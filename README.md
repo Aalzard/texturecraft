@@ -35,7 +35,7 @@
 <br>
 
 <p align="center">
-  <img src="docs/images/texturecraft-workspace.png" alt="The TextureCraft workspace: the asset shelf on the left, the 3D viewport with a material ball wearing a painted-steel smart material on a rusted iron base, the 2D UV view, and the texture set list, layer stack and properties on the right" width="100%">
+  <img src="docs/images/texturecraft-workspace.png" alt="The TextureCraft workspace: the material library on the left, the 3D viewport with a material ball wearing a worn painted-steel smart material on a rusted iron base, the 2D UV view, and the texture set list, layer stack and properties on the right" width="100%">
   <br>
   <sub>The workspace: asset shelf, 3D viewport, 2D UV view, texture sets, layer stack and properties.</sub>
 </p>
@@ -143,6 +143,10 @@
   grain, parallax occlusion, and temporal anti-aliasing that refines the image while you look.
 - **Rendering mode** (F10): a progressive, path-traced view of your textures with multi-bounce
   light, environment importance sampling and one-click PNG save.
+
+<p align="center">
+  <img src="docs/images/texturecraft-render.png" alt="A path-traced render of the material ball in worn red paint over bare steel, made with texturecraft-cli render --samples 256" width="80%">
+</p>
 - View any channel, any baked mesh map, or a UV checker; Alt+drag to orbit, middle-drag to pan,
   wheel to zoom, F to frame, M / C / B to cycle views.
 
