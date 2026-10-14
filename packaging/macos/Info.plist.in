@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: packaging/macos/package.sh substitutes @VERSION@ (full, e.g. 0.2.0-rc.1),
+     @SHORT_VERSION@ (numeric X.Y.Z) and @BUILD_SHA@. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>TextureCraft</string>
+  <key>CFBundleName</key>
+  <string>TextureCraft</string>
+  <key>CFBundleExecutable</key>
+  <string>TextureCraft</string>
+  <key>CFBundleIdentifier</key>
+  <string>ai.storyteller.texturecraft</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleSignature</key>
+  <string>????</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@SHORT_VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@SHORT_VERSION@</string>
+  <key>TextureCraftVersion</key>
+  <string>@VERSION@</string>
+  <key>TextureCraftBuildCommit</key>
+  <string>@BUILD_SHA@</string>
+  <key>CFBundleIconFile</key>
+  <string>TextureCraft</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.graphics-design</string>
+  <!-- Must match MACOSX_DEPLOYMENT_TARGET in package.sh. Big Sur is the first release on
+       Apple silicon and has the Metal feature set wgpu targets. -->
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+  <key>NSRequiresAquaSystemAppearance</key>
+  <false/>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright © the TextureCraft contributors. MIT OR Apache-2.0.</string>
+
+  <!-- TextureCraft's own project format (a zip container). -->
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>ai.storyteller.texturecraft.project</string>
+      <key>UTTypeDescription</key>
+      <string>TextureCraft Project</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+        <string>public.content</string>
+      </array>
+      <key>UTTypeIconFile</key>
+      <string>TextureCraft</string>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>tcraft</string></array>
+        <key>public.mime-type</key>
+        <array><string>application/x-texturecraft</string></array>
+      </dict>
+    </dict>
+  </array>
+  <!-- Mesh formats macOS may not know; the system's own declaration wins when it has one. -->
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>ai.storyteller.texturecraft.gltf-binary</string>
+      <key>UTTypeDescription</key>
+      <string>glTF Binary Model</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>glb</string></array>
+        <key>public.mime-type</key>
+        <array><string>model/gltf-binary</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>ai.storyteller.texturecraft.gltf</string>
+      <key>UTTypeDescription</key>
+      <string>glTF Model</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>gltf</string></array>
+        <key>public.mime-type</key>
+        <array><string>model/gltf+json</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>public.geometry-definition-format</string>
+      <key>UTTypeDescription</key>
+      <string>Wavefront OBJ Model</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>obj</string></array>
+        <key>public.mime-type</key>
+        <array><string>model/obj</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>public.polygon-file-format</string>
+      <key>UTTypeDescription</key>
+      <string>PLY Model</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>ply</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>public.standard-tesselated-geometry-format</string>
+      <key>UTTypeDescription</key>
+      <string>STL Model</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>stl</string></array>
+        <key>public.mime-type</key>
+        <array><string>model/stl</string></array>
+      </dict>
+    </dict>
+  </array>
+
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>TextureCraft Project</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>TextureCraft</string>
+      <key>LSItemContentTypes</key>
+      <array><string>ai.storyteller.texturecraft.project</string></array>
+    </dict>
+    <!-- Meshes: offered under "Open With", never claimed as the default. -->
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>3D Model</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>ai.storyteller.texturecraft.gltf-binary</string>
+        <string>ai.storyteller.texturecraft.gltf</string>
+        <string>public.geometry-definition-format</string>
+        <string>public.polygon-file-format</string>
+        <string>public.standard-tesselated-geometry-format</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>

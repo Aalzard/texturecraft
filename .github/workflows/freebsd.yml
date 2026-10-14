@@ -1,0 +1,59 @@
+# Builds and tests the workspace on FreeBSD, inside a FreeBSD VM on a Linux runner
+# (GitHub has no FreeBSD runners). It then runs packaging/freebsd/package.sh, the script the
+# release job runs, and checks the tarball, so a broken FreeBSD package fails here before it can
+# fail a release. Nothing is uploaded and no secrets are used.
+name: FreeBSD
+
+# The VM build takes one to several hours, so it runs nightly on main rather than on every push.
+# PRs that change the FreeBSD packaging itself still run it.
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  pull_request:
+    paths:
+      - .github/workflows/freebsd.yml
+      - packaging/freebsd/**
+      - packaging/env.sh
+  workflow_dispatch:
+
+concurrency:
+  group: freebsd-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  freebsd:
+    name: FreeBSD 14 (build + test + package)
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build, test and package in a FreeBSD VM
+        # vmactions/freebsd-vm v1.5.9, pinned by commit (it runs our build).
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
+        with:
+          release: "14.3"
+          usesh: true
+          cpu: 4
+          mem: 12288
+          # Nothing to bring back; copying the target dir out of the VM fails on large builds.
+          copyback: false
+          prepare: |
+            pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          run: |
+            set -e
+            . "$HOME/.cargo/env"
+            # The checkout is synced in under another owner; let tests that call git read it.
+            git config --global --add safe.directory "*"
+            rustc --version
+            # One test thread: the VM's software Vulkan driver crashes when several tests set up a
+            # GPU device at once (PhotoCraft). GPU tests must skip themselves when there is no adapter.
+            CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked -- --test-threads=1
+            # The release package, as release.yml builds it. Free the debug build's disk first.
+            rm -rf target/debug
+            CARGO_BUILD_JOBS=4 bash packaging/freebsd/package.sh
+            tar -tzf dist/release/texturecraft-*-freebsd-x86_64.tar.gz \
+              | grep -E '/bin/texturecraft$|/bin/texturecraft-cli$|/share/applications/ai\.storyteller\.texturecraft\.desktop$|/share/doc/texturecraft/LICENSE-MIT$'

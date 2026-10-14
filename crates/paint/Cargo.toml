@@ -1,0 +1,17 @@
+[package]
+name = "texturecraft-paint"
+description = "TextureCraft brush engine: strokes, stamps, visibility, texture-space rasterization, commit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+texturecraft-core = { workspace = true }
+texturecraft-texel = { workspace = true }
+texturecraft-geom = { workspace = true }
+texturecraft-compose = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }

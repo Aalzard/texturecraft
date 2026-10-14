@@ -1,0 +1,23 @@
+[package]
+name = "texturecraft"
+description = "TextureCraft: an open-source 3D texture painter (desktop app)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "texturecraft"
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+texturecraft-engine = { workspace = true }
+texturecraft-ui-egui = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "persistence"] }
+egui = { workspace = true }
+image = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+
+[build-dependencies]
+winresource = "0.1"

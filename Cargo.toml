@@ -1,0 +1,100 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/texel", "crates/geom", "crates/compose", "crates/bake", "crates/formats", "crates/paint", "crates/engine", "crates/render", "crates/automation", "crates/ui-egui", "apps/texturecraft", "apps/texturecraft-cli", "apps/texturecraft-web", "xtask"]
+default-members = ["crates/core", "crates/texel", "crates/geom", "crates/compose", "crates/bake", "crates/formats", "crates/paint", "crates/engine", "crates/render", "crates/automation", "crates/ui-egui", "apps/texturecraft", "apps/texturecraft-cli", "xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+repository = "https://github.com/storytold/texturecraft"
+
+[workspace.dependencies]
+# internal
+texturecraft-core = { path = "crates/core" }
+texturecraft-texel = { path = "crates/texel" }
+texturecraft-geom = { path = "crates/geom" }
+texturecraft-bake = { path = "crates/bake" }
+texturecraft-paint = { path = "crates/paint" }
+texturecraft-formats = { path = "crates/formats" }
+texturecraft-compose = { path = "crates/compose" }
+texturecraft-engine = { path = "crates/engine" }
+texturecraft-render = { path = "crates/render" }
+texturecraft-automation = { path = "crates/automation" }
+texturecraft-ui-egui = { path = "crates/ui-egui" }
+
+# external
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+glam = { version = "0.30", features = ["serde", "bytemuck"] }
+bytemuck = { version = "1", features = ["derive"] }
+rayon = "1"
+log = "0.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "tiff", "exr", "hdr", "bmp", "webp"] }
+half = "2"
+exr = { version = "1.73", default-features = false }
+eframe = { version = "0.36", default-features = false }
+egui = "0.36"
+wgpu = "30"
+rfd = "0.17"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names", "KHR_materials_emissive_strength"] }
+tobj = { version = "4", default-features = false }
+flate2 = "1"
+quick-xml = "0.41"
+mikktspace = { version = "0.3", default-features = false, features = ["glam"] }
+proptest = "1"
+rmcp = { version = "3.5", default-features = false, features = ["server", "macros", "transport-io"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync", "net", "io-util", "time"] }
+schemars = "1"
+base64 = "0.22"
+cap-std = "4"
+getrandom = "0.3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+# Index loops read better than zipped iterators in per-texel code.
+needless_range_loop = "allow"
+field_reassign_with_default = "allow"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"
+
+[profile.wasm-release.package."*"]
+opt-level = "s"
+
+[profile.wasm-release.package.texturecraft-texel]
+opt-level = 3
+[profile.wasm-release.package.texturecraft-compose]
+opt-level = 3
+[profile.wasm-release.package.texturecraft-paint]
+opt-level = 3
+[profile.wasm-release.package.texturecraft-geom]
+opt-level = 3
+[profile.wasm-release.package.texturecraft-bake]
+opt-level = 3
+# Path tracing and the vector math under it run per pixel.
+[profile.wasm-release.package.texturecraft-render]
+opt-level = 3
+[profile.wasm-release.package.glam]
+opt-level = 3

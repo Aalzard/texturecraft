@@ -1,0 +1,64 @@
+//! # texturecraft-engine
+//!
+//! The TextureCraft session: a [`Session`] owns the document (project + copy-on-write pixels +
+//! baked maps), the mesh with its BVH and per-texture-set caches (UV G-buffer, padding map,
+//! composite), snapshot-based undo, the tool state and the active stroke. Every user-visible
+//! action is a command in the [`commands`] registry, dispatched by id from the UI, the CLI,
+//! the control channel and the MCP server alike.
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+pub mod bake_cmds;
+pub mod commands;
+pub mod file_cmds;
+pub mod inspect;
+pub mod instance_cmds;
+pub mod layer_cmds;
+pub mod layer_ops;
+pub mod mask_cmds;
+pub mod material_lib;
+pub mod materials;
+pub mod painting;
+pub mod path_tool;
+pub mod preview;
+pub mod project_cmds;
+pub mod quick_mask;
+pub mod resource_cmds;
+pub mod session;
+pub mod set_cmds;
+pub mod smart_masks;
+pub mod tool_cmds;
+pub mod view_cmds;
+
+pub use bake_cmds::{BakeMesh, BakeMeshes, BakeTask};
+pub use commands::{CommandSpec, command_specs, execute, find};
+pub use path_tool::PathState;
+pub use project_cmds::sample_session;
+pub use session::{CloneSource, Document, FillMode, Session, SetCache, StackTarget, StencilState, Tool, ToolState, ViewMode};
+
+pub use texturecraft_bake as bake;
+pub use texturecraft_compose as compose;
+pub use texturecraft_core as core;
+pub use texturecraft_formats as formats;
+pub use texturecraft_geom as geom;
+pub use texturecraft_paint as paint;
+pub use texturecraft_texel as texel;
+
+#[derive(Debug, thiserror::Error)]
+pub enum EngineError {
+    #[error("unknown command `{0}`")]
+    UnknownCommand(String),
+    #[error("`{cmd}` is not available: {why}")]
+    Disabled { cmd: String, why: String },
+    #[error("`{cmd}`: {msg}")]
+    BadParams { cmd: String, msg: String },
+    #[error(transparent)]
+    Core(#[from] texturecraft_core::CoreError),
+    #[error("{0}")]
+    Other(String),
+}
+
+pub type Result<T> = std::result::Result<T, EngineError>;
+
+/// Version string shown in About, `--version` and window titles.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

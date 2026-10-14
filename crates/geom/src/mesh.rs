@@ -1,0 +1,325 @@
+//! The internal triangle mesh.
+
+use glam::{Vec2, Vec3, Vec4};
+
+use crate::{GeomError, Result};
+
+/// A contiguous index range drawn with one material.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SubMesh {
+    pub name: String,
+    pub material: usize,
+    /// First index (into [`Mesh::indices`]) and index count.
+    pub start: u32,
+    pub count: u32,
+}
+
+/// Triangle mesh in world space. UVs use the glTF convention (origin top-left, v down).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Mesh {
+    pub positions: Vec<Vec3>,
+    pub normals: Vec<Vec3>,
+    /// xyz tangent, w bitangent sign.
+    pub tangents: Vec<Vec4>,
+    pub uvs: Vec<Vec2>,
+    /// RGBA vertex colors in 0..1 (glTF: linear; OBJ, PLY: as stored): one per vertex, or empty.
+    pub colors: Vec<Vec4>,
+    pub indices: Vec<u32>,
+    /// Index ranges per material and part (node / object); `name` is the part name.
+    pub submeshes: Vec<SubMesh>,
+    pub materials: Vec<String>,
+}
+
+/// Hard cap on mesh size accepted from files (triangles).
+pub const MAX_TRIANGLES: usize = 20_000_000;
+
+impl Mesh {
+    pub fn triangle_count(&self) -> usize {
+        self.indices.len() / 3
+    }
+
+    pub fn vertex_count(&self) -> usize {
+        self.positions.len()
+    }
+
+    /// Axis-aligned bounds (zero box for an empty mesh).
+    pub fn bounds(&self) -> (Vec3, Vec3) {
+        if self.positions.is_empty() {
+            return (Vec3::ZERO, Vec3::ZERO);
+        }
+        self.positions.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)))
+    }
+
+    /// Bounding-sphere radius around the bounds center (at least a small epsilon).
+    pub fn radius(&self) -> f32 {
+        let (lo, hi) = self.bounds();
+        ((hi - lo).length() * 0.5).max(1e-4)
+    }
+
+    /// Vertex indices of triangle `t`.
+    pub fn tri(&self, t: usize) -> Option<[usize; 3]> {
+        let i = self.indices.get(t * 3..t * 3 + 3)?;
+        Some([i[0] as usize, i[1] as usize, i[2] as usize])
+    }
+
+    /// Material of triangle `t`.
+    pub fn material_of(&self, t: usize) -> Option<usize> {
+        let idx = (t * 3) as u32;
+        self.submeshes.iter().find(|s| idx >= s.start && idx < s.start.saturating_add(s.count)).map(|s| s.material)
+    }
+
+    /// Triangle index range belonging to material `m` (all submeshes of that material).
+    pub fn triangles_of(&self, m: usize) -> impl Iterator<Item = usize> + '_ {
+        self.submeshes.iter().filter(move |s| s.material == m).flat_map(|s| (s.start / 3) as usize..((s.start + s.count) / 3) as usize)
+    }
+
+    /// Check that attribute arrays agree and every index is in range.
+    pub fn validate(&self) -> Result<()> {
+        let n = self.positions.len();
+        if self.normals.len() != n || self.uvs.len() != n || self.tangents.len() != n {
+            return Err(GeomError::Invalid(format!(
+                "attribute counts differ: {} positions, {} normals, {} uvs, {} tangents",
+                n,
+                self.normals.len(),
+                self.uvs.len(),
+                self.tangents.len()
+            )));
+        }
+        if !self.colors.is_empty() && self.colors.len() != n {
+            return Err(GeomError::Invalid(format!("{} vertex colors for {n} vertices", self.colors.len())));
+        }
+        if !self.indices.len().is_multiple_of(3) {
+            return Err(GeomError::Invalid("index count is not a multiple of 3".into()));
+        }
+        if self.triangle_count() > MAX_TRIANGLES {
+            return Err(GeomError::Invalid(format!("mesh has more than {MAX_TRIANGLES} triangles")));
+        }
+        if let Some(bad) = self.indices.iter().find(|i| **i as usize >= n) {
+            return Err(GeomError::Invalid(format!("index {bad} out of range ({n} vertices)")));
+        }
+        if self.positions.iter().any(|p| !p.is_finite()) {
+            return Err(GeomError::Invalid("mesh has non-finite positions".into()));
+        }
+        for s in &self.submeshes {
+            if s.start as usize + s.count as usize > self.indices.len() || s.material >= self.materials.len().max(1) {
+                return Err(GeomError::Invalid(format!("submesh {} is out of range", s.name)));
+            }
+        }
+        Ok(())
+    }
+
+    /// Area-weighted smooth normals over the index buffer.
+    pub fn compute_normals(&mut self) {
+        let mut n = vec![Vec3::ZERO; self.positions.len()];
+        for t in self.indices.chunks_exact(3) {
+            let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
+            let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
+            let face = (*pb - *pa).cross(*pc - *pa);
+            for v in [a, b, c] {
+                if let Some(x) = n.get_mut(v) {
+                    *x += face;
+                }
+            }
+        }
+        self.normals = n.into_iter().map(|v| v.try_normalize().unwrap_or(Vec3::Y)).collect();
+    }
+
+    /// MikkTSpace tangents (falls back to per-triangle tangents if generation fails).
+    pub fn compute_tangents(&mut self) {
+        self.tangents = vec![Vec4::new(1.0, 0.0, 0.0, 1.0); self.positions.len()];
+        if self.normals.len() != self.positions.len() {
+            self.compute_normals();
+        }
+        if self.uvs.len() != self.positions.len() {
+            self.uvs = vec![Vec2::ZERO; self.positions.len()];
+        }
+        // mikktspace crashes (out-of-bounds) when every triangle is degenerate; skip it then.
+        let usable = !crate::unwrap::all_triangles_degenerate(self);
+        let mut g = Mikk { mesh: self };
+        if !usable || !mikktspace::generate_tangents(&mut g) {
+            self.simple_tangents();
+        }
+        for (t, n) in self.tangents.iter_mut().zip(&self.normals) {
+            // Orthonormalize against the normal; repair degenerate results.
+            let v = t.truncate();
+            let o = (v - *n * n.dot(v)).try_normalize().unwrap_or_else(|| n.any_orthonormal_vector());
+            *t = o.extend(if t.w < 0.0 { -1.0 } else { 1.0 });
+        }
+    }
+
+    fn simple_tangents(&mut self) {
+        let mut acc = vec![Vec3::ZERO; self.positions.len()];
+        for t in self.indices.chunks_exact(3) {
+            let (a, b, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
+            let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
+            let (Some(ua), Some(ub), Some(uc)) = (self.uvs.get(a), self.uvs.get(b), self.uvs.get(c)) else { continue };
+            let (e1, e2) = (*pb - *pa, *pc - *pa);
+            let (d1, d2) = (*ub - *ua, *uc - *ua);
+            let r = d1.x * d2.y - d2.x * d1.y;
+            if r.abs() < 1e-12 {
+                continue;
+            }
+            let tan = (e1 * d2.y - e2 * d1.y) / r;
+            for v in [a, b, c] {
+                if let Some(x) = acc.get_mut(v) {
+                    *x += tan;
+                }
+            }
+        }
+        self.tangents = acc.into_iter().map(|t| t.try_normalize().unwrap_or(Vec3::X).extend(1.0)).collect();
+    }
+
+    /// Append `other`, offsetting indices; its submeshes keep their material indices shifted by
+    /// this mesh's material count.
+    pub fn append(&mut self, other: &Mesh) {
+        let base = self.positions.len() as u32;
+        let ibase = self.indices.len() as u32;
+        let mbase = self.materials.len();
+        self.positions.extend_from_slice(&other.positions);
+        self.normals.extend_from_slice(&other.normals);
+        self.tangents.extend_from_slice(&other.tangents);
+        self.uvs.extend_from_slice(&other.uvs);
+        if !(self.colors.is_empty() && other.colors.is_empty()) {
+            // Vertices of the side without colors become white.
+            self.colors.resize(base as usize, Vec4::ONE);
+            self.colors.extend(other.colors.iter().copied().chain(std::iter::repeat(Vec4::ONE)).take(other.positions.len()));
+        }
+        self.indices.extend(other.indices.iter().map(|i| i + base));
+        self.materials.extend(other.materials.iter().cloned());
+        self.submeshes.extend(other.submeshes.iter().map(|s| SubMesh {
+            name: s.name.clone(),
+            material: s.material + mbase,
+            start: s.start + ibase,
+            count: s.count,
+        }));
+    }
+
+    /// Uniformly scale and translate so the mesh is centered with the given bounding radius.
+    pub fn normalize_to(&mut self, radius: f32) {
+        let (lo, hi) = self.bounds();
+        let c = (lo + hi) * 0.5;
+        let s = radius / self.radius();
+        for p in &mut self.positions {
+            *p = (*p - c) * s;
+        }
+    }
+
+    /// A single-material mesh from raw attributes; computes missing normals and tangents.
+    pub fn from_parts(positions: Vec<Vec3>, normals: Option<Vec<Vec3>>, uvs: Vec<Vec2>, indices: Vec<u32>, material: &str) -> Result<Mesh> {
+        let count = indices.len() as u32;
+        let mut m = Mesh {
+            normals: normals.unwrap_or_default(),
+            uvs,
+            positions,
+            indices,
+            tangents: Vec::new(),
+            colors: Vec::new(),
+            submeshes: vec![SubMesh { name: material.into(), material: 0, start: 0, count }],
+            materials: vec![material.into()],
+        };
+        if m.normals.len() != m.positions.len() {
+            m.compute_normals();
+        }
+        m.compute_tangents();
+        m.validate()?;
+        Ok(m)
+    }
+}
+
+struct Mikk<'a> {
+    mesh: &'a mut Mesh,
+}
+
+impl Mikk<'_> {
+    fn vi(&self, face: usize, vert: usize) -> usize {
+        self.mesh.indices.get(face * 3 + vert).copied().unwrap_or(0) as usize
+    }
+}
+
+impl mikktspace::Geometry for Mikk<'_> {
+    fn num_faces(&self) -> usize {
+        self.mesh.indices.len() / 3
+    }
+    fn num_vertices_of_face(&self, _face: usize) -> usize {
+        3
+    }
+    fn position(&self, face: usize, vert: usize) -> [f32; 3] {
+        self.mesh.positions.get(self.vi(face, vert)).copied().unwrap_or_default().to_array()
+    }
+    fn normal(&self, face: usize, vert: usize) -> [f32; 3] {
+        self.mesh.normals.get(self.vi(face, vert)).copied().unwrap_or(Vec3::Y).to_array()
+    }
+    fn tex_coord(&self, face: usize, vert: usize) -> [f32; 2] {
+        // MikkTSpace expects OpenGL texture coordinates (v up); our UVs are glTF (v down). With
+        // v flipped, the bitangent `cross(N, T) * w` points up the image, as glTF requires.
+        let uv = self.mesh.uvs.get(self.vi(face, vert)).copied().unwrap_or_default();
+        [uv.x, 1.0 - uv.y]
+    }
+    fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
+        let i = self.vi(face, vert);
+        if let Some(t) = self.mesh.tangents.get_mut(i) {
+            *t = Vec4::from_array(tangent);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quad() -> Mesh {
+        Mesh::from_parts(
+            vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 0.0), Vec3::new(0.0, 1.0, 0.0)],
+            None,
+            vec![Vec2::new(0.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 0.0)],
+            vec![0, 1, 2, 0, 2, 3],
+            "Default",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn normals_and_tangents_of_a_quad() {
+        let m = quad();
+        for n in &m.normals {
+            assert!((*n - Vec3::Z).length() < 1e-5);
+        }
+        for t in &m.tangents {
+            assert!((t.truncate() - Vec3::X).length() < 1e-4, "{t:?}");
+        }
+        assert_eq!(m.material_of(1), Some(0));
+        assert_eq!(m.triangles_of(0).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn validate_catches_bad_indices() {
+        let mut m = quad();
+        m.indices[0] = 99;
+        assert!(m.validate().is_err());
+        let mut m = quad();
+        m.uvs.pop();
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn append_offsets_indices_and_materials() {
+        let mut a = quad();
+        let b = quad();
+        a.append(&b);
+        assert_eq!(a.indices[6], 4);
+        assert_eq!(a.submeshes[1].material, 1);
+        assert_eq!(a.submeshes[1].start, 6);
+        a.validate().unwrap();
+        // Colors on one side only: the other side's vertices become white.
+        let mut red = quad();
+        red.colors = vec![Vec4::new(1.0, 0.0, 0.0, 1.0); 4];
+        a.append(&red);
+        assert_eq!(a.colors.len(), 12);
+        assert_eq!((a.colors[0], a.colors[8]), (Vec4::ONE, Vec4::new(1.0, 0.0, 0.0, 1.0)));
+        a.append(&quad());
+        assert_eq!(a.colors[15], Vec4::ONE);
+        a.validate().unwrap();
+        a.colors.pop();
+        assert!(a.validate().is_err());
+    }
+}

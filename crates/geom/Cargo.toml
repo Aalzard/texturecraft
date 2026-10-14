@@ -1,0 +1,16 @@
+[package]
+name = "texturecraft-geom"
+description = "TextureCraft geometry: meshes, primitives, tangents, BVH ray casts, UV G-buffer, camera"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+glam = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+mikktspace = { workspace = true }

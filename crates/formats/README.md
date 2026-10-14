@@ -1,0 +1,131 @@
+# texturecraft-formats
+
+File formats for TextureCraft: mesh import and export, texture export with presets, and the
+`.tcraft` project file. Every reader takes untrusted bytes and returns `Result`; nothing panics on bad
+input. Byte-based functions work on every target (the web build loads and saves through bytes);
+path-based functions are native only (`#[cfg(not(target_arch = "wasm32"))]`).
+
+## Public API
+
+### Mesh import (`mesh_import`)
+
+```rust
+pub fn import_mesh_bytes(file_name: &str, bytes: &[u8]) -> Result<ImportedMesh>;
+pub fn import_mesh(path: &Path) -> Result<ImportedMesh>;            // native
+pub struct ImportedMesh { pub mesh: Mesh, pub report: MeshReport }
+pub struct MeshReport {
+    pub triangles: usize, pub vertices: usize, pub materials: usize,
+    pub uvs_generated: bool, pub uv_out_of_range: usize, pub overlap_ratio: f32,
+    pub zero_area_uv_triangles: usize, pub warnings: Vec<String>,
+}
+```
+
+| Format | Notes |
+|---|---|
+| `.glb` / `.gltf` | Default scene's node tree flattened to world space; normals by inverse transpose; winding flipped under mirroring transforms; one submesh per material (`Default` for none, `Material_<i>` when unnamed); missing normals are flat (glTF rule). Bytes: GLB or data-URI buffers; from a path, external `.bin` files too. Triangle primitives only; sparse accessors are refused. |
+| `.fbx` | FBX 7.x (2011 and newer), binary (32- and 64-bit node records, zlib arrays) and ASCII. Every `Mesh` geometry connected to a Model, with the Model hierarchy's transforms (`Lcl Translation/Rotation/Scaling`, `RotationOrder`, `Pre/PostRotation`, pivots and offsets, geometric transform); normals and UV set 0 from the layer elements (`ByPolygonVertex`, `ByControlPoint`, `ByPolygon`, `AllSame`; `Direct` / `IndexToDirect`); per-polygon materials named by the Materials connected to the Model. Units (`UnitScaleFactor`, cm by default) become meters and the axis system becomes Y up. FBX 6 and older are refused; decoded data is capped at 2 GiB. |
+| `.dae` | COLLADA: `triangles`, `polylist`, `polygons` (holes ignored) with `VERTEX` / `NORMAL` / `TEXCOORD` inputs at any offset (lowest `set`); materials by `bind_material` symbol; the visual scene's node tree (`matrix`, `translate`, `rotate`, `scale`, `instance_node`, skinned `instance_controller` with its bind shape); `unit` to meters, `Z_UP` / `X_UP` to Y up. Lines and strips are skipped with a warning. |
+| `.obj` | Triangulated, one vertex per unique `v/vt/vn`, **v flipped** (OBJ is bottom-left). Material names come from `usemtl` (MTL files are never read; they only carry shading data). |
+| `.ply` | ascii, binary little/big endian; `x y z`, `nx ny nz`, `s t` / `u v` / `texture_u texture_v`; n-gons fan-triangulated. |
+| `.stl` | ascii and binary (size-checked, so binary files whose header says `solid` work); flat normals; no UVs. |
+
+FBX and COLLADA polygons are fan-triangulated with one vertex per unique corner. Missing
+normals (OBJ/PLY/FBX/COLLADA) are smooth over welded positions. Missing UVs run
+`texturecraft_geom::unwrap::auto_unwrap` (charts within 60° of their seed normal, principal-axis
+rotation, shelf packing per material with one texel density). Tangents are MikkTSpace. Limits:
+2 GiB files, `MAX_TRIANGLES` triangles, 3 × that many vertices; meshes whose triangles are all
+degenerate are refused (MikkTSpace crashes on them).
+
+### Mesh export (`mesh_export`)
+
+```rust
+pub fn obj_bytes(mesh: &Mesh, name: &str) -> Vec<u8>;
+pub fn glb_bytes(mesh: &Mesh, name: &str, textures: &[GlbTextures]) -> Result<Vec<u8>>;
+pub fn glb_export_options() -> ExportOptions;                     // render GlbTextures with these
+pub struct GlbTextures { pub base_color, pub orm, pub normal, pub emissive: Option<Vec<u8>> }  // PNG
+```
+
+GLB: one primitive per submesh, one metallic-roughness material per mesh material with its
+textures embedded in the binary chunk (base color sRGB, `alphaMode: BLEND` when it has alpha;
+ORM as occlusion + metallic-roughness; OpenGL normal; emissive only when not black).
+
+### Texture export (`export`, `presets`)
+
+```rust
+pub fn list_outputs(project: &Project, ts: usize, mesh_name: &str, opts: &ExportOptions) -> Result<Vec<PlannedFile>>;
+pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<ExportedFile>>;
+pub fn write_files(files: &[ExportedFile], dir: &Path) -> Result<Vec<PathBuf>>;   // native, atomic
+pub fn builtin_presets() -> Vec<ExportPreset>;
+pub fn builtin_preset(name: &str) -> Option<ExportPreset>;
+pub fn preset_from_json(json: &str) -> Result<ExportPreset>;
+pub fn preset_to_json(preset: &ExportPreset) -> Result<String>;
+```
+
+- `ExportPreset { name, maps: Vec<MapSpec> }`, `MapSpec { file, format, bit_depth, channels: Vec<(Dest, SourceRef)> }`
+  (serde JSON, so presets can be user files).
+- `Dest`: `R G B A` or `L` (gray; `L` + `A` = gray + alpha).
+- `SourceRef`: `Channel { channel, component }` (`Normal` = the **final** normal in the export
+  normal format), `Virtual { map, component }` (`NormalOpenGl`, `NormalDirectX`, `Glossiness` =
+  1 − roughness, `AoMixed` = baked AO × AO channel, `F0` = 0.08 × specular level),
+  `Baked { map, component }`, `Constant(f32)`.
+- `ExportOptions { preset, format_override, bit_depth_override, padding, size, normal_format }`;
+  `Padding::{None, Dilation(n), DilationDefault(n), Infinite}`; `size` must be a power of two
+  (box filter down, bilinear up).
+- File templates: `$project`, `$mesh`, `$textureSet`, `$channel`, `$colorSpace`; names are
+  sanitized to `[A-Za-z0-9_.-]` (reserved device names get a `_` prefix); case-insensitive
+  collisions get `_2`, `_3`, … plus a warning.
+- A map is written only when one of its sources has data in the texture set (channel present,
+  map baked, …); alpha from a missing channel is dropped.
+- Formats: PNG 8/16, JPEG 8 (q 95), TGA 8, TIFF 8/16, BMP 8, WebP 8 (lossless), EXR 16f/32f
+  (`Y`, `YA`, `RGB`, `RGBA`, ZIP), HDR 32f. Color maps are sRGB in 8/16-bit and linear in float
+  formats; data maps are linear; height is stored as `h · 0.5 + 0.5`.
+- Final normal: Sobel normal from the height channel (strength = `height_strength`; with 1, a
+  height change of 1 over 1/16 of the texture width tilts 45°; `+Y` up the image), combined with
+  the normal channel, then with the baked normal map, by Reoriented Normal Mapping. DirectX
+  flips green.
+
+Built-in presets:
+
+| Preset | Files (`$mesh_$textureSet_…`) |
+|---|---|
+| Document channels + Normal + AO | one per document channel (`$channel`), plus `normal` and `ambientOcclusion` (mixed) |
+| glTF PBR Metal Roughness | `BaseColor` (sRGB, A = opacity), `OcclusionRoughnessMetallic`, `Normal` (OpenGL), `Emissive` (if present) |
+| Unreal Engine (Packed) | `BaseColor`, `OcclusionRoughnessMetallic`, `Normal` (DirectX) |
+| Unity HDRP (Mask Map) | `BaseMap`, `MaskMap` (R metal, G AO, B detail = 0, A smoothness), `Normal` (OpenGL) |
+| Unity Standard (Metallic Smoothness) | `Albedo`, `MetallicSmoothness` (R metal, A smoothness), `Normal` (OpenGL), `Occlusion` |
+| Blender (Principled BSDF) | `BaseColor`, `Metallic`, `Roughness`, `Normal` (OpenGL), `Height` (16-bit), `Emission`, `Specular` |
+| Separate maps | one file per channel, gray where scalar, height 16-bit |
+| Mesh maps | every baked map (`$channel` = map id), 16-bit |
+
+### Project file (`project_file`)
+
+```rust
+pub struct ProjectFile {
+    pub project: Project, pub pixels: PixelStore, pub baked: BTreeMap<usize, BakedMaps>,
+    pub mesh: Option<(String /* ext */, Vec<u8>)>, pub thumbnail: Option<Vec<u8>>,
+}
+pub fn save_project_bytes(pf: &ProjectFile) -> Result<Vec<u8>>;
+pub fn load_project_bytes(bytes: &[u8]) -> Result<ProjectFile>;
+pub fn save_project(path: &Path, pf: &ProjectFile) -> Result<()>;   // native, atomic
+pub fn load_project(path: &Path) -> Result<ProjectFile>;            // native
+```
+
+`.tcraft` layout (zip, deflate):
+
+| Entry | Content |
+|---|---|
+| `project.json` | serde JSON of `Project` |
+| `mesh.<ext>` | the original mesh file bytes (absent for `builtin:<id>` meshes) |
+| `pixels/layer_<id>_<channelId>.bin` | painted layer (or content paint effect) channel |
+| `pixels/mask_<id>.bin` | painted mask effect |
+| `baked/<ts>_<mapId>.bin` | baked mesh map of texture set `<ts>` |
+| `thumbnail.png` | optional, stored |
+
+`.bin`: header `TCTX`, version, width, height, components, tile count (u32 LE each), then per
+allocated 64×64 tile `tx`, `ty` (u32 LE) and the raw `u16` LE components (sparse, lossless).
+Baked maps: the same header with 0 tiles, then `width × height × components` f32 LE.
+
+Loading runs `Project::validate`, refuses a newer `format_version` (`FormatError::NewerVersion`),
+checks every tile against its texture set's resolution and component count, rejects repeated or
+out-of-range tiles and trailing data, drops pixels of layers that are in no stack, and caps the
+total decompressed size at 8 GiB.

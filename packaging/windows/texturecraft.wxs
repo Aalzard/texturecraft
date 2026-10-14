@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TextureCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
+
+    wix build texturecraft.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+
+  Per-machine install into Program Files, a Start Menu shortcut, `.tcraft` owned by TextureCraft,
+  and TextureCraft offered under "Open with" for the mesh formats it opens (without taking over
+  the user's default app for them).
+
+  UpgradeCode is TextureCraft's for good: generated once (2026-10-14), never change it, or new
+  versions install beside old ones instead of replacing them.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="TextureCraft"
+      Manufacturer="Learning Machines LLC"
+      Version="$(var.Version)"
+      UpgradeCode="7E670E60-BB22-4E6B-8749-DD3FD4CA8979"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="TextureCraft 3D texture painter" Manufacturer="Learning Machines LLC" />
+    <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
+         (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of TextureCraft is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- MSI caches this icon using its Id as the filename. Advertised shortcuts to an
+         .exe need an .exe icon identifier (ICE50), even when the source is an ICO. -->
+    <Icon Id="TextureCraftIcon.exe" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="TextureCraftIcon.exe" />
+    <Property Id="ARPURLINFOABOUT" Value="https://getartcraft.com/apps/texturecraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://getartcraft.com/apps/texturecraft" />
+    <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="TextureCraft" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="TextureCraft" Level="1">
+      <ComponentGroupRef Id="TextureCraftFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="TextureCraftFiles" Directory="INSTALLFOLDER">
+      <Component Id="TextureCraftApp">
+        <File Id="TextureCraftExe" Source="$(var.BinDir)\texturecraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="TextureCraft"
+              Description="TextureCraft 3D texture painter" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="TextureCraftIcon.exe" IconIndex="0" />
+        </File>
+
+        <!-- .tcraft: TextureCraft's own project format; TextureCraft is its default app. -->
+        <ProgId Id="TextureCraft.Project" Description="TextureCraft Project" Icon="TextureCraftExe" IconIndex="0">
+          <Extension Id="tcraft" ContentType="application/x-texturecraft">
+            <Verb Id="open" Command="Open" TargetFile="TextureCraftExe" Argument="&quot;%1&quot;" />
+          </Extension>
+        </ProgId>
+        <!-- Meshes: offered under "Open with", never forced as the default. -->
+        <ProgId Id="TextureCraft.Mesh" Description="3D Model" Icon="TextureCraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\TextureCraft.Mesh\shell\open\command" Value="&quot;[#TextureCraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.glb\OpenWithProgids" Name="TextureCraft.Mesh" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.gltf\OpenWithProgids" Name="TextureCraft.Mesh" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.obj\OpenWithProgids" Name="TextureCraft.Mesh" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.ply\OpenWithProgids" Name="TextureCraft.Mesh" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.stl\OpenWithProgids" Name="TextureCraft.Mesh" Value="" Type="string" />
+
+        <!-- "Open with" app list and the Run dialog (Win+R "texturecraft"). -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe" Name="FriendlyAppName" Value="TextureCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\shell\open\command" Value="&quot;[#TextureCraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".tcraft" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".glb" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".gltf" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".obj" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".ply" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".stl" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\texturecraft.exe" Value="[#TextureCraftExe]" Type="string" />
+      </Component>
+
+      <Component Id="TextureCraftCli">
+        <File Id="TextureCraftCliExe" Source="$(var.BinDir)\texturecraft-cli.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

@@ -1,0 +1,130 @@
+//! Clone, smudge, image alphas and the quick mask, driven through engine commands the way
+//! agents paint.
+
+use serde_json::{Value, json};
+use texturecraft_engine::core::Channel;
+use texturecraft_engine::geom::glam::Vec2;
+use texturecraft_engine::geom::primitives;
+use texturecraft_engine::{Session, execute};
+
+const RES: f32 = 256.0;
+
+fn session() -> Session {
+    let mut s = Session::new_project("t", primitives::sphere(1.0, 48, 24), "builtin:sphere", None, 256).unwrap();
+    s.viewport = Vec2::new(400.0, 400.0);
+    s.camera.yaw = 0.0;
+    s.camera.pitch = 0.0;
+    s.update();
+    s
+}
+
+/// Base color of the composite under a viewport point.
+fn color_at(s: &Session, x: f32, y: f32) -> [f32; 3] {
+    let hit = s.pick(Vec2::new(x, y), s.viewport).unwrap();
+    s.caches[0].composite.value(Channel::BaseColor, (hit.uv.x * RES) as u32, (hit.uv.y * RES) as u32)
+}
+
+fn red(v: [f32; 3]) -> bool {
+    v[0] > 0.85 && v[1] < 0.15
+}
+
+fn dab(s: &mut Session, x: f32, y: f32) {
+    execute(s, "tool.stroke", &json!({"points": [[x, y]]})).unwrap();
+}
+
+fn paint_red(s: &mut Session, size: f32) {
+    execute(s, "tool.paint", &Value::Null).unwrap();
+    execute(s, "tool.material", &json!({"channel": "baseColor", "color": [1.0, 0.0, 0.0]})).unwrap();
+    execute(s, "tool.brush", &json!({"size": size, "hardness": 90})).unwrap();
+}
+
+#[test]
+fn clone_copies_values_from_the_source_offset() {
+    let mut s = session();
+    paint_red(&mut s, 20.0);
+    dab(&mut s, 160.0, 200.0);
+    assert!(red(color_at(&s, 160.0, 200.0)));
+    assert!(!red(color_at(&s, 240.0, 200.0)));
+
+    execute(&mut s, "tool.clone", &Value::Null).unwrap();
+    assert!(execute(&mut s, "tool.stroke", &json!({"points": [[240, 200]]})).is_err(), "no source yet");
+    execute(&mut s, "tool.cloneSource", &json!({"x": 160, "y": 200})).unwrap();
+    execute(&mut s, "tool.brush", &json!({"size": 6})).unwrap();
+    dab(&mut s, 240.0, 200.0);
+    let v = color_at(&s, 240.0, 200.0);
+    assert!(red(v), "cloned red: {v:?}");
+    // The offset stays for the next strokes: the source moved along with the destination.
+    let off = s.tool.clone_source.unwrap().offset.unwrap();
+    assert!(off[0].abs() > 0.01, "{off:?}");
+    // One undo step per clone stroke.
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    s.update();
+    assert!(!red(color_at(&s, 240.0, 200.0)));
+}
+
+#[test]
+fn smudge_drags_color_along_the_stroke() {
+    let mut s = session();
+    paint_red(&mut s, 12.0);
+    dab(&mut s, 170.0, 200.0);
+    let before = color_at(&s, 205.0, 200.0);
+    assert!(!red(before), "{before:?}");
+    execute(&mut s, "tool.smudge", &Value::Null).unwrap();
+    execute(&mut s, "tool.brush", &json!({"size": 10, "smudgeStrength": 100, "spacing": 5})).unwrap();
+    let pts: Vec<[f32; 2]> = (0..=40).map(|i| [170.0 + i as f32, 200.0]).collect();
+    execute(&mut s, "tool.stroke", &json!({"points": pts})).unwrap();
+    let after = color_at(&s, 205.0, 200.0);
+    assert!(after[0] - before[0] > 0.2 && after[1] < before[1], "red dragged right: {before:?} -> {after:?}");
+}
+
+#[test]
+fn image_alpha_shapes_the_stamp() {
+    let mut s = session();
+    let mut png = Vec::new();
+    // Top half white, bottom half black.
+    let img = image::RgbaImage::from_fn(16, 16, |_, y| if y < 8 { image::Rgba([255; 4]) } else { image::Rgba([0, 0, 0, 255]) });
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let name = s.import_resource_bytes("half.png", png).unwrap();
+    paint_red(&mut s, 20.0);
+    assert!(execute(&mut s, "tool.brush", &json!({"alpha": {"image": "missing.png"}})).is_err());
+    let r = execute(&mut s, "tool.brush", &json!({"alpha": {"image": name}})).unwrap();
+    assert_eq!(r["alpha"]["image"], json!(name));
+    execute(&mut s, "tool.strokeUv", &json!({"points": [[0.5, 0.5]]})).unwrap();
+    // In the 2D view +v points down: the image's top half lands above the center.
+    let at = |s: &Session, dy: i32| s.caches[0].composite.value(Channel::BaseColor, 128, (128 + dy) as u32);
+    assert!(red(at(&s, -12)), "{:?}", at(&s, -12));
+    assert!(!red(at(&s, 12)), "{:?}", at(&s, 12));
+    // A procedural alpha clears the image.
+    let r = execute(&mut s, "tool.brush", &json!({"alpha": "round"})).unwrap();
+    assert_eq!(r["alpha"], json!("Round"));
+}
+
+#[test]
+fn quick_mask_limits_painting() {
+    let mut s = session();
+    paint_red(&mut s, 20.0);
+    let r = execute(&mut s, "viewport.quickMask.edit", &Value::Null).unwrap();
+    assert_eq!(r["editing"], json!(true));
+    assert_eq!(r["enabled"], json!(true), "editing enables the mask");
+    let undo = s.history_labels().len();
+    dab(&mut s, 150.0, 200.0);
+    assert!(!red(color_at(&s, 150.0, 200.0)), "mask strokes do not paint the layer");
+    assert_eq!(s.history_labels().len(), undo, "mask strokes stay out of the history");
+    assert!(s.quick_mask_rgba(0, 64).is_some_and(|v| v.len() == 64 * 64 * 4));
+    execute(&mut s, "viewport.quickMask.edit", &Value::Null).unwrap();
+
+    execute(&mut s, "tool.brush", &json!({"size": 6})).unwrap();
+    dab(&mut s, 150.0, 200.0);
+    dab(&mut s, 250.0, 200.0);
+    assert!(red(color_at(&s, 150.0, 200.0)), "inside the mask");
+    assert!(!red(color_at(&s, 250.0, 200.0)), "outside the mask");
+
+    execute(&mut s, "viewport.quickMask.invert", &Value::Null).unwrap();
+    dab(&mut s, 250.0, 200.0);
+    assert!(red(color_at(&s, 250.0, 200.0)), "inverted: outside is open");
+
+    execute(&mut s, "viewport.quickMask", &json!({"enabled": false})).unwrap();
+    execute(&mut s, "tool.material", &json!({"channel": "baseColor", "color": [0.0, 1.0, 0.0]})).unwrap();
+    dab(&mut s, 150.0, 200.0);
+    assert!(color_at(&s, 150.0, 200.0)[1] > 0.85, "disabled: everything is open");
+}

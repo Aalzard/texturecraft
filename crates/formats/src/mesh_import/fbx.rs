@@ -1,0 +1,613 @@
+//! Autodesk FBX 7.x, binary (32- and 64-bit node records, zlib-compressed arrays) and ASCII:
+//! mesh geometry with normals, UVs and per-polygon materials from the layer elements, every
+//! Model's transform and parent hierarchy, and the file's unit and axis system (converted to
+//! meters, Y up, like glTF).
+
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::io::Read as _;
+
+use texturecraft_geom::glam::{Mat3, Mat4, Vec2, Vec3};
+
+use super::{Corner, PolygonSink, RawMesh, check_vertices};
+use crate::{FormatError, Result, malformed};
+
+const KIND: &str = "FBX";
+const MAGIC: &[u8] = b"Kaydara FBX Binary  \0";
+/// First FBX version with the object/connection layout read here.
+const MIN_VERSION: i64 = 7000;
+/// Deepest node nesting (and Model parent chain) followed.
+const MAX_DEPTH: usize = 64;
+/// Memory budget for parsed nodes and properties (arrays are held as f64).
+const MAX_DECODED_BYTES: usize = 1 << 31;
+/// Approximate memory charged per node and per scalar property.
+const NODE_COST: usize = 96;
+const PROP_COST: usize = 32;
+
+enum Prop {
+    I(i64),
+    F(f64),
+    S(String),
+    Arr(Vec<f64>),
+}
+
+impl Prop {
+    fn num(&self) -> Option<f64> {
+        match self {
+            Prop::I(v) => Some(*v as f64),
+            Prop::F(v) => Some(*v),
+            _ => None,
+        }
+    }
+}
+
+struct Node {
+    name: String,
+    props: Vec<Prop>,
+    children: Vec<Node>,
+}
+
+impl Node {
+    fn child(&self, name: &str) -> Option<&Node> {
+        self.children.iter().find(|c| c.name == name)
+    }
+
+    fn all<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Node> {
+        self.children.iter().filter(move |c| c.name == name)
+    }
+
+    fn int_at(&self, i: usize) -> Option<i64> {
+        match self.props.get(i) {
+            Some(Prop::I(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    fn str_at(&self, i: usize) -> &str {
+        match self.props.get(i) {
+            Some(Prop::S(s)) => s,
+            _ => "",
+        }
+    }
+
+    fn child_str(&self, name: &str) -> &str {
+        self.child(name).map_or("", |c| c.str_at(0))
+    }
+
+    /// Array payload: a binary array, an ASCII `*N { a: ... }` block or a bare value list.
+    fn arr(&self) -> Cow<'_, [f64]> {
+        if let Some(Prop::Arr(a)) = self.props.first() {
+            return Cow::Borrowed(a);
+        }
+        if let Some(a) = self.child("a") {
+            return a.arr();
+        }
+        Cow::Owned(self.props.iter().filter_map(Prop::num).collect())
+    }
+
+    /// The numbers of entry `name` in Properties70 (`P: name, type, subtype, flags, values`).
+    fn property(&self, name: &str) -> Option<Vec<f64>> {
+        let list = self.child("Properties70")?;
+        list.children.iter().find(|p| p.str_at(0) == name).map(|p| p.props.iter().filter_map(Prop::num).collect())
+    }
+
+    fn vec3(&self, name: &str, default: Vec3) -> Vec3 {
+        match self.property(name).as_deref() {
+            Some([x, y, z, ..]) => Vec3::new(*x as f32, *y as f32, *z as f32),
+            _ => default,
+        }
+    }
+
+    fn number(&self, name: &str) -> Option<f64> {
+        self.property(name)?.first().copied()
+    }
+}
+
+/// Charges parsed data against [`MAX_DECODED_BYTES`].
+struct Budget(usize);
+
+impl Budget {
+    fn charge(&mut self, bytes: usize) -> Result<()> {
+        self.0 = self.0.checked_sub(bytes).ok_or_else(|| FormatError::TooLarge(format!("the FBX file decodes to more than {MAX_DECODED_BYTES} bytes")))?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Binary.
+
+struct Binary<'a> {
+    b: &'a [u8],
+    pos: usize,
+    /// 64-bit node records (version 7500 and later).
+    wide: bool,
+    budget: Budget,
+}
+
+impl<'a> Binary<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+        let s = self.pos.checked_add(n).and_then(|end| self.b.get(self.pos..end)).ok_or_else(|| malformed(KIND, "unexpected end of file"))?;
+        self.pos += n;
+        Ok(s)
+    }
+
+    fn bytes<const N: usize>(&mut self) -> Result<[u8; N]> {
+        let mut a = [0u8; N];
+        a.copy_from_slice(self.take(N)?);
+        Ok(a)
+    }
+
+    fn u32(&mut self) -> Result<usize> {
+        Ok(u32::from_le_bytes(self.bytes()?) as usize)
+    }
+
+    fn uint(&mut self) -> Result<u64> {
+        Ok(if self.wide { u64::from_le_bytes(self.bytes()?) } else { u32::from_le_bytes(self.bytes()?) as u64 })
+    }
+
+    /// The next node ending at or before `limit`, or None at a null record / the end.
+    fn node(&mut self, limit: usize, depth: usize) -> Result<Option<Node>> {
+        let header = if self.wide { 25 } else { 13 };
+        if limit.saturating_sub(self.pos) < header {
+            return Ok(None);
+        }
+        let (end, nprops, plen) = (self.uint()?, self.uint()?, self.uint()?);
+        let [name_len] = self.bytes()?;
+        if end == 0 {
+            return Ok(None);
+        }
+        if depth > MAX_DEPTH {
+            return Err(malformed(KIND, "nodes are nested too deeply"));
+        }
+        let end = usize::try_from(end).ok().filter(|e| *e > self.pos && *e <= limit).ok_or_else(|| malformed(KIND, "node end offset out of range"))?;
+        self.budget.charge(NODE_COST)?;
+        let name = String::from_utf8_lossy(self.take(name_len as usize)?).into_owned();
+        let props_end = usize::try_from(plen).ok().and_then(|p| self.pos.checked_add(p)).filter(|e| *e <= end);
+        let props_end = props_end.ok_or_else(|| malformed(KIND, format!("properties of \"{name}\" overrun the node")))?;
+        let mut props = Vec::new();
+        for _ in 0..nprops {
+            if self.pos >= props_end {
+                return Err(malformed(KIND, format!("\"{name}\" claims more properties than it holds")));
+            }
+            props.push(self.prop()?);
+        }
+        if self.pos > props_end {
+            return Err(malformed(KIND, format!("properties of \"{name}\" overrun their list")));
+        }
+        self.pos = props_end;
+        let mut children = Vec::new();
+        while let Some(c) = self.node(end, depth + 1)? {
+            children.push(c);
+        }
+        self.pos = end;
+        Ok(Some(Node { name, props, children }))
+    }
+
+    fn prop(&mut self) -> Result<Prop> {
+        self.budget.charge(PROP_COST)?;
+        let [ty] = self.bytes()?;
+        Ok(match ty {
+            b'Y' => Prop::I(i16::from_le_bytes(self.bytes()?) as i64),
+            b'C' | b'B' => Prop::I(self.bytes::<1>()?[0] as i64),
+            b'I' => Prop::I(i32::from_le_bytes(self.bytes()?) as i64),
+            b'L' => Prop::I(i64::from_le_bytes(self.bytes()?)),
+            b'F' => Prop::F(f32::from_le_bytes(self.bytes()?) as f64),
+            b'D' => Prop::F(f64::from_le_bytes(self.bytes()?)),
+            b'S' | b'R' => {
+                let n = self.u32()?;
+                Prop::S(String::from_utf8_lossy(self.take(n)?).into_owned())
+            }
+            b'f' | b'd' | b'l' | b'i' | b'b' => Prop::Arr(self.array(ty)?),
+            other => return Err(malformed(KIND, format!("unknown property type 0x{other:02x}"))),
+        })
+    }
+
+    fn array(&mut self, ty: u8) -> Result<Vec<f64>> {
+        let (count, encoding, stored) = (self.u32()?, self.u32()?, self.u32()?);
+        let size = match ty {
+            b'd' | b'l' => 8,
+            b'f' | b'i' => 4,
+            _ => 1,
+        };
+        let len = count.checked_mul(size).ok_or_else(|| malformed(KIND, "array too large"))?;
+        self.budget.charge(count.saturating_mul(8))?;
+        let data = self.take(stored)?;
+        let raw: Cow<[u8]> = match encoding {
+            0 if stored == len => Cow::Borrowed(data),
+            1 => {
+                let mut out = Vec::new();
+                flate2::read::ZlibDecoder::new(data)
+                    .take(len as u64 + 1)
+                    .read_to_end(&mut out)
+                    .map_err(|e| malformed(KIND, format!("bad compressed array: {e}")))?;
+                if out.len() != len {
+                    return Err(malformed(KIND, "compressed array has the wrong length"));
+                }
+                Cow::Owned(out)
+            }
+            _ => return Err(malformed(KIND, format!("array encoding {encoding} with {stored} bytes for {count} items"))),
+        };
+        fn le<const N: usize>(c: &[u8]) -> [u8; N] {
+            <[u8; N]>::try_from(c).unwrap_or([0; N])
+        }
+        Ok(match ty {
+            b'd' => raw.chunks_exact(8).map(|c| f64::from_le_bytes(le(c))).collect(),
+            b'l' => raw.chunks_exact(8).map(|c| i64::from_le_bytes(le(c)) as f64).collect(),
+            b'f' => raw.chunks_exact(4).map(|c| f32::from_le_bytes(le(c)) as f64).collect(),
+            b'i' => raw.chunks_exact(4).map(|c| i32::from_le_bytes(le(c)) as f64).collect(),
+            _ => raw.iter().map(|b| *b as f64).collect(),
+        })
+    }
+}
+
+fn parse_binary(b: &[u8]) -> Result<(Vec<Node>, i64)> {
+    let mut r = Binary { b, pos: MAGIC.len(), wide: false, budget: Budget(MAX_DECODED_BYTES) };
+    let _reserved: [u8; 2] = r.bytes()?;
+    let version = u32::from_le_bytes(r.bytes()?);
+    r.wide = version >= 7500;
+    let mut nodes = Vec::new();
+    while let Some(n) = r.node(b.len(), 0)? {
+        nodes.push(n);
+    }
+    Ok((nodes, version as i64))
+}
+
+// ---------------------------------------------------------------------------------------------
+// ASCII.
+
+#[derive(Clone, Copy)]
+enum Tok<'a> {
+    /// `name:`
+    Key(&'a str),
+    Str(&'a [u8]),
+    Word(&'a str),
+    Comma,
+    Open,
+    Close,
+}
+
+struct Ascii<'a> {
+    s: &'a [u8],
+    pos: usize,
+    budget: Budget,
+}
+
+impl<'a> Ascii<'a> {
+    /// The next token and the position after it (the position is not advanced).
+    fn lex(&self) -> Result<Option<(Tok<'a>, usize)>> {
+        let mut i = self.pos;
+        loop {
+            match self.s.get(i) {
+                None => return Ok(None),
+                Some(c) if c.is_ascii_whitespace() => i += 1,
+                Some(b';') => i += self.s.get(i..).unwrap_or_default().iter().position(|c| *c == b'\n').unwrap_or(self.s.len() - i),
+                Some(_) => break,
+            }
+        }
+        let rest = self.s.get(i..).unwrap_or_default();
+        Ok(Some(match rest.first() {
+            Some(b',') => (Tok::Comma, i + 1),
+            Some(b'{') => (Tok::Open, i + 1),
+            Some(b'}') => (Tok::Close, i + 1),
+            Some(b'"') => {
+                let len = rest.get(1..).unwrap_or_default().iter().position(|c| *c == b'"').ok_or_else(|| malformed(KIND, "unterminated string"))?;
+                (Tok::Str(rest.get(1..1 + len).unwrap_or_default()), i + len + 2)
+            }
+            _ => {
+                let len = rest.iter().position(|c| c.is_ascii_whitespace() || b",{}\":;".contains(c)).unwrap_or(rest.len());
+                if len == 0 {
+                    return Err(malformed(KIND, format!("unexpected character at byte {i}")));
+                }
+                let word = std::str::from_utf8(rest.get(..len).unwrap_or_default()).map_err(|_| malformed(KIND, "text is not UTF-8"))?;
+                if rest.get(len) == Some(&b':') { (Tok::Key(word), i + len + 1) } else { (Tok::Word(word), i + len) }
+            }
+        }))
+    }
+
+    /// Nodes until `}` (left for the caller) or the end.
+    fn nodes(&mut self, depth: usize) -> Result<Vec<Node>> {
+        if depth > MAX_DEPTH {
+            return Err(malformed(KIND, "nodes are nested too deeply"));
+        }
+        let mut out = Vec::new();
+        while let Some((tok, after)) = self.lex()? {
+            match tok {
+                Tok::Close => break,
+                Tok::Key(name) => {
+                    self.pos = after;
+                    out.push(self.node(name, depth)?);
+                }
+                _ => return Err(malformed(KIND, format!("expected a property name at byte {}", self.pos))),
+            }
+        }
+        Ok(out)
+    }
+
+    fn node(&mut self, name: &str, depth: usize) -> Result<Node> {
+        self.budget.charge(NODE_COST)?;
+        let mut props = Vec::new();
+        while let Some((tok, after)) = self.lex()? {
+            let prop = match tok {
+                Tok::Str(s) => Some(Prop::S(String::from_utf8_lossy(s).into_owned())),
+                // `*N` announces an array's length.
+                Tok::Word(w) if w.starts_with('*') => None,
+                Tok::Word(w) => Some(w.parse::<i64>().map(Prop::I).or_else(|_| w.parse::<f64>().map(Prop::F)).unwrap_or_else(|_| Prop::S(w.to_string()))),
+                _ => break,
+            };
+            self.pos = after;
+            if let Some(p) = prop {
+                self.budget.charge(PROP_COST)?;
+                props.push(p);
+            }
+            match self.lex()? {
+                Some((Tok::Comma, after)) => self.pos = after,
+                _ => break,
+            }
+        }
+        let mut children = Vec::new();
+        if let Some((Tok::Open, after)) = self.lex()? {
+            self.pos = after;
+            children = self.nodes(depth + 1)?;
+            match self.lex()? {
+                Some((Tok::Close, after)) => self.pos = after,
+                _ => return Err(malformed(KIND, format!("\"{name}\" is missing its closing brace"))),
+            }
+        }
+        // Long value lists (arrays) are stored compactly.
+        if props.len() > 1 && props.iter().all(|p| p.num().is_some()) {
+            props = vec![Prop::Arr(props.iter().filter_map(Prop::num).collect())];
+        }
+        Ok(Node { name: name.to_string(), props, children })
+    }
+}
+
+fn parse_ascii(s: &[u8]) -> Result<(Vec<Node>, i64)> {
+    let mut a = Ascii { s, pos: 0, budget: Budget(MAX_DECODED_BYTES) };
+    let nodes = a.nodes(0)?;
+    if a.lex()?.is_some() {
+        return Err(malformed(KIND, "unbalanced closing brace"));
+    }
+    let version = nodes.iter().find(|n| n.name == "FBXHeaderExtension").and_then(|h| h.child("FBXVersion")).and_then(|v| v.int_at(0));
+    let version = version.ok_or_else(|| malformed(KIND, "not an FBX file (no FBXHeaderExtension / FBXVersion)"))?;
+    Ok((nodes, version))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Scene.
+
+pub(crate) fn read(bytes: &[u8]) -> Result<RawMesh> {
+    crate::guard(KIND, || read_inner(bytes))
+}
+
+fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
+    let (nodes, version) = if bytes.starts_with(MAGIC) { parse_binary(bytes)? } else { parse_ascii(bytes)? };
+    if version < MIN_VERSION {
+        return Err(FormatError::Unsupported(format!("FBX version {version} (re-export as FBX 2011 / 7.x or newer)")));
+    }
+    let root = |name: &str| nodes.iter().find(|n| n.name == name);
+    let objects = root("Objects").ok_or_else(|| malformed(KIND, "the file has no Objects"))?;
+    let (mut geometries, mut models, mut materials) = (HashMap::new(), HashMap::new(), HashMap::new());
+    for o in &objects.children {
+        let Some(id) = o.int_at(0) else { continue };
+        match o.name.as_str() {
+            "Geometry" if o.child("Vertices").is_some() => geometries.insert(id, o),
+            "Model" => models.insert(id, o),
+            "Material" => materials.insert(id, o),
+            _ => None,
+        };
+    }
+    // (geometry, model) instances, Model parents, and each Model's materials in slot order.
+    let mut instances: Vec<(i64, Option<i64>)> = Vec::new();
+    let mut parents: HashMap<i64, i64> = HashMap::new();
+    let mut slots: HashMap<i64, Vec<String>> = HashMap::new();
+    for c in root("Connections").into_iter().flat_map(|c| c.all("C")) {
+        let (Some(child), Some(parent)) = (c.int_at(1), c.int_at(2)) else { continue };
+        if c.str_at(0) != "OO" || !models.contains_key(&parent) {
+            continue;
+        }
+        if geometries.contains_key(&child) {
+            instances.push((child, Some(parent)));
+        } else if let Some(m) = materials.get(&child) {
+            let name = clean_name(m.str_at(1));
+            slots.entry(parent).or_default().push(if name.is_empty() { format!("Material_{child}") } else { name.to_string() });
+        } else if models.contains_key(&child) {
+            parents.insert(child, parent);
+        }
+    }
+    let placed: HashSet<i64> = instances.iter().map(|(g, _)| *g).collect();
+    let mut unplaced: Vec<i64> = geometries.keys().filter(|g| !placed.contains(g)).copied().collect();
+    unplaced.sort_unstable();
+    instances.extend(unplaced.into_iter().map(|g| (g, None)));
+
+    let global = global_transform(root("GlobalSettings"));
+    let mut sink = PolygonSink::default();
+    let no_slots = Vec::new();
+    for (geom, model) in instances {
+        let Some(g) = geometries.get(&geom) else { continue };
+        let m = match model.and_then(|m| models.get(&m).map(|n| (m, n))) {
+            Some((id, node)) => {
+                sink.part = clean_name(node.str_at(1)).to_string();
+                world(&models, &parents, id)? * geometric(node)
+            }
+            None => {
+                sink.part.clear();
+                Mat4::IDENTITY
+            }
+        };
+        let names = model.and_then(|m| slots.get(&m)).unwrap_or(&no_slots);
+        add_geometry(&mut sink, g, global * m, names)?;
+    }
+    Ok(sink.finish())
+}
+
+/// `Name\0\1Class` (binary) or `Class::Name` (ASCII) to `Name`.
+fn clean_name(s: &str) -> &str {
+    match s.split_once("\u{0}\u{1}") {
+        Some((name, _)) => name,
+        None => s.split_once("::").map_or(s, |(_, name)| name),
+    }
+}
+
+/// Unit scale to meters and the file's axis system to Y up (+Z front, +X right).
+fn global_transform(settings: Option<&Node>) -> Mat4 {
+    let get = |name: &str, default: f64| settings.and_then(|s| s.number(name)).filter(|v| v.is_finite()).unwrap_or(default);
+    let unit = get("UnitScaleFactor", 1.0);
+    let unit = if unit > 0.0 { unit / 100.0 } else { 0.01 };
+    let axis = |a: &str, s: &str, default: f64| (get(a, default) as i64, if get(s, 1.0) < 0.0 { -1.0 } else { 1.0 });
+    let [(right, rs), (up, us), (front, fs)] =
+        [axis("CoordAxis", "CoordAxisSign", 0.0), axis("UpAxis", "UpAxisSign", 1.0), axis("FrontAxis", "FrontAxisSign", 2.0)];
+    let basis = |a: i64| [Vec3::X, Vec3::Y, Vec3::Z].get(a as usize).copied().filter(|_| a >= 0);
+    let rows = match (basis(right), basis(up), basis(front)) {
+        (Some(r), Some(u), Some(f)) if r.cross(u).dot(f).abs() > 0.5 => Mat3::from_cols(r * rs, u * us, f * fs).transpose(),
+        _ => Mat3::IDENTITY,
+    };
+    Mat4::from_mat3(rows) * Mat4::from_scale(Vec3::splat(unit as f32))
+}
+
+/// Euler rotation in degrees, `order` as FBX RotationOrder (0 = XYZ: X applied first).
+fn euler(deg: Vec3, order: i64) -> Mat4 {
+    use Vec3 as V;
+    let axes = match order {
+        1 => [V::X, V::Z, V::Y],
+        2 => [V::Y, V::Z, V::X],
+        3 => [V::Y, V::X, V::Z],
+        4 => [V::Z, V::X, V::Y],
+        5 => [V::Z, V::Y, V::X],
+        _ => [V::X, V::Y, V::Z],
+    };
+    axes.iter().fold(Mat4::IDENTITY, |m, a| Mat4::from_axis_angle(*a, deg.dot(*a).to_radians()) * m)
+}
+
+/// A Model's local transform: T · Roff · Rp · Rpre · R · Rpost⁻¹ · Rp⁻¹ · Soff · Sp · S · Sp⁻¹.
+fn local(m: &Node) -> Mat4 {
+    let t = |name: &str| Mat4::from_translation(m.vec3(name, Vec3::ZERO));
+    let order = m.number("RotationOrder").unwrap_or(0.0) as i64;
+    let (rp, sp) = (m.vec3("RotationPivot", Vec3::ZERO), m.vec3("ScalingPivot", Vec3::ZERO));
+    t("Lcl Translation")
+        * t("RotationOffset")
+        * Mat4::from_translation(rp)
+        * euler(m.vec3("PreRotation", Vec3::ZERO), 0)
+        * euler(m.vec3("Lcl Rotation", Vec3::ZERO), order)
+        * euler(m.vec3("PostRotation", Vec3::ZERO), 0).inverse()
+        * Mat4::from_translation(-rp)
+        * t("ScalingOffset")
+        * Mat4::from_translation(sp)
+        * Mat4::from_scale(m.vec3("Lcl Scaling", Vec3::ONE))
+        * Mat4::from_translation(-sp)
+}
+
+/// The geometry offset of a Model (not inherited by its children).
+fn geometric(m: &Node) -> Mat4 {
+    Mat4::from_translation(m.vec3("GeometricTranslation", Vec3::ZERO))
+        * euler(m.vec3("GeometricRotation", Vec3::ZERO), 0)
+        * Mat4::from_scale(m.vec3("GeometricScaling", Vec3::ONE))
+}
+
+fn world(models: &HashMap<i64, &Node>, parents: &HashMap<i64, i64>, id: i64) -> Result<Mat4> {
+    let mut m = Mat4::IDENTITY;
+    let mut cur = Some(id);
+    for _ in 0..=MAX_DEPTH {
+        let Some(node) = cur.and_then(|c| models.get(&c)) else { return Ok(m) };
+        m = local(node) * m;
+        cur = cur.and_then(|c| parents.get(&c)).copied();
+    }
+    Err(malformed(KIND, "the Model hierarchy is nested too deeply (or cyclic)"))
+}
+
+#[derive(Clone, Copy)]
+enum Mapping {
+    PolygonVertex,
+    ControlPoint,
+    Polygon,
+    AllSame,
+}
+
+/// One LayerElement's items, optionally through an index array.
+struct Layer<'a> {
+    mapping: Mapping,
+    data: Cow<'a, [f64]>,
+    index: Option<Cow<'a, [f64]>>,
+}
+
+impl Layer<'_> {
+    /// Element `index` names the index array (empty: the data is never indexed).
+    fn read<'a>(geom: &'a Node, element: &str, data: &str, index: &str) -> Option<Layer<'a>> {
+        let el = geom.children.iter().filter(|c| c.name == element).min_by_key(|e| e.int_at(0) != Some(0))?;
+        let mapping = match el.child_str("MappingInformationType") {
+            "ByPolygonVertex" => Mapping::PolygonVertex,
+            "ByVertice" | "ByVertex" | "ByControlPoint" => Mapping::ControlPoint,
+            "ByPolygon" => Mapping::Polygon,
+            "AllSame" => Mapping::AllSame,
+            _ => return None,
+        };
+        let indexed = !index.is_empty() && matches!(el.child_str("ReferenceInformationType"), "IndexToDirect" | "Index");
+        let index = if indexed { Some(el.child(index)?.arr()) } else { None };
+        Some(Layer { mapping, data: el.child(data)?.arr(), index })
+    }
+
+    /// The `W` numbers of polygon vertex `k` (control point `cp`, polygon `poly`).
+    fn get<const W: usize>(&self, k: usize, cp: usize, poly: usize) -> Option<[f64; W]> {
+        let i = match self.mapping {
+            Mapping::PolygonVertex => k,
+            Mapping::ControlPoint => cp,
+            Mapping::Polygon => poly,
+            Mapping::AllSame => 0,
+        };
+        let i = match &self.index {
+            Some(ix) => Some(*ix.get(i)?).filter(|v| *v >= 0.0)? as usize,
+            None => i,
+        };
+        let start = i.checked_mul(W)?;
+        self.data.get(start..start.checked_add(W)?)?.try_into().ok()
+    }
+}
+
+fn add_geometry(sink: &mut PolygonSink, g: &Node, m: Mat4, slots: &[String]) -> Result<()> {
+    let verts = g.child("Vertices").map(Node::arr).unwrap_or_default();
+    check_vertices(verts.len() / 3)?;
+    let points: Vec<Vec3> = verts.chunks_exact(3).map(|c| m.transform_point3(Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32))).collect();
+    let pvi = g.child("PolygonVertexIndex").map(Node::arr).unwrap_or_default();
+    let normals = Layer::read(g, "LayerElementNormal", "Normals", "NormalsIndex");
+    let uvs = Layer::read(g, "LayerElementUV", "UV", "UVIndex");
+    let mats = Layer::read(g, "LayerElementMaterial", "Materials", "");
+    let nm = Mat3::from_mat4(m).inverse().transpose();
+    let flip = m.determinant() < 0.0;
+    let (mut corners, mut poly, mut bad_normals, mut bad_uvs) = (Vec::new(), 0usize, 0usize, 0usize);
+    for (k, &v) in pvi.iter().enumerate() {
+        // The last corner of each polygon is stored as -(index + 1).
+        let (cp, last) = if v < 0.0 { (-v - 1.0, true) } else { (v, false) };
+        let p = points.get(cp as usize).filter(|_| cp.fract() == 0.0).ok_or_else(|| malformed(KIND, format!("polygon vertex index {v} out of range")))?;
+        let cp = cp as usize;
+        let n = normals.as_ref().and_then(|l| {
+            let n = l.get(k, cp, poly).map(|[x, y, z]| nm * Vec3::new(x as f32, y as f32, z as f32));
+            bad_normals += usize::from(n.is_none());
+            n
+        });
+        // A UV layer with holes keeps its layout: missing items read as 0, 0.
+        let uv = uvs.as_ref().map(|l| match l.get(k, cp, poly) {
+            Some([u, v]) => Vec2::new(u as f32, 1.0 - v as f32),
+            None => {
+                bad_uvs += 1;
+                Vec2::ZERO
+            }
+        });
+        corners.push(Corner { p: *p, n, uv });
+        if last || k + 1 == pvi.len() {
+            if flip {
+                corners.reverse();
+            }
+            let slot = mats.as_ref().and_then(|l| l.get(poly, poly, poly)).map_or(0.0, |[s]| s);
+            let name = slots.get(slot as usize).filter(|_| slot >= 0.0).map_or("Default", String::as_str);
+            sink.polygon(name, &corners)?;
+            corners.clear();
+            poly += 1;
+        }
+    }
+    if bad_normals > 0 {
+        sink.warn(format!("{bad_normals} polygon corners have no normal in the FBX normal layer; normals were recomputed"));
+    }
+    if bad_uvs > 0 {
+        sink.warn(format!("{bad_uvs} polygon corners have no UV in the FBX UV layer (set to 0, 0)"));
+    }
+    Ok(())
+}

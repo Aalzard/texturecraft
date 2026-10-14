@@ -1,0 +1,11 @@
+[package]
+name = "texturecraft-texel"
+description = "TextureCraft texel storage: sparse copy-on-write tiles, UV padding, noise"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

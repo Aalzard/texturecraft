@@ -1,0 +1,579 @@
+//! Built-in materials and smart materials: fill layers (and folders of fill layers with
+//! mesh-map-driven masks), all procedural (no bitmap assets), so they are original to
+//! TextureCraft and work at any resolution.
+//!
+//! Values follow physically based conventions: metals are metallic 1 with base colors from
+//! published measured reflectance (F0) tables; dielectrics are metallic 0 with linear albedo
+//! between about 0.02 (charcoal, rubber) and 0.9 (fresh snow).
+
+use texturecraft_core::{
+    BlendMode, Channel, ChannelBlend, EffectKind, Fill, GeneratorKind, Layer, LayerId, LayerKind, MaskBackground, Procedural, ProceduralKind, Project,
+    Projection, Source,
+};
+
+use crate::smart_masks::{build_mask, directional, generator, pattern};
+use crate::{EngineError, Result, Session};
+
+/// One material in the shelf: id, label, category, and a representative color/metal/roughness.
+pub struct SmartMaterial {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// Shelf group ("Metal", "Wood", …).
+    pub category: &'static str,
+    pub base: [f32; 3],
+    pub metallic: f32,
+    pub roughness: f32,
+    /// True for multi-layer "smart" materials (worn, dirty…), false for simple materials.
+    pub smart: bool,
+}
+
+const fn m(id: &'static str, label: &'static str, category: &'static str, base: [f32; 3], metallic: f32, roughness: f32) -> SmartMaterial {
+    SmartMaterial { id, label, category, base, metallic, roughness, smart: false }
+}
+
+const fn sm(id: &'static str, label: &'static str, category: &'static str, base: [f32; 3], metallic: f32, roughness: f32) -> SmartMaterial {
+    SmartMaterial { id, label, category, base, metallic, roughness, smart: true }
+}
+
+const METAL: &str = "Metal";
+const WOOD: &str = "Wood";
+const STONE: &str = "Stone & Masonry";
+const PLASTIC: &str = "Plastic & Rubber";
+const FABRIC: &str = "Fabric & Leather";
+const GLASS: &str = "Ceramic & Glass";
+
+pub const MATERIALS: &[SmartMaterial] = &[
+    // Metals (base color = measured F0, linear).
+    m("steel", "Steel", METAL, [0.56, 0.57, 0.58], 1.0, 0.34),
+    m("steel_stainless", "Steel Stainless", METAL, [0.65, 0.64, 0.62], 1.0, 0.24),
+    m("steel_dark", "Steel Dark", METAL, [0.48, 0.48, 0.5], 1.0, 0.3),
+    m("iron", "Iron Raw", METAL, [0.53, 0.53, 0.54], 1.0, 0.5),
+    m("cast_iron", "Cast Iron", METAL, [0.48, 0.48, 0.48], 1.0, 0.65),
+    m("copper", "Copper", METAL, [0.955, 0.638, 0.538], 1.0, 0.26),
+    m("copper_hammered", "Copper Hammered", METAL, [0.92, 0.6, 0.5], 1.0, 0.3),
+    m("brass", "Brass", METAL, [0.91, 0.778, 0.423], 1.0, 0.27),
+    m("bronze", "Bronze", METAL, [0.8, 0.56, 0.32], 1.0, 0.36),
+    m("gold_polished", "Gold Polished", METAL, [1.0, 0.766, 0.336], 1.0, 0.17),
+    m("silver", "Silver", METAL, [0.972, 0.96, 0.915], 1.0, 0.22),
+    m("aluminium", "Aluminium Raw", METAL, [0.913, 0.922, 0.924], 1.0, 0.42),
+    m("aluminium_brushed", "Aluminium Brushed", METAL, [0.913, 0.922, 0.924], 1.0, 0.32),
+    m("chrome", "Chrome", METAL, [0.55, 0.556, 0.554], 1.0, 0.05),
+    m("titanium", "Titanium", METAL, [0.542, 0.497, 0.449], 1.0, 0.32),
+    m("nickel", "Nickel", METAL, [0.66, 0.609, 0.526], 1.0, 0.25),
+    m("galvanized", "Steel Galvanized", METAL, [0.69, 0.71, 0.72], 1.0, 0.4),
+    // Woods.
+    m("wood", "Wood Varnished", WOOD, [0.29, 0.15, 0.06], 0.0, 0.26),
+    m("wood_oak", "Oak", WOOD, [0.33, 0.2, 0.09], 0.0, 0.62),
+    m("wood_walnut", "Walnut", WOOD, [0.12, 0.06, 0.03], 0.0, 0.5),
+    m("wood_pine", "Pine", WOOD, [0.52, 0.33, 0.16], 0.0, 0.65),
+    m("plywood", "Plywood", WOOD, [0.55, 0.38, 0.21], 0.0, 0.75),
+    m("wood_painted", "Wood Painted", WOOD, [0.61, 0.59, 0.54], 0.0, 0.48),
+    // Stone, masonry and earth.
+    m("concrete", "Concrete", STONE, [0.27, 0.26, 0.25], 0.0, 0.9),
+    m("brick", "Brick Red", STONE, [0.3, 0.075, 0.04], 0.0, 0.85),
+    m("tiles_ceramic", "Tiles Ceramic", STONE, [0.8, 0.8, 0.78], 0.0, 0.1),
+    m("marble", "Marble", STONE, [0.78, 0.78, 0.76], 0.0, 0.14),
+    m("marble_black", "Marble Black", STONE, [0.03, 0.03, 0.032], 0.0, 0.1),
+    m("granite", "Granite", STONE, [0.3, 0.27, 0.25], 0.0, 0.3),
+    m("asphalt", "Asphalt", STONE, [0.06, 0.06, 0.058], 0.0, 0.9),
+    m("clay", "Clay Earthenware", STONE, [0.45, 0.18, 0.09], 0.0, 0.8),
+    // Plastics, rubber, composites.
+    m("plastic_glossy", "Plastic Glossy", PLASTIC, [0.8, 0.12, 0.08], 0.0, 0.16),
+    m("plastic_matte", "Plastic Matte", PLASTIC, [0.18, 0.18, 0.19], 0.0, 0.6),
+    m("plastic_textured", "Plastic Textured", PLASTIC, [0.035, 0.035, 0.04], 0.0, 0.55),
+    m("rubber", "Rubber", PLASTIC, [0.03, 0.03, 0.03], 0.0, 0.88),
+    m("carbon_fiber", "Carbon Fiber", PLASTIC, [0.035, 0.035, 0.04], 0.0, 0.15),
+    // Fabric and leather.
+    m("fabric", "Fabric Cotton", FABRIC, [0.45, 0.47, 0.54], 0.0, 0.95),
+    m("denim", "Denim", FABRIC, [0.06, 0.09, 0.19], 0.0, 0.92),
+    m("leather", "Leather", FABRIC, [0.17, 0.08, 0.04], 0.0, 0.52),
+    m("leather_black", "Leather Black", FABRIC, [0.025, 0.025, 0.028], 0.0, 0.42),
+    // Ceramic and glass.
+    m("ceramic", "Ceramic White", GLASS, [0.8, 0.8, 0.78], 0.0, 0.08),
+    m("glass", "Glass Clear", GLASS, [0.02, 0.022, 0.022], 0.0, 0.03),
+    m("glass_frosted", "Glass Frosted", GLASS, [0.6, 0.64, 0.64], 0.0, 0.45),
+    // Smart materials.
+    sm("steel_painted_worn", "Steel Painted Worn", METAL, [0.42, 0.06, 0.04], 0.2, 0.45),
+    sm("steel_painted_rust", "Steel Painted Rust Leaks", METAL, [0.62, 0.62, 0.6], 0.1, 0.5),
+    sm("military_paint", "Military Paint", METAL, [0.07, 0.08, 0.035], 0.1, 0.6),
+    sm("iron_rusted", "Iron Rusted", METAL, [0.38, 0.14, 0.05], 0.3, 0.8),
+    sm("aluminium_scratched", "Aluminium Scratched", METAL, [0.913, 0.922, 0.924], 1.0, 0.3),
+    sm("copper_patina", "Copper Oxidized", METAL, [0.6, 0.45, 0.35], 0.6, 0.5),
+    sm("bronze_statue", "Bronze Statue", METAL, [0.35, 0.4, 0.3], 0.5, 0.6),
+    sm("brass_tarnished", "Brass Tarnished", METAL, [0.7, 0.58, 0.3], 0.8, 0.4),
+    sm("gold_dirty", "Gold Dirty", METAL, [0.9, 0.68, 0.3], 0.9, 0.3),
+    sm("chrome_smudged", "Chrome Smudged", METAL, [0.55, 0.556, 0.554], 1.0, 0.12),
+    sm("wood_weathered", "Wood Weathered", WOOD, [0.33, 0.3, 0.27], 0.0, 0.8),
+    sm("wood_chipped_paint", "Wood Chipped Paint", WOOD, [0.04, 0.22, 0.22], 0.0, 0.55),
+    sm("concrete_dirty", "Concrete Dirty", STONE, [0.28, 0.26, 0.23], 0.0, 0.92),
+    sm("brick_mossy", "Brick Mossy", STONE, [0.22, 0.12, 0.05], 0.0, 0.9),
+    sm("plastic_dusty", "Plastic Dusty", PLASTIC, [0.05, 0.2, 0.45], 0.0, 0.4),
+    sm("plastic_scuffed", "Plastic Scuffed", PLASTIC, [0.06, 0.06, 0.065], 0.0, 0.5),
+    sm("leather_worn", "Leather Worn", FABRIC, [0.22, 0.12, 0.07], 0.0, 0.5),
+];
+
+fn norm(x: &str) -> String {
+    x.to_ascii_lowercase().replace([' ', '_', '-'], "")
+}
+
+pub fn find(id: &str) -> Option<&'static SmartMaterial> {
+    MATERIALS.iter().find(|m| norm(m.id) == norm(id) || norm(m.label) == norm(id))
+}
+
+fn u(v: f32) -> Source {
+    Source::Uniform([v; 3])
+}
+
+fn rgb(c: [f32; 3]) -> Source {
+    Source::Uniform(c)
+}
+
+fn pat(kind: ProceduralKind, scale: f32, seed: u32, contrast: f32, low: [f32; 3], high: [f32; 3]) -> Source {
+    Source::Procedural { pattern: Procedural { kind, scale, seed, contrast, balance: 0.0, invert: false }, low, high }
+}
+
+/// A scalar pattern between `lo` and `hi`.
+fn gray(kind: ProceduralKind, scale: f32, seed: u32, lo: f32, hi: f32) -> Source {
+    pat(kind, scale, seed, 1.0, [lo; 3], [hi; 3])
+}
+
+type Sources = Vec<(Channel, Source)>;
+
+fn surface(base: Source, metallic: f32, rough: Source) -> Sources {
+    vec![(Channel::BaseColor, base), (Channel::Metallic, u(metallic)), (Channel::Roughness, rough)]
+}
+
+fn metal(base: Source, rough: Source) -> Sources {
+    surface(base, 1.0, rough)
+}
+
+fn dielectric(base: Source, rough: Source) -> Sources {
+    surface(base, 0.0, rough)
+}
+
+/// `sources` plus `extra` channels (height, opacity…).
+fn plus(mut sources: Sources, extra: impl IntoIterator<Item = (Channel, Source)>) -> Sources {
+    sources.extend(extra);
+    sources
+}
+
+fn height(s: Source) -> [(Channel, Source); 1] {
+    [(Channel::Height, s)]
+}
+
+pub(crate) struct Builder<'a> {
+    pub p: &'a mut Project,
+    /// Channels of the target texture set; layers only enable these.
+    pub channels: Vec<Channel>,
+}
+
+impl Builder<'_> {
+    fn fill(&mut self, name: &str, sources: Sources) -> Layer {
+        let id = self.p.alloc_id();
+        let enabled: Vec<Channel> = sources.iter().map(|(c, _)| *c).filter(|c| self.channels.contains(c)).collect();
+        let projection = Projection::Triplanar { scale: 1.0, sharpness: 8.0, offset: [0.0; 3] };
+        Layer::new(id, name, LayerKind::Fill(Fill { sources: sources.into_iter().collect(), projection }), &enabled)
+    }
+
+    /// A fill masked by smart mask preset `mask` (inverted: present where the preset is not).
+    fn preset(&mut self, name: &str, sources: Sources, mask: &str, invert: bool) -> Result<Layer> {
+        let mut l = self.fill(name, sources);
+        l.mask = Some(crate::smart_masks::mask(self.p, mask, invert)?);
+        Ok(l)
+    }
+
+    /// A fill with a custom black-background mask.
+    fn masked(&mut self, name: &str, sources: Sources, effects: Vec<(EffectKind, BlendMode)>) -> Layer {
+        let mut l = self.fill(name, sources);
+        l.mask = Some(build_mask(self.p, MaskBackground::Black, effects));
+        l
+    }
+
+    /// The common grime layer: dark dirt settled in cavities.
+    fn dirt(&mut self, color: [f32; 3]) -> Result<Layer> {
+        self.preset("Dirt", dielectric(rgb(color), u(0.9)), "dirt_cavities", false)
+    }
+}
+
+/// Layers (bottom → top) making up material `id`.
+pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
+    use BlendMode::{Lighten, Multiply, Normal};
+    use Channel::*;
+    use GeneratorKind as G;
+    use ProceduralKind as P;
+    let m = find(id).ok_or_else(|| EngineError::Other(format!("unknown material `{id}`")))?;
+    let one = |b: &mut Builder, s: Sources| -> Result<Vec<Layer>> { Ok(vec![b.fill(m.label, s)]) };
+    // A simple metal: subtle cloudy tone and roughness variation around the table values.
+    let plain_metal = |b: &mut Builder, rough: Source| {
+        let lo = m.base.map(|v| v * 0.94);
+        one(b, metal(pat(P::Clouds, 3.0, 5, 1.0, lo, m.base), rough))
+    };
+    let r = m.roughness;
+    let clouds_rough = |seed: u32| gray(P::Clouds, 6.0, seed, r * 0.85, (r * 1.2).min(1.0));
+    match m.id {
+        // ---- Metals -------------------------------------------------------------------------
+        "steel" | "steel_dark" | "iron" | "copper" | "brass" | "bronze" | "gold_polished" | "silver" | "aluminium" | "chrome" | "nickel" => {
+            plain_metal(b, clouds_rough(7))
+        }
+        "steel_stainless" | "aluminium_brushed" | "titanium" => plain_metal(b, gray(P::Brushed, 3.0, 3, r * 0.75, r * 1.25)),
+        "cast_iron" => one(
+            b,
+            plus(metal(pat(P::Noise, 1.0, 4, 1.0, [0.44; 3], [0.52; 3]), gray(P::Grunge, 3.0, 9, 0.55, 0.75)), height(gray(P::Pores, 14.0, 3, -0.02, 0.0))),
+        ),
+        "copper_hammered" => one(
+            b,
+            plus(
+                metal(pat(P::Hammered, 6.0, 1, 1.0, [0.86, 0.55, 0.45], [0.955, 0.638, 0.538]), gray(P::Hammered, 6.0, 1, 0.38, 0.24)),
+                height(gray(P::Hammered, 6.0, 1, -0.04, 0.0)),
+            ),
+        ),
+        "galvanized" => one(b, metal(pat(P::Voronoi, 10.0, 4, 1.0, [0.6, 0.62, 0.63], [0.78, 0.8, 0.81]), gray(P::Voronoi, 10.0, 4, 0.5, 0.28))),
+        // ---- Woods (grain along X, rings across Y) ---------------------------------------------
+        "wood" => one(
+            b,
+            plus(dielectric(pat(P::Wood, 2.0, 7, 1.0, [0.12, 0.05, 0.018], [0.42, 0.22, 0.09]), clouds_rough(3)), height(gray(P::Wood, 2.0, 7, -0.004, 0.0))),
+        ),
+        "wood_oak" => one(
+            b,
+            plus(
+                dielectric(pat(P::Wood, 2.0, 7, 1.0, [0.2, 0.11, 0.045], [0.46, 0.29, 0.14]), gray(P::Wood, 2.0, 7, 0.74, 0.56)),
+                height(gray(P::Wood, 2.0, 7, -0.012, 0.0)),
+            ),
+        ),
+        "wood_walnut" => one(
+            b,
+            plus(
+                dielectric(pat(P::Wood, 2.5, 21, 1.0, [0.05, 0.025, 0.012], [0.2, 0.1, 0.05]), gray(P::Wood, 2.5, 21, 0.56, 0.46)),
+                height(gray(P::Wood, 2.5, 21, -0.008, 0.0)),
+            ),
+        ),
+        "wood_pine" => one(
+            b,
+            plus(
+                dielectric(pat(P::Wood, 1.5, 4, 1.0, [0.33, 0.17, 0.065], [0.7, 0.48, 0.25]), gray(P::Wood, 1.5, 4, 0.72, 0.62)),
+                height(gray(P::Wood, 1.5, 4, -0.012, 0.0)),
+            ),
+        ),
+        "plywood" => one(b, dielectric(pat(P::Wood, 1.2, 15, 0.6, [0.42, 0.27, 0.13], [0.66, 0.47, 0.27]), gray(P::Wood, 1.2, 15, 0.8, 0.7))),
+        "wood_painted" => one(
+            b,
+            plus(
+                dielectric(pat(P::Clouds, 3.0, 4, 1.0, [0.57, 0.55, 0.5], [0.64, 0.62, 0.57]), gray(P::Wood, 2.0, 7, 0.56, 0.42)),
+                height(gray(P::Wood, 2.0, 7, -0.015, 0.0)),
+            ),
+        ),
+        // ---- Stone, masonry, earth ----------------------------------------------------------
+        "concrete" => one(
+            b,
+            plus(
+                dielectric(pat(P::Clouds, 6.0, 4, 1.3, [0.2, 0.19, 0.18], [0.35, 0.34, 0.32]), gray(P::Noise, 1.0, 6, 0.85, 0.95)),
+                height(gray(P::Pores, 14.0, 6, -0.03, 0.0)),
+            ),
+        ),
+        "brick" => one(
+            b,
+            plus(
+                dielectric(pat(P::Bricks, 3.0, 4, 1.0, [0.27, 0.26, 0.24], [0.3, 0.075, 0.04]), gray(P::Bricks, 3.0, 4, 0.95, 0.82)),
+                height(gray(P::Bricks, 3.0, 4, -0.04, 0.0)),
+            ),
+        ),
+        "tiles_ceramic" => one(
+            b,
+            plus(
+                dielectric(pat(P::Tiles, 4.0, 2, 1.0, [0.33, 0.32, 0.3], [0.82, 0.82, 0.8]), gray(P::Tiles, 4.0, 2, 0.85, 0.08)),
+                height(gray(P::Tiles, 4.0, 2, -0.03, 0.0)),
+            ),
+        ),
+        "marble" => one(b, dielectric(pat(P::Marble, 2.0, 12, 1.0, [0.38, 0.38, 0.37], [0.86, 0.86, 0.84]), clouds_rough(12))),
+        "marble_black" => one(b, dielectric(pat(P::Marble, 2.0, 5, 1.0, [0.55, 0.55, 0.53], [0.015, 0.015, 0.017]), clouds_rough(5))),
+        "granite" => one(b, dielectric(pat(P::Voronoi, 70.0, 8, 1.0, [0.1, 0.095, 0.09], [0.5, 0.47, 0.45]), gray(P::Voronoi, 70.0, 8, 0.25, 0.35))),
+        "asphalt" => one(
+            b,
+            plus(
+                dielectric(pat(P::Voronoi, 90.0, 3, 1.0, [0.025; 3], [0.11, 0.105, 0.1]), gray(P::Voronoi, 90.0, 3, 0.95, 0.75)),
+                height(gray(P::Pores, 10.0, 5, -0.02, 0.0)),
+            ),
+        ),
+        "clay" => one(
+            b,
+            plus(dielectric(pat(P::Clouds, 5.0, 2, 1.0, [0.4, 0.15, 0.07], [0.5, 0.21, 0.11]), clouds_rough(2)), height(gray(P::Noise, 0.8, 3, -0.005, 0.005))),
+        ),
+        // ---- Plastics, rubber, composites ---------------------------------------------------
+        "plastic_glossy" | "plastic_matte" | "ceramic" => one(b, dielectric(rgb(m.base), clouds_rough(9))),
+        "plastic_textured" => one(b, plus(dielectric(rgb(m.base), gray(P::Leather, 40.0, 5, 0.66, 0.5)), height(gray(P::Leather, 40.0, 5, -0.01, 0.0)))),
+        "rubber" => one(b, dielectric(pat(P::Noise, 0.5, 3, 1.0, [0.025; 3], [0.035; 3]), gray(P::Noise, 0.5, 3, 0.84, 0.94))),
+        "carbon_fiber" => {
+            one(b, plus(dielectric(pat(P::Weave, 24.0, 1, 1.0, [0.01, 0.01, 0.012], [0.06, 0.06, 0.065]), u(r)), height(gray(P::Weave, 24.0, 1, 0.0, 0.006))))
+        }
+        // ---- Fabric and leather -------------------------------------------------------------
+        "fabric" => {
+            one(b, plus(dielectric(pat(P::Weave, 18.0, 2, 1.0, [0.27, 0.29, 0.34], [0.6, 0.62, 0.7]), u(r)), height(gray(P::Weave, 18.0, 2, -0.01, 0.0))))
+        }
+        "denim" => {
+            one(b, plus(dielectric(pat(P::Weave, 22.0, 5, 1.0, [0.02, 0.03, 0.08], [0.12, 0.16, 0.3]), u(r)), height(gray(P::Weave, 22.0, 5, -0.01, 0.0))))
+        }
+        "leather" => one(
+            b,
+            plus(
+                dielectric(pat(P::Leather, 42.0, 2, 1.0, [0.07, 0.03, 0.013], [0.25, 0.12, 0.06]), gray(P::Leather, 42.0, 2, 0.62, 0.46)),
+                height(gray(P::Leather, 42.0, 2, -0.02, 0.0)),
+            ),
+        ),
+        "leather_black" => one(
+            b,
+            plus(
+                dielectric(pat(P::Leather, 42.0, 6, 1.0, [0.01; 3], [0.04, 0.04, 0.045]), gray(P::Leather, 42.0, 6, 0.52, 0.36)),
+                height(gray(P::Leather, 42.0, 6, -0.02, 0.0)),
+            ),
+        ),
+        // ---- Glass (opaque approximation; uses Opacity when the texture set has it) ------------
+        "glass" => one(b, plus(dielectric(rgb(m.base), u(r)), [(Opacity, u(0.2))])),
+        "glass_frosted" => one(b, plus(dielectric(rgb(m.base), gray(P::Noise, 1.0, 2, 0.4, 0.5)), [(Opacity, u(0.6))])),
+        // ---- Smart materials ----------------------------------------------------------------
+        "steel_painted_worn" => {
+            let mut v = build(b, "steel")?;
+            v.push(b.preset("Paint", plus(dielectric(rgb(m.base), gray(P::Clouds, 3.0, 9, 0.38, 0.55)), height(u(0.004))), "edge_chipped", true)?);
+            v.push(b.dirt([0.12, 0.09, 0.06])?);
+            Ok(v)
+        }
+        "steel_painted_rust" => {
+            let mut v = build(b, "steel")?;
+            v.push(b.preset(
+                "Paint",
+                plus(dielectric(pat(P::Clouds, 4.0, 3, 1.0, [0.58, 0.58, 0.56], [0.66, 0.66, 0.64]), u(0.45)), height(u(0.004))),
+                "edge_wear",
+                true,
+            )?);
+            v.push(b.preset("Rust leaks", dielectric(pat(P::Grunge, 4.0, 2, 1.0, [0.1, 0.03, 0.01], [0.24, 0.08, 0.025]), u(0.85)), "rust_leaks", false)?);
+            Ok(v)
+        }
+        "military_paint" => {
+            let mut v = build(b, "steel_dark")?;
+            v.push(b.preset(
+                "Olive drab",
+                plus(dielectric(pat(P::Clouds, 3.0, 6, 1.0, [0.06, 0.07, 0.03], [0.085, 0.095, 0.042]), u(0.62)), height(u(0.004))),
+                "edge_chipped",
+                true,
+            )?);
+            v.push(b.dirt([0.06, 0.05, 0.035])?);
+            v.push(b.preset("Dust", dielectric(rgb([0.36, 0.31, 0.23]), u(0.95)), "dust_top", false)?);
+            Ok(v)
+        }
+        "iron_rusted" => {
+            let mut v = build(b, "cast_iron")?;
+            let rust =
+                plus(dielectric(pat(P::Grunge, 5.0, 3, 0.8, [0.045, 0.018, 0.008], [0.14, 0.05, 0.018]), u(0.88)), height(gray(P::Noise, 1.0, 1, 0.0, 0.04)));
+            v.push(b.masked("Rust", rust, vec![(pattern(P::Grunge, 2.0, 8, 1.2), Normal), (generator(G::Dirt, 0.5, 0.25, 0.3), Lighten)]));
+            v.push(b.preset("Rust leaks", dielectric(rgb([0.11, 0.04, 0.014]), u(0.8)), "rust_leaks", false)?);
+            Ok(v)
+        }
+        "aluminium_scratched" => {
+            let mut v = build(b, "aluminium_brushed")?;
+            v.push(b.preset("Polished edges", metal(rgb([0.95, 0.95, 0.95]), u(0.14)), "edge_wear", false)?);
+            v.push(b.preset("Scratches", plus(metal(rgb([0.95, 0.95, 0.95]), u(0.12)), height(u(-0.006))), "scratches", false)?);
+            Ok(v)
+        }
+        "copper_patina" => {
+            let mut v = build(b, "copper")?;
+            v.push(b.preset("Tarnish", dielectric(pat(P::Clouds, 4.0, 2, 1.0, [0.18, 0.07, 0.04], [0.3, 0.13, 0.07]), u(0.6)), "grunge", false)?);
+            let patina = plus(dielectric(pat(P::Clouds, 4.0, 11, 1.4, [0.15, 0.38, 0.32], [0.33, 0.6, 0.5]), u(0.85)), height(u(0.02)));
+            v.push(b.masked("Patina", patina, vec![(generator(G::Dirt, 0.65, 0.25, 0.6), Normal), (pattern(P::Streaks, 3.0, 9, 1.0), Lighten)]));
+            Ok(v)
+        }
+        "bronze_statue" => {
+            let mut v = build(b, "bronze")?;
+            v.push(b.preset("Dark oxide", dielectric(pat(P::Clouds, 4.0, 5, 1.0, [0.05, 0.035, 0.02], [0.12, 0.08, 0.04]), u(0.6)), "grunge", false)?);
+            v.push(b.preset(
+                "Verdigris",
+                plus(dielectric(pat(P::Clouds, 5.0, 8, 1.3, [0.1, 0.3, 0.24], [0.25, 0.5, 0.42]), u(0.88)), height(u(0.015))),
+                "rust_leaks",
+                false,
+            )?);
+            Ok(v)
+        }
+        "brass_tarnished" => {
+            let mut v = build(b, "brass")?;
+            v.push(b.masked(
+                "Tarnish",
+                dielectric(pat(P::Clouds, 4.0, 4, 1.0, [0.08, 0.06, 0.025], [0.16, 0.12, 0.05]), u(0.7)),
+                vec![(generator(G::Dirt, 0.6, 0.25, 0.5), Normal), (pattern(P::Grunge, 2.5, 3, 0.9), Lighten)],
+            ));
+            v.push(b.preset("Fingerprints", metal(rgb([0.8, 0.68, 0.37]), u(0.45)), "fingerprints", false)?);
+            Ok(v)
+        }
+        "gold_dirty" => {
+            let mut v = build(b, "gold_polished")?;
+            v.push(b.preset("Smudges", metal(rgb([0.85, 0.64, 0.28]), u(0.4)), "fingerprints", false)?);
+            v.push(b.dirt([0.06, 0.045, 0.03])?);
+            Ok(v)
+        }
+        "chrome_smudged" => {
+            let mut v = build(b, "chrome")?;
+            v.push(b.preset("Smudges", metal(rgb([0.5, 0.505, 0.5]), u(0.3)), "fingerprints", false)?);
+            v.push(b.preset("Dust", dielectric(rgb([0.5, 0.48, 0.45]), u(0.9)), "dust_top", false)?);
+            Ok(v)
+        }
+        "wood_weathered" => {
+            let mut v = build(b, "wood_pine")?;
+            let gray_wood =
+                plus(dielectric(pat(P::Wood, 1.5, 4, 1.0, [0.17, 0.16, 0.14], [0.42, 0.4, 0.37]), u(0.85)), height(gray(P::Wood, 1.5, 4, -0.03, 0.0)));
+            v.push(b.masked(
+                "Weathered",
+                gray_wood,
+                vec![(pattern(P::Grunge, 2.0, 15, 0.8), Normal), (directional(G::Direction, [0.0, 1.0, 0.0], 0.45, 0.2, 0.4, false), Lighten)],
+            ));
+            v.push(b.dirt([0.05, 0.04, 0.03])?);
+            Ok(v)
+        }
+        "wood_chipped_paint" => {
+            let mut v = build(b, "wood_oak")?;
+            v.push(b.preset(
+                "Paint",
+                plus(dielectric(pat(P::Clouds, 3.0, 2, 1.0, [0.035, 0.19, 0.19], [0.05, 0.25, 0.25]), u(0.55)), height(u(0.01))),
+                "paint_chips",
+                true,
+            )?);
+            v.push(b.dirt([0.05, 0.04, 0.03])?);
+            Ok(v)
+        }
+        "concrete_dirty" => {
+            let mut v = build(b, "concrete")?;
+            v.push(b.preset("Water stains", dielectric(rgb([0.13, 0.13, 0.12]), u(0.9)), "rust_leaks", false)?);
+            v.push(b.dirt([0.08, 0.065, 0.05])?);
+            v.push(b.preset("Ground mud", dielectric(rgb([0.12, 0.09, 0.06]), u(0.95)), "ground_dirt", false)?);
+            Ok(v)
+        }
+        "brick_mossy" => {
+            let mut v = build(b, "brick")?;
+            v.push(b.preset("Grime", dielectric(rgb([0.07, 0.06, 0.05]), u(0.95)), "ground_dirt", false)?);
+            let moss = plus(dielectric(pat(P::Noise, 1.0, 7, 1.0, [0.02, 0.035, 0.008], [0.05, 0.075, 0.015]), u(0.95)), height(u(0.02)));
+            v.push(b.masked(
+                "Moss",
+                moss,
+                vec![
+                    (directional(G::Direction, [0.0, 1.0, 0.0], 0.45, 0.15, 0.3, false), Normal),
+                    (pattern(P::Grunge, 2.0, 5, 1.0), Multiply),
+                    (generator(G::Dirt, 0.4, 0.2, 0.5), Lighten),
+                ],
+            ));
+            Ok(v)
+        }
+        "plastic_dusty" => {
+            let mut v = one(b, dielectric(rgb(m.base), u(0.35)))?;
+            v.push(b.preset("Dust", dielectric(rgb([0.5, 0.46, 0.4]), u(0.95)), "dust_top", false)?);
+            v.push(b.dirt([0.1, 0.09, 0.08])?);
+            Ok(v)
+        }
+        "plastic_scuffed" => {
+            let mut v = one(b, dielectric(rgb(m.base), gray(P::Leather, 40.0, 5, 0.45, 0.35)))?;
+            v.push(b.preset("Scuffed edges", dielectric(rgb([0.2, 0.2, 0.21]), u(0.7)), "edge_wear", false)?);
+            v.push(b.preset("Scratches", dielectric(rgb([0.14, 0.14, 0.15]), u(0.6)), "scratches", false)?);
+            Ok(v)
+        }
+        "leather_worn" => {
+            let mut v = build(b, "leather")?;
+            v.push(b.preset("Worn", dielectric(rgb([0.3, 0.18, 0.1]), u(0.36)), "edge_wear", false)?);
+            v.push(b.dirt([0.035, 0.022, 0.014])?);
+            Ok(v)
+        }
+        other => Err(EngineError::Other(format!("material `{other}` has no definition"))),
+    }
+}
+
+/// Add material `id` above the selection: a single fill layer, or a folder for multi-layer
+/// materials. Returns the new top-level layer id.
+pub fn apply(s: &mut Session, id: &str) -> Result<LayerId> {
+    let m = find(id).ok_or_else(|| EngineError::Other(format!("unknown material `{id}`")))?;
+    let label = format!("Add {}", m.label);
+    s.edit(&label, |s| {
+        let channels = s.doc.project.texture_set(s.ts())?.channel_list();
+        let layers = build(&mut Builder { p: &mut s.doc.project, channels: channels.clone() }, m.id)?;
+        if layers.len() == 1 {
+            let l = layers.into_iter().next().ok_or_else(|| EngineError::Other("empty material".into()))?;
+            return crate::layer_cmds::insert_selected(s, l);
+        }
+        let gid = s.doc.project.alloc_id();
+        let mut group = Layer::new(gid, m.label, LayerKind::Group { children: Vec::new(), collapsed: false }, &channels);
+        for c in group.channels.values_mut() {
+            *c = ChannelBlend { mode: BlendMode::Passthrough, opacity: 1.0 };
+        }
+        let gid = crate::layer_cmds::insert_selected(s, group)?;
+        let ts = s.ts();
+        for l in layers {
+            s.doc.project.insert_layer(ts, l, Some(gid), true)?;
+        }
+        s.selected.insert(ts, gid);
+        Ok(gid)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_and_labels_are_unique_and_values_physical() {
+        let (mut ids, mut labels) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+        for m in MATERIALS {
+            assert!(ids.insert(norm(m.id)), "duplicate id {}", m.id);
+            assert!(labels.insert(norm(m.label)), "duplicate label {}", m.label);
+            assert_eq!(find(m.label).map(|f| f.id), Some(m.id));
+            if !m.smart {
+                // Metals: measured F0 is at least ~0.45 in some channel; dielectrics: 0.01..0.9.
+                let hi = m.base.iter().copied().fold(0.0, f32::max);
+                if m.metallic == 1.0 {
+                    assert!(hi >= 0.45, "{} too dark for a metal", m.id);
+                } else {
+                    assert_eq!(m.metallic, 0.0, "{} must be metal or dielectric", m.id);
+                    assert!(m.base.iter().all(|v| (0.01..=0.9).contains(v)), "{} albedo out of range", m.id);
+                }
+            }
+        }
+        assert!(MATERIALS.iter().filter(|m| !m.smart).count() >= 40);
+        assert!(MATERIALS.iter().filter(|m| m.smart).count() >= 15);
+        assert!(find("Gold Polished").is_some());
+        assert!(find("nope").is_none());
+    }
+
+    /// Base color, roughness and metallic at a grid of texels of texture set `ts`.
+    fn snapshot(s: &Session, ts: usize) -> Vec<[f32; 3]> {
+        let c = &s.caches[ts].composite;
+        let n = c.resolution;
+        (0..n)
+            .step_by(3)
+            .flat_map(|y| (0..n).step_by(3).map(move |x| (x, y)))
+            .flat_map(|(x, y)| [Channel::BaseColor, Channel::Roughness, Channel::Metallic].map(|ch| c.value(ch, x, y)))
+            .collect()
+    }
+
+    #[test]
+    fn every_material_and_smart_mask_applies_on_the_sample() {
+        let mut s = crate::sample_session(256, 256).unwrap();
+        // A baseline no material matches, so every material must visibly change the composite.
+        crate::execute(&mut s, "layer.add.fill", &serde_json::json!({"color": [1.0, 0.0, 1.0], "roughness": 0.123})).unwrap();
+        s.update();
+        let before = snapshot(&s, 0);
+        for m in MATERIALS {
+            apply(&mut s, m.id).unwrap_or_else(|e| panic!("{}: {e}", m.id));
+            s.doc.project.validate().unwrap();
+            s.update();
+            let after = snapshot(&s, 0);
+            assert!(after.iter().flatten().all(|v| v.is_finite() && (-1.0..=1.0).contains(v)), "{} produced invalid values", m.id);
+            assert_ne!(after, before, "{} changed nothing", m.id);
+            s.undo().unwrap();
+        }
+        assert!(apply(&mut s, "nope").is_err());
+        // Smart masks on the pedestal: it has edges and cavities (the ball is a plain sphere).
+        s.active_set = 1;
+        apply(&mut s, "gold_polished").unwrap();
+        let layer = s.selected_layer().unwrap();
+        for sm in crate::smart_masks::SMART_MASKS {
+            crate::smart_masks::apply(&mut s, layer, sm.id).unwrap();
+            s.update();
+            let view = s.mask_view_rgba(layer, 64).unwrap();
+            assert!(view.chunks(4).any(|px| px[0] > 0), "{} is empty", sm.id);
+            assert!(snapshot(&s, 1).iter().flatten().all(|v| v.is_finite()), "{}", sm.id);
+        }
+        assert!(crate::smart_masks::apply(&mut s, layer, "nope").is_err());
+    }
+}

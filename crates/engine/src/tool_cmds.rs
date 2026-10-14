@@ -1,0 +1,322 @@
+//! Tool commands: pick a tool, set brush and material values, and paint scripted strokes (the
+//! way agents and the CLI paint).
+
+use serde_json::{Value, json};
+use texturecraft_core::Channel;
+use texturecraft_geom::glam::Vec2;
+use texturecraft_paint::{Alignment, BrushAlpha};
+
+use crate::commands::{CommandSpec, always, bad, boolp, channel_param, color_param, f32p, strp};
+use crate::session::{CloneSource, FillMode, Tool};
+use crate::{Result, Session, cmd};
+
+pub fn specs() -> Vec<CommandSpec> {
+    vec![
+        cmd!("tool.paint", "Paint", ["Tools"], Some("1"), "{}", always, |s, _| set_tool(s, Tool::Paint)),
+        cmd!("tool.eraser", "Eraser", ["Tools"], Some("2"), "{}", always, |s, _| set_tool(s, Tool::Eraser)),
+        cmd!("tool.projection", "Projection", ["Tools"], Some("3"), "{}", always, |s, _| set_tool(s, Tool::Projection)),
+        cmd!("tool.polygonFill", "Polygon fill", ["Tools"], Some("4"), "{}", always, |s, _| set_tool(s, Tool::PolygonFill)),
+        cmd!("tool.smudge", "Smudge", ["Tools"], Some("5"), "{}", always, |s, _| set_tool(s, Tool::Smudge)),
+        cmd!("tool.clone", "Clone", ["Tools"], Some("6"), "{}", always, |s, _| set_tool(s, Tool::Clone)),
+        cmd!("tool.colorPicker", "Color picker", ["Tools"], Some("P"), "{}", always, |s, _| set_tool(s, Tool::ColorPicker)),
+        cmd!("tool.select", "Select tool", [], None, "{tool: paint|eraser|projection|polygonFill|smudge|clone|colorPicker|path}", always, select),
+        cmd!(
+            "tool.brush",
+            "Brush settings",
+            [],
+            None,
+            "{size?: 0..100, flow?: 0..100, opacity?: 0..100, spacing?: 1..1000, hardness?: 0..100, angle?, followPath?, alignment?: tangent|camera, lazy?, jitterSize?, jitterAngle?, jitterFlow?, jitterPosition?, alpha?: name | {image: resource name}, backfaceCulling?, symmetryX?, symmetryY?, symmetryZ?, minSize?, smudgeStrength?: 0..100, particles?: {enabled?, count?: 1..16, lifetime?: 1..128 steps, gravity?: 0..2}}",
+            always,
+            brush
+        ),
+        cmd!("tool.material", "Tool material", [], None, "{channel, color?|value?, enabled?} or {maskValue?: 0..1}", always, material),
+        cmd!("tool.stencil", "Projection stencil", [], None, "{image?: resource name, center?: [x,y] NDC, scale?: 0.01..10, rotation?: degrees, tile?, opacity?, clear?: bool}", always, stencil),
+        cmd!(
+            "tool.cloneSource",
+            "Set clone source",
+            [],
+            None,
+            "{x, y, viewport?: [w,h]} a point on the mesh, or {uv: [u,v]}, or {clear: true} — the Clone tool copies from here (V + click)",
+            always,
+            clone_source
+        ),
+        cmd!("tool.fillMode", "Polygon fill mode", [], None, "{mode: triangle|uvIsland|mesh}", always, fill_mode),
+        cmd!("tool.stroke", "Paint stroke", [], None, "{points: [[x,y],...] viewport pixels, viewport?: [w,h]} — paints with the current tool", always, stroke),
+        cmd!("tool.strokeUv", "Paint stroke in the 2D view", [], None, "{points: [[u,v],...] texture coordinates 0..1} — paints in UV space like the 2D view", always, stroke_uv),
+        cmd!("tool.click", "Tool click", [], None, "{x, y, viewport?: [w,h]} — polygon fill / color picker / single dab", always, click),
+        cmd!("tool.state", "Tool state", [], None, "{}", always, |s, _| Ok(serde_json::to_value(&s.tool).unwrap_or(Value::Null))),
+    ]
+}
+
+pub(crate) fn set_tool(s: &mut Session, t: Tool) -> Result<Value> {
+    s.cancel_stroke();
+    s.tool.tool = t;
+    s.revision = s.revision.wrapping_add(1);
+    Ok(json!({ "tool": t.id() }))
+}
+
+fn select(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = strp(p, "tool").ok_or_else(|| bad("tool.select", "`tool` is required"))?;
+    let t = Tool::parse(name).ok_or_else(|| bad("tool.select", format!("unknown tool `{name}`")))?;
+    set_tool(s, t)
+}
+
+/// Brush values use the UI's 0–100 scales, so agents and the sliders speak the same numbers.
+fn brush(s: &mut Session, p: &Value) -> Result<Value> {
+    let b = &mut s.tool.brush;
+    let pct = |k: &str| f32p(p, k).map(|v| v / 100.0);
+    if let Some(v) = pct("size") {
+        b.size = v * 0.25;
+    }
+    if let Some(v) = pct("minSize") {
+        b.min_size = v;
+    }
+    if let Some(v) = pct("flow") {
+        b.flow = v;
+    }
+    if let Some(v) = pct("opacity") {
+        b.opacity = v;
+    }
+    if let Some(v) = pct("spacing") {
+        b.spacing = v;
+    }
+    if let Some(v) = pct("hardness") {
+        b.hardness = v;
+    }
+    if let Some(v) = f32p(p, "angle") {
+        b.angle = v;
+    }
+    if let Some(v) = boolp(p, "followPath") {
+        b.follow_path = v;
+    }
+    if let Some(a) = strp(p, "alignment") {
+        b.alignment = match a {
+            "camera" => Alignment::Camera,
+            "tangent" | "uv" => Alignment::Tangent,
+            other => return Err(bad("tool.brush", format!("unknown alignment `{other}`"))),
+        };
+    }
+    if let Some(v) = f32p(p, "lazy") {
+        b.lazy = v;
+    }
+    for (k, slot) in [("jitterSize", &mut b.jitter_size), ("jitterAngle", &mut b.jitter_angle), ("jitterFlow", &mut b.jitter_flow)] {
+        if let Some(v) = f32p(p, k) {
+            *slot = v / 100.0;
+        }
+    }
+    if let Some(v) = f32p(p, "jitterPosition") {
+        b.jitter_position = v / 100.0;
+    }
+    if let Some(a) = strp(p, "alpha") {
+        b.alpha = BrushAlpha::parse(a).ok_or_else(|| bad("tool.brush", format!("unknown alpha `{a}`")))?;
+        b.alpha_image = None;
+    } else if let Some(name) = p.get("alpha").and_then(|a| a.get("image")).and_then(Value::as_str) {
+        if !s.images.contains_key(name) {
+            return Err(bad("tool.brush", format!("no image resource `{name}` (import it first)")));
+        }
+        b.alpha_image = Some(name.to_string());
+    }
+    if let Some(v) = boolp(p, "backfaceCulling") {
+        b.backface_culling = v;
+    }
+    for (k, slot) in [("symmetryX", &mut b.symmetry.x), ("symmetryY", &mut b.symmetry.y), ("symmetryZ", &mut b.symmetry.z)] {
+        if let Some(v) = boolp(p, k) {
+            *slot = v;
+        }
+    }
+    if let Some(v) = boolp(p, "screenSpace") {
+        b.screen_space = v;
+    }
+    if let Some(q) = p.get("particles") {
+        let pt = &mut b.particles;
+        pt.enabled = boolp(q, "enabled").unwrap_or(pt.enabled);
+        pt.count = f32p(q, "count").map_or(pt.count, |v| v as u32);
+        pt.lifetime = f32p(q, "lifetime").map_or(pt.lifetime, |v| v as u32);
+        pt.gravity = f32p(q, "gravity").unwrap_or(pt.gravity);
+    }
+    *b = b.sanitized();
+    if let Some(v) = f32p(p, "smudgeStrength") {
+        s.tool.smudge_strength = (v / 100.0).clamp(0.0, 1.0);
+    }
+    s.revision = s.revision.wrapping_add(1);
+    Ok(brush_json(s))
+}
+
+pub(crate) fn brush_json(s: &Session) -> Value {
+    let b = &s.tool.brush;
+    json!({
+        "size": b.size / 0.25 * 100.0, "minSize": b.min_size * 100.0, "flow": b.flow * 100.0, "opacity": b.opacity * 100.0,
+        "spacing": b.spacing * 100.0, "hardness": b.hardness * 100.0, "angle": b.angle, "followPath": b.follow_path,
+        "alignment": format!("{:?}", b.alignment).to_lowercase(), "lazy": b.lazy,
+        "alpha": match &b.alpha_image { Some(name) => json!({ "image": name }), None => json!(b.alpha.label()) },
+        "backfaceCulling": b.backface_culling, "symmetry": [b.symmetry.x, b.symmetry.y, b.symmetry.z],
+        "smudgeStrength": s.tool.smudge_strength * 100.0, "particles": b.particles,
+    })
+}
+
+fn material(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(v) = f32p(p, "maskValue") {
+        s.tool.mask_value = v.clamp(0.0, 1.0);
+    }
+    if let Some(c) = channel_param("tool.material", p, "channel")? {
+        if let Some(v) = color_param(p, "color").or_else(|| color_param(p, "value")) {
+            let v = if c == Channel::Height { v.map(|x| x.clamp(-1.0, 1.0)) } else { v.map(|x| x.clamp(0.0, 1.0)) };
+            s.tool.values.insert(c, v);
+            s.tool.enabled.insert(c);
+        }
+        match boolp(p, "enabled") {
+            Some(true) => {
+                s.tool.enabled.insert(c);
+            }
+            Some(false) => {
+                s.tool.enabled.remove(&c);
+            }
+            None => {}
+        }
+    }
+    s.revision = s.revision.wrapping_add(1);
+    Ok(json!({
+        "values": s.tool.values.iter().map(|(c, v)| (c.id().to_string(), json!(v))).collect::<serde_json::Map<_, _>>(),
+        "enabled": s.tool.enabled.iter().map(|c| c.id()).collect::<Vec<_>>(),
+        "maskValue": s.tool.mask_value,
+    }))
+}
+
+fn stencil(s: &mut Session, p: &Value) -> Result<Value> {
+    if boolp(p, "clear") == Some(true) {
+        s.tool.stencil = None;
+        return Ok(Value::Null);
+    }
+    if let Some(name) = strp(p, "image") {
+        if !s.doc.resources.contains_key(name) {
+            return Err(bad("tool.stencil", format!("no resource `{name}` (import it first)")));
+        }
+        let keep = s.tool.stencil.take();
+        let mut st = crate::session::StencilState::new(name);
+        if let Some(k) = keep {
+            st = crate::session::StencilState { image: name.to_string(), ..k };
+        }
+        s.tool.stencil = Some(st);
+    }
+    let st = s.tool.stencil.as_mut().ok_or_else(|| bad("tool.stencil", "no stencil: give `image`"))?;
+    if let Some(c) = color_param(p, "center").map(|c| [c[0], c[1]]).or_else(|| pair(p, "center")) {
+        st.center = c.map(|v| v.clamp(-4.0, 4.0));
+    }
+    if let Some(v) = f32p(p, "scale") {
+        st.scale = v.clamp(0.01, 10.0);
+    }
+    if let Some(v) = f32p(p, "rotation") {
+        st.rotation = v.rem_euclid(360.0);
+    }
+    if let Some(v) = boolp(p, "tile") {
+        st.tile = v;
+    }
+    if let Some(v) = f32p(p, "opacity") {
+        st.opacity = v.clamp(0.0, 1.0);
+    }
+    s.revision = s.revision.wrapping_add(1);
+    Ok(serde_json::to_value(&s.tool.stencil).unwrap_or(Value::Null))
+}
+
+/// A `[a, b]` param of two finite numbers.
+fn pair(p: &Value, key: &str) -> Option<[f32; 2]> {
+    let a = p.get(key)?.as_array()?;
+    let v: Vec<f32> = a.iter().filter_map(Value::as_f64).map(|x| x as f32).filter(|x| x.is_finite()).collect();
+    match v.as_slice() {
+        [x, y] => Some([*x, *y]),
+        _ => None,
+    }
+}
+
+fn clone_source(s: &mut Session, p: &Value) -> Result<Value> {
+    if boolp(p, "clear") == Some(true) {
+        s.tool.clone_source = None;
+        return Ok(Value::Null);
+    }
+    let uv = match (pair(p, "uv"), f32p(p, "x"), f32p(p, "y")) {
+        (Some(uv), _, _) => uv.map(|v| v.clamp(0.0, 1.0)),
+        (None, Some(x), Some(y)) => {
+            let hit = s.pick(Vec2::new(x, y), viewport_of(s, p)).ok_or_else(|| bad("tool.cloneSource", "nothing under that point"))?;
+            if s.doc.project.texture_set(s.ts()).ok().map(|t| t.material) != Some(hit.material) {
+                return Err(bad("tool.cloneSource", "that surface belongs to another texture set"));
+            }
+            [hit.uv.x, hit.uv.y]
+        }
+        _ => return Err(bad("tool.cloneSource", "give `uv: [u, v]` or `x` and `y`")),
+    };
+    s.tool.clone_source = Some(CloneSource { uv, offset: None });
+    s.revision = s.revision.wrapping_add(1);
+    Ok(serde_json::to_value(s.tool.clone_source).unwrap_or(Value::Null))
+}
+
+fn fill_mode(s: &mut Session, p: &Value) -> Result<Value> {
+    s.tool.fill_mode = match strp(p, "mode").unwrap_or("triangle") {
+        "triangle" => FillMode::Triangle,
+        "uvIsland" | "island" => FillMode::UvIsland,
+        "mesh" => FillMode::Mesh,
+        other => return Err(bad("tool.fillMode", format!("unknown fill mode `{other}`"))),
+    };
+    Ok(Value::Null)
+}
+
+pub(crate) fn viewport_of(s: &Session, p: &Value) -> Vec2 {
+    match p.get("viewport").and_then(Value::as_array) {
+        Some(a) if a.len() == 2 => {
+            let w = a[0].as_f64().unwrap_or(0.0) as f32;
+            let h = a[1].as_f64().unwrap_or(0.0) as f32;
+            if w.is_finite() && h.is_finite() && w >= 16.0 && h >= 16.0 { Vec2::new(w.min(16384.0), h.min(16384.0)) } else { s.viewport }
+        }
+        _ => s.viewport,
+    }
+}
+
+/// A `[[x, y], ...]` param of at most 100000 finite points, None when the key is absent.
+pub(crate) fn points_param(cmd: &str, p: &Value, key: &str) -> Result<Option<Vec<Vec2>>> {
+    let Some(v) = p.get(key) else { return Ok(None) };
+    let pts = v.as_array().ok_or_else(|| bad(cmd, format!("`{key}` must be an array of [x, y]")))?;
+    if pts.len() > 100_000 {
+        return Err(bad(cmd, "at most 100000 points"));
+    }
+    let points: Vec<Vec2> = pts
+        .iter()
+        .filter_map(|v| {
+            let a = v.as_array()?;
+            let (x, y) = (a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32);
+            (x.is_finite() && y.is_finite()).then_some(Vec2::new(x, y))
+        })
+        .collect();
+    if points.is_empty() {
+        return Err(bad(cmd, "no valid points"));
+    }
+    Ok(Some(points))
+}
+
+fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
+    let points = points_param("tool.stroke", p, "points")?.ok_or_else(|| bad("tool.stroke", "`points` must be an array of [x, y]"))?;
+    let vp = viewport_of(s, p);
+    let stamps = s.stroke_points(&points, vp)?;
+    s.update();
+    Ok(json!({ "stamps": stamps }))
+}
+
+fn click(s: &mut Session, p: &Value) -> Result<Value> {
+    let (Some(x), Some(y)) = (f32p(p, "x"), f32p(p, "y")) else { return Err(bad("tool.click", "`x` and `y` are required")) };
+    let vp = viewport_of(s, p);
+    let out = match s.tool.tool {
+        Tool::PolygonFill => json!({ "triangles": s.polygon_fill(Vec2::new(x, y), vp)? }),
+        Tool::ColorPicker => {
+            let v = s.color_pick(Vec2::new(x, y), vp)?;
+            json!(v.iter().map(|(c, v)| (c.id().to_string(), json!(v))).collect::<serde_json::Map<_, _>>())
+        }
+        _ => json!({ "stamps": s.stroke_points(&[Vec2::new(x, y)], vp)? }),
+    };
+    s.update();
+    Ok(out)
+}
+
+fn stroke_uv(s: &mut Session, p: &Value) -> Result<Value> {
+    let points = points_param("tool.strokeUv", p, "points")?.ok_or_else(|| bad("tool.strokeUv", "`points` must be an array of [u, v]"))?;
+    let tiles = s.stroke_uv_points(&points)?;
+    s.update();
+    Ok(json!({ "tiles": tiles }))
+}

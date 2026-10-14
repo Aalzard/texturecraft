@@ -1,0 +1,25 @@
+[package]
+name = "texturecraft-render"
+description = "TextureCraft wgpu viewport renderer: PBR, image-based lighting, debug views, UV view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+texturecraft-core = { workspace = true }
+texturecraft-texel = { workspace = true }
+texturecraft-geom = { workspace = true }
+texturecraft-compose = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+half = { workspace = true }
+rayon = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "0.4"
+
+[dev-dependencies]
+image = { workspace = true }

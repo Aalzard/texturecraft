@@ -1,0 +1,33 @@
+[package]
+name = "texturecraft-ui-egui"
+description = "TextureCraft's egui shell: Painter-style docks, toolbars, viewports and windows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+texturecraft-engine = { workspace = true }
+texturecraft-render = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "persistence"] }
+egui = { workspace = true }
+egui-phosphor = { version = "0.14", features = ["regular", "fill"] }
+# Dockable, tabbed, floating panels (MIT).
+egui_dock = { version = "0.21", features = ["serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+log = { workspace = true }
+base64 = "0.22"
+image = { workspace = true }
+rfd = { workspace = true }
+zip = { workspace = true }
+
+# Browser file I/O (web_files.rs): async pickers and Blob downloads.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Document", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "CssStyleDeclaration"] }

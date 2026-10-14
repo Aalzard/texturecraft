@@ -1,0 +1,14 @@
+[package]
+name = "texturecraft-core"
+description = "TextureCraft document model: projects, texture sets, channels, layers, masks, effects and blend math"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

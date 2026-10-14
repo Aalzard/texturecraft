@@ -1,0 +1,22 @@
+[package]
+name = "texturecraft-cli"
+description = "Headless TextureCraft: info, run, batch, bake, export, render, MCP server, JSON-lines server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+texturecraft-automation = { workspace = true }
+texturecraft-engine = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+image = { workspace = true }
+
+[build-dependencies]
+winresource = "0.1"

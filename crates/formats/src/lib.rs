@@ -1,0 +1,103 @@
+//! # texturecraft-formats
+//!
+//! Everything TextureCraft reads from or writes to disk:
+//!
+//! - [`mesh_import`]: glTF/GLB, FBX (7.x binary and ASCII), COLLADA, OBJ, PLY and STL into a
+//!   [`texturecraft_geom::Mesh`] (world space in meters, Y up, glTF UV convention, one submesh
+//!   per material), with an automatic unwrap ([`texturecraft_geom::unwrap::auto_unwrap`]) when
+//!   the file has no UVs and a [`MeshReport`].
+//! - [`mesh_export`]: the working mesh as OBJ, or as GLB with its textures embedded.
+//! - [`export`]: texture export from a texture set's composite through [`ExportPreset`]s (file
+//!   name templates, channel packing, virtual maps such as the final normal, padding, resizing)
+//!   to PNG, JPEG, TGA, TIFF, BMP, WebP, EXR and HDR bytes.
+//! - [`presets`]: the built-in export presets and JSON (de)serialization of user presets.
+//! - [`project_file`]: the `.tcraft` project zip (project JSON, sparse lossless pixel tiles,
+//!   baked maps, the original mesh and a thumbnail).
+//!
+//! Every reader takes untrusted bytes and returns an error, never panics. Byte-based functions
+//! work everywhere (including the web build); path-based ones are native only.
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+pub mod export;
+pub mod image_res;
+pub mod mesh_export;
+pub mod mesh_import;
+pub mod presets;
+pub mod project_file;
+
+pub use export::{
+    Dest, ExportInput, ExportOptions, ExportPreset, ExportedFile, FileFormat, MapSpec, Padding, PlannedFile, SourceRef, VirtualMap, list_outputs, render_maps,
+};
+pub use image_res::{DecodedImage, decode_image};
+pub use mesh_export::{GlbTextures, glb_bytes, glb_export_options, obj_bytes};
+pub use mesh_import::{ImportedMesh, MeshReport, import_high_poly_bytes, import_mesh_bytes};
+pub use presets::{builtin_preset, builtin_presets, preset_from_json, preset_to_json};
+pub use project_file::{ProjectFile, load_project_bytes, sanitize_resource_name, save_project_bytes};
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use export::write_files;
+#[cfg(not(target_arch = "wasm32"))]
+pub use mesh_import::import_mesh;
+#[cfg(not(target_arch = "wasm32"))]
+pub use project_file::{load_project, save_project};
+
+#[derive(Debug, thiserror::Error)]
+pub enum FormatError {
+    #[error("unsupported: {0}")]
+    Unsupported(String),
+    #[error("malformed {kind}: {msg}")]
+    Malformed { kind: &'static str, msg: String },
+    #[error("too large: {0}")]
+    TooLarge(String),
+    #[error("invalid: {0}")]
+    Invalid(String),
+    #[error("this file was saved by a newer TextureCraft (format {found}; this version reads up to {supported})")]
+    NewerVersion { found: u32, supported: u32 },
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Geom(#[from] texturecraft_geom::GeomError),
+    #[error(transparent)]
+    Core(#[from] texturecraft_core::CoreError),
+}
+
+pub type Result<T> = std::result::Result<T, FormatError>;
+
+pub(crate) fn malformed(kind: &'static str, msg: impl std::fmt::Display) -> FormatError {
+    FormatError::Malformed { kind, msg: msg.to_string() }
+}
+
+/// Last-resort guard around third-party parsers: a panic inside them becomes an error.
+pub(crate) fn guard<T>(kind: &'static str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| Err(malformed(kind, "the parser failed on this file")))
+}
+
+/// Largest image edge accepted or produced anywhere in this crate.
+pub const MAX_IMAGE_SIZE: u32 = 16_384;
+
+/// Read a whole file, refusing files over `cap` bytes.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_capped(path: &std::path::Path, cap: u64) -> Result<Vec<u8>> {
+    let meta = std::fs::metadata(path)?;
+    if !meta.is_file() {
+        return Err(FormatError::Invalid(format!("{} is not a regular file", path.display())));
+    }
+    if meta.len() > cap {
+        return Err(FormatError::TooLarge(format!("{} is {} bytes (limit {cap})", path.display(), meta.len())));
+    }
+    Ok(std::fs::read(path)?)
+}
+
+/// Write `bytes` to `path` atomically: `<path>.tmp` first, then rename over the target.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    let res = std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, path));
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    Ok(res?)
+}

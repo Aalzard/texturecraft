@@ -1,0 +1,250 @@
+//! glTF 2.0 / GLB: the default scene's node tree, flattened to world space.
+
+use std::path::Path;
+
+use gltf::accessor::{Accessor, DataType, Dimensions};
+use gltf::mesh::Mode;
+use gltf::{Node, Semantic};
+use texturecraft_geom::glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
+
+use super::{RawMesh, check_triangles, check_vertices};
+use crate::{FormatError, Result, malformed};
+
+const KIND: &str = "glTF";
+/// Deepest node hierarchy followed (also stops cyclic node graphs).
+const MAX_DEPTH: usize = 64;
+/// Node instances visited (bounds exponential instancing in shared node graphs).
+const MAX_NODE_VISITS: usize = 1_000_000;
+
+pub(crate) fn read(bytes: &[u8], base: Option<&Path>) -> Result<RawMesh> {
+    crate::guard(KIND, || read_inner(bytes, base))
+}
+
+fn read_inner(bytes: &[u8], base: Option<&Path>) -> Result<RawMesh> {
+    let gltf::Gltf { document, blob } = gltf::Gltf::from_slice(bytes).map_err(|e| malformed(KIND, e))?;
+    check_buffer_uris(&document, base)?;
+    let buffers = gltf::import_buffers(&document, base, blob).map_err(|e| match e {
+        gltf::Error::ExternalReferenceInSliceImport => FormatError::Unsupported("this glTF references external files; open it from disk or use a .glb".into()),
+        e => malformed(KIND, e),
+    })?;
+
+    let roots: Vec<Node> = match document.default_scene().or_else(|| document.scenes().next()) {
+        Some(scene) => scene.nodes().collect(),
+        None => {
+            // No scene: every node that is nobody's child.
+            let mut is_child = vec![false; document.nodes().len()];
+            for n in document.nodes() {
+                for c in n.children() {
+                    if let Some(f) = is_child.get_mut(c.index()) {
+                        *f = true;
+                    }
+                }
+            }
+            document.nodes().filter(|n| !is_child.get(n.index()).copied().unwrap_or(true)).collect()
+        }
+    };
+    let mut raw = RawMesh { normals: Some(Vec::new()), ..RawMesh::default() };
+    let mut attrs = Attrs::default();
+    let mut stack: Vec<(Node, Mat4, usize)> = roots.into_iter().rev().map(|n| (n, Mat4::IDENTITY, 0)).collect();
+    let mut visits = 0usize;
+    while let Some((node, parent, depth)) = stack.pop() {
+        visits += 1;
+        if visits > MAX_NODE_VISITS {
+            return Err(FormatError::TooLarge(format!("the glTF scene has more than {MAX_NODE_VISITS} node instances")));
+        }
+        let m = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
+        if let Some(mesh) = node.mesh() {
+            let part = node.name().or_else(|| mesh.name()).unwrap_or_default();
+            for prim in mesh.primitives() {
+                add_primitive(&mut raw, &mut attrs, &prim, m, &buffers, part)?;
+            }
+        }
+        if depth >= MAX_DEPTH {
+            return Err(malformed(KIND, "the node hierarchy is nested too deeply (or cyclic)"));
+        }
+        stack.extend(node.children().collect::<Vec<_>>().into_iter().rev().map(|c| (c, m, depth + 1)));
+    }
+    match attrs.uv_seen {
+        (_, false) => raw.uvs = Some(attrs.uvs),
+        (true, true) => raw.warnings.push("some primitives have no UVs; the whole mesh was unwrapped automatically".into()),
+        (false, true) => {}
+    }
+    raw.colors = attrs.color_seen.then_some(attrs.colors);
+    Ok(raw)
+}
+
+/// Per-vertex attributes gathered across primitives.
+#[derive(Default)]
+struct Attrs {
+    uvs: Vec<Vec2>,
+    /// (some primitive had UVs, some primitive had none)
+    uv_seen: (bool, bool),
+    /// White where a primitive has no COLOR_0.
+    colors: Vec<Vec4>,
+    color_seen: bool,
+}
+
+fn add_primitive(raw: &mut RawMesh, attrs: &mut Attrs, prim: &gltf::Primitive, m: Mat4, buffers: &[gltf::buffer::Data], part: &str) -> Result<()> {
+    if prim.mode() != Mode::Triangles {
+        raw.warnings.push(format!("skipped a primitive drawn as {:?} (only triangles are supported)", prim.mode()));
+        return Ok(());
+    }
+    let Some(pacc) = prim.get(&Semantic::Positions) else {
+        raw.warnings.push("skipped a primitive without positions".into());
+        return Ok(());
+    };
+    check_accessor(&pacc, buffers, Dimensions::Vec3, &[DataType::F32], "position")?;
+    let nacc = prim.get(&Semantic::Normals);
+    if let Some(a) = &nacc {
+        check_accessor(a, buffers, Dimensions::Vec3, &[DataType::F32], "normal")?;
+    }
+    let tacc = prim.get(&Semantic::TexCoords(0));
+    if let Some(a) = &tacc {
+        check_accessor(a, buffers, Dimensions::Vec2, &[DataType::F32, DataType::U8, DataType::U16], "texcoord")?;
+    }
+    let cacc = prim.get(&Semantic::Colors(0));
+    if let Some(a) = &cacc {
+        let dims = if a.dimensions() == Dimensions::Vec3 { Dimensions::Vec3 } else { Dimensions::Vec4 };
+        check_accessor(a, buffers, dims, &[DataType::F32, DataType::U8, DataType::U16], "color")?;
+    }
+    if let Some(a) = prim.indices() {
+        check_accessor(&a, buffers, Dimensions::Scalar, &[DataType::U8, DataType::U16, DataType::U32], "index")?;
+    }
+    let reader = prim.reader(|b| buffers.get(b.index()).map(|d| &d.0[..]));
+    let positions: Vec<Vec3> = reader.read_positions().ok_or_else(|| malformed(KIND, "unreadable positions"))?.map(Vec3::from).collect();
+    let n = positions.len();
+    check_vertices(raw.positions.len().saturating_add(n))?;
+    let mut indices: Vec<u32> = match reader.read_indices() {
+        Some(i) => i.into_u32().collect(),
+        None => (0..n as u32).collect(),
+    };
+    indices.truncate(indices.len() / 3 * 3);
+    if let Some(bad) = indices.iter().find(|i| **i as usize >= n) {
+        return Err(malformed(KIND, format!("index {bad} out of range ({n} vertices)")));
+    }
+    check_triangles(raw.triangle_count(), indices.len() / 3)?;
+    let normals: Option<Vec<Vec3>> = nacc.and_then(|_| reader.read_normals()).map(|it| it.map(Vec3::from).collect());
+    let texcoords: Option<Vec<Vec2>> = tacc.and_then(|_| reader.read_tex_coords(0)).map(|t| t.into_f32().map(Vec2::from).collect());
+    let colors: Option<Vec<Vec4>> =
+        cacc.and_then(|_| reader.read_colors(0)).map(|c| c.into_rgba_f32().map(Vec4::from).collect()).filter(|c: &Vec<Vec4>| c.len() == n);
+    attrs.color_seen |= colors.is_some();
+    let color_of = |i: usize| colors.as_ref().and_then(|c| c.get(i)).copied().unwrap_or(Vec4::ONE);
+
+    let m3 = Mat3::from_mat4(m);
+    let nm = m3.inverse().transpose();
+    let flip = m3.determinant() < 0.0;
+    let world: Vec<Vec3> = positions.iter().map(|p| m.transform_point3(*p)).collect();
+    let name = match prim.material().index() {
+        None => "Default".to_string(),
+        Some(i) => prim.material().name().map(str::to_string).unwrap_or_else(|| format!("Material_{i}")),
+    };
+    let base = raw.positions.len() as u32;
+    let tex_ok = texcoords.as_ref().is_some_and(|t| t.len() == n);
+    if tex_ok {
+        attrs.uv_seen.0 = true
+    } else {
+        attrs.uv_seen.1 = true
+    }
+    let uv_of = |i: usize| texcoords.as_ref().and_then(|t| t.get(i)).copied().unwrap_or_default();
+    let raw_normals = raw.normals.get_or_insert_with(Vec::new);
+    match normals.filter(|v| v.len() == n) {
+        Some(nrm) => {
+            raw.positions.extend_from_slice(&world);
+            raw_normals.extend(nrm.iter().map(|v| (nm * *v).try_normalize().unwrap_or(Vec3::Y)));
+            attrs.uvs.extend((0..n).map(uv_of));
+            attrs.colors.extend((0..n).map(color_of));
+            let group = raw.group(&name, part);
+            for t in indices.chunks_exact(3) {
+                let (a, b, c) = (t[0] + base, t[1] + base, t[2] + base);
+                group.extend_from_slice(&if flip { [a, c, b] } else { [a, b, c] });
+            }
+        }
+        None => {
+            // glTF: flat normals when none are given, so every triangle gets its own corners.
+            let mut tris = Vec::with_capacity(indices.len());
+            for t in indices.chunks_exact(3) {
+                let order = if flip { [t[0], t[2], t[1]] } else { [t[0], t[1], t[2]] };
+                let p = order.map(|i| world.get(i as usize).copied().unwrap_or_default());
+                let face = (p[1] - p[0]).cross(p[2] - p[0]).try_normalize().unwrap_or(Vec3::Y);
+                for (k, i) in order.iter().enumerate() {
+                    tris.push(raw.positions.len() as u32);
+                    raw.positions.push(p[k]);
+                    raw_normals.push(face);
+                    attrs.uvs.push(uv_of(*i as usize));
+                    attrs.colors.push(color_of(*i as usize));
+                }
+            }
+            raw.group(&name, part).extend_from_slice(&tris);
+        }
+    }
+    Ok(())
+}
+
+/// Reject accessors the `gltf` reader would panic on or read out of bounds.
+fn check_accessor(acc: &Accessor, buffers: &[gltf::buffer::Data], dims: Dimensions, types: &[DataType], what: &str) -> Result<()> {
+    let bad = |msg: &str| malformed(KIND, format!("{what} accessor {}: {msg}", acc.index()));
+    if acc.sparse().is_some() {
+        return Err(FormatError::Unsupported(format!("sparse glTF accessors ({what})")));
+    }
+    if acc.dimensions() != dims || !types.contains(&acc.data_type()) {
+        return Err(bad("unexpected element type"));
+    }
+    let view = acc.view().ok_or_else(|| bad("has no buffer view"))?;
+    let data_len = buffers.get(view.buffer().index()).map(|d| d.0.len()).ok_or_else(|| bad("buffer is missing"))?;
+    if view.offset().checked_add(view.length()).is_none_or(|end| end > data_len) {
+        return Err(bad("buffer view exceeds its buffer"));
+    }
+    let size = acc.size();
+    let stride = view.stride().unwrap_or(size);
+    let end = acc.count().checked_sub(1).and_then(|k| k.checked_mul(stride)).and_then(|x| x.checked_add(acc.offset())).and_then(|x| x.checked_add(size));
+    if stride < size || end.is_none_or(|e| e > view.length()) {
+        return Err(bad("data exceeds its buffer view"));
+    }
+    Ok(())
+}
+
+/// Check buffer URIs before `gltf` resolves them: percent-decoding must give UTF-8 (`gltf`
+/// panics otherwise), and files read from disk must be regular files of sane size.
+fn check_buffer_uris(doc: &gltf::Document, base: Option<&Path>) -> Result<()> {
+    for buf in doc.buffers() {
+        let gltf::buffer::Source::Uri(uri) = buf.source() else { continue };
+        if uri.starts_with("data:") {
+            continue;
+        }
+        let path = if let Some(rest) = uri.strip_prefix("file://").or_else(|| uri.strip_prefix("file:")) {
+            Some(std::path::PathBuf::from(rest))
+        } else if uri.contains(':') {
+            None
+        } else {
+            let decoded = percent_decode(uri).ok_or_else(|| malformed(KIND, format!("buffer URI \"{uri}\" is not valid UTF-8")))?;
+            base.map(|b| b.join(decoded))
+        };
+        if let (Some(path), Some(_)) = (path, base) {
+            let meta = std::fs::metadata(&path).map_err(|e| malformed(KIND, format!("buffer {}: {e}", path.display())))?;
+            if !meta.is_file() || meta.len() > super::MAX_MESH_FILE_BYTES {
+                return Err(malformed(KIND, format!("buffer {} is not a regular file of acceptable size", path.display())));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while let Some(&c) = b.get(i) {
+        let hex = |k: usize| b.get(k).and_then(|h| (*h as char).to_digit(16));
+        match (c, hex(i + 1), hex(i + 2)) {
+            (b'%', Some(h), Some(l)) => {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}

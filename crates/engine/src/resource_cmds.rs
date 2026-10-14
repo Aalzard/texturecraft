@@ -1,0 +1,152 @@
+//! Image resources: import (PNG, JPEG, TGA, TIFF, BMP, WEBP, EXR, HDR), list, remove, and use as
+//! fill sources.
+
+use std::sync::Arc;
+
+use serde_json::{Value, json};
+use texturecraft_compose::ImageRes;
+use texturecraft_core::{Channel, Fill, Layer, LayerKind, Projection, Source};
+
+use crate::commands::{CommandSpec, always, bad, channel_param, strp};
+use crate::{EngineError, Result, Session, cmd};
+
+pub fn specs() -> Vec<CommandSpec> {
+    vec![
+        cmd!("resource.import", "Import resources", ["File"], None, "{path} — an image file (png, jpg, tga, tif, bmp, webp, exr, hdr)", always, import),
+        cmd!("resource.list", "List resources", [], None, "{}", always, |s, _| Ok(list(s))),
+        cmd!("resource.remove", "Remove resource", [], None, "{name}", always, remove),
+        cmd!("file.removeUnused", "Remove unused resources...", ["File"], None, "{}", always, remove_unused),
+        cmd!("layer.add.image", "Add fill layer from image", [], None, "{name, channel?: baseColor, projection?: uv|triplanar|planar, scale?}", always, add_image_fill),
+    ]
+}
+
+/// Largest accepted resource file.
+const MAX_BYTES: usize = 512 << 20;
+
+fn decoded(d: texturecraft_formats::DecodedImage) -> Arc<ImageRes> {
+    Arc::new(ImageRes { width: d.width, height: d.height, rgba: d.rgba, srgb: d.srgb })
+}
+
+impl Session {
+    /// Add an image resource from bytes (one undo step); returns its unique, sanitized name.
+    pub fn import_resource_bytes(&mut self, file_name: &str, bytes: Vec<u8>) -> Result<String> {
+        if bytes.len() > MAX_BYTES {
+            return Err(EngineError::Other(format!("{file_name} is larger than {} MB", MAX_BYTES >> 20)));
+        }
+        let image = texturecraft_formats::decode_image(&bytes).map_err(|e| EngineError::Other(format!("{file_name}: {e}")))?;
+        let leaf = std::path::Path::new(file_name).file_name().and_then(|n| n.to_str()).unwrap_or("image");
+        let base = texturecraft_formats::sanitize_resource_name(leaf);
+        let mut name = base.clone();
+        let mut n = 2;
+        while self.doc.resources.contains_key(&name) {
+            name = format!("{n}_{base}");
+            n += 1;
+        }
+        let key = name.clone();
+        self.edit("Import resource", |s| {
+            s.doc.resources.insert(key, Arc::new(bytes));
+            Ok(())
+        })?;
+        self.images.insert(name.clone(), decoded(image));
+        Ok(name)
+    }
+
+    /// Decode resources that are not decoded yet and forget removed ones (after undo, redo, load).
+    pub fn sync_images(&mut self) {
+        let keep: Vec<String> = self.doc.resources.keys().cloned().collect();
+        self.images.retain(|k, _| keep.contains(k));
+        let missing: Vec<(String, Arc<Vec<u8>>)> = self.doc.resources.iter().filter(|(k, _)| !self.images.contains_key(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        for (k, bytes) in missing {
+            match texturecraft_formats::decode_image(&bytes) {
+                Ok(d) => {
+                    self.images.insert(k, decoded(d));
+                }
+                Err(e) => self.log.push(format!("resource {k}: {e}")),
+            }
+        }
+    }
+}
+
+fn list(s: &Session) -> Value {
+    json!(
+        s.doc
+            .resources
+            .iter()
+            .map(|(k, v)| {
+                let (w, h) = s.images.get(k).map(|i| (i.width, i.height)).unwrap_or((0, 0));
+                json!({"name": k, "bytes": v.len(), "width": w, "height": h})
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn import(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = strp(p, "path").ok_or_else(|| bad("resource.import", "`path` is required"))?;
+    let meta = std::fs::metadata(path).map_err(|e| bad("resource.import", format!("cannot read {path}: {e}")))?;
+    if meta.len() > MAX_BYTES as u64 {
+        return Err(bad("resource.import", format!("{path} is too large")));
+    }
+    let bytes = std::fs::read(path).map_err(|e| bad("resource.import", format!("cannot read {path}: {e}")))?;
+    let name = s.import_resource_bytes(path, bytes)?;
+    Ok(json!({ "name": name }))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn import(_: &mut Session, _: &Value) -> Result<Value> {
+    Err(EngineError::Other("file paths are not available in the browser; use File > Import resources".into()))
+}
+
+fn remove(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = strp(p, "name").ok_or_else(|| bad("resource.remove", "`name` is required"))?.to_string();
+    if !s.doc.resources.contains_key(&name) {
+        return Err(bad("resource.remove", format!("no resource `{name}`")));
+    }
+    s.edit("Remove resource", |s| {
+        s.doc.resources.remove(&name);
+        Ok(())
+    })?;
+    s.sync_images();
+    Ok(Value::Null)
+}
+
+/// Drop resources no layer, mask effect, the projection stencil or the environment uses (one undo
+/// step).
+fn remove_unused(s: &mut Session, _: &Value) -> Result<Value> {
+    let mut used = Vec::new();
+    for set in &s.doc.project.texture_sets {
+        for root in &set.stack {
+            crate::material_lib::images_used(&s.doc.project, *root, &mut used, 0);
+        }
+    }
+    used.extend(s.tool.stencil.as_ref().map(|st| st.image.clone()));
+    used.extend(s.doc.project.display.environment_resource().map(str::to_string));
+    let unused: Vec<String> = s.doc.resources.keys().filter(|k| !used.contains(k)).cloned().collect();
+    if !unused.is_empty() {
+        s.edit("Remove unused resources", |s| {
+            s.doc.resources.retain(|k, _| !unused.contains(k));
+            Ok(())
+        })?;
+        s.sync_images();
+    }
+    Ok(json!({ "removed": unused }))
+}
+
+fn add_image_fill(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = strp(p, "name").ok_or_else(|| bad("layer.add.image", "`name` is required"))?.to_string();
+    if !s.doc.resources.contains_key(&name) {
+        return Err(bad("layer.add.image", format!("no resource `{name}`")));
+    }
+    let ch = channel_param("layer.add.image", p, "channel")?.unwrap_or(Channel::BaseColor);
+    let projection = if p.get("projection").is_some() { crate::layer_cmds::projection_from(p, "layer.add.image")? } else { Projection::default() };
+    let ts = s.ts();
+    let label = std::path::Path::new(&name).file_stem().and_then(|n| n.to_str()).unwrap_or("Image").to_string();
+    let layer_name = s.doc.project.next_layer_name(ts, &label);
+    let id = s.edit("Add image fill", |s| {
+        let id = s.doc.project.alloc_id();
+        let mut fill = Fill { projection, ..Fill::default() };
+        fill.sources.insert(ch, Source::Image { name: name.clone() });
+        crate::layer_cmds::insert_selected(s, Layer::new(id, layer_name, LayerKind::Fill(fill), &[ch]))
+    })?;
+    Ok(json!({ "layer": id.0 }))
+}

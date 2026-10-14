@@ -1,0 +1,485 @@
+//! Mask and effect commands (the layer context menu's mask section and "Add <effect>").
+
+use serde_json::{Value, json};
+use texturecraft_core::{
+    BlendMode, Channel, CompareOp, Effect, EffectKind, Filter, Generator, GeneratorKind, LayerId, Levels, Mask, MaskBackground, Procedural, ProceduralKind,
+    Source,
+};
+
+use crate::commands::{CommandSpec, bad, blend_param, boolp, channel_param, color_param, f32p, has_layer, layer_param, strp, u64p};
+use crate::layer_cmds::projection_from;
+use crate::session::StackTarget;
+use crate::{EngineError, Result, Session, cmd};
+
+pub fn specs() -> Vec<CommandSpec> {
+    vec![
+        cmd!("mask.add.white", "Add white mask", ["Layers", "Mask"], None, "{layer?}", has_layer, |s, p| add_mask(s, p, MaskBackground::White)),
+        cmd!("mask.add.black", "Add black mask", ["Layers", "Mask"], None, "{layer?}", has_layer, |s, p| add_mask(s, p, MaskBackground::Black)),
+        cmd!(
+            "mask.add.colorSelection",
+            "Add mask with color selection",
+            ["Layers", "Mask"],
+            None,
+            "{layer?, color?: [r,g,b] ID color, tolerance?}",
+            has_layer,
+            add_color_mask
+        ),
+        cmd!("mask.toggle", "Toggle mask", ["Layers", "Mask"], None, "{layer?, enabled?}", has_layer, toggle),
+        cmd!("mask.invertBackground", "Invert mask background", ["Layers", "Mask"], None, "{layer?}", has_layer, invert_background),
+        cmd!("mask.invert", "Invert mask", ["Layers", "Mask"], None, "{layer?}", has_layer, invert),
+        cmd!("mask.clear", "Clear mask", ["Layers", "Mask"], None, "{layer?}", has_layer, clear),
+        cmd!("mask.remove", "Remove mask", ["Layers", "Mask"], None, "{layer?}", has_layer, remove),
+        cmd!(
+            "effect.add.paint",
+            "Add paint",
+            ["Layers", "Effects"],
+            None,
+            "{layer?, target?: mask|content, name?}",
+            has_layer,
+            |s, p| push_effect(s, p, EffectKind::Paint, BlendMode::Normal)
+        ),
+        cmd!(
+            "effect.add.fill",
+            "Add fill",
+            ["Layers", "Effects"],
+            None,
+            "{layer?, target?: mask|content, name?, mask: value?: 0..1 | procedural?: kind, scale?, seed? | anchor?: anchor effect id, anchorChannel?: channel (height); content: color?, roughness?, metallic?, height?, opacity? (default: every layer channel); projection?}",
+            has_layer,
+            add_fill
+        ),
+        cmd!(
+            "effect.add.generator",
+            "Add generator",
+            ["Layers", "Effects"],
+            None,
+            "{layer?, name?, generator?: edgeWear|dirt|thinAreas|curvature|ambientOcclusion|position|direction, level?, softness?, noise?, invert?}",
+            has_layer,
+            add_generator
+        ),
+        cmd!(
+            "effect.add.levels",
+            "Add levels",
+            ["Layers", "Effects"],
+            None,
+            "{layer?, target?: mask|content, name?, inLow?, inHigh?, gamma?, outLow?, outHigh?}",
+            has_layer,
+            add_levels
+        ),
+        cmd!(
+            "effect.add.filter",
+            "Add filter",
+            ["Layers", "Effects"],
+            None,
+            "{layer?, target?: mask|content, name?, filter?: invert|threshold|blur|sharpen|hsl, level?, radius?, amount?, hue?: turns -1..1, saturation?: -1..1, lightness?: -1..1}",
+            has_layer,
+            add_filter
+        ),
+        cmd!(
+            "effect.add.compare",
+            "Add compare mask",
+            ["Layers", "Effects"],
+            None,
+            "{layer?, name?, op?: lesser|within|greater, value?, tolerance?}",
+            has_layer,
+            add_compare
+        ),
+        cmd!(
+            "effect.add.anchor",
+            "Add anchor point",
+            ["Layers", "Effects"],
+            None,
+            "{layer?, name?} (records the stack up to this layer for fills and masks above: effect.add.fill {anchor})",
+            has_layer,
+            |s, p| push_effect(s, p, EffectKind::Anchor, BlendMode::Normal)
+        ),
+        cmd!(
+            "effect.set",
+            "Edit effect",
+            [],
+            None,
+            "{effect, visible?, blend?, opacity?, name?, level?, softness?, noise?, noiseScale?, invert?, value?, anchor?, anchorChannel?, inLow?, inHigh?, gamma?, outLow?, outHigh?, radius?, amount?, hue?, saturation?, lightness?, tolerance?}",
+            has_layer,
+            set
+        ),
+        cmd!("effect.remove", "Remove effect", [], None, "{effect}", has_layer, remove_effect),
+    ]
+}
+
+fn with_mask<T>(s: &mut Session, p: &Value, cmd: &str, label: &str, f: impl FnOnce(&mut Session, LayerId) -> Result<T>) -> Result<T> {
+    let id = layer_param(s, cmd, p)?;
+    s.edit(label, |s| f(s, id))
+}
+
+fn add_mask(s: &mut Session, p: &Value, bg: MaskBackground) -> Result<Value> {
+    let label = if bg == MaskBackground::White { "Add white mask" } else { "Add black mask" };
+    with_mask(s, p, "mask.add", label, |s, id| {
+        let l = s.doc.project.layer_mut(id)?;
+        if l.mask.is_some() {
+            return Err(EngineError::Other(format!("\"{}\" already has a mask", l.name)));
+        }
+        l.mask = Some(Mask::new(bg));
+        s.target = StackTarget::Mask;
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
+fn add_color_mask(s: &mut Session, p: &Value) -> Result<Value> {
+    let color = color_param(p, "color").unwrap_or([1.0, 0.0, 0.0]);
+    let tolerance = f32p(p, "tolerance").unwrap_or(0.1).clamp(0.0, 1.0);
+    with_mask(s, p, "mask.add.colorSelection", "Add mask with color selection", |s, id| {
+        let eid = s.doc.project.alloc_id();
+        let l = s.doc.project.layer_mut(s.doc.project.mask_owner(id))?;
+        let m = l.mask.get_or_insert_with(|| Mask::new(MaskBackground::Black));
+        m.effects.push(Effect::new(eid, EffectKind::ColorSelection { colors: vec![color], tolerance }));
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
+/// The mask layer `id` draws with (an instance's source's unless it has its own).
+fn mask_of(s: &mut Session, id: LayerId) -> Result<&mut Mask> {
+    let l = s.doc.project.layer_mut(s.doc.project.mask_owner(id))?;
+    let name = l.name.clone();
+    l.mask.as_mut().ok_or_else(|| EngineError::Other(format!("\"{name}\" has no mask")))
+}
+
+fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
+    let on = with_mask(s, p, "mask.toggle", "Toggle mask", |s, id| {
+        let m = mask_of(s, id)?;
+        m.enabled = boolp(p, "enabled").unwrap_or(!m.enabled);
+        Ok(m.enabled)
+    })?;
+    Ok(json!({ "enabled": on }))
+}
+
+fn invert_background(s: &mut Session, p: &Value) -> Result<Value> {
+    with_mask(s, p, "mask.invertBackground", "Invert mask background", |s, id| {
+        let m = mask_of(s, id)?;
+        m.background = if m.background == MaskBackground::White { MaskBackground::Black } else { MaskBackground::White };
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
+fn invert(s: &mut Session, p: &Value) -> Result<Value> {
+    with_mask(s, p, "mask.invert", "Invert mask", |s, id| {
+        let eid = s.doc.project.alloc_id();
+        let m = mask_of(s, id)?;
+        // Inverting twice cancels out.
+        if m.effects.last().is_some_and(|e| matches!(e.kind, EffectKind::Filter(Filter::Invert))) {
+            m.effects.pop();
+        } else {
+            m.effects.push(Effect::new(eid, EffectKind::Filter(Filter::Invert)));
+        }
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
+fn clear(s: &mut Session, p: &Value) -> Result<Value> {
+    with_mask(s, p, "mask.clear", "Clear mask", |s, id| {
+        let m = mask_of(s, id)?;
+        let ids: Vec<LayerId> = m.effects.drain(..).map(|e| e.id).collect();
+        for e in ids {
+            s.doc.pixels.masks.remove(&e);
+        }
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
+fn remove(s: &mut Session, p: &Value) -> Result<Value> {
+    with_mask(s, p, "mask.remove", "Remove mask", |s, id| {
+        let m = s.doc.project.layer_mut(s.doc.project.mask_owner(id))?.mask.take().ok_or_else(|| EngineError::Other("the layer has no mask".into()))?;
+        for e in m.effects {
+            s.doc.pixels.masks.remove(&e.id);
+        }
+        s.target = StackTarget::Content;
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
+/// Whether `effect.add.*` targets the layer content (`target: "content"`) or its mask (the
+/// default).
+fn content_target(p: &Value, cmd: &str) -> Result<bool> {
+    match strp(p, "target") {
+        None | Some("mask") => Ok(false),
+        Some("content") => Ok(true),
+        Some(other) => Err(bad(cmd, format!("unknown target `{other}`: use content or mask"))),
+    }
+}
+
+/// A valid `name` param.
+fn name_param(p: &Value) -> Option<&str> {
+    strp(p, "name").filter(|n| !n.trim().is_empty() && n.chars().count() <= 256)
+}
+
+/// Add an effect to the selected layer's mask (creating a mask if there is none) or, with
+/// `target: "content"` or a content-only effect, to its content stack.
+fn push_effect(s: &mut Session, p: &Value, kind: EffectKind, blend: BlendMode) -> Result<Value> {
+    let content = kind.content_only() == Some(true) || content_target(p, "effect.add")?;
+    if kind.content_only().is_some_and(|c| c != content) {
+        return Err(bad("effect.add", format!("{} effects go on masks, not on layer content", kind.name())));
+    }
+    let label = format!("Add {}", kind.name().to_ascii_lowercase());
+    let eid = with_mask(s, p, "effect.add", &label, |s, id| {
+        let eid = s.doc.project.alloc_id();
+        // An instance's content and (unless it has its own) mask belong to its source.
+        let id = if content { s.doc.project.content_layer(id).map_or(id, |l| l.id) } else { s.doc.project.mask_owner(id) };
+        let l = s.doc.project.layer_mut(id)?;
+        let bg = if matches!(kind, EffectKind::Generator(_) | EffectKind::Fill { .. }) { MaskBackground::Black } else { MaskBackground::White };
+        let mut e = Effect::new(eid, kind);
+        e.blend = blend;
+        if let Some(n) = name_param(p) {
+            e.name = n.to_string();
+        }
+        if !content {
+            l.mask.get_or_insert_with(|| Mask::new(bg)).effects.push(e);
+        } else if l.is_group() {
+            return Err(EngineError::Other(format!("\"{}\" is a folder: content effects go on paint and fill layers", l.name)));
+        } else {
+            l.content_effects.push(e);
+        }
+        s.target = StackTarget::Effect(eid);
+        Ok(eid)
+    })?;
+    Ok(json!({ "effect": eid.0 }))
+}
+
+/// A source reading anchor point `anchor` for layer `reader`: the anchor must sit on a layer
+/// below the reader in the same texture set (the compositor walks bottom → top).
+pub(crate) fn anchor_source(s: &Session, cmd: &str, reader: LayerId, anchor: LayerId, channel: Channel) -> Result<Source> {
+    let owner = match s.doc.project.effect(anchor) {
+        Some((owner, e)) if matches!(e.kind, EffectKind::Anchor) => owner,
+        _ => return Err(bad(cmd, format!("{} is not an anchor point", anchor.0))),
+    };
+    let (ts, _, _) = s.doc.project.locate(reader).ok_or_else(|| bad(cmd, "layer not in a stack"))?;
+    let order: Vec<LayerId> = s.doc.project.walk(ts).into_iter().map(|(id, _)| id).collect();
+    let pos = |id: LayerId| order.iter().position(|x| *x == id);
+    match (pos(owner), pos(reader)) {
+        (Some(o), Some(r)) if o < r => Ok(Source::Anchor { anchor, channel }),
+        _ => Err(bad(cmd, "the anchor point must be on a layer below this one in the same texture set")),
+    }
+}
+
+fn add_fill(s: &mut Session, p: &Value) -> Result<Value> {
+    let projection = projection_from(p, "effect.add.fill")?;
+    let blend = blend_param("effect.add.fill", p, "blend")?.unwrap_or(BlendMode::Normal);
+    let id = layer_param(s, "effect.add.fill", p)?;
+    if content_target(p, "effect.add.fill")? {
+        let mut fill = crate::layer_cmds::fill_from(p);
+        if fill.sources.is_empty() {
+            fill.sources = s.doc.project.layer(id)?.channels.keys().map(|c| (*c, Source::uniform_of(*c))).collect();
+        }
+        fill.projection = projection;
+        return push_effect(s, p, EffectKind::Material(fill), blend);
+    }
+    if let Some(a) = u64p(p, "anchor") {
+        let channel = channel_param("effect.add.fill", p, "anchorChannel")?.unwrap_or(Channel::Height);
+        let source = anchor_source(s, "effect.add.fill", id, LayerId(a), channel)?;
+        return push_effect(s, p, EffectKind::Fill { source, projection }, blend);
+    }
+    let source = match strp(p, "procedural") {
+        Some(k) => {
+            let kind = ProceduralKind::parse(k).ok_or_else(|| bad("effect.add.fill", format!("unknown procedural `{k}`")))?;
+            let mut pr = Procedural::new(kind);
+            if let Some(v) = f32p(p, "scale") {
+                pr.scale = v.clamp(0.001, 1000.0);
+            }
+            if let Some(v) = u64p(p, "seed") {
+                pr.seed = v as u32;
+            }
+            Source::Procedural { pattern: pr, low: [0.0; 3], high: [1.0; 3] }
+        }
+        None => Source::Uniform([f32p(p, "value").unwrap_or(1.0).clamp(0.0, 1.0); 3]),
+    };
+    push_effect(s, p, EffectKind::Fill { source, projection }, blend)
+}
+
+fn generator_from(p: &Value, g: &mut Generator) {
+    if let Some(v) = f32p(p, "level") {
+        g.level = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = f32p(p, "softness") {
+        g.softness = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = f32p(p, "noise") {
+        g.noise_amount = v.clamp(0.0, 2.0);
+    }
+    if let Some(v) = f32p(p, "noiseScale") {
+        g.noise_scale = v.clamp(0.01, 1000.0);
+    }
+    if let Some(v) = u64p(p, "seed") {
+        g.seed = v as u32;
+    }
+    if let Some(v) = boolp(p, "invert") {
+        g.invert = v;
+    }
+    if let Some(d) = color_param(p, "direction") {
+        g.direction = d;
+    }
+}
+
+fn add_generator(s: &mut Session, p: &Value) -> Result<Value> {
+    let kind = match strp(p, "generator") {
+        Some(k) => GeneratorKind::parse(k).ok_or_else(|| bad("effect.add.generator", format!("unknown generator `{k}`")))?,
+        None => GeneratorKind::EdgeWear,
+    };
+    let mut g = Generator::new(kind);
+    generator_from(p, &mut g);
+    let blend = blend_param("effect.add.generator", p, "blend")?.unwrap_or(BlendMode::Normal);
+    push_effect(s, p, EffectKind::Generator(g), blend)
+}
+
+fn levels_from(p: &Value, l: &mut Levels) {
+    for (k, slot) in [("inLow", &mut l.in_low), ("inHigh", &mut l.in_high), ("gamma", &mut l.gamma), ("outLow", &mut l.out_low), ("outHigh", &mut l.out_high)] {
+        if let Some(v) = f32p(p, k) {
+            *slot = if k == "gamma" { v.clamp(0.01, 10.0) } else { v.clamp(0.0, 1.0) };
+        }
+    }
+}
+
+fn add_levels(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut l = Levels::default();
+    levels_from(p, &mut l);
+    push_effect(s, p, EffectKind::Levels(l), BlendMode::Normal)
+}
+
+fn add_filter(s: &mut Session, p: &Value) -> Result<Value> {
+    let f = match strp(p, "filter").unwrap_or("invert") {
+        "invert" => Filter::Invert,
+        "threshold" => Filter::Threshold { level: f32p(p, "level").unwrap_or(0.5).clamp(0.0, 1.0) },
+        "blur" => Filter::Blur { radius: f32p(p, "radius").unwrap_or(2.0).clamp(0.0, 64.0) },
+        "sharpen" => Filter::Sharpen { amount: f32p(p, "amount").unwrap_or(1.0).clamp(0.0, 10.0) },
+        "hsl" => {
+            let mut f = Filter::Hsl { hue: 0.0, saturation: 0.0, lightness: 0.0 };
+            hsl_from(p, &mut f);
+            f
+        }
+        other => return Err(bad("effect.add.filter", format!("unknown filter `{other}`"))),
+    };
+    push_effect(s, p, EffectKind::Filter(f), BlendMode::Normal)
+}
+
+fn hsl_from(p: &Value, f: &mut Filter) {
+    if let Filter::Hsl { hue, saturation, lightness } = f {
+        for (k, slot) in [("hue", hue), ("saturation", saturation), ("lightness", lightness)] {
+            if let Some(v) = f32p(p, k) {
+                *slot = v.clamp(-1.0, 1.0);
+            }
+        }
+    }
+}
+
+fn add_compare(s: &mut Session, p: &Value) -> Result<Value> {
+    let op = match strp(p, "op").unwrap_or("greater") {
+        "lesser" | "less" => CompareOp::LesserThan,
+        "within" => CompareOp::WithinTolerance,
+        "greater" => CompareOp::GreaterThan,
+        other => return Err(bad("effect.add.compare", format!("unknown op `{other}`"))),
+    };
+    let kind =
+        EffectKind::Compare { op, value: f32p(p, "value").unwrap_or(0.5).clamp(0.0, 1.0), tolerance: f32p(p, "tolerance").unwrap_or(0.1).clamp(0.0, 1.0) };
+    push_effect(s, p, kind, BlendMode::Normal)
+}
+
+fn effect_id(p: &Value, cmd: &str) -> Result<LayerId> {
+    u64p(p, "effect").map(LayerId).ok_or_else(|| bad(cmd, "`effect` id is required"))
+}
+
+fn set(s: &mut Session, p: &Value) -> Result<Value> {
+    let eid = effect_id(p, "effect.set")?;
+    let blend = blend_param("effect.set", p, "blend")?;
+    // A fill reading an anchor: `anchor` picks the anchor point, `anchorChannel` alone
+    // re-targets the current one.
+    let anchor = match s.doc.project.effect(eid) {
+        Some((owner, Effect { kind: EffectKind::Fill { source, .. }, .. })) => {
+            let (current, channel) = match source {
+                Source::Anchor { anchor, channel } => (Some(*anchor), *channel),
+                _ => (None, Channel::Height),
+            };
+            let channel_param = channel_param("effect.set", p, "anchorChannel")?;
+            match u64p(p, "anchor").map(LayerId).or(current.filter(|_| channel_param.is_some())) {
+                Some(a) => Some(anchor_source(s, "effect.set", owner, a, channel_param.unwrap_or(channel))?),
+                None => None,
+            }
+        }
+        _ => None,
+    };
+    s.edit("Edit effect", |s| {
+        let e = s.doc.project.effect_mut(eid).ok_or_else(|| bad("effect.set", format!("no effect {}", eid.0)))?;
+        if let Some(v) = boolp(p, "visible") {
+            e.visible = v;
+        }
+        if let Some(b) = blend {
+            e.blend = b;
+        }
+        if let Some(o) = f32p(p, "opacity") {
+            e.opacity = o.clamp(0.0, 1.0);
+        }
+        if let Some(n) = name_param(p) {
+            e.name = n.to_string();
+        }
+        match &mut e.kind {
+            EffectKind::Generator(g) => generator_from(p, g),
+            EffectKind::Levels(l) => levels_from(p, l),
+            EffectKind::Filter(f @ Filter::Hsl { .. }) => hsl_from(p, f),
+            EffectKind::Fill { source, .. } => {
+                if let Some(a) = anchor {
+                    *source = a;
+                } else if let Some(x) = f32p(p, "value")
+                    && matches!(source, Source::Uniform(_) | Source::Anchor { .. })
+                {
+                    *source = Source::Uniform([x.clamp(0.0, 1.0); 3]);
+                }
+            }
+            EffectKind::Filter(Filter::Threshold { level }) => {
+                if let Some(x) = f32p(p, "level") {
+                    *level = x.clamp(0.0, 1.0);
+                }
+            }
+            EffectKind::Filter(Filter::Blur { radius }) => {
+                if let Some(x) = f32p(p, "radius") {
+                    *radius = x.clamp(0.0, 256.0);
+                }
+            }
+            EffectKind::Filter(Filter::Sharpen { amount }) => {
+                if let Some(x) = f32p(p, "amount") {
+                    *amount = x.clamp(0.0, 10.0);
+                }
+            }
+            EffectKind::ColorSelection { tolerance, .. } | EffectKind::Compare { tolerance, .. } => {
+                if let Some(x) = f32p(p, "tolerance") {
+                    *tolerance = x.clamp(0.0, 1.0);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
+fn remove_effect(s: &mut Session, p: &Value) -> Result<Value> {
+    let eid = effect_id(p, "effect.remove")?;
+    s.edit("Remove effect", |s| {
+        let content = match s.doc.project.effect(eid) {
+            Some((owner, _)) => s.doc.project.layer(owner)?.content_effects.iter().any(|e| e.id == eid),
+            None => return Err(bad("effect.remove", format!("no effect {}", eid.0))),
+        };
+        for l in s.doc.project.layers.values_mut() {
+            for list in l.mask.iter_mut().map(|m| &mut m.effects).chain(std::iter::once(&mut l.content_effects)) {
+                list.retain(|e| e.id != eid);
+            }
+        }
+        s.doc.pixels.masks.remove(&eid);
+        s.doc.pixels.layers.retain(|(id, _), _| *id != eid);
+        if s.target == StackTarget::Effect(eid) {
+            s.target = if content { StackTarget::Content } else { StackTarget::Mask };
+        }
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}

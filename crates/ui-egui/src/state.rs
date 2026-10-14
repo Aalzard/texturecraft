@@ -1,0 +1,250 @@
+//! UI state (serde, so the control channel can read and drive it).
+
+use serde::{Deserialize, Serialize};
+use texturecraft_engine::core::Channel;
+
+use crate::docking::Dock;
+use crate::keymap::Keymap;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Mode {
+    #[default]
+    Painting,
+    Baking,
+    /// Path-traced view (F10).
+    Rendering,
+}
+
+/// Rendering mode settings.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RenderUi {
+    pub max_samples: u32,
+    pub bounces: u32,
+    pub denoise: bool,
+}
+
+impl Default for RenderUi {
+    fn default() -> Self {
+        // The web traces on one thread: fewer bounces keep it interactive.
+        RenderUi { max_samples: 256, bounces: if cfg!(target_arch = "wasm32") { 3 } else { 6 }, denoise: true }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ViewLayout {
+    /// 3D and 2D side by side.
+    #[default]
+    Split,
+    Only3D,
+    Only2D,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PropsTab {
+    #[default]
+    Brush,
+    Alpha,
+    Material,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct Windows {
+    pub export: bool,
+    pub new_project: bool,
+    pub about: bool,
+    pub shortcuts: bool,
+    #[serde(default)]
+    pub settings: bool,
+}
+
+/// Edit › Settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Prefs {
+    /// Interface zoom (1 = 100%).
+    pub ui_scale: f32,
+    /// Minutes between autosaves of a modified project (0: off; desktop).
+    pub autosave_minutes: u32,
+    /// UI language code (`i18n::LANGUAGES`).
+    pub language: String,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs { ui_scale: 1.0, autosave_minutes: 10, language: "en".into() }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NewProject {
+    pub mesh: String,
+    pub resolution: u32,
+    pub name: String,
+    /// A mesh file chosen from disk (desktop only).
+    pub file: Option<String>,
+}
+
+impl Default for NewProject {
+    fn default() -> Self {
+        NewProject { mesh: "material_ball".into(), resolution: 2048, name: "Untitled".into(), file: None }
+    }
+}
+
+/// The export dialog's settings (remembered between sessions).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExportUi {
+    pub dir: String,
+    pub preset: String,
+    /// File extension override ("" = the preset's formats).
+    pub format: String,
+    /// Bit depth override (0 = the preset's).
+    pub bit_depth: u8,
+    /// none | dilation | dilationDefault | infinite
+    pub padding: String,
+    pub dilation: u32,
+    /// Output size override (0 = each texture set's size).
+    pub size: u32,
+    /// "" (project), openGl or directX.
+    pub normal_format: String,
+    /// Texture sets excluded from export.
+    pub skip: Vec<usize>,
+    pub tab: u8,
+}
+
+impl Default for ExportUi {
+    fn default() -> Self {
+        ExportUi {
+            dir: default_export_dir(),
+            preset: "Document channels + Normal + AO".into(),
+            format: String::new(),
+            bit_depth: 0,
+            padding: "infinite".into(),
+            dilation: 16,
+            size: 0,
+            normal_format: String::new(),
+            skip: Vec::new(),
+            tab: 0,
+        }
+    }
+}
+
+fn default_export_dir() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::user_dir("export").display().to_string()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        String::new()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UiState {
+    pub mode: Mode,
+    pub layout: ViewLayout,
+    /// The docked, tabbed and floating panels around the viewport.
+    #[serde(default)]
+    pub dock: Dock,
+    /// Window ▸ Hide UI (Tab): only the viewport.
+    pub hide_ui: bool,
+    pub windows: Windows,
+    pub uv_zoom: f32,
+    pub uv_pan: [f32; 2],
+    /// Channel whose blending the layer rows show.
+    pub layer_channel: Channel,
+    pub shelf_filter: String,
+    pub props_tab: PropsTab,
+    /// Layer being renamed and the edit buffer.
+    pub rename: Option<(u64, String)>,
+    pub new_project: NewProject,
+    /// Show the UV wireframe in the 2D view.
+    pub uv_wireframe: bool,
+    /// Show the mesh wireframe over the 3D view.
+    #[serde(default)]
+    pub wireframe_3d: bool,
+    #[serde(default)]
+    pub render: RenderUi,
+    #[serde(default)]
+    pub prefs: Prefs,
+    #[serde(default)]
+    pub export: ExportUi,
+    /// Recently opened or saved projects (desktop).
+    #[serde(default)]
+    pub recent: Vec<String>,
+    /// Custom keyboard shortcuts (item id → "Ctrl+Shift+E", "" = none) over the defaults.
+    #[serde(default)]
+    pub keymap: Keymap,
+}
+
+impl UiState {
+    /// Take `layout`'s panels, windows and view settings, keeping this state's dialogs, export
+    /// settings and recent files.
+    pub fn adopt_layout(&mut self, layout: UiState) {
+        let keep = std::mem::replace(self, layout);
+        self.new_project = keep.new_project;
+        self.export = keep.export;
+        self.recent = keep.recent;
+        self.shelf_filter = keep.shelf_filter;
+        self.prefs = keep.prefs;
+        self.keymap = keep.keymap;
+        self.rename = None;
+    }
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        UiState {
+            mode: Mode::Painting,
+            layout: ViewLayout::Split,
+            dock: Dock::default(),
+            hide_ui: false,
+            windows: Windows::default(),
+            uv_zoom: 1.0,
+            uv_pan: [0.0, 0.0],
+            layer_channel: Channel::BaseColor,
+            shelf_filter: String::new(),
+            props_tab: PropsTab::Brush,
+            rename: None,
+            new_project: NewProject::default(),
+            uv_wireframe: true,
+            wireframe_3d: false,
+            render: RenderUi::default(),
+            prefs: Prefs::default(),
+            export: ExportUi::default(),
+            recent: Vec::new(),
+            keymap: Keymap::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adopting_a_layout_keeps_recent_files_export_settings_and_shortcuts() {
+        let mut ui = UiState { recent: vec!["a.tcraft".into()], ..UiState::default() };
+        ui.export.preset = "Mine".into();
+        ui.keymap.insert("file.save".into(), "F5".into());
+        let mut layout = UiState::default();
+        layout.dock.close(crate::docking::Panel::Assets);
+        ui.adopt_layout(layout);
+        assert!(!ui.dock.is_open(crate::docking::Panel::Assets));
+        assert_eq!(ui.recent, vec!["a.tcraft".to_string()]);
+        assert_eq!(ui.export.preset, "Mine");
+        assert_eq!(ui.keymap.get("file.save").map(String::as_str), Some("F5"));
+    }
+
+    #[test]
+    fn older_saved_state_without_a_dock_loads_the_default_layout() {
+        let mut v = serde_json::to_value(UiState::default()).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        obj.remove("dock");
+        obj.remove("keymap");
+        obj.insert("show_shelf".into(), serde_json::json!(false));
+        let ui: UiState = serde_json::from_value(v).unwrap();
+        assert_eq!(ui.dock, Dock::default());
+    }
+}

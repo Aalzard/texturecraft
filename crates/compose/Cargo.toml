@@ -1,0 +1,16 @@
+[package]
+name = "texturecraft-compose"
+description = "TextureCraft layer-stack compositor (CPU reference), patterns, UV padding, display conversion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+texturecraft-core = { workspace = true }
+texturecraft-texel = { workspace = true }
+texturecraft-geom = { workspace = true }
+rayon = { workspace = true }
+half = { workspace = true }

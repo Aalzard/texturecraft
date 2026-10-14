@@ -1,0 +1,25 @@
+[package]
+name = "texturecraft-engine"
+description = "TextureCraft session, command registry, painting, baking and inspection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+texturecraft-core = { workspace = true }
+texturecraft-texel = { workspace = true }
+texturecraft-geom = { workspace = true }
+texturecraft-compose = { workspace = true }
+texturecraft-paint = { workspace = true }
+texturecraft-bake = { workspace = true }
+texturecraft-formats = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+image = { workspace = true }

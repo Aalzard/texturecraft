@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>TextureCraft</title>
+  <link data-trunk rel="rust" data-bin="texturecraft-web" data-cargo-profile="wasm-release" data-wasm-opt="z" data-weak-refs />
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #1c1c1c; }
+    #texturecraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    #texturecraft_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 0 16px; text-align: center; color: #b8b8b8; font: 14px system-ui, sans-serif; pointer-events: none; }
+    #texturecraft_loading p { margin: 0 0 8px; max-width: 420px; line-height: 1.5; }
+    #texturecraft_loading a { color: #e0e0e0; pointer-events: auto; }
+    /* The app removes this element once it runs. If the WebAssembly never downloads or doesn't match
+       this page, no Rust runs to say so, so the page itself shows what to do after a while. */
+    #texturecraft_stalled { color: #8c8c8c; visibility: hidden; animation: texturecraft-stalled 0s 30s forwards; }
+    @keyframes texturecraft-stalled { to { visibility: visible; } }
+  </style>
+</head>
+<body>
+  <canvas id="texturecraft_canvas"></canvas>
+  <div id="texturecraft_loading">
+    <p>Loading TextureCraft&hellip;</p>
+    <p id="texturecraft_stalled">This is taking longer than usual. If TextureCraft doesn't start, its files may have failed to
+      download or come from a different version of this page. <a href="">Reload</a> to try again; the browser
+      console lists what failed.</p>
+  </div>
+</body>
+</html>

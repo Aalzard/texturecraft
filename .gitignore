@@ -1,0 +1,11 @@
+*~
+plan/
+/target
+target/
+/dist
+/corpus
+/log
+/secrets
+/temp
+/craft-fonts
+*.tcraft.tmp

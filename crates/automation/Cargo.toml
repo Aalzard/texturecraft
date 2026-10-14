@@ -1,0 +1,28 @@
+[package]
+name = "texturecraft-automation"
+description = "TextureCraft automation: MCP server (rmcp), headless JSON-lines RPC and a bridge to the running app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+texturecraft-engine = { workspace = true }
+texturecraft-render = { workspace = true }
+texturecraft-formats = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+image = { workspace = true }
+rayon = { workspace = true }
+rmcp = { workspace = true }
+tokio = { workspace = true }
+schemars = { workspace = true }
+base64 = { workspace = true }
+cap-std = { workspace = true }
+getrandom = { workspace = true }
+
+[dev-dependencies]
+rmcp = { workspace = true, features = ["client"] }

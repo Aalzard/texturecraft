@@ -1,0 +1,225 @@
+# Control protocol, MCP and CLI
+
+Everything TextureCraft does is an engine command with a stable id (`layer.add.fill`,
+`bake.run`, `edit.undo`, …). Agents and scripts reach the same commands four ways:
+
+| Surface | Start it with | Use it for |
+|---|---|---|
+| Control channel | `texturecraft --control <port>` | Drive the running desktop app: commands, inspect, menus, screenshots |
+| MCP server | `texturecraft-cli mcp` | AI agents (Claude Code, Claude Desktop, any MCP client), headless or bridged to the app |
+| JSON-lines server | `texturecraft-cli serve [--port <port>]` | Scripts that keep one headless session open |
+| CLI subcommands | `texturecraft-cli info/run/batch/bake/export/render/new` | One-shot jobs in shells and pipelines |
+
+Programmatic calls never open dialogs: a command runs with its defaults. Only `ui.menu.invoke`
+behaves like a menu click. `session.inspect` shows every layer, mask, effect, fill source and
+painted tile count, so an agent can verify its work without a screenshot.
+
+## Control channel (desktop app)
+
+```sh
+texturecraft --control 7878
+# stderr: texturecraft: control token written to <temp>/texturecraft-control-7878.token
+```
+
+Loopback TCP (`127.0.0.1` only), one JSON object per line each way. Requests are
+`{"id", "method", "params"}`; replies are `{"id", "ok": true, "result"}` or
+`{"id", "ok": false, "error"}`. Requests are limited to 8 MiB.
+
+**Authentication.** The first request on every connection must be
+
+```json
+{"id": 0, "method": "auth", "params": {"token": "<token>"}}
+```
+
+The token is `TEXTURECRAFT_CONTROL_TOKEN` when that is set (16 characters or more), otherwise a
+fresh random token the app writes to `<temp>/texturecraft-control-<port>.token` (`<temp>` is
+`%TEMP%` on Windows, `$TMPDIR` or `/tmp` elsewhere). Any other first request is refused.
+
+| Method | Params | Result |
+|---|---|---|
+| `ping` | | `"pong"` |
+| `command.run` | `{id, params?}` | the command's JSON result |
+| `command.list` | `{filter?}` | `[{id, label, menu, shortcut, params, enabled}]` |
+| `session.inspect` | | project, mesh, texture sets, layer stack, tool, camera, display, history |
+| `ui.inspect` | | UI state, viewport rect, fps, bake progress, toasts |
+| `ui.menu.list` | | the menu catalog: `{menu, submenu, label, id, shortcut, implemented, enabled}` |
+| `ui.menu.invoke` | `{id}` | behaves like a menu click (may open a window) |
+| `ui.set` | fields of the UI state, e.g. `{"layout": "Only3D"}`; `dock` is the panel layout (`{main, windows}`: `{"tabs": {"tabs": [...], "active": 0}}` or `{"split": {"vertical", "fraction", "first", "second"}}` nodes over `Viewport`, `Assets`, `TextureSetList`, `Layers`, `TextureSetSettings`, `Properties`, `Display`, `Shader`, `History`, `Log`), `keymap` the custom shortcuts (`{"file.save": "F5"}`, `""` unbinds) | `null` |
+| `viewport.screenshot` | `{view?: "3d" \| "2d"}` | `{width, height, png}` (PNG, base64) |
+| `ui.screenshot` | | `{width, height, png}` of the whole window, after the next frame |
+
+Example session:
+
+```text
+> {"id":0,"method":"auth","params":{"token":"3f9c…"}}
+< {"id":0,"ok":true}
+> {"id":1,"method":"command.run","params":{"id":"layer.add.fill","params":{"color":"#336699","roughness":0.2}}}
+< {"id":1,"ok":true,"result":{"layer":7}}
+> {"id":2,"method":"command.run","params":{"id":"mask.add.black"}}
+< {"id":2,"ok":true,"result":null}
+> {"id":3,"method":"viewport.screenshot","params":{"view":"3d"}}
+< {"id":3,"ok":true,"result":{"width":1210,"height":788,"png":"iVBORw0KGgo…"}}
+```
+
+A minimal client (Python, for illustration):
+
+```python
+import json, os, socket, tempfile
+port = 7878
+token = os.environ.get("TEXTURECRAFT_CONTROL_TOKEN") or open(
+    os.path.join(tempfile.gettempdir(), f"texturecraft-control-{port}.token")).read().strip()
+s = socket.create_connection(("127.0.0.1", port)); f = s.makefile("rw")
+def call(method, params=None, _id=[0]):
+    _id[0] += 1
+    f.write(json.dumps({"id": _id[0], "method": method, "params": params or {}}) + "\n"); f.flush()
+    reply = json.loads(f.readline())
+    if not reply["ok"]: raise RuntimeError(reply["error"])
+    return reply.get("result")
+call("auth", {"token": token})
+print(call("command.run", {"id": "layer.add.fill", "params": {"color": [0.8, 0.1, 0.1]}}))
+```
+
+## MCP server
+
+`texturecraft-cli mcp` speaks MCP on stdin/stdout (stdout carries only protocol messages).
+
+- **Headless** (default): an in-process session that starts on the material ball (1024).
+  Files are reachable only below the roots given at launch, as forward-slash paths relative to
+  them: `--read-root <dir>` for `project_open` / `mesh_import`, `--write-root <dir>` for
+  `project_save` / `material_save` / `textures_export`. Without roots there is no file access. `..`, absolute
+  paths, drive letters, device names and symlink or junction escapes are refused.
+- **Bridge**: `--bridge <port>` forwards to a running `texturecraft --control <port>` (token from
+  `--token`, `TEXTURECRAFT_CONTROL_TOKEN` or the app's token file). The app reads and writes its
+  own files, so the path tools are unavailable there; `project_save` without a path invokes
+  File › Save.
+
+Through `command_run`, every `file.*` command but `file.close` (and `file.reimportMesh` without
+a `path`) is refused, and so is any command given a `path` or `dir` (`resource.import`,
+`material.save`, `material.load`, …), in both modes: use the workspace tools below.
+
+| Tool | Params | Notes |
+|---|---|---|
+| `session_inspect` | | The whole session as JSON |
+| `command_list` | `{filter?}` | Command ids, labels, params docs, enabled now |
+| `command_run` | `{id, params?}` | Any command by id |
+| `command_batch` | `{steps: [{id, params?}]}` | Stops at the first error: `{completed, results, failed: {index, id, error}}` (a tool error) |
+| `project_new` | `{mesh?, resolution?, name?}` | Built-in mesh: material_ball, sphere, cube, rounded_cube, cylinder, torus, plane, crate |
+| `project_open` | `{path}` | `.tcraft` or a mesh file, relative to the read root |
+| `project_save` | `{path?}` | `.tcraft` (appended if missing), relative to the write root |
+| `mesh_import` | `{path, resolution?}` | New project from .glb/.gltf/.fbx/.dae/.obj/.ply/.stl |
+| `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil` |
+| `material_save` | `{path, layer?, name?}` | A layer or folder as a `.tcmat` smart material below the write root |
+| `material_load` | `{path}` | Add a `.tcmat` smart material above the selection |
+| `textures_export` | `{dir, preset?, ts?, format?, padding?, size?}` | Writes files below the write root |
+| `bake` | `{ts?, resolution?, maps?}` | Mesh maps for generators and smart materials |
+| `paint_stroke` | `{points, viewport?, color?, roughness?, metallic?, height?, size?, hardness?}` | Paint tool + brush material + `tool.stroke`; points in viewport pixels |
+| `viewport_render` | `{view?: "3d" \| "2d", width?, height?, yaw?, pitch?, samples?, bounces?}` | Headless: PNG image (≤ 2048 px a side); yaw/pitch in degrees for this render only; `samples` (1–4096) path traces the 3D view on the CPU instead (no GPU needed) |
+| `viewport_screenshot` | `{view?}` | Bridge: the app's 3D or 2D view |
+| `ui_screenshot` | | Bridge: the whole window (downscaled to 2048 px) |
+| `ui_inspect` | | Bridge: UI state |
+| `ui_menu_invoke` | `{id}` | Bridge: a menu click |
+
+Replies are capped: 8 MiB of JSON, 5 MiB per PNG, 256 batch steps. Stroke points and render
+sizes share one space: the default render size is the session viewport (1280×800), so
+`paint_stroke` points can be read straight off a `viewport_render` image.
+
+A typical agent run: `project_new {"mesh": "sphere"}` → `command_run layer.add.fill
+{"color": "#336699", "roughness": 0.2}` → `bake {"resolution": 512}` → `command_run
+mask.add.black` → `command_run effect.add.generator {"generator": "edgeWear"}` →
+`session_inspect` → `viewport_render` → `project_save {"path": "ball.tcraft"}` →
+`textures_export {"dir": "textures", "preset": "glTF PBR Metal Roughness"}`.
+
+### Claude Code
+
+```sh
+claude mcp add texturecraft -- texturecraft-cli mcp --read-root . --write-root .
+# bridged to the running app:
+claude mcp add texturecraft-app -- texturecraft-cli mcp --bridge 7878
+```
+
+or a project `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "texturecraft": { "command": "texturecraft-cli", "args": ["mcp", "--read-root", ".", "--write-root", "."] }
+  }
+}
+```
+
+### Claude Desktop
+
+In `claude_desktop_config.json` (Settings › Developer › Edit Config), with absolute paths:
+
+```json
+{
+  "mcpServers": {
+    "texturecraft": {
+      "command": "C:\\Program Files\\TextureCraft\\texturecraft-cli.exe",
+      "args": ["mcp", "--read-root", "C:\\Users\\me\\Texturing", "--write-root", "C:\\Users\\me\\Texturing"]
+    }
+  }
+}
+```
+
+## Headless JSON-lines server
+
+`texturecraft-cli serve` keeps one headless session open and answers the control channel's
+envelope on stdin/stdout (no authentication: the caller started the process). With
+`--port <port>` it listens on `127.0.0.1:<port>` instead, with the same `auth` handshake and
+token rules as the app (a generated token goes to `<temp>/texturecraft-control-<port>.token`).
+File access follows `--read-root` / `--write-root` as for MCP.
+
+| Method | Params |
+|---|---|
+| `ping`, `methods`, `session.inspect` | |
+| `command.run` | `{id, params?}` |
+| `command.list` | `{filter?}` |
+| `command.batch` | `{steps: [{id, params?}]}` |
+| `project.open` | `{path}` |
+| `project.save` | `{path?}` |
+| `mesh.import` | `{path, resolution?, name?}` |
+| `resource.import` | `{path}` |
+| `material.save` | `{path, layer?, name?}` |
+| `material.load` | `{path}` |
+| `textures.export` | `{dir, preset?, ts?, format?, padding?, size?, bitDepth?, dilation?, normalFormat?}` |
+| `render` | `{view?, width?, height?, yaw?, pitch?}` → `{width, height, png}` |
+
+```sh
+printf '%s\n' '{"id":1,"method":"command.run","params":{"id":"project.new","params":{"mesh":"torus"}}}' \
+              '{"id":2,"method":"render","params":{"width":512,"height":512}}' | texturecraft-cli serve
+```
+
+## CLI
+
+```sh
+texturecraft-cli --version                                   # TextureCraft 0.1.0 (abc1234 2026-10-14)
+texturecraft-cli info model.glb                              # triangles, materials, UV report
+texturecraft-cli info project.tcraft                         # texture sets, layers, baked maps
+texturecraft-cli commands --filter mask
+texturecraft-cli new builtin:material_ball ball.tcraft --resolution 1024 --sample
+texturecraft-cli new model.glb model.tcraft --resolution 2048
+texturecraft-cli run ball.tcraft layer.add.fill '{"color":"#c08040","metallic":1}' -o ball.tcraft
+texturecraft-cli batch script.json
+texturecraft-cli bake model.tcraft --resolution 2048 --maps ambientOcclusion,curvature,thickness
+texturecraft-cli export model.tcraft out/ --preset "Unreal Engine (Packed)" --format png --size 2048
+texturecraft-cli render ball.tcraft ball.png --size 1280x800 --view 3d --yaw 30 --pitch 15
+```
+
+`<input>` is a `.tcraft` project, a mesh file or `builtin:<id>`. A batch script is a list of
+steps or an object with an optional input and output (paths relative to the current directory):
+
+```json
+{
+  "open": "builtin:sphere",
+  "steps": [
+    {"id": "layer.add.fill", "params": {"color": [0.6, 0.6, 0.62], "metallic": 1, "roughness": 0.3}},
+    {"id": "bake.run", "params": {"resolution": 512}},
+    {"id": "material.apply", "params": {"material": "iron_rusted"}}
+  ],
+  "save": "rusty.tcraft"
+}
+```
+
+Errors print `texturecraft-cli <command>: error: …` and exit 1; usage errors exit 2. The CLI is a
+console program and never opens a window; `render` needs a GPU or software adapter.
