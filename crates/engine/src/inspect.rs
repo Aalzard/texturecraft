@@ -98,24 +98,27 @@ pub fn stack(s: &Session, ts: usize) -> Value {
 }
 
 pub fn texture_sets(s: &Session) -> Value {
-    json!(
-        s.doc
-            .project
-            .texture_sets
-            .iter()
-            .enumerate()
-            .map(|(i, t)| json!({
-                "index": i,
-                "name": t.name,
-                "resolution": t.resolution,
-                "channels": t.channels.iter().map(|(c, f)| json!({ "channel": c.id(), "format": f.label() })).collect::<Vec<_>>(),
-                "layers": s.doc.project.walk(i).len(),
-                "baked": crate::project_cmds::baked_json(s.doc.baked.get(&i)),
-                "visible": t.visible,
-                "active": i == s.ts(),
-            }))
-            .collect::<Vec<_>>()
-    )
+    json!((0..s.set_count()).map(|i| texture_set(s, i)).collect::<Vec<_>>())
+}
+
+/// One texture set; UV-tiled sets list their tiles and where each sits in the texel atlas.
+pub fn texture_set(s: &Session, i: usize) -> Value {
+    let Some(t) = s.doc.project.texture_sets.get(i) else { return Value::Null };
+    let grid = t.tile_grid();
+    let tiles: Vec<Value> = t.uv_tiles.iter().filter_map(|u| grid?.block(*u).map(|(x, y)| json!({ "udim": u, "block": [x, y] }))).collect();
+    json!({
+        "index": i,
+        "name": t.name,
+        "resolution": t.resolution,
+        "size": t.size(),
+        "uvTiles": t.uv_tiles,
+        "tiles": tiles,
+        "channels": t.channels.iter().map(|(c, f)| json!({ "channel": c.id(), "format": f.label() })).collect::<Vec<_>>(),
+        "layers": s.doc.project.walk(i).len(),
+        "baked": crate::project_cmds::baked_json(s.doc.baked.get(&i)),
+        "visible": t.visible,
+        "active": i == s.ts(),
+    })
 }
 
 /// The whole session.

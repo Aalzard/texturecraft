@@ -32,14 +32,14 @@ pub struct StrokeCanvas {
 }
 
 impl StrokeCanvas {
-    pub fn new(resolution: u32) -> StrokeCanvas {
-        StrokeCanvas {
-            alpha: TileImage::new(resolution, resolution, 1),
-            dirty: BTreeSet::new(),
-            recent: BTreeSet::new(),
-            limit: None,
-            pickup: None,
-            texels: Vec::new(),
+    pub fn new(width: u32, height: u32) -> StrokeCanvas {
+        StrokeCanvas { alpha: TileImage::new(width, height, 1), dirty: BTreeSet::new(), recent: BTreeSet::new(), limit: None, pickup: None, texels: Vec::new() }
+    }
+
+    /// Start over when the canvas is not the size of `gbuf`.
+    fn fit(&mut self, gbuf: &UvGBuffer) {
+        if (self.alpha.width(), self.alpha.height()) != (gbuf.width, gbuf.height) {
+            *self = StrokeCanvas::new(gbuf.width, gbuf.height);
         }
     }
 
@@ -105,9 +105,7 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 /// Accumulate `stamps` into `canvas` ("over": `m = a + m·(1 − a)`).
 pub fn rasterize(canvas: &mut StrokeCanvas, ctx: &RasterCtx, stamps: &[Stamp]) {
     let (w, h) = (ctx.gbuf.width, ctx.gbuf.height);
-    if canvas.alpha.width() != w {
-        *canvas = StrokeCanvas::new(w);
-    }
+    canvas.fit(ctx.gbuf);
     let fade_lo = ctx.angle_fade.1.to_radians().cos();
     let fade_hi = ctx.angle_fade.0.to_radians().cos();
     let mut tris = Vec::new();
@@ -211,9 +209,7 @@ pub fn fill_triangles(canvas: &mut StrokeCanvas, gbuf: &UvGBuffer, tris: &BTreeS
 /// covered texel's alpha (lasso and polygon fills).
 pub fn fill_coverage(canvas: &mut StrokeCanvas, gbuf: &UvGBuffer, coverage: impl Fn(usize, u32) -> f32 + Sync) {
     let w = gbuf.width.max(1);
-    if canvas.alpha.width() != gbuf.width {
-        *canvas = StrokeCanvas::new(gbuf.width);
-    }
+    canvas.fit(gbuf);
     canvas.texels = gbuf
         .tri
         .par_iter()
@@ -237,7 +233,7 @@ mod tests {
         let m = primitives::plane(2.0, 8);
         let bvh = Bvh::new(&m);
         let g = UvGBuffer::new(&m, 0, 128, 128);
-        let mut canvas = StrokeCanvas::new(128);
+        let mut canvas = StrokeCanvas::new(128, 128);
         let ctx = RasterCtx {
             mesh: &m,
             bvh: &bvh,
@@ -260,7 +256,7 @@ mod tests {
         assert!(!canvas.dirty.is_empty());
 
         // From below (backface), nothing is painted.
-        let mut c2 = StrokeCanvas::new(128);
+        let mut c2 = StrokeCanvas::new(128, 128);
         let below = RasterCtx { eye: Vec3::new(0.0, -5.0, 0.0), ..ctx };
         rasterize(&mut c2, &below, &[st]);
         assert!(c2.dirty.is_empty());
@@ -281,9 +277,7 @@ pub struct UvStamp {
 /// Accumulate UV-space stamps into `canvas` (only texels covered by the texture set).
 pub fn rasterize_uv(canvas: &mut StrokeCanvas, gbuf: &UvGBuffer, shape: Shape, stamps: &[UvStamp]) {
     let (w, h) = (gbuf.width, gbuf.height);
-    if canvas.alpha.width() != w {
-        *canvas = StrokeCanvas::new(w);
-    }
+    canvas.fit(gbuf);
     for s in stamps {
         if s.radius.is_nan() || s.radius <= 0.0 || !s.center.is_finite() {
             continue;

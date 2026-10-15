@@ -11,6 +11,15 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!("textureSet.select", "Select texture set", [], None, "{ts}", always, select),
         cmd!("textureSet.list", "List texture sets", [], None, "{}", always, |s, _| Ok(crate::inspect::texture_sets(s))),
+        cmd!(
+            "textureSet.inspect",
+            "Inspect texture set",
+            [],
+            None,
+            "{ts?} → {index, name, resolution, size: [w, h], uvTiles: [UDIM numbers] (empty: no UV tiles), tiles: [{udim, block: [x, y]}], channels, layers, baked, visible, active}",
+            always,
+            |s, p| Ok(crate::inspect::texture_set(s, ts_param(s, p, "textureSet.inspect")?))
+        ),
         cmd!("textureSet.resolution", "Texture set size", [], None, "{ts?, resolution: 128..8192 (power of two)}", always, resolution),
         cmd!("textureSet.channel.add", "Add channel", [], None, "{ts?, channel}", always, |s, p| channel(s, p, true)),
         cmd!("textureSet.channel.remove", "Remove channel", [], None, "{ts?, channel}", always, |s, p| channel(s, p, false)),
@@ -42,9 +51,12 @@ fn resolution(s: &mut Session, p: &Value) -> Result<Value> {
     let r = u64p(p, "resolution").ok_or_else(|| bad("textureSet.resolution", "`resolution` is required"))?;
     let r = check_resolution(u32::try_from(r).unwrap_or(0))?;
     s.edit("Texture set size", |s| {
-        s.doc.project.texture_set_mut(ts)?.resolution = r;
+        let set = s.doc.project.texture_set_mut(ts)?;
+        set.resolution = r;
+        crate::session::check_size(set)?;
+        let size = set.size();
         // Painted pixels are resampled (bilinear); strokes are not replayed.
-        crate::layer_ops::resample_set(s, ts, r);
+        crate::layer_ops::resample_set(s, ts, size);
         Ok(())
     })?;
     Ok(json!({ "ts": ts, "resolution": r }))
@@ -54,29 +66,35 @@ fn channel(s: &mut Session, p: &Value, add: bool) -> Result<Value> {
     let ts = ts_param(s, p, "textureSet.channel")?;
     let c = channel_param("textureSet.channel", p, "channel")?.ok_or_else(|| bad("textureSet.channel", "`channel` is required"))?;
     s.edit(if add { "Add channel" } else { "Remove channel" }, |s| {
-        let set = s.doc.project.texture_set_mut(ts)?;
         if add {
-            if !set.has_channel(c) {
-                set.channels.push((c, ChannelFormat::default_for(c)));
-                set.channels.sort_by_key(|(c, _)| c.index());
-            }
-            // Existing layers get the new channel enabled.
-            let ids: Vec<_> = s.doc.project.walk(ts).into_iter().map(|(id, _)| id).collect();
-            for id in ids {
-                if let Ok(l) = s.doc.project.layer_mut(id) {
-                    let mode = if l.is_group() { texturecraft_core::BlendMode::Passthrough } else { texturecraft_core::BlendMode::Normal };
-                    l.channels.entry(c).or_insert(ChannelBlend { mode, opacity: 1.0 });
-                }
-            }
-        } else {
-            if c == Channel::BaseColor {
-                return Err(bad("textureSet.channel.remove", "base color can't be removed"));
-            }
-            set.channels.retain(|(x, _)| *x != c);
+            return add_channel(s, ts, c);
         }
+        if c == Channel::BaseColor {
+            return Err(bad("textureSet.channel.remove", "base color can't be removed"));
+        }
+        s.doc.project.texture_set_mut(ts)?.channels.retain(|(x, _)| *x != c);
         Ok(())
     })?;
     Ok(Value::Null)
+}
+
+/// Add channel `c` to texture set `ts` (no-op when present) and enable it on the set's layers.
+/// Call inside [`Session::edit`].
+pub(crate) fn add_channel(s: &mut Session, ts: usize, c: Channel) -> Result<()> {
+    let set = s.doc.project.texture_set_mut(ts)?;
+    if !set.has_channel(c) {
+        set.channels.push((c, ChannelFormat::default_for(c)));
+        set.channels.sort_by_key(|(c, _)| c.index());
+    }
+    // Existing layers get the new channel enabled.
+    let ids: Vec<_> = s.doc.project.walk(ts).into_iter().map(|(id, _)| id).collect();
+    for id in ids {
+        if let Ok(l) = s.doc.project.layer_mut(id) {
+            let mode = if l.is_group() { texturecraft_core::BlendMode::Passthrough } else { texturecraft_core::BlendMode::Normal };
+            l.channels.entry(c).or_insert(ChannelBlend { mode, opacity: 1.0 });
+        }
+    }
+    Ok(())
 }
 
 fn visible(s: &mut Session, p: &Value) -> Result<Value> {

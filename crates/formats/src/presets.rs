@@ -9,11 +9,11 @@ use crate::{FormatError, Result};
 /// Largest preset JSON accepted.
 const MAX_PRESET_JSON: usize = 1 << 20;
 
-fn ch(channel: Channel, component: u8) -> SourceRef {
+pub(crate) fn ch(channel: Channel, component: u8) -> SourceRef {
     SourceRef::Channel { channel, component }
 }
 
-fn virt(map: VirtualMap, component: u8) -> SourceRef {
+pub(crate) fn virt(map: VirtualMap, component: u8) -> SourceRef {
     SourceRef::Virtual { map, component }
 }
 
@@ -22,11 +22,11 @@ fn map(suffix: &str, bit_depth: u8, channels: Vec<(Dest, SourceRef)>) -> MapSpec
     MapSpec { file: format!("$mesh_$textureSet_{suffix}"), format: FileFormat::Png, bit_depth, channels }
 }
 
-fn rgb(f: impl Fn(u8) -> SourceRef) -> Vec<(Dest, SourceRef)> {
+pub(crate) fn rgb(f: impl Fn(u8) -> SourceRef) -> Vec<(Dest, SourceRef)> {
     vec![(Dest::R, f(0)), (Dest::G, f(1)), (Dest::B, f(2))]
 }
 
-fn gray(s: SourceRef) -> Vec<(Dest, SourceRef)> {
+pub(crate) fn gray(s: SourceRef) -> Vec<(Dest, SourceRef)> {
     vec![(Dest::L, s)]
 }
 
@@ -60,15 +60,24 @@ pub(crate) const GLTF_BASE_COLOR: &str = "BaseColor";
 pub(crate) const GLTF_ORM: &str = "OcclusionRoughnessMetallic";
 pub(crate) const GLTF_NORMAL: &str = "Normal";
 pub(crate) const GLTF_EMISSIVE: &str = "Emissive";
+/// KHR_materials_clearcoat: clear coat weight (R) and roughness (G).
+pub(crate) const GLTF_CLEARCOAT: &str = "Clearcoat";
+/// KHR_materials_sheen: sheen color × weight (RGB) and roughness (A).
+pub(crate) const GLTF_SHEEN: &str = "Sheen";
 
-/// glTF metallic-roughness maps (8-bit PNG); `file` turns a stem above into a file template.
+/// glTF metallic-roughness maps (8-bit PNG), plus the clear coat and sheen extension maps where
+/// the texture set has those channels; `file` turns a stem above into a file template.
 pub(crate) fn gltf_pbr_maps(file: impl Fn(&str) -> String) -> Vec<MapSpec> {
     let spec = |stem: &str, channels| MapSpec { file: file(stem), format: FileFormat::Png, bit_depth: 8, channels };
+    let mut sheen = rgb(|k| virt(VirtualMap::SheenTint, k));
+    sheen.push((Dest::A, ch(Channel::SheenRoughness, 0)));
     vec![
         spec(GLTF_BASE_COLOR, base_with_alpha()),
         spec(GLTF_ORM, orm()),
         spec(GLTF_NORMAL, normal(VirtualMap::NormalOpenGl)),
         spec(GLTF_EMISSIVE, rgb(|k| ch(Channel::Emissive, k))),
+        spec(GLTF_CLEARCOAT, vec![(Dest::R, ch(Channel::CoatWeight, 0)), (Dest::G, ch(Channel::CoatRoughness, 0))]),
+        spec(GLTF_SHEEN, sheen),
     ]
 }
 

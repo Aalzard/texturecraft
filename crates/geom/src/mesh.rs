@@ -169,6 +169,68 @@ impl Mesh {
         self.tangents = acc.into_iter().map(|t| t.try_normalize().unwrap_or(Vec3::X).extend(1.0)).collect();
     }
 
+    /// The UV tiles material `m` covers: integer parts of its triangles' UV centroids (v down),
+    /// ascending. Non-finite UVs are skipped.
+    pub fn uv_tiles(&self, m: usize) -> std::collections::BTreeSet<(i32, i32)> {
+        self.triangles_of(m)
+            .filter_map(|t| {
+                let [a, b, c] = self.tri(t)?;
+                let uv = (*self.uvs.get(a)? + *self.uvs.get(b)? + *self.uvs.get(c)?) / 3.0;
+                uv.is_finite().then(|| (uv.x.floor() as i32, uv.y.floor() as i32))
+            })
+            .collect()
+    }
+
+    /// Remap the UVs of material `m`'s triangles with `f`. Vertices they share with other
+    /// materials are duplicated first, so the other triangles keep their UVs.
+    pub fn map_material_uvs(&mut self, m: usize, f: impl Fn(Vec2) -> Vec2) {
+        let mine: Vec<usize> = self.triangles_of(m).collect();
+        let mut is_mine = vec![false; self.triangle_count()];
+        for t in &mine {
+            if let Some(x) = is_mine.get_mut(*t) {
+                *x = true;
+            }
+        }
+        let mut shared = vec![false; self.positions.len()];
+        for (_, tri) in self.indices.chunks_exact(3).enumerate().filter(|(t, _)| !is_mine.get(*t).copied().unwrap_or(false)) {
+            for v in tri {
+                if let Some(s) = shared.get_mut(*v as usize) {
+                    *s = true;
+                }
+            }
+        }
+        let mut copies = std::collections::HashMap::new();
+        let mut verts = Vec::with_capacity(mine.len() * 3);
+        for k in mine.iter().flat_map(|t| t * 3..t * 3 + 3) {
+            let Some(&v) = self.indices.get(k) else { continue };
+            let v = if shared.get(v as usize).copied().unwrap_or(false) { *copies.entry(v).or_insert_with(|| self.duplicate_vertex(v as usize)) } else { v };
+            if let Some(i) = self.indices.get_mut(k) {
+                *i = v;
+            }
+            verts.push(v as usize);
+        }
+        verts.sort_unstable();
+        verts.dedup();
+        for v in verts {
+            if let Some(uv) = self.uvs.get_mut(v) {
+                *uv = f(*uv);
+            }
+        }
+    }
+
+    /// Append a copy of vertex `v`; returns its index.
+    fn duplicate_vertex(&mut self, v: usize) -> u32 {
+        let i = self.positions.len() as u32;
+        self.positions.push(self.positions.get(v).copied().unwrap_or_default());
+        self.normals.push(self.normals.get(v).copied().unwrap_or(Vec3::Y));
+        self.tangents.push(self.tangents.get(v).copied().unwrap_or(Vec4::new(1.0, 0.0, 0.0, 1.0)));
+        self.uvs.push(self.uvs.get(v).copied().unwrap_or_default());
+        if !self.colors.is_empty() {
+            self.colors.push(self.colors.get(v).copied().unwrap_or(Vec4::ONE));
+        }
+        i
+    }
+
     /// Append `other`, offsetting indices; its submeshes keep their material indices shifted by
     /// this mesh's material count.
     pub fn append(&mut self, other: &Mesh) {
@@ -321,5 +383,26 @@ mod tests {
         a.validate().unwrap();
         a.colors.pop();
         assert!(a.validate().is_err());
+    }
+
+    #[test]
+    fn material_uvs_remap_and_split_shared_vertices() {
+        // quad(): two triangles sharing an edge; put the second in its own material.
+        let mut m = quad();
+        m.materials = vec!["a".into(), "b".into()];
+        m.submeshes = vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 3 }, SubMesh { name: "b".into(), material: 1, start: 3, count: 3 }];
+        let before = m.clone();
+        m.map_material_uvs(1, |uv| uv + Vec2::X);
+        m.validate().unwrap();
+        assert_eq!(m.vertex_count(), 6, "the two shared vertices are split");
+        assert_eq!(&m.indices[..3], &before.indices[..3]);
+        for k in 0..3 {
+            let (old, new) = (before.indices[k] as usize, m.indices[k] as usize);
+            assert_eq!(m.uvs[new], before.uvs[old], "material a keeps its UVs");
+            let (old, new) = (before.indices[3 + k] as usize, m.indices[3 + k] as usize);
+            assert_eq!((m.uvs[new], m.positions[new]), (before.uvs[old] + Vec2::X, before.positions[old]));
+        }
+        assert_eq!(m.uv_tiles(1).into_iter().collect::<Vec<_>>(), vec![(1, 0)]);
+        assert_eq!(m.uv_tiles(0).into_iter().collect::<Vec<_>>(), vec![(0, 0)]);
     }
 }

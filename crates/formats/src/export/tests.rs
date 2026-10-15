@@ -421,3 +421,81 @@ fn converted_maps_invert_and_derive_normals() {
     let names: Vec<String> = list_outputs(&fx.project, 0, "m", &ExportOptions::new(only)).unwrap().into_iter().map(|p| p.name).collect();
     assert_eq!(names, ["hn.png"], "the default set has height but no glossiness");
 }
+
+#[test]
+fn uv_tiles_export_one_file_per_tile_without_padding_across() {
+    // Tiles 1001 (left block: red, only x < 16 covered) and 1002 (right block: blue).
+    let mut project = Project::new("My Project", "builtin:udim_plane");
+    let mut ts = TextureSet::new("Body Set", 0, RES);
+    ts.uv_tiles = vec![1001, 1002];
+    ts.channels = vec![(Channel::BaseColor, ChannelFormat::default_for(Channel::BaseColor))];
+    project.texture_sets.push(ts);
+    let mut comp = Composite::with_size(&[Channel::BaseColor], 2 * RES, RES);
+    let mut coverage = vec![false; (2 * RES * RES) as usize];
+    for y in 0..RES {
+        for x in 0..2 * RES {
+            let blue = x >= RES;
+            if blue || x < 16 {
+                comp.channels.get_mut(&Channel::BaseColor).unwrap().set(x, y, &[to_u16(if blue { 0.0 } else { 1.0 }), 0, to_u16(if blue { 1.0 } else { 0.0 })]);
+                coverage[(y * 2 * RES + x) as usize] = true;
+            }
+        }
+    }
+    let input = ExportInput { project: &project, ts: 0, composite: &comp, baked: &BakedMaps::default(), coverage: &coverage, mesh_name: "udim_plane" };
+    let preset = ExportPreset {
+        name: "t".into(),
+        maps: vec![MapSpec {
+            file: "$textureSet_color".into(),
+            format: FileFormat::Png,
+            bit_depth: 8,
+            channels: vec![
+                (Dest::R, SourceRef::Channel { channel: Channel::BaseColor, component: 0 }),
+                (Dest::G, SourceRef::Channel { channel: Channel::BaseColor, component: 1 }),
+                (Dest::B, SourceRef::Channel { channel: Channel::BaseColor, component: 2 }),
+            ],
+        }],
+    };
+    let files = render_maps(&input, &ExportOptions::new(preset.clone())).unwrap();
+    let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["Body_Set_color.1001.png", "Body_Set_color.1002.png"]);
+    let (left, right) = (decode(&files[0]).to_rgb8(), decode(&files[1]).to_rgb8());
+    assert_eq!((left.width(), left.height(), right.width()), (RES, RES, RES));
+    // Infinite padding fills tile 1001 from its own island only.
+    assert!(left.pixels().all(|p| p.0 == [255, 0, 0]), "tile 1001 is red");
+    assert!(right.pixels().all(|p| p.0 == [0, 0, 255]), "tile 1002 is blue");
+    // `$udim` placed by the template; a size applies per tile; the atlas is one image.
+    let mut named = preset.clone();
+    named.maps[0].file = "$udim_$textureSet".into();
+    let opts = ExportOptions { size: Some(32), ..ExportOptions::new(named) };
+    let small = render_maps(&input, &opts).unwrap();
+    assert_eq!((small[1].name.as_str(), small[1].width, small[1].height), ("1002_Body_Set.png", 32, 32));
+    let atlas = render_maps(&input, &ExportOptions { atlas: true, ..ExportOptions::new(preset) }).unwrap();
+    assert_eq!((atlas.len(), atlas[0].name.as_str(), atlas[0].width, atlas[0].height), (1, "Body_Set_color.png", 2 * RES, RES));
+}
+
+#[test]
+fn lobe_channels_export_as_document_maps_and_gltf_extension_maps() {
+    let mut channels = default_channels();
+    channels.extend(Channel::LOBES);
+    let mut fx = Fx::new(&channels);
+    fx.set_all(Channel::CoatWeight, |_, _| [1.0; 3]);
+    fx.set_all(Channel::CoatRoughness, |_, _| [0.2; 3]);
+    fx.set_all(Channel::SheenWeight, |_, _| [0.5; 3]);
+    fx.set_all(Channel::SheenColor, |_, _| [1.0, 0.5, 0.0]);
+    fx.set_all(Channel::SheenRoughness, |_, _| [0.4; 3]);
+    let doc = fx.render_preset("Document channels + Normal + AO");
+    for c in Channel::LOBES {
+        find(&doc, &format!("_{}.", c.id()));
+    }
+    let gltf = fx.render_preset("glTF PBR Metal Roughness");
+    let coat = decode(find(&gltf, "_Clearcoat.png")).to_rgb8();
+    let px = coat.get_pixel(3, 3);
+    assert!(px[0] == 255 && (px[1] as i32 - 51).abs() <= 1 && px[2] == 0, "weight in R, roughness in G: {px:?}");
+    let sheen = decode(find(&gltf, "_Sheen.png")).to_rgba8();
+    let px = sheen.get_pixel(3, 3);
+    // sRGB color × weight (0.5, 0.25, 0) and linear roughness in alpha.
+    let want = [188, 137, 0, 102];
+    assert!(px.0.iter().zip(want).all(|(a, b)| (*a as i32 - b).abs() <= 1), "{px:?}");
+    let plain = Fx::new(&default_channels()).render_preset("glTF PBR Metal Roughness");
+    assert!(!plain.iter().any(|f| f.name.contains("Clearcoat") || f.name.contains("Sheen")), "sets without the lobes export no extension maps");
+}

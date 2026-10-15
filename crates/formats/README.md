@@ -25,6 +25,7 @@ pub struct MeshReport {
 | `.glb` / `.gltf` | Default scene's node tree flattened to world space; normals by inverse transpose; winding flipped under mirroring transforms; one submesh per material (`Default` for none, `Material_<i>` when unnamed); missing normals are flat (glTF rule). Bytes: GLB or data-URI buffers; from a path, external `.bin` files too. Triangle primitives only; sparse accessors are refused. |
 | `.fbx` | FBX 7.x (2011 and newer), binary (32- and 64-bit node records, zlib arrays) and ASCII. Every `Mesh` geometry connected to a Model, with the Model hierarchy's transforms (`Lcl Translation/Rotation/Scaling`, `RotationOrder`, `Pre/PostRotation`, pivots and offsets, geometric transform); normals and UV set 0 from the layer elements (`ByPolygonVertex`, `ByControlPoint`, `ByPolygon`, `AllSame`; `Direct` / `IndexToDirect`); per-polygon materials named by the Materials connected to the Model. Units (`UnitScaleFactor`, cm by default) become meters and the axis system becomes Y up. FBX 6 and older are refused; decoded data is capped at 2 GiB. |
 | `.dae` | COLLADA: `triangles`, `polylist`, `polygons` (holes ignored) with `VERTEX` / `NORMAL` / `TEXCOORD` inputs at any offset (lowest `set`); materials by `bind_material` symbol; the visual scene's node tree (`matrix`, `translate`, `rotate`, `scale`, `instance_node`, skinned `instance_controller` with its bind shape); `unit` to meters, `Z_UP` / `X_UP` to Y up. Lines and strips are skipped with a warning. |
+| `.usda` / `.usdc` / `.usd` / `.usdz` | Pixar USD, text or Crate binary (0.4.0 and newer: LZ4 sections, compressed integer and float arrays, inlined values; `.usd` by magic) or a usdz package (its first layer). Every defined, active, non-guide, visible `Mesh` prim: points, faceVertexCounts/Indices (holes skipped, n-gons fanned), normals (`primvars:normals` or `normals`) and UVs (`primvars:st`, `st0`, `UVMap`, `uv` or the first `texCoord2f[]` primvar), indexed or not, any interpolation; `orientation = leftHanded`. Xform ops (`translate`, `scale`, `rotateX/Y/Z`, the six `rotateXYZ` orders, `orient`, `transform`, `!invert!`, `!resetXformStack!`) by `xformOpOrder`. Material names from `material:binding` (inherited) and `materialBind` GeomSubsets. Internal references compose (`class` prims are only drawn through them); time samples use the first sample. Stage `metersPerUnit` (fallback 0.01, as in USD) and `upAxis` become meters, Y up. Skipped with a warning: external references and payloads, variant sets, PointInstancers. Decoded data is capped at 2 GiB. |
 | `.obj` | Triangulated, one vertex per unique `v/vt/vn`, **v flipped** (OBJ is bottom-left). Material names come from `usemtl` (MTL files are never read; they only carry shading data). |
 | `.ply` | ascii, binary little/big endian; `x y z`, `nx ny nz`, `s t` / `u v` / `texture_u texture_v`; n-gons fan-triangulated. |
 | `.stl` | ascii and binary (size-checked, so binary files whose header says `solid` work); flat normals; no UVs. |
@@ -43,7 +44,19 @@ pub fn obj_bytes(mesh: &Mesh, name: &str) -> Vec<u8>;
 pub fn glb_bytes(mesh: &Mesh, name: &str, textures: &[GlbTextures]) -> Result<Vec<u8>>;
 pub fn glb_export_options() -> ExportOptions;                     // render GlbTextures with these
 pub struct GlbTextures { pub base_color, pub orm, pub normal, pub emissive: Option<Vec<u8>> }  // PNG
+pub fn usd_bytes(mesh: &Mesh, name: &str, textures: &[Vec<ExportedFile>], format: UsdFormat) -> Result<UsdExport>;
+pub fn usd_export_options() -> ExportOptions;                     // render each material's textures with these
+pub enum UsdFormat { Usda, Usdc, Usdz }
+pub struct UsdExport { pub bytes: Vec<u8>, pub textures: Vec<(String, Vec<u8>)> }  // textures: usda/usdc only
 ```
+
+USD: one `Mesh` prim (vertex normals and `primvars:st`, `subdivisionScheme = "none"`), one
+`materialBind` GeomSubset per material when there are several, and a UsdPreviewSurface material
+per material with a UsdUVTexture per map (base color and emissive sRGB; roughness, metallic,
+OpenGL normal with scale 2 / bias -1, opacity raw; black emissive maps dropped). Meters, Y up.
+`.usdc` is a Crate 0.8.0 file; `.usdz` is that layer first plus the PNGs, stored uncompressed at
+64-byte aligned offsets; `.usda` / `.usdc` reference `<name>_<material>_<slot>.png` next to the
+layer.
 
 GLB: one primitive per submesh, one metallic-roughness material per mesh material with its
 textures embedded in the binary chunk (base color sRGB, `alphaMode: BLEND` when it has alpha;

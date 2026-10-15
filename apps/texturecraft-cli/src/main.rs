@@ -41,7 +41,7 @@ USAGE:
   texturecraft-cli serve [--port <port>] [--read-root <dir>] [--write-root <dir>]
       JSON lines ({\"id\",\"method\",\"params\"}) on stdio, or on 127.0.0.1:<port> with a token.
 
-<input> is a .tcraft project, a mesh file (.glb .gltf .fbx .dae .obj .ply .stl) or builtin:<id>
+<input> is a .tcraft project, a mesh file (.glb .gltf .fbx .dae .usd .usda .usdc .usdz .obj .ply .stl) or builtin:<id>
 (material_ball, sphere, cube, rounded_cube, cylinder, torus, plane, crate).
 See docs/control-protocol.md.
 ";

@@ -18,6 +18,22 @@ pub enum Channel {
     Specular,
     /// Specular/glossiness workflow: 1 − roughness.
     Glossiness,
+    /// Clear coat: weight of a GGX dielectric layer (IOR 1.5) over the base.
+    CoatWeight,
+    /// Clear coat roughness.
+    CoatRoughness,
+    /// Sheen (cloth fuzz) layer weight.
+    SheenWeight,
+    /// Sheen tint.
+    SheenColor,
+    /// Sheen roughness.
+    SheenRoughness,
+    /// Anisotropy: how much the specular highlight stretches along the tangent direction.
+    AnisotropyLevel,
+    /// Anisotropy direction: 0..1 turns the tangent by 0..π.
+    AnisotropyAngle,
+    /// Subsurface scattering weight (scatter color and radius are project shader settings).
+    ScatterWeight,
 }
 
 /// How a channel's values are stored and interpreted.
@@ -34,7 +50,7 @@ pub enum ChannelKind {
 }
 
 impl Channel {
-    pub const ALL: [Channel; 11] = [
+    pub const ALL: [Channel; 19] = [
         Channel::BaseColor,
         Channel::Metallic,
         Channel::Roughness,
@@ -46,6 +62,27 @@ impl Channel {
         Channel::SpecularLevel,
         Channel::Specular,
         Channel::Glossiness,
+        Channel::CoatWeight,
+        Channel::CoatRoughness,
+        Channel::SheenWeight,
+        Channel::SheenColor,
+        Channel::SheenRoughness,
+        Channel::AnisotropyLevel,
+        Channel::AnisotropyAngle,
+        Channel::ScatterWeight,
+    ];
+
+    /// The extra shading lobes (clear coat, sheen, anisotropy, subsurface scattering). Their
+    /// defaults switch the lobes off, so a set without them shades exactly as before.
+    pub const LOBES: [Channel; 8] = [
+        Channel::CoatWeight,
+        Channel::CoatRoughness,
+        Channel::SheenWeight,
+        Channel::SheenColor,
+        Channel::SheenRoughness,
+        Channel::AnisotropyLevel,
+        Channel::AnisotropyAngle,
+        Channel::ScatterWeight,
     ];
 
     /// The channels of the default "PBR - Metallic Roughness" template.
@@ -53,7 +90,7 @@ impl Channel {
 
     pub fn kind(self) -> ChannelKind {
         match self {
-            Channel::BaseColor | Channel::Emissive | Channel::Specular => ChannelKind::Color,
+            Channel::BaseColor | Channel::Emissive | Channel::Specular | Channel::SheenColor => ChannelKind::Color,
             Channel::Normal => ChannelKind::NormalMap,
             Channel::Height => ChannelKind::Signed,
             _ => ChannelKind::Scalar,
@@ -73,6 +110,10 @@ impl Channel {
         match self {
             Channel::BaseColor => [0.5, 0.5, 0.5],
             Channel::Metallic | Channel::Height | Channel::Emissive => [0.0; 3],
+            Channel::CoatWeight | Channel::SheenWeight | Channel::AnisotropyLevel | Channel::AnisotropyAngle | Channel::ScatterWeight => [0.0; 3],
+            Channel::CoatRoughness => [0.1; 3],
+            Channel::SheenColor => [1.0; 3],
+            Channel::SheenRoughness => [0.5; 3],
             Channel::Roughness => [0.5; 3],
             Channel::Normal => [0.5, 0.5, 1.0],
             Channel::Opacity | Channel::AmbientOcclusion => [1.0; 3],
@@ -95,6 +136,14 @@ impl Channel {
             Channel::SpecularLevel => "Specular level",
             Channel::Specular => "Specular",
             Channel::Glossiness => "Glossiness",
+            Channel::CoatWeight => "Coat weight",
+            Channel::CoatRoughness => "Coat roughness",
+            Channel::SheenWeight => "Sheen weight",
+            Channel::SheenColor => "Sheen color",
+            Channel::SheenRoughness => "Sheen roughness",
+            Channel::AnisotropyLevel => "Anisotropy level",
+            Channel::AnisotropyAngle => "Anisotropy angle",
+            Channel::ScatterWeight => "Scattering weight",
         }
     }
 
@@ -112,6 +161,14 @@ impl Channel {
             Channel::SpecularLevel => "spec",
             Channel::Specular => "specular",
             Channel::Glossiness => "gloss",
+            Channel::CoatWeight => "coat",
+            Channel::CoatRoughness => "coat rough",
+            Channel::SheenWeight => "sheen",
+            Channel::SheenColor => "sheen color",
+            Channel::SheenRoughness => "sheen rough",
+            Channel::AnisotropyLevel => "aniso",
+            Channel::AnisotropyAngle => "aniso angle",
+            Channel::ScatterWeight => "scatter",
         }
     }
 
@@ -129,6 +186,14 @@ impl Channel {
             Channel::SpecularLevel => "specularLevel",
             Channel::Specular => "specular",
             Channel::Glossiness => "glossiness",
+            Channel::CoatWeight => "coatWeight",
+            Channel::CoatRoughness => "coatRoughness",
+            Channel::SheenWeight => "sheenWeight",
+            Channel::SheenColor => "sheenColor",
+            Channel::SheenRoughness => "sheenRoughness",
+            Channel::AnisotropyLevel => "anisotropyLevel",
+            Channel::AnisotropyAngle => "anisotropyAngle",
+            Channel::ScatterWeight => "scatterWeight",
         }
     }
 
@@ -195,6 +260,25 @@ mod tests {
         }
         assert_eq!(Channel::parse("base color"), Some(Channel::BaseColor));
         assert_eq!(Channel::parse("nope"), None);
+    }
+
+    #[test]
+    fn names_are_unique_and_lobes_default_off() {
+        let norm = |x: &str| x.to_ascii_lowercase().replace([' ', '_', '-'], "");
+        let mut seen = std::collections::BTreeMap::new();
+        for c in Channel::ALL {
+            for name in [c.id(), c.label(), c.short()] {
+                let prev = seen.insert(norm(name), c);
+                assert!(prev.is_none_or(|p| p == c), "`{name}` names both {prev:?} and {c:?}");
+            }
+        }
+        for c in Channel::LOBES {
+            assert!(Channel::ALL.contains(&c));
+            let off = matches!(c, Channel::CoatRoughness | Channel::SheenColor | Channel::SheenRoughness) || c.default_value() == [0.0; 3];
+            assert!(off, "{c:?} must default to an inactive lobe");
+        }
+        assert_eq!(Channel::parse("sheen color"), Some(Channel::SheenColor));
+        assert_eq!(Channel::parse("coatWeight"), Some(Channel::CoatWeight));
     }
 
     #[test]

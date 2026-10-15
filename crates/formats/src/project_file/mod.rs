@@ -14,7 +14,8 @@
 //! Pixel `.bin` files are sparse and lossless: a header (magic `TCTX`, version, width, height,
 //! components, tile count; u32 LE each) followed, for every allocated 64×64 tile, by `tx`, `ty`
 //! (u32 LE) and the tile's raw `u16` LE components. Baked maps use the same header with a tile
-//! count of 0, followed by `width × height × components` f32 LE.
+//! count of 0, followed by `width × height × components` f32 LE. Pixels of a UV-tiled texture
+//! set cover its whole atlas (`resolution` per tile, see `TileGrid`).
 
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Seek, Write};
@@ -38,6 +39,8 @@ const MAX_RESOURCE: u64 = 512 << 20;
 const MAX_ENTRIES: usize = 100_000;
 /// Total decompressed bytes accepted from one project file (zip-bomb guard).
 const MAX_TOTAL: u64 = 8 << 30;
+/// Largest image (texels) of a texture set or baked map: UV-tiled sets hold several tiles.
+const MAX_TEXELS: u64 = 1 << 28;
 
 /// Everything a project file holds.
 #[derive(Clone, Debug)]
@@ -159,12 +162,13 @@ fn write_project<W: Write + Seek>(out: W, pf: &ProjectFile) -> Result<()> {
     for (ts, maps) in &pf.baked {
         let r = maps.resolution;
         for (m, data) in &maps.maps {
-            // A map whose size disagrees with its resolution cannot be loaded; it can be re-baked.
-            if data.len() != (r as usize) * (r as usize) * m.components() {
+            // A map whose size disagrees with its width cannot be loaded; it can be re-baked.
+            let h = maps.height(*m);
+            if h == 0 || data.len() != (r as usize) * (h as usize) * m.components() {
                 continue;
             }
             zip.start_file(format!("baked/{ts}_{}.bin", m.id()), deflate).map_err(zip_err)?;
-            zip.write_all(&header(r, r, m.components(), 0))?;
+            zip.write_all(&header(r, h, m.components(), 0))?;
             let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
             zip.write_all(&bytes)?;
         }
@@ -249,12 +253,12 @@ fn expect_end(r: &mut impl Read, what: &str) -> Result<()> {
     }
 }
 
-fn read_tiles(r: &mut impl Read, res: u32, comps: usize, budget: &mut Budget, what: &str) -> Result<TileImage> {
+fn read_tiles(r: &mut impl Read, size: (u32, u32), comps: usize, budget: &mut Budget, what: &str) -> Result<TileImage> {
     let (w, h, c, count) = read_header(r, what)?;
-    if w != res || h != res || c != comps {
-        return Err(malformed(KIND, format!("{what}: {w}×{h}×{c} does not match the texture set ({res}×{res}×{comps})")));
+    if (w, h) != size || c != comps {
+        return Err(malformed(KIND, format!("{what}: {w}×{h}×{c} does not match the texture set ({}×{}×{comps})", size.0, size.1)));
     }
-    let mut img = TileImage::new(res, res, comps);
+    let mut img = TileImage::new(w, h, comps);
     if count > (img.tiles_x() as usize) * (img.tiles_y() as usize) {
         return Err(malformed(KIND, format!("{what}: {count} tiles is more than the image holds")));
     }
@@ -275,9 +279,10 @@ fn read_tiles(r: &mut impl Read, res: u32, comps: usize, budget: &mut Budget, wh
     Ok(img)
 }
 
-fn read_baked(r: &mut impl Read, comps: usize, budget: &mut Budget, what: &str) -> Result<(u32, Vec<f32>)> {
+/// A baked map: (width, height, data).
+fn read_baked(r: &mut impl Read, comps: usize, budget: &mut Budget, what: &str) -> Result<(u32, u32, Vec<f32>)> {
     let (w, h, c, _) = read_header(r, what)?;
-    if w != h || w == 0 || w > MAX_IMAGE_SIZE || c != comps {
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_TEXELS || c != comps {
         return Err(malformed(KIND, format!("{what}: bad size {w}×{h}×{c}")));
     }
     let len = (w as usize) * (h as usize) * comps;
@@ -285,7 +290,7 @@ fn read_baked(r: &mut impl Read, comps: usize, budget: &mut Budget, what: &str) 
     let mut bytes = vec![0u8; len * 4];
     read_exact(r, &mut bytes, what)?;
     expect_end(r, what)?;
-    Ok((w, bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()))
+    Ok((w, h, bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()))
 }
 
 /// Texture set holding a paint layer, a content effect or a mask effect id.
@@ -311,8 +316,9 @@ fn load<R: Read + Seek>(reader: R) -> Result<ProjectFile> {
     }
     let project: Project = serde_json::from_slice(&json).map_err(|e| malformed(KIND, format!("project.json: {e}")))?;
     project.validate()?;
-    if let Some(ts) = project.texture_sets.iter().find(|t| t.resolution == 0 || t.resolution > MAX_IMAGE_SIZE) {
-        return Err(malformed(KIND, format!("texture set \"{}\" has resolution {}", ts.name, ts.resolution)));
+    let too_large = |t: &texturecraft_core::TextureSet| u64::from(t.size().0) * u64::from(t.size().1) > MAX_TEXELS;
+    if let Some(ts) = project.texture_sets.iter().find(|t| t.resolution == 0 || t.resolution > MAX_IMAGE_SIZE || too_large(t)) {
+        return Err(malformed(KIND, format!("texture set \"{}\" has resolution {} over {} UV tiles", ts.name, ts.resolution, ts.uv_tiles.len().max(1))));
     }
 
     let mut pf = ProjectFile {
@@ -328,7 +334,7 @@ fn load<R: Read + Seek>(reader: R) -> Result<ProjectFile> {
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).map_err(zip_err)?;
         let name = f.name().to_string();
-        let res_of = |id: LayerId| texture_set_of(&pf.project, id).and_then(|ts| pf.project.texture_sets.get(ts)).map(|t| t.resolution);
+        let size_of = |id: LayerId| texture_set_of(&pf.project, id).and_then(|ts| pf.project.texture_sets.get(ts)).map(|t| t.size());
         if name == "thumbnail.png" {
             pf.thumbnail = Some(read_all(&mut f, MAX_THUMBNAIL, &mut budget, &name)?);
         } else if let Some(res_name) = name.strip_prefix("resources/") {
@@ -354,13 +360,13 @@ fn load<R: Read + Seek>(reader: R) -> Result<ProjectFile> {
             let id = LayerId(id.parse().map_err(|_| malformed(KIND, format!("bad entry name {name}")))?);
             let c = Channel::ALL.into_iter().find(|c| c.id() == chan).ok_or_else(|| malformed(KIND, format!("unknown channel in {name}")))?;
             // Pixels of layers that are no longer in any stack are dropped.
-            let Some(res) = res_of(id) else { continue };
-            let img = read_tiles(&mut f, res, c.components() + 1, &mut budget, &name)?;
+            let Some(size) = size_of(id) else { continue };
+            let img = read_tiles(&mut f, size, c.components() + 1, &mut budget, &name)?;
             pf.pixels.layers.insert((id, c), img);
         } else if let Some(rest) = name.strip_prefix("pixels/mask_").and_then(|r| r.strip_suffix(".bin")) {
             let id = LayerId(rest.parse().map_err(|_| malformed(KIND, format!("bad entry name {name}")))?);
-            let Some(res) = res_of(id) else { continue };
-            let img = read_tiles(&mut f, res, 2, &mut budget, &name)?;
+            let Some(size) = size_of(id) else { continue };
+            let img = read_tiles(&mut f, size, 2, &mut budget, &name)?;
             pf.pixels.masks.insert(id, img);
         } else if let Some(rest) = name.strip_prefix("baked/").and_then(|r| r.strip_suffix(".bin")) {
             let (ts, map) = rest.split_once('_').ok_or_else(|| malformed(KIND, format!("bad entry name {name}")))?;
@@ -369,11 +375,11 @@ fn load<R: Read + Seek>(reader: R) -> Result<ProjectFile> {
             if ts >= pf.project.texture_sets.len() {
                 continue;
             }
-            let (res, data) = read_baked(&mut f, m.components(), &mut budget, &name)?;
+            let (res, height, data) = read_baked(&mut f, m.components(), &mut budget, &name)?;
             let maps = pf.baked.entry(ts).or_default();
             if maps.maps.is_empty() {
                 maps.resolution = res;
-            } else if maps.resolution != res {
+            } else if maps.resolution != res || maps.maps.keys().next().is_some_and(|k| maps.height(*k) != height) {
                 return Err(malformed(KIND, format!("{name}: baked maps of one texture set differ in size")));
             }
             maps.maps.insert(m, Arc::new(data));

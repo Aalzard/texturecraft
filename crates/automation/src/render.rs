@@ -11,7 +11,7 @@ use texturecraft_render::{Frame, Shade, ViewKind};
 pub struct Gpu {
     h: texturecraft_render::headless::Headless,
     mesh_id: u64,
-    sets: Vec<(u32, usize)>,
+    sets: Vec<((u32, u32), usize)>,
     env: String,
 }
 
@@ -36,7 +36,7 @@ impl Gpu {
             self.sets.clear();
             reupload = true;
         }
-        let sets: Vec<(u32, usize)> = s.doc.project.texture_sets.iter().map(|t| (t.resolution, t.material)).collect();
+        let sets: Vec<((u32, u32), usize)> = s.doc.project.texture_sets.iter().map(|t| (t.size(), t.material)).collect();
         if sets != self.sets {
             h.renderer.set_texture_sets(&h.device, &h.queue, &sets, s.mesh.materials.len().max(1));
             self.sets = sets;
@@ -52,7 +52,7 @@ impl Gpu {
             let mut tiles = s.take_uploads(ts);
             let Some(cache) = s.caches.get(ts) else { continue };
             if reupload {
-                tiles = all_tiles(cache.resolution);
+                tiles = all_tiles(cache.size.0, cache.size.1);
             }
             let empty = Default::default();
             let baked = s.doc.baked.get(&ts).unwrap_or(&empty);
@@ -63,10 +63,10 @@ impl Gpu {
                 .map(|(k, tx, ty)| (k, tx, ty, tile_bytes(comp, baked, k, tx, ty)))
                 .collect();
             for (k, tx, ty, b) in bytes {
-                h.renderer.upload_tile(&h.queue, ts, k, tx, ty, &b);
+                h.renderer.upload_tile(&h.device, &h.queue, ts, k, tx, ty, &b);
             }
             // The aux texture behind the mesh-map and mask views (rebuilt every render).
-            let res = cache.resolution.min(2048);
+            let res = texturecraft_render::aux_size(cache.size);
             let aux = match s.view {
                 ViewMode::MeshMap(m) => Some(texturecraft_render::mesh_maps::mesh_map_rgba(s.doc.baked.get(&ts), m, res)),
                 ViewMode::Mask(id) if s.doc.project.locate(id).is_some_and(|(t, _, _)| t == ts) => s.mask_view_rgba(id, res),
@@ -96,7 +96,7 @@ pub fn path_trace(s: &mut Session, size: [u32; 2], camera: texturecraft_engine::
         .texture_sets
         .iter()
         .zip(&s.caches)
-        .map(|(ts, c)| TraceSet { material: ts.material, composite: c.composite.clone(), height_strength: ts.height_strength })
+        .map(|(ts, c)| TraceSet { material: ts.material, composite: c.composite.clone(), height_strength: ts.atlas_height_strength() })
         .collect();
     let d = &s.doc.project.display;
     let env_image = d.environment_resource().and_then(|n| s.images.get(n));
@@ -117,7 +117,7 @@ pub fn shade(s: &Session) -> Shade {
         ViewMode::UvChecker => (3, 0),
     };
     Shade {
-        height_strength: s.doc.project.texture_sets.get(s.ts()).map(|t| t.height_strength).unwrap_or(1.0),
+        height_strength: s.doc.project.texture_sets.get(s.ts()).map(|t| t.atlas_height_strength()).unwrap_or(1.0),
         view_mode,
         channel,
         // The app's default (only the 2D view draws it).
@@ -164,5 +164,29 @@ mod tests {
         assert_ne!(base, lit, "the HDR environment changes the render");
         let warm = |px: &[u8]| px.chunks(4).map(|p| p[0] as f32 - p[2] as f32).sum::<f32>();
         assert!(warm(&lit) > warm(&base), "the orange sky warms the image");
+    }
+
+    #[test]
+    fn uv_tile_atlas_renders_tiles_side_by_side() {
+        let mesh = texturecraft_engine::geom::primitives::udim_plane();
+        let mut s = Session::new_project("t", mesh, "builtin:udim_plane", None, 128).unwrap();
+        execute(&mut s, "tool.material", &json!({"channel": "baseColor", "color": [1.0, 0.0, 0.0]})).unwrap();
+        execute(&mut s, "tool.brush", &json!({"size": 10, "hardness": 100})).unwrap();
+        // Atlas UV 0.75 is the middle of tile 1002.
+        execute(&mut s, "tool.strokeUv", &json!({"points": [[0.75, 0.5]]})).unwrap();
+        let Ok(mut gpu) = Gpu::new() else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let cam = s.camera;
+        // A 2:1 atlas fills a 2:1 view's middle 92%: tile 1001 left of center, 1002 right.
+        let (w, _, px) = gpu.render(&mut s, ViewKind::Uv { ts: 0, zoom: 1.0, pan: [0.0, 0.0] }, [200, 100], cam).unwrap();
+        let at = |x: u32, y: u32| px.get(((y * w + x) * 4) as usize..((y * w + x) * 4 + 3) as usize).unwrap().to_vec();
+        let red = |p: &[u8]| i32::from(p[0]) - i32::from(p[1]) > 60;
+        let (left, right) = (at(77, 50), at(123, 50));
+        assert!(red(&right), "tile 1002 shows the stroke: {right:?}");
+        assert!(!red(&left), "tile 1001 does not: {left:?}");
+        let (_, _, scene) = gpu.render(&mut s, ViewKind::Scene, [160, 120], cam).unwrap();
+        assert!(scene.chunks(4).any(red), "the 3D view samples the atlas");
     }
 }

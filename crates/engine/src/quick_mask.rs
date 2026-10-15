@@ -76,46 +76,47 @@ fn invert(s: &mut Session, _: &Value) -> Result<Value> {
 }
 
 impl Session {
-    /// The quick mask of texture set `ts` at resolution `res` (empty when never painted).
-    fn quick_mask_image(&self, ts: usize, res: u32) -> TileImage {
+    /// The quick mask of texture set `ts` at `size` (empty when never painted).
+    fn quick_mask_image(&self, ts: usize, (w, h): (u32, u32)) -> TileImage {
         match self.quick_mask.masks.get(&ts) {
-            Some(m) if m.width() == res => m.clone(),
-            Some(m) => m.resampled(res, res, &[0]),
-            None => TileImage::new(res, res, 1),
+            Some(m) if (m.width(), m.height()) == (w, h) => m.clone(),
+            Some(m) => m.resampled(w, h, &[0]),
+            None => TileImage::new(w, h, 1),
         }
     }
 
     /// What limits a paint stroke on `ts`: the mask and whether it is inverted (None when the
     /// quick mask is off or being edited).
-    pub(crate) fn stroke_limit(&self, ts: usize, res: u32) -> Option<(TileImage, bool)> {
+    pub(crate) fn stroke_limit(&self, ts: usize, size: (u32, u32)) -> Option<(TileImage, bool)> {
         let q = &self.quick_mask;
-        (q.enabled && !q.editing).then(|| (self.quick_mask_image(ts, res), q.inverted))
+        (q.enabled && !q.editing).then(|| (self.quick_mask_image(ts, size), q.inverted))
     }
 
     /// Commit a stroke into the quick mask of `ts`.
-    pub(crate) fn commit_quick_mask(&mut self, ts: usize, res: u32, src: CommitSource) {
-        let mut mask = self.quick_mask_image(ts, res);
+    pub(crate) fn commit_quick_mask(&mut self, ts: usize, size: (u32, u32), src: CommitSource) {
+        let mut mask = self.quick_mask_image(ts, size);
         commit_coverage(&mut mask, src);
         self.quick_mask.masks.insert(ts, mask);
         self.quick_mask.revision = self.quick_mask.revision.wrapping_add(1);
     }
 
-    /// RGBA8 overlay of texture set `ts` while editing the quick mask (`size²`, display-encoded):
-    /// the base color, tinted red where painting is blocked. Includes the stroke in progress.
+    /// RGBA8 overlay of texture set `ts` while editing the quick mask (`size²` stretched over
+    /// the set, display-encoded): the base color, tinted red where painting is blocked.
+    /// Includes the stroke in progress.
     pub fn quick_mask_rgba(&self, ts: usize, size: u32) -> Option<Vec<u8>> {
         let cache = self.caches.get(ts)?;
-        let res = cache.resolution;
-        let size = size.clamp(1, res);
-        let mask = self.quick_mask_image(ts, res);
+        let (w, h) = cache.size;
+        let size = size.clamp(1, w.max(h));
+        let mask = self.quick_mask_image(ts, cache.size);
         let live = self.stroke.as_ref().filter(|s| s.ts == ts && s.target.is_none()).map(|s| (&s.canvas.alpha, s.stroke.settings.opacity, s.erase));
         let base = cache.composite.channels.get(&Channel::BaseColor);
         let lut = srgb_lut();
         let inverted = self.quick_mask.inverted;
         let mut out = vec![255u8; size as usize * size as usize * 4];
         out.par_chunks_mut(size as usize * 4).enumerate().for_each(|(y, row)| {
-            let ty = (y as u64 * u64::from(res) / u64::from(size)) as u32;
+            let ty = (y as u64 * u64::from(h) / u64::from(size)) as u32;
             for (x, px) in row.chunks_exact_mut(4).enumerate() {
-                let tx = (x as u64 * u64::from(res) / u64::from(size)) as u32;
+                let tx = (x as u64 * u64::from(w) / u64::from(size)) as u32;
                 let mut m = from_u16(mask.get(tx, ty)[0]);
                 if let Some((alpha, opacity, erase)) = live {
                     let a = from_u16(alpha.get(tx, ty)[0]) * opacity;

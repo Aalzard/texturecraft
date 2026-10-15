@@ -98,7 +98,7 @@ impl Session {
         let erase = tool == Tool::Eraser;
         let quick_mask = self.quick_mask.editing;
         let ts = self.ts();
-        let res = self.caches.get(ts).map(|c| c.resolution).unwrap_or(1024);
+        let size = self.caches.get(ts).map(|c| c.size).unwrap_or((1024, 1024));
         let pickup = if quick_mask { None } else { self.pickup_mode(first_uv)? };
         if pickup.is_some() {
             // Clone and smudge read the composite: bring it up to date first.
@@ -138,16 +138,17 @@ impl Session {
             brush.symmetry = Default::default();
         }
         let stroke = Stroke::new(&brush, &self.mesh);
-        let mut canvas = StrokeCanvas::new(res);
+        let mut canvas = StrokeCanvas::new(size.0, size.1);
         if !quick_mask {
-            canvas.limit = self.stroke_limit(ts, res);
+            canvas.limit = self.stroke_limit(ts, size);
         }
         if let Some((mode, offset)) = pickup
             && let Some(cache) = self.caches.get(ts)
         {
-            let r = res as f32;
             let mode = match mode {
-                PickupMode::Clone { .. } => PickupMode::Clone { offset: [(offset[0] * r).round() as i64, (offset[1] * r).round() as i64] },
+                PickupMode::Clone { .. } => {
+                    PickupMode::Clone { offset: [(offset[0] * size.0 as f32).round() as i64, (offset[1] * size.1 as f32).round() as i64] }
+                }
                 m => m,
             };
             canvas.pickup = Some(Pickup::new(mode, cache.composite.clone(), cache.gbuf.clone(), values.keys().copied()));
@@ -333,7 +334,7 @@ impl Session {
     /// Commit the active stroke (one undo step).
     pub fn end_stroke(&mut self) -> Result<()> {
         let Some(st) = self.stroke.take() else { return Ok(()) };
-        let res = self.caches.get(st.ts).map(|c| c.resolution).unwrap_or(1024);
+        let size = (st.canvas.alpha.width(), st.canvas.alpha.height());
         if st.canvas.dirty.is_empty() {
             // Nothing painted: drop any mask effect the stroke created.
             self.doc = st.before;
@@ -350,10 +351,10 @@ impl Session {
         let carried = st.canvas.pickup.as_ref().map(|p| &p.values);
         let src = CommitSource { alpha: &st.canvas.alpha, tiles: &st.canvas.dirty, opacity: st.stroke.settings.opacity, erase: st.erase, per_texel, carried };
         match st.target {
-            Some(PaintTarget::Layer(id)) => commit_layer(&mut self.doc.pixels, id, res, &st.values, src),
-            Some(PaintTarget::Mask(eid)) => commit_mask(&mut self.doc.pixels, eid, res, self.tool.mask_value, src),
+            Some(PaintTarget::Layer(id)) => commit_layer(&mut self.doc.pixels, id, size, &st.values, src),
+            Some(PaintTarget::Mask(eid)) => commit_mask(&mut self.doc.pixels, eid, size, self.tool.mask_value, src),
             None => {
-                self.commit_quick_mask(st.ts, res, src);
+                self.commit_quick_mask(st.ts, size, src);
                 return Ok(());
             }
         }
@@ -426,27 +427,27 @@ impl Session {
     /// quick mask unless the fill edits it.
     pub(crate) fn fill_canvas(&self, ts: usize) -> Result<(std::sync::Arc<texturecraft_geom::UvGBuffer>, StrokeCanvas)> {
         let gbuf = self.caches.get(ts).map(|c| c.gbuf.clone()).ok_or_else(|| EngineError::Other("texture set not ready".into()))?;
-        let mut canvas = StrokeCanvas::new(gbuf.width);
+        let mut canvas = StrokeCanvas::new(gbuf.width, gbuf.height);
         if !self.quick_mask.editing {
-            canvas.limit = self.stroke_limit(ts, gbuf.width);
+            canvas.limit = self.stroke_limit(ts, (gbuf.width, gbuf.height));
         }
         Ok((gbuf, canvas))
     }
 
     /// Commit a one-shot fill with the tool's material (one undo step), or into the quick mask.
     pub(crate) fn commit_fill(&mut self, label: &str, ts: usize, canvas: &StrokeCanvas) -> Result<()> {
-        let res = canvas.alpha.width();
+        let size = (canvas.alpha.width(), canvas.alpha.height());
         let src = |opacity| CommitSource { alpha: &canvas.alpha, tiles: &canvas.dirty, opacity, erase: false, per_texel: None, carried: None };
         if self.quick_mask.editing {
-            self.commit_quick_mask(ts, res, src(self.tool.brush.opacity));
+            self.commit_quick_mask(ts, size, src(self.tool.brush.opacity));
             return Ok(());
         }
         self.edit(label, |s| {
             let target = s.paint_target()?;
             let values = s.stroke_values(target);
             match target {
-                PaintTarget::Layer(id) => commit_layer(&mut s.doc.pixels, id, res, &values, src(s.tool.brush.opacity)),
-                PaintTarget::Mask(eid) => commit_mask(&mut s.doc.pixels, eid, res, s.tool.mask_value, src(s.tool.brush.opacity)),
+                PaintTarget::Layer(id) => commit_layer(&mut s.doc.pixels, id, size, &values, src(s.tool.brush.opacity)),
+                PaintTarget::Mask(eid) => commit_mask(&mut s.doc.pixels, eid, size, s.tool.mask_value, src(s.tool.brush.opacity)),
             }
             Ok(())
         })
@@ -494,8 +495,8 @@ impl Session {
         let hit = self.pick(screen, viewport).ok_or_else(|| EngineError::Other("nothing under the cursor".into()))?;
         let ts = self.doc.project.texture_sets.iter().position(|t| t.material == hit.material).unwrap_or(self.ts());
         let cache = self.caches.get(ts).ok_or_else(|| EngineError::Other("texture set not ready".into()))?;
-        let res = cache.resolution as f32;
-        let (x, y) = ((hit.uv.x * res).clamp(0.0, res - 1.0) as u32, (hit.uv.y * res).clamp(0.0, res - 1.0) as u32);
+        let (w, h) = (cache.size.0 as f32, cache.size.1 as f32);
+        let (x, y) = ((hit.uv.x * w).clamp(0.0, w - 1.0) as u32, (hit.uv.y * h).clamp(0.0, h - 1.0) as u32);
         let mut out = BTreeMap::new();
         for c in cache.composite.channels.keys() {
             let v = cache.composite.value(*c, x, y);

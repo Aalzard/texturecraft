@@ -22,12 +22,15 @@ pub enum AuxView {
     QuickMask,
 }
 
+/// A texture set's texels across and down, and its mesh material.
+pub type SetLayout = ((u32, u32), usize);
+
 /// What the renderer must catch up with before drawing.
 #[derive(Default)]
 pub struct SceneSync {
     pub mesh: Option<(Arc<Mesh>, u64)>,
-    /// (resolution, material) per texture set, and the mesh material count.
-    pub sets: Option<(Vec<(u32, usize)>, usize)>,
+    /// (texels across and down, material) per texture set, and the mesh material count.
+    pub sets: Option<(Vec<SetLayout>, usize)>,
     /// The environment name and, for `resource:<name>`, its decoded image.
     pub env: Option<(String, Option<Arc<ImageRes>>)>,
     pub tiles: Vec<(usize, DisplayKind, u32, u32, Vec<u8>)>,
@@ -48,7 +51,7 @@ pub struct GpuLink {
     /// frame was never painted, e.g. a WebGPU surface not ready yet): send everything again.
     pub lost: Arc<AtomicBool>,
     mesh_id: u64,
-    sets: Vec<(u32, usize)>,
+    sets: Vec<SetLayout>,
     /// The environment the GPU has: name and image identity (a re-imported resource differs).
     env: (String, usize),
     /// What each set's aux texture holds: (mesh map or mask key, revision).
@@ -102,7 +105,7 @@ impl GpuLink {
             self.mesh_id = s.mesh_id;
             self.aux.clear();
         }
-        let sets: Vec<(u32, usize)> = s.doc.project.texture_sets.iter().map(|t| (t.resolution, t.material)).collect();
+        let sets: Vec<SetLayout> = s.doc.project.texture_sets.iter().map(|t| (t.size(), t.material)).collect();
         if sets != self.sets || out.mesh.is_some() {
             out.sets = Some((sets.clone(), s.mesh.materials.len().max(1)));
             self.sets = sets;
@@ -116,7 +119,7 @@ impl GpuLink {
         }
         if self.reset.swap(false, Ordering::AcqRel) {
             for c in &mut s.caches {
-                c.upload.extend(texturecraft_engine::compose::all_tiles(c.resolution));
+                c.upload.extend(texturecraft_engine::compose::all_tiles(c.size.0, c.size.1));
             }
             self.aux.clear();
         }
@@ -144,7 +147,7 @@ impl GpuLink {
                     if self.aux.get(&ts) == Some(&key) {
                         continue;
                     }
-                    let res = s.caches.get(ts).map(|c| c.resolution).unwrap_or(1024).min(2048);
+                    let res = s.caches.get(ts).map_or(1024, |c| texturecraft_render::aux_size(c.size));
                     out.aux.push((ts, res, texturecraft_render::mesh_maps::mesh_map_rgba(s.doc.baked.get(&ts), m, res)));
                     self.aux.insert(ts, key);
                 }
@@ -153,7 +156,7 @@ impl GpuLink {
                 if let Some((ts, _, _)) = s.doc.project.locate(id) {
                     let key = (format!("mask{}", id.0), s.revision);
                     if self.aux.get(&ts) != Some(&key) && !s.stroke_active() {
-                        let res = s.caches.get(ts).map(|c| c.resolution).unwrap_or(1024).min(2048);
+                        let res = s.caches.get(ts).map_or(1024, |c| texturecraft_render::aux_size(c.size));
                         if let Some(rgba) = s.mask_view_rgba(id, res) {
                             out.aux.push((ts, res, rgba));
                         }
@@ -168,7 +171,7 @@ impl GpuLink {
                     if self.aux.get(&ts) == Some(&key) {
                         continue;
                     }
-                    let res = cache.resolution.min(2048);
+                    let res = texturecraft_render::aux_size(cache.size);
                     if let Some(rgba) = s.quick_mask_rgba(ts, res) {
                         out.aux.push((ts, res, rgba));
                     }
@@ -224,7 +227,7 @@ impl CallbackTrait for ViewCallback {
                 }
             }
             for (ts, k, tx, ty, bytes) in &sync.tiles {
-                gpu.renderer.upload_tile(queue, *ts, *k, *tx, *ty, bytes);
+                gpu.renderer.upload_tile(device, queue, *ts, *k, *tx, *ty, bytes);
             }
             for (ts, size, bytes) in &sync.aux {
                 gpu.renderer.upload_aux(queue, *ts, *size, bytes);

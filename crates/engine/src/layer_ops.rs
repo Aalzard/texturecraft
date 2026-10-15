@@ -39,8 +39,8 @@ pub(crate) fn empty_texel(c: Channel) -> Vec<u16> {
     v
 }
 
-fn fit(img: &TileImage, res: u32, empty: &[u16]) -> TileImage {
-    if img.width() == res { img.clone() } else { img.resampled(res, res, empty) }
+fn fit(img: &TileImage, (w, h): (u32, u32), empty: &[u16]) -> TileImage {
+    if (img.width(), img.height()) == (w, h) { img.clone() } else { img.resampled(w, h, empty) }
 }
 
 /// Copy layer `id` of document `src` (recursively, with pixels) into the session's texture set
@@ -50,7 +50,7 @@ pub(crate) fn copy_tree(src: &Document, id: LayerId, s: &mut Document, ts: usize
     if depth > texturecraft_core::project::MAX_DEPTH {
         return Err(EngineError::Other("layer groups nested too deeply".into()));
     }
-    let res = s.project.texture_set(ts)?.resolution;
+    let size = s.project.texture_set(ts)?.size();
     let channels = s.project.texture_set(ts)?.channel_list();
     let layer = src.project.layer(id)?.clone();
     let new = s.project.alloc_id();
@@ -63,12 +63,12 @@ pub(crate) fn copy_tree(src: &Document, id: LayerId, s: &mut Document, ts: usize
         let old = e.id;
         e.id = s.project.alloc_id();
         if let Some(img) = src.pixels.masks.get(&old) {
-            s.pixels.masks.insert(e.id, fit(img, res, &[0, 0]));
+            s.pixels.masks.insert(e.id, fit(img, size, &[0, 0]));
         }
         // Content paint effects keep per-channel pixels.
         for c in channels.iter().copied() {
             if let Some(img) = src.pixels.layer(old, c) {
-                s.pixels.layers.insert((e.id, c), fit(img, res, &empty_texel(c)));
+                s.pixels.layers.insert((e.id, c), fit(img, size, &empty_texel(c)));
             }
         }
     }
@@ -80,7 +80,7 @@ pub(crate) fn copy_tree(src: &Document, id: LayerId, s: &mut Document, ts: usize
         if let Some(img) = src.pixels.layer(id, c)
             && channels.contains(&c)
         {
-            s.pixels.layers.insert((new, c), fit(img, res, &empty_texel(c)));
+            s.pixels.layers.insert((new, c), fit(img, size, &empty_texel(c)));
         }
     }
     s.project.insert_layer(ts, copy, above, inside)?;
@@ -157,7 +157,7 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.update();
     let cache = s.caches.get(ts).ok_or_else(|| EngineError::Other("texture set not ready".into()))?;
-    let res = cache.resolution;
+    let size = cache.size;
     let tiles: Vec<(u32, u32)> = cache.covered_tiles.iter().copied().collect();
     let empty = Default::default();
     let inputs = texturecraft_compose::Inputs {
@@ -180,7 +180,7 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
         s.doc.pixels.masks.retain(|e, _| !effects.contains(e));
         s.doc.pixels.layers.retain(|(e, _), _| !effects.contains(e));
         for (c, (tx, ty), data) in flat {
-            let img = s.doc.pixels.layer_mut(id, c, res);
+            let img = s.doc.pixels.layer_mut(id, c, size);
             img.set_tile(tx, ty, Some(std::sync::Arc::new(data)));
         }
         let channels = s.doc.project.texture_set(ts)?.channel_list();
@@ -196,8 +196,8 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "layer": id.0 }))
 }
 
-/// Resample every painted image of texture set `ts` to `res` (after a size change).
-pub(crate) fn resample_set(s: &mut Session, ts: usize, res: u32) {
+/// Resample every painted image of texture set `ts` to `size` (after a size change).
+pub(crate) fn resample_set(s: &mut Session, ts: usize, size: (u32, u32)) {
     let ids: Vec<LayerId> = s.doc.project.walk(ts).into_iter().map(|(id, _)| id).collect();
     let effect_ids: Vec<LayerId> = ids
         .iter()
@@ -205,13 +205,13 @@ pub(crate) fn resample_set(s: &mut Session, ts: usize, res: u32) {
         .flat_map(|l| l.mask.iter().flat_map(|m| m.effects.iter()).chain(l.content_effects.iter()).map(|e| e.id))
         .collect();
     for ((id, c), img) in s.doc.pixels.layers.iter_mut() {
-        if (ids.contains(id) || effect_ids.contains(id)) && img.width() != res {
-            *img = img.resampled(res, res, &empty_texel(*c));
+        if ids.contains(id) || effect_ids.contains(id) {
+            *img = fit(img, size, &empty_texel(*c));
         }
     }
     for (id, img) in s.doc.pixels.masks.iter_mut() {
-        if effect_ids.contains(id) && img.width() != res {
-            *img = img.resampled(res, res, &[0, 0]);
+        if effect_ids.contains(id) {
+            *img = fit(img, size, &[0, 0]);
         }
     }
 }

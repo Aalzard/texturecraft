@@ -5,6 +5,9 @@
 //! Values follow physically based conventions: metals are metallic 1 with base colors from
 //! published measured reflectance (F0) tables; dielectrics are metallic 0 with linear albedo
 //! between about 0.02 (charcoal, rubber) and 0.9 (fresh snow).
+//!
+//! A few materials show the extra lobes (clear coat, sheen, anisotropy, subsurface scattering);
+//! applying one adds the lobe channels it uses to the texture set.
 
 use texturecraft_core::{
     BlendMode, Channel, ChannelBlend, EffectKind, Fill, GeneratorKind, Layer, LayerId, LayerKind, MaskBackground, Procedural, ProceduralKind, Project,
@@ -41,6 +44,7 @@ const STONE: &str = "Stone & Masonry";
 const PLASTIC: &str = "Plastic & Rubber";
 const FABRIC: &str = "Fabric & Leather";
 const GLASS: &str = "Ceramic & Glass";
+const ORGANIC: &str = "Organic";
 
 pub const MATERIALS: &[SmartMaterial] = &[
     // Metals (base color = measured F0, linear).
@@ -57,6 +61,7 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("silver", "Silver", METAL, [0.972, 0.96, 0.915], 1.0, 0.22),
     m("aluminium", "Aluminium Raw", METAL, [0.913, 0.922, 0.924], 1.0, 0.42),
     m("aluminium_brushed", "Aluminium Brushed", METAL, [0.913, 0.922, 0.924], 1.0, 0.32),
+    m("steel_brushed_aniso", "Steel Brushed Anisotropic", METAL, [0.56, 0.57, 0.58], 1.0, 0.3),
     m("chrome", "Chrome", METAL, [0.55, 0.556, 0.554], 1.0, 0.05),
     m("titanium", "Titanium", METAL, [0.542, 0.497, 0.449], 1.0, 0.32),
     m("nickel", "Nickel", METAL, [0.66, 0.609, 0.526], 1.0, 0.25),
@@ -88,10 +93,15 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("denim", "Denim", FABRIC, [0.06, 0.09, 0.19], 0.0, 0.92),
     m("leather", "Leather", FABRIC, [0.17, 0.08, 0.04], 0.0, 0.52),
     m("leather_black", "Leather Black", FABRIC, [0.025, 0.025, 0.028], 0.0, 0.42),
+    m("velvet", "Velvet", FABRIC, [0.12, 0.015, 0.09], 0.0, 0.9),
     // Ceramic and glass.
     m("ceramic", "Ceramic White", GLASS, [0.8, 0.8, 0.78], 0.0, 0.08),
     m("glass", "Glass Clear", GLASS, [0.02, 0.022, 0.022], 0.0, 0.03),
     m("glass_frosted", "Glass Frosted", GLASS, [0.6, 0.64, 0.64], 0.0, 0.45),
+    m("car_paint", "Car Paint", PLASTIC, [0.45, 0.025, 0.03], 0.0, 0.4),
+    // Organic.
+    m("skin", "Skin", ORGANIC, [0.56, 0.35, 0.27], 0.0, 0.5),
+    m("wax", "Candle Wax", ORGANIC, [0.8, 0.72, 0.55], 0.0, 0.35),
     // Smart materials.
     sm("steel_painted_worn", "Steel Painted Worn", METAL, [0.42, 0.06, 0.04], 0.2, 0.45),
     sm("steel_painted_rust", "Steel Painted Rust Leaks", METAL, [0.62, 0.62, 0.6], 0.1, 0.5),
@@ -216,6 +226,14 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
             plain_metal(b, clouds_rough(7))
         }
         "steel_stainless" | "aluminium_brushed" | "titanium" => plain_metal(b, gray(P::Brushed, 3.0, 3, r * 0.75, r * 1.25)),
+        // Brushing lines run along X; the highlights stretch across them (a quarter turn).
+        "steel_brushed_aniso" => one(
+            b,
+            plus(
+                metal(pat(P::Brushed, 3.0, 5, 1.0, m.base.map(|v| v * 0.92), m.base), gray(P::Brushed, 3.0, 5, r * 0.8, r * 1.2)),
+                [(AnisotropyLevel, u(0.8)), (AnisotropyAngle, u(0.5))],
+            ),
+        ),
         "cast_iron" => one(
             b,
             plus(metal(pat(P::Noise, 1.0, 4, 1.0, [0.44; 3], [0.52; 3]), gray(P::Grunge, 3.0, 9, 0.55, 0.75)), height(gray(P::Pores, 14.0, 3, -0.02, 0.0))),
@@ -326,6 +344,29 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
                 height(gray(P::Leather, 42.0, 6, -0.02, 0.0)),
             ),
         ),
+        "velvet" => one(
+            b,
+            plus(
+                dielectric(pat(P::Weave, 30.0, 3, 1.0, [0.07, 0.008, 0.05], m.base), u(r)),
+                [(SheenWeight, u(1.0)), (SheenColor, rgb([0.95, 0.55, 0.85])), (SheenRoughness, u(0.35)), (Height, gray(P::Weave, 30.0, 3, -0.004, 0.0))],
+            ),
+        ),
+        // ---- Coated and translucent ---------------------------------------------------------
+        "car_paint" => one(
+            b,
+            plus(
+                dielectric(pat(P::Noise, 0.3, 8, 1.0, [0.38, 0.02, 0.025], m.base), gray(P::Noise, 0.3, 8, 0.3, 0.45)),
+                [(CoatWeight, u(1.0)), (CoatRoughness, u(0.04))],
+            ),
+        ),
+        "skin" => one(
+            b,
+            plus(
+                dielectric(pat(P::Clouds, 4.0, 6, 1.0, [0.5, 0.3, 0.23], m.base), gray(P::Pores, 30.0, 2, 0.42, 0.58)),
+                [(ScatterWeight, u(1.0)), (SheenWeight, u(0.15)), (SheenRoughness, u(0.6)), (Height, gray(P::Pores, 30.0, 2, -0.004, 0.0))],
+            ),
+        ),
+        "wax" => one(b, plus(dielectric(pat(P::Clouds, 2.0, 11, 1.0, [0.74, 0.66, 0.5], m.base), clouds_rough(11)), [(ScatterWeight, u(1.0))])),
         // ---- Glass (opaque approximation; uses Opacity when the texture set has it) ------------
         "glass" => one(b, plus(dielectric(rgb(m.base), u(r)), [(Opacity, u(0.2))])),
         "glass_frosted" => one(b, plus(dielectric(rgb(m.base), gray(P::Noise, 1.0, 2, 0.4, 0.5)), [(Opacity, u(0.6))])),
@@ -502,8 +543,15 @@ pub fn apply_at(s: &mut Session, id: &str, place: Place) -> Result<LayerId> {
     let m = find(id).ok_or_else(|| EngineError::Other(format!("unknown material `{id}`")))?;
     let label = format!("Add {}", m.label);
     s.edit(&label, |s| {
-        let channels = s.doc.project.texture_set(s.ts())?.channel_list();
-        let layers = build(&mut Builder { p: &mut s.doc.project, channels: channels.clone() }, m.id)?;
+        let ts = s.ts();
+        let mut channels = s.doc.project.texture_set(ts)?.channel_list();
+        // Lobe channels the material uses join the texture set (other channels it lacks are skipped).
+        let missing: Vec<Channel> = Channel::LOBES.into_iter().filter(|c| !channels.contains(c)).collect();
+        let layers = build(&mut Builder { p: &mut s.doc.project, channels: [channels.clone(), missing.clone()].concat() }, m.id)?;
+        for c in missing.into_iter().filter(|c| layers.iter().any(|l| l.channels.contains_key(c))) {
+            crate::set_cmds::add_channel(s, ts, c)?;
+            channels.push(c);
+        }
         let top = if layers.len() == 1 {
             let l = layers.into_iter().next().ok_or_else(|| EngineError::Other("empty material".into()))?;
             crate::layer_cmds::insert_selected(s, l)?
@@ -514,7 +562,6 @@ pub fn apply_at(s: &mut Session, id: &str, place: Place) -> Result<LayerId> {
                 *c = ChannelBlend { mode: BlendMode::Passthrough, opacity: 1.0 };
             }
             let gid = crate::layer_cmds::insert_selected(s, group)?;
-            let ts = s.ts();
             for l in layers {
                 s.doc.project.insert_layer(ts, l, Some(gid), true)?;
             }
@@ -583,6 +630,41 @@ mod tests {
         crate::execute(&mut s, "layer.select", &serde_json::json!({"layer": a.0})).unwrap();
         let y = run(&mut s, "material.apply", serde_json::json!({"material": "copper"}));
         assert_eq!(stack(&s), [vec![n], base, vec![a, y, m, b]].concat());
+    }
+
+    #[test]
+    fn lobe_materials_add_their_channels_and_round_trip() {
+        use Channel::*;
+        let mut s = Session::new_project("t", texturecraft_geom::primitives::sphere(1.0, 16, 8), "builtin:sphere", None, 128).unwrap();
+        let chans = |s: &Session| s.doc.project.texture_sets[0].channel_list();
+        let before = chans(&s);
+        let cases: [(&str, &[Channel]); 5] = [
+            ("car_paint", &[CoatWeight, CoatRoughness]),
+            ("velvet", &[SheenWeight, SheenColor, SheenRoughness]),
+            ("steel_brushed_aniso", &[AnisotropyLevel, AnisotropyAngle]),
+            ("skin", &[SheenWeight, SheenRoughness, ScatterWeight]),
+            ("wax", &[ScatterWeight]),
+        ];
+        for (id, lobes) in cases {
+            apply(&mut s, id).unwrap();
+            let added: Vec<Channel> = chans(&s).into_iter().filter(|c| !before.contains(c)).collect();
+            assert_eq!(added, lobes, "{id}");
+            s.undo().unwrap();
+            assert_eq!(chans(&s), before, "{id}: one undo step");
+        }
+        // Classic channels a set lacks stay out (glass uses Opacity).
+        apply(&mut s, "glass").unwrap();
+        assert_eq!(chans(&s), before);
+        apply(&mut s, "car_paint").unwrap();
+        s.update();
+        let coat = |s: &Session| s.caches[0].composite.value(CoatWeight, 64, 64)[0];
+        assert!((coat(&s) - 1.0).abs() < 1e-3);
+        let mut back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
+        back.update();
+        assert_eq!(chans(&back), chans(&s));
+        assert_eq!(coat(&back), coat(&s));
+        crate::execute(&mut s, "textureSet.channel.remove", &serde_json::json!({"channel": "coatWeight"})).unwrap();
+        assert!(!chans(&s).contains(&CoatWeight));
     }
 
     /// Base color, roughness and metallic at a grid of texels of texture set `ts`.

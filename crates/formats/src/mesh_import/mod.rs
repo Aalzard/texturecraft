@@ -1,6 +1,7 @@
-//! Mesh import: glTF/GLB, FBX, COLLADA, OBJ, PLY and STL into a world-space [`Mesh`] with one
-//! submesh per material and part (glTF node, OBJ object, FBX model, COLLADA node; unnamed parts
-//! take the file stem), materials contiguous, glTF UV convention (origin top-left, v down),
+//! Mesh import: glTF/GLB, FBX, COLLADA, USD (usda, usdc, usdz), OBJ, PLY and STL into a
+//! world-space [`Mesh`] with one submesh per material and part (glTF node, OBJ object, FBX
+//! model, COLLADA node, USD Mesh prim; unnamed parts take the file stem), materials contiguous,
+//! glTF UV convention (origin top-left, v down),
 //! normals (computed when missing), vertex colors (glTF, OBJ, PLY), UVs (auto-unwrapped when
 //! missing) and MikkTSpace tangents.
 
@@ -12,8 +13,9 @@ mod ply;
 #[cfg(test)]
 mod scene_tests;
 mod stl;
+pub(crate) mod usd;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -35,7 +37,7 @@ const UNWRAP_PADDING: f32 = 4.0;
 const REPORT_RESOLUTION: u32 = 512;
 
 /// File extensions [`import_mesh_bytes`] understands.
-pub const MESH_EXTENSIONS: [&str; 7] = ["gltf", "glb", "fbx", "dae", "obj", "ply", "stl"];
+pub const MESH_EXTENSIONS: [&str; 11] = ["gltf", "glb", "fbx", "dae", "usd", "usda", "usdc", "usdz", "obj", "ply", "stl"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImportedMesh {
@@ -218,6 +220,7 @@ fn read(file_name: &str, bytes: &[u8], base: Option<&std::path::Path>) -> Result
         "gltf" | "glb" => gltf::read(bytes, base)?,
         "fbx" => fbx::read(bytes)?,
         "dae" => dae::read(bytes)?,
+        "usd" | "usda" | "usdc" | "usdz" => usd::read(file_name, bytes)?,
         "obj" => obj::read(bytes)?,
         "ply" => ply::read(bytes)?,
         "stl" => stl::read(bytes)?,
@@ -338,7 +341,7 @@ fn report(mesh: &Mesh, uvs_generated: bool, mut warnings: Vec<String>) -> MeshRe
     }
     let overlap_ratio = if covered == 0 { 0.0 } else { overlaps as f32 / covered as f32 };
     if out_of_range > 0 {
-        warnings.push(format!("{out_of_range} triangles have UVs outside 0..1 (UDIM tiles are not supported; those parts will not be painted)"));
+        warnings.push(format!("{out_of_range} triangles have UVs outside 0..1 (painted as UDIM tiles when they lie in tiles 1001 and up)"));
     }
     if overlap_ratio > 0.01 {
         warnings.push(format!("{:.1}% of the UV layout overlaps; painting there affects several places at once", overlap_ratio * 100.0));

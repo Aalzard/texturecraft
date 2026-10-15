@@ -56,6 +56,9 @@ pub struct Windows {
     pub shortcuts: bool,
     #[serde(default)]
     pub settings: bool,
+    /// Browser File › Export Mesh: the download format choice.
+    #[serde(default)]
+    pub export_mesh: bool,
 }
 
 /// Edit › Settings.
@@ -83,11 +86,13 @@ pub struct NewProject {
     pub name: String,
     /// A mesh file chosen from disk (desktop only).
     pub file: Option<String>,
+    /// UV tile (UDIM) workflow: on, off, or None for when the mesh's UVs leave tile 1001.
+    pub uv_tiles: Option<bool>,
 }
 
 impl Default for NewProject {
     fn default() -> Self {
-        NewProject { mesh: "material_ball".into(), resolution: 2048, name: "Untitled".into(), file: None }
+        NewProject { mesh: "material_ball".into(), resolution: 2048, name: "Untitled".into(), file: None, uv_tiles: None }
     }
 }
 

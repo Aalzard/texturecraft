@@ -20,11 +20,11 @@ fn sample() -> Sample {
     masked.mask = Some(Mask { effects: vec![Effect::new(effect, EffectKind::Paint)], ..Mask::new(MaskBackground::Black) });
     p.insert_layer(1, masked, None, false).unwrap();
     let mut pixels = PixelStore::default();
-    let img = pixels.layer_mut(paint, Channel::BaseColor, 128);
+    let img = pixels.layer_mut(paint, Channel::BaseColor, (128, 128));
     img.set(0, 0, &[1, 2, 3, 4]);
     img.set(127, 127, &[65535, 0, 9, 65535]);
-    pixels.layer_mut(paint, Channel::Height, 128).set(70, 3, &[40000, 65535]);
-    pixels.mask_mut(effect, 64).set(10, 60, &[30000, 65535]);
+    pixels.layer_mut(paint, Channel::Height, (128, 128)).set(70, 3, &[40000, 65535]);
+    pixels.mask_mut(effect, (64, 64)).set(10, 60, &[30000, 65535]);
     let ao: Vec<f32> = (0..256).map(|i| i as f32 / 255.0).collect();
     let baked = BakedMaps { resolution: 16, maps: [(BakedMap::AmbientOcclusion, Arc::new(ao)), (BakedMap::Normal, Arc::new(vec![0.5; 16 * 16 * 3]))].into() };
     let pf = ProjectFile {
@@ -165,4 +165,23 @@ fn tiles_are_validated_against_the_texture_set() {
     assert!(load_project_bytes(&zip_with(&[("pixels/layer_x_baseColor.bin", vec![])])).is_err());
     assert!(load_project_bytes(&zip_with(&[("baked/0_ambient_occlusion.bin", header(16, 16, 1, 0))])).is_err());
     assert!(load_project_bytes(&zip_with(&[("baked/0_ambient_occlusion.bin", header(100_000, 100_000, 1, 0))])).is_err());
+}
+
+#[test]
+fn uv_tiled_sets_round_trip_their_atlas_pixels_and_bakes() {
+    let mut s = sample();
+    s.pf.project.texture_sets[0].uv_tiles = vec![1001, 1002];
+    let mut pixels = PixelStore::default();
+    pixels.layer_mut(s.paint, Channel::BaseColor, (256, 128)).set(200, 100, &[1, 2, 3, 4]);
+    s.pf.pixels = pixels;
+    let baked = BakedMaps { resolution: 32, maps: [(BakedMap::AmbientOcclusion, Arc::new(vec![0.25; 32 * 16]))].into() };
+    s.pf.baked = [(0, baked)].into();
+    let back = load_project_bytes(&save_project_bytes(&s.pf).unwrap()).unwrap();
+    assert_same(&s.pf, &back);
+    assert_eq!(back.baked[&0].height(BakedMap::AmbientOcclusion), 16);
+    assert_eq!(back.pixels.layer(s.paint, Channel::BaseColor).unwrap().get(200, 100), [1, 2, 3, 4]);
+    // A square image no longer fits the tiled set.
+    let mut square = s.pf.clone();
+    square.project.texture_sets[0].uv_tiles.clear();
+    assert!(load_project_bytes(&save_project_bytes(&square).unwrap()).is_err());
 }

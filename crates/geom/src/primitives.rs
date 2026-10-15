@@ -242,6 +242,29 @@ pub fn plane(size: f32, subdivisions: usize) -> Mesh {
     b.finish("Plane")
 }
 
+/// Two planes side by side on UV tiles 1001 and 1002 (UDIM): one material, 4 × 2 units.
+pub fn udim_plane() -> Mesh {
+    let mut m = plane(2.0, 16);
+    let mut right = m.clone();
+    for p in &mut m.positions {
+        p.x -= 1.0;
+    }
+    for p in &mut right.positions {
+        p.x += 1.0;
+    }
+    for uv in &mut right.uvs {
+        uv.x += 1.0;
+    }
+    right.materials.clear();
+    right.submeshes.clear();
+    m.append(&right);
+    let count = m.indices.len() as u32;
+    if let Some(s) = m.submeshes.first_mut() {
+        s.count = count;
+    }
+    m
+}
+
 /// The default project mesh: a ball on a beveled pedestal, two materials ("Ball", "Base").
 pub fn material_ball() -> Mesh {
     let mut ball = Builder::default();
@@ -310,12 +333,13 @@ pub fn builtin(id: &str) -> Option<Mesh> {
         "torus" => torus(1.0, 0.35, 128, 48),
         "plane" => plane(2.0, 16),
         "crate" => crate_scene(),
+        "udim_plane" | "udimplane" => udim_plane(),
         _ => return None,
     })
 }
 
 /// Ids accepted by [`builtin`], in menu order.
-pub const BUILTINS: [(&str, &str); 8] = [
+pub const BUILTINS: [(&str, &str); 9] = [
     ("material_ball", "Material ball"),
     ("sphere", "Sphere"),
     ("cube", "Cube"),
@@ -324,15 +348,16 @@ pub const BUILTINS: [(&str, &str); 8] = [
     ("torus", "Torus"),
     ("plane", "Plane"),
     ("crate", "Crate"),
+    ("udim_plane", "UDIM plane"),
 ];
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Every triangle's winding agrees with its vertex normals, UVs stay in 0..1, and the UV
-    /// mapping is not mirrored (tangent handedness +1).
-    fn check(m: &Mesh) {
+    /// Every triangle's winding agrees with its vertex normals, UVs stay in 0..1 (u in 0..max_u),
+    /// and the UV mapping is not mirrored (tangent handedness +1).
+    fn check(m: &Mesh, max_u: f32) {
         m.validate().unwrap();
         let mut bad = 0;
         for t in 0..m.triangle_count() {
@@ -348,7 +373,7 @@ mod tests {
         }
         assert_eq!(bad, 0, "{} triangles wound against their normals", bad);
         for uv in &m.uvs {
-            assert!((0.0..=1.0).contains(&uv.x) && (0.0..=1.0).contains(&uv.y), "{uv:?}");
+            assert!((0.0..=max_u).contains(&uv.x) && (0.0..=1.0).contains(&uv.y), "{uv:?}");
         }
         let mirrored = m.tangents.iter().filter(|t| t.w < 0.0).count();
         assert!(mirrored * 50 < m.tangents.len().max(1), "{mirrored} mirrored tangents");
@@ -359,9 +384,10 @@ mod tests {
         for (id, _) in BUILTINS {
             let m = builtin(id).unwrap();
             assert!(m.triangle_count() > 0, "{id}");
-            check(&m);
+            check(&m, if id == "udim_plane" { 2.0 } else { 1.0 });
         }
         assert!(builtin("nope").is_none());
+        assert_eq!(udim_plane().uv_tiles(0).into_iter().collect::<Vec<_>>(), vec![(0, 0), (1, 0)]);
     }
 
     #[test]

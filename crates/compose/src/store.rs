@@ -21,21 +21,14 @@ impl PixelStore {
         self.layers.get(&(id, c))
     }
 
-    /// The image for `(id, c)` at `res`, created empty if missing or of another size.
-    pub fn layer_mut(&mut self, id: LayerId, c: Channel, res: u32) -> &mut TileImage {
-        let img = self.layers.entry((id, c)).or_insert_with(|| TileImage::new(res, res, c.components() + 1));
-        if img.width() != res {
-            *img = TileImage::new(res, res, c.components() + 1);
-        }
-        img
+    /// The image for `(id, c)` at `size` (width, height), created empty if missing or of
+    /// another size.
+    pub fn layer_mut(&mut self, id: LayerId, c: Channel, size: (u32, u32)) -> &mut TileImage {
+        sized(self.layers.entry((id, c)).or_insert_with(|| TileImage::new(size.0, size.1, c.components() + 1)), size)
     }
 
-    pub fn mask_mut(&mut self, id: LayerId, res: u32) -> &mut TileImage {
-        let img = self.masks.entry(id).or_insert_with(|| TileImage::new(res, res, 2));
-        if img.width() != res {
-            *img = TileImage::new(res, res, 2);
-        }
-        img
+    pub fn mask_mut(&mut self, id: LayerId, size: (u32, u32)) -> &mut TileImage {
+        sized(self.masks.entry(id).or_insert_with(|| TileImage::new(size.0, size.1, 2)), size)
     }
 
     /// Drop pixels of layers that no longer exist.
@@ -49,25 +42,42 @@ impl PixelStore {
     }
 }
 
+/// `img`, replaced by an empty image of its components when it is not `size`.
+fn sized(img: &mut TileImage, size: (u32, u32)) -> &mut TileImage {
+    if (img.width(), img.height()) != size {
+        *img = TileImage::new(size.0, size.1, img.comps());
+    }
+    img
+}
+
 /// Decode a stored component of channel kind `kind` to its float value.
 #[inline]
 pub fn decode(kind: ChannelKind, v: u16) -> f32 {
     if kind == ChannelKind::Signed { from_u16_signed(v) } else { from_u16(v) }
 }
 
-/// Baked mesh maps of one texture set (dense, row-major, `components()` floats per texel).
+/// Baked mesh maps of one texture set (dense, row-major, `components()` floats per texel). The
+/// maps cover the texture set's texels at another density: `resolution` wide, and as tall as
+/// the set's aspect makes them (square for classic sets, the UV tile grid's aspect otherwise).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BakedMaps {
+    /// Width in texels.
     pub resolution: u32,
     pub maps: BTreeMap<BakedMap, std::sync::Arc<Vec<f32>>>,
 }
 
 impl BakedMaps {
-    /// Sample map `m` at texel (x, y) of an image `res` wide (nearest texel of the bake).
+    /// Height in texels of map `m` (from its length).
+    pub fn height(&self, m: BakedMap) -> u32 {
+        self.maps.get(&m).map_or(0, |d| (d.len() / (self.resolution.max(1) as usize * m.components())) as u32)
+    }
+
+    /// Sample map `m` at texel (x, y) of an image `res` wide with the same aspect (nearest texel
+    /// of the bake).
     pub fn sample(&self, m: BakedMap, x: u32, y: u32, res: u32) -> Option<[f32; 3]> {
         let data = self.maps.get(&m)?;
         let r = self.resolution.max(1) as u64;
-        let (bx, by) = ((x as u64 * r / res.max(1) as u64).min(r - 1), (y as u64 * r / res.max(1) as u64).min(r - 1));
+        let (bx, by) = ((x as u64 * r / res.max(1) as u64).min(r - 1), (y as u64 * r / res.max(1) as u64).min(self.height(m).max(1) as u64 - 1));
         let comps = m.components();
         let i = ((by * r + bx) as usize) * comps;
         let s = data.get(i..i + comps)?;

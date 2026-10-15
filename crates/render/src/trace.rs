@@ -3,6 +3,15 @@
 //! GGX, specular level,
 //! height-to-normal slope rule, normal channel blended with RNM, emissive, opacity) but real
 //! multi-bounce light transport. Each [`Tracer::pass`] adds one sample per pixel.
+//!
+//! The optional lobe channels: anisotropic GGX (true anisotropic evaluation and visible-normal
+//! sampling along the turned mesh tangent), a GGX clear coat (IOR 1.5) on the mesh normal that
+//! takes `1 − coat Fresnel` from everything below it, a Charlie sheen with Estevez–Kulla
+//! visibility and albedo scaling of the base, and subsurface scattering as a random walk: the
+//! scattering part of the diffuse light enters the mesh, scatters isotropically with the
+//! project's per-channel mean free path (no absorption: the base color tints it once, on entry)
+//! and leaves where the walk next crosses the surface, as a Lambertian emitter. Walks are capped
+//! at [`WALK_STEPS`] (their energy is dropped) and need closed meshes.
 
 use std::f32::consts::{PI, TAU};
 use std::sync::Arc;
@@ -42,6 +51,10 @@ pub struct TraceScene {
     pub spec_gloss: bool,
     /// Ray offset off surfaces, scaled to the mesh.
     eps: f32,
+    /// Subsurface scattering extinction per color channel (1 / mean free path, world units).
+    scatter_sigma: Vec3,
+    /// Bounding radius of the mesh (scales the scatter radius).
+    radius: f32,
 }
 
 impl TraceScene {
@@ -61,7 +74,19 @@ impl TraceScene {
         let (lo, hi) = mesh.bounds();
         let eps = ((hi - lo).length() * 2e-5).max(1e-6);
         let light = EnvSampler::new(&env).map(Arc::new);
-        TraceScene { mesh, bvh, sets, env, env_rotation, tri_set: Arc::new(tri_set), light, spec_gloss: false, eps }
+        let radius = ((hi - lo).length() * 0.5).max(1e-6);
+        let mut scene =
+            TraceScene { mesh, bvh, sets, env, env_rotation, tri_set: Arc::new(tri_set), light, spec_gloss: false, eps, scatter_sigma: Vec3::ONE, radius };
+        let d = DisplaySettings::default();
+        scene.set_scatter(d.scatter_color, d.scatter_radius);
+        scene
+    }
+
+    /// Subsurface scattering: the mean free path of each color channel is `radius` (a fraction
+    /// of the mesh's bounding radius) times that channel of `color`.
+    pub fn set_scatter(&mut self, color: [f32; 3], radius: f32) {
+        let floor = self.eps * 4.0;
+        self.scatter_sigma = Vec3::from(color.map(|c| 1.0 / (radius * c * self.radius).max(floor)));
     }
 
     /// The scene as `display` shows it: the imported environment `env_image` (when the display
@@ -71,6 +96,7 @@ impl TraceScene {
         let env = imported.unwrap_or_else(|| crate::ibl::environment(&display.environment, 1024));
         let mut scene = TraceScene::new(mesh, bvh, sets, Arc::new(env), display.env_rotation.to_radians());
         scene.spec_gloss = display.spec_gloss;
+        scene.set_scatter(display.scatter_color, display.scatter_radius);
         scene
     }
 
@@ -409,12 +435,23 @@ struct Surface {
     /// Geometric normal facing the incoming ray.
     geo: Vec3,
     n: Vec3,
+    /// Anisotropy direction: the mesh tangent turned by the anisotropy angle, orthogonal to `n`.
+    tangent: Vec3,
     /// Diffuse albedo and specular reflectance at normal incidence.
     diffuse: Vec3,
     f0: Vec3,
     roughness: f32,
     emissive: Vec3,
     opacity: f32,
+    anisotropy: f32,
+    coat: f32,
+    coat_roughness: f32,
+    /// The interpolated mesh normal (the clear coat ignores normal and height channels).
+    coat_n: Vec3,
+    /// Sheen color × weight.
+    sheen: Vec3,
+    sheen_roughness: f32,
+    scatter: f32,
 }
 
 fn lerp3(a: Vec3, b: Vec3, c: Vec3, u: f32, v: f32) -> Vec3 {
@@ -451,9 +488,9 @@ fn surface(scene: &TraceScene, tri: u32, u: f32, v: f32, o: Vec3, d: Vec3, t: f3
     let set = scene.tri_set.get(tri as usize).and_then(|s| scene.sets.get(*s));
     let ch = |c: Channel, dx: i32, dy: i32| -> [f32; 3] {
         let Some(s) = set else { return c.default_value() };
-        let res = s.composite.resolution.max(1) as i32;
-        let x = ((uv.x * res as f32).floor() as i32 + dx).rem_euclid(res) as u32;
-        let y = ((uv.y * res as f32).floor() as i32 + dy).rem_euclid(res) as u32;
+        let (w, h) = (s.composite.resolution.max(1) as i32, s.composite.height.max(1) as i32);
+        let x = ((uv.x * w as f32).floor() as i32 + dx).rem_euclid(w) as u32;
+        let y = ((uv.y * h as f32).floor() as i32 + dy).rem_euclid(h) as u32;
         s.composite.value(c, x, y)
     };
     let base = Vec3::from(ch(Channel::BaseColor, 0, 0));
@@ -472,6 +509,10 @@ fn surface(scene: &TraceScene, tri: u32, u: f32, v: f32, o: Vec3, d: Vec3, t: f3
     if n.dot(-d) <= 0.0 {
         n = n_geo;
     }
+    let scalar = |c: Channel| ch(c, 0, 0)[0].clamp(0.0, 1.0);
+    let (sin, cos) = (scalar(Channel::AnisotropyAngle) * PI).sin_cos();
+    let turned = tt * cos + b * sin;
+    let tangent = (turned - n * n.dot(turned)).normalize_or(n.any_orthonormal_vector());
     // Glossiness replaces roughness wherever a set has it (as in the viewport).
     let roughness = match set {
         Some(s) if s.composite.channels.contains_key(&Channel::Glossiness) => 1.0 - ch(Channel::Glossiness, 0, 0)[0],
@@ -489,11 +530,19 @@ fn surface(scene: &TraceScene, tri: u32, u: f32, v: f32, o: Vec3, d: Vec3, t: f3
         pos: o + d * t,
         geo,
         n,
+        tangent,
         diffuse,
         f0,
         roughness: roughness.clamp(0.045, 1.0),
         emissive: Vec3::from(ch(Channel::Emissive, 0, 0)),
         opacity: ch(Channel::Opacity, 0, 0)[0].clamp(0.0, 1.0),
+        anisotropy: scalar(Channel::AnisotropyLevel),
+        coat: scalar(Channel::CoatWeight),
+        coat_roughness: scalar(Channel::CoatRoughness).max(0.045),
+        coat_n: if n_geo.dot(-d) > 0.0 { n_geo } else { geo },
+        sheen: Vec3::from(ch(Channel::SheenColor, 0, 0)).clamp(Vec3::ZERO, Vec3::ONE) * scalar(Channel::SheenWeight),
+        sheen_roughness: scalar(Channel::SheenRoughness).max(0.07),
+        scatter: scalar(Channel::ScatterWeight),
     })
 }
 
@@ -505,15 +554,34 @@ fn schlick(f0: Vec3, cos: f32) -> Vec3 {
     f0 + (Vec3::ONE - f0) * (1.0 - cos.clamp(0.0, 1.0)).powi(5)
 }
 
-/// Smith GGX masking for one direction (local frame, z = normal).
-fn smith_g1(w: Vec3, a: f32) -> f32 {
-    let z = w.z.max(1e-6);
-    2.0 * z / (z + (a * a * (1.0 - z * z) + z * z).sqrt())
+/// Fresnel of the clear coat (IOR 1.5).
+fn coat_fresnel(cos: f32) -> f32 {
+    schlick(Vec3::splat(0.04), cos).x
 }
 
-/// GGX visible-normal sampling (local frame, z = normal).
-fn sample_vndf(ve: Vec3, a: f32, u1: f32, u2: f32) -> Vec3 {
-    let vh = Vec3::new(a * ve.x, a * ve.y, ve.z).normalize_or(Vec3::Z);
+/// Cosine-weighted direction around local +z.
+fn cosine_local(u1: f32, u2: f32) -> Vec3 {
+    let r = u1.sqrt();
+    let phi = TAU * u2;
+    Vec3::new(r * phi.cos(), r * phi.sin(), (1.0 - u1).max(0.0).sqrt())
+}
+
+/// Cosine-weighted world direction around `n`.
+fn cosine_around(n: Vec3, rng: &mut Rng) -> Vec3 {
+    let (t, b) = n.any_orthonormal_pair();
+    let l = cosine_local(rng.next(), rng.next());
+    t * l.x + b * l.y + n * l.z
+}
+
+/// Smith GGX masking for one direction (local frame, z = normal), anisotropic alphas.
+fn smith_g1(w: Vec3, at: f32, ab: f32) -> f32 {
+    let z = w.z.max(1e-6);
+    2.0 * z / (z + (at * at * w.x * w.x + ab * ab * w.y * w.y + z * z).sqrt())
+}
+
+/// GGX visible-normal sampling (Heitz 2018; local frame, z = normal), anisotropic alphas.
+fn sample_vndf(ve: Vec3, at: f32, ab: f32, u1: f32, u2: f32) -> Vec3 {
+    let vh = Vec3::new(at * ve.x, ab * ve.y, ve.z).normalize_or(Vec3::Z);
     let len2 = vh.x * vh.x + vh.y * vh.y;
     let t1 = if len2 > 0.0 { Vec3::new(-vh.y, vh.x, 0.0) / len2.sqrt() } else { Vec3::X };
     let t2 = vh.cross(t1);
@@ -523,79 +591,233 @@ fn sample_vndf(ve: Vec3, a: f32, u1: f32, u2: f32) -> Vec3 {
     let s = 0.5 * (1.0 + vh.z);
     let p2 = (1.0 - s) * (1.0 - p1 * p1).max(0.0).sqrt() + s * r * phi.sin();
     let nh = t1 * p1 + t2 * p2 + vh * (1.0 - p1 * p1 - p2 * p2).max(0.0).sqrt();
-    Vec3::new(a * nh.x, a * nh.y, nh.z.max(1e-6)).normalize_or(Vec3::Z)
+    Vec3::new(at * nh.x, ab * nh.y, nh.z.max(1e-6)).normalize_or(Vec3::Z)
 }
 
-/// The surface's BRDF at one hit, in a local frame (z = shading normal).
-struct Bsdf {
+/// A GGX microfacet lobe in its own frame (z = normal, x = the direction of `at`).
+struct Ggx {
     t: Vec3,
     b: Vec3,
     n: Vec3,
     /// View direction, local.
     v: Vec3,
-    f0: Vec3,
-    diffuse: Vec3,
-    /// GGX alpha.
-    a: f32,
-    /// Fresnel at the view angle.
-    fv: Vec3,
-    /// Probability of sampling the specular lobe.
-    p_spec: f32,
+    at: f32,
+    ab: f32,
 }
 
-impl Bsdf {
-    fn new(s: &Surface, v: Vec3) -> Bsdf {
-        let n = s.n;
-        let t = n.any_orthonormal_vector();
+impl Ggx {
+    fn new(t: Vec3, n: Vec3, v: Vec3, at: f32, ab: f32) -> Ggx {
         let b = n.cross(t);
-        let vl = Vec3::new(v.dot(t), v.dot(b), v.dot(n).max(1e-4));
-        let (f0, diffuse) = (s.f0, s.diffuse);
-        let fv = schlick(f0, vl.z);
-        let ld = luminance(diffuse * (Vec3::ONE - fv));
-        let p_spec = if ld < 1e-5 { 1.0 } else { (luminance(fv) / (luminance(fv) + ld)).clamp(0.1, 0.9) };
-        Bsdf { t, b, n, v: vl, f0, diffuse, a: (s.roughness * s.roughness).max(1e-3), fv, p_spec }
+        Ggx { t, b, n, v: Vec3::new(v.dot(t), v.dot(b), v.dot(n).max(1e-4)), at: at.max(1e-3), ab: ab.max(1e-3) }
     }
 
     fn local(&self, w: Vec3) -> Vec3 {
         Vec3::new(w.dot(self.t), w.dot(self.b), w.dot(self.n))
     }
 
-    fn ggx_d(&self, h: Vec3) -> f32 {
-        let a2 = self.a * self.a;
-        let d = h.z * h.z * (a2 - 1.0) + 1.0;
-        a2 / (PI * d * d).max(1e-12)
+    fn d(&self, h: Vec3) -> f32 {
+        let k = (h.x / self.at).powi(2) + (h.y / self.ab).powi(2) + h.z * h.z;
+        1.0 / (PI * self.at * self.ab * k * k).max(1e-12)
+    }
+
+    /// D·G / (4 cos θv) toward world direction `w` (the BRDF × cos θl without Fresnel), the
+    /// density of [`Self::sample`] picking `w`, and cos(l, h) for the Fresnel term.
+    fn eval(&self, w: Vec3) -> Option<(f32, f32, f32)> {
+        let l = self.local(w);
+        if l.z <= 0.0 {
+            return None;
+        }
+        let h = (l + self.v).normalize_or(Vec3::Z);
+        let d = self.d(h);
+        let g1v = smith_g1(self.v, self.at, self.ab);
+        let pdf = g1v * d / (4.0 * self.v.z);
+        Some((pdf * smith_g1(l, self.at, self.ab), pdf, l.dot(h)))
+    }
+
+    /// A world direction reflected off a visible normal.
+    fn sample(&self, u1: f32, u2: f32) -> Option<Vec3> {
+        let h = sample_vndf(self.v, self.at, self.ab, u1, u2);
+        let l = h * 2.0 * self.v.dot(h) - self.v;
+        (l.z > 0.0).then(|| self.t * l.x + self.b * l.y + self.n * l.z)
+    }
+}
+
+/// Sheen distribution ("Charlie"), alpha = sheen roughness².
+fn d_charlie(a: f32, noh: f32) -> f32 {
+    let inv = 1.0 / a;
+    (2.0 + inv) * (1.0 - noh * noh).max(1e-4).powf(inv * 0.5) / TAU
+}
+
+/// Estevez & Kulla's fitted Λ of the sheen visibility ("Production Friendly Microfacet Sheen
+/// BRDF", 2017).
+fn sheen_lambda(cos: f32, a: f32) -> f32 {
+    let o = (1.0 - a) * (1.0 - a);
+    let mix = |x: f32, y: f32| x + (y - x) * o;
+    let l = |x: f32| {
+        mix(21.5473, 25.3245) / (1.0 + mix(3.82987, 3.32435) * x.max(1e-4).powf(mix(0.19823, 0.16801))) + mix(-1.97760, -1.27393) * x + mix(-4.32054, -4.85967)
+    };
+    if cos < 0.5 { l(cos).exp() } else { (2.0 * l(0.5) - l(1.0 - cos)).exp() }
+}
+
+fn sheen_vis(nov: f32, nol: f32, a: f32) -> f32 {
+    (1.0 / ((1.0 + sheen_lambda(nov, a) + sheen_lambda(nol, a)) * 4.0 * nov * nol.max(1e-4))).clamp(0.0, 1.0)
+}
+
+/// Directional albedo of the sheen lobe at sheen roughness `r` (the viewport's fit, see
+/// `sheen_albedo` in mesh.wgsl).
+fn sheen_albedo(nov: f32, r: f32) -> f32 {
+    let a = 1.2416 - 1.7580 * r + 1.7164 * r * r;
+    let b = 6.2757 / (r + 0.2077) - 8.6381 + 4.4979 * r;
+    let q = 1.2287 - 0.5161 * r;
+    let c = 0.1121 * r - 0.3840 * r * r;
+    (a * (-b * nov.max(0.0).powf(q)).exp() + c).clamp(0.0, 1.0)
+}
+
+/// The surface's BRDF at one hit: anisotropic GGX specular and Lambert diffuse, under a sheen
+/// and a clear coat. The scattering part of the diffuse light is not in it: see
+/// [`Bsdf::walk_albedo`].
+struct Bsdf {
+    spec: Ggx,
+    coat: Ggx,
+    f0: Vec3,
+    /// Diffuse albedo that reflects at the surface.
+    diffuse: Vec3,
+    /// Fresnel at the view angle.
+    fv: Vec3,
+    coat_weight: f32,
+    /// Energy the coat lets through toward the view.
+    coat_t: f32,
+    sheen: Vec3,
+    sheen_a: f32,
+    sheen_r: f32,
+    /// Sheen albedo toward the view.
+    sheen_ev: f32,
+    /// Probabilities of sampling the specular, diffuse, sheen and coat lobes.
+    p: [f32; 4],
+    /// Albedo of the diffuse light that scatters under the surface, and the probability of
+    /// following it with a random walk instead of sampling this BRDF.
+    walk_albedo: Vec3,
+    p_walk: f32,
+}
+
+impl Bsdf {
+    fn new(s: &Surface, v: Vec3) -> Bsdf {
+        let a = (s.roughness * s.roughness).max(1e-3);
+        let spec = Ggx::new(s.tangent, s.n, v, a * (1.0 + s.anisotropy), a * (1.0 - s.anisotropy));
+        let coat_a = s.coat_roughness * s.coat_roughness;
+        let coat = Ggx::new(s.coat_n.any_orthonormal_vector(), s.coat_n, v, coat_a, coat_a);
+        let fv = schlick(s.f0, spec.v.z);
+        let coat_t = 1.0 - s.coat * coat_fresnel(coat.v.z);
+        let sheen_ev = sheen_albedo(spec.v.z, s.sheen_roughness);
+        let base = coat_t * (1.0 - s.sheen.max_element() * sheen_ev);
+        let diffuse = s.diffuse * (1.0 - s.scatter);
+        let walk_albedo = s.diffuse * s.scatter * (Vec3::ONE - fv) * base;
+        let w = [luminance(fv) * base, luminance(diffuse * (Vec3::ONE - fv)) * base, luminance(s.sheen) * sheen_ev * coat_t, s.coat * coat_fresnel(coat.v.z)];
+        let sum: f32 = w.iter().sum();
+        let w = w.map(|x| if x > 1e-5 { x.max(0.1 * sum) } else { 0.0 });
+        let total: f32 = w.iter().sum();
+        let p = if total > 0.0 { w.map(|x| x / total) } else { [1.0, 0.0, 0.0, 0.0] };
+        let walk = luminance(walk_albedo);
+        let p_walk = if walk > 1e-5 { (walk / (walk + sum)).clamp(0.05, 0.95) } else { 0.0 };
+        Bsdf {
+            spec,
+            coat,
+            f0: s.f0,
+            diffuse,
+            fv,
+            coat_weight: s.coat,
+            coat_t,
+            sheen: s.sheen,
+            sheen_a: s.sheen_roughness * s.sheen_roughness,
+            sheen_r: s.sheen_roughness,
+            sheen_ev,
+            p,
+            walk_albedo,
+            p_walk,
+        }
     }
 
     /// BRDF times cos(theta) toward world direction `w`, and the density of [`Self::sample`]
     /// picking it.
     fn eval(&self, w: Vec3) -> (Vec3, f32) {
-        let l = self.local(w);
-        if l.z <= 0.0 {
-            return (Vec3::ZERO, 0.0);
+        let (mut f, mut pdf) = (Vec3::ZERO, 0.0);
+        let l = self.spec.local(w);
+        if l.z > 0.0 {
+            // Sheen albedo scaling (the glTF sheen convention): energy the sheen reflects
+            // toward the view or the light never reaches the base.
+            let m = self.sheen.max_element();
+            let base = self.coat_t * if m > 0.0 { (1.0 - m * self.sheen_ev).min(1.0 - m * sheen_albedo(l.z, self.sheen_r)) } else { 1.0 };
+            if let Some((g, p, cos_lh)) = self.spec.eval(w) {
+                f += schlick(self.f0, cos_lh) * g * base;
+                pdf += self.p[0] * p;
+            }
+            f += self.diffuse * (Vec3::ONE - self.fv) * (l.z / PI * base);
+            pdf += (self.p[1] + self.p[2]) * l.z / PI;
+            if m > 0.0 {
+                let h = (l + self.spec.v).normalize_or(Vec3::Z);
+                f += self.sheen * (d_charlie(self.sheen_a, h.z) * sheen_vis(self.spec.v.z, l.z, self.sheen_a) * l.z * self.coat_t);
+            }
         }
-        let h = (l + self.v).normalize_or(Vec3::Z);
-        let d = self.ggx_d(h);
-        let g1v = smith_g1(self.v, self.a);
-        let spec = schlick(self.f0, l.dot(h)) * d * g1v * smith_g1(l, self.a) / (4.0 * self.v.z);
-        let diff = self.diffuse * (Vec3::ONE - self.fv) * (l.z / PI);
-        let pdf_spec = g1v * d / (4.0 * self.v.z);
-        let pdf_diff = l.z / PI;
-        (spec + diff, self.p_spec * pdf_spec + (1.0 - self.p_spec) * pdf_diff)
+        if self.coat_weight > 0.0
+            && let Some((g, p, cos_lh)) = self.coat.eval(w)
+        {
+            f += Vec3::splat(self.coat_weight * coat_fresnel(cos_lh) * g);
+            pdf += self.p[3] * p;
+        }
+        (f, pdf)
     }
 
-    /// A world direction from the BRDF lobes (specular by visible normals, diffuse by cosine).
+    /// A world direction from the BRDF lobes (specular lobes by visible normals, diffuse and
+    /// sheen by cosine).
     fn sample(&self, rng: &mut Rng) -> Option<Vec3> {
         let (u0, u1, u2) = (rng.next(), rng.next(), rng.next());
-        let l = if u0 < self.p_spec {
-            let h = sample_vndf(self.v, self.a, u1, u2);
-            h * 2.0 * self.v.dot(h) - self.v
+        let [ps, pd, pz, _] = self.p;
+        if u0 < ps {
+            self.spec.sample(u1, u2)
+        } else if u0 < ps + pd + pz {
+            let l = cosine_local(u1, u2);
+            Some(self.spec.t * l.x + self.spec.b * l.y + self.spec.n * l.z)
         } else {
-            let r = u1.sqrt();
-            let phi = TAU * u2;
-            Vec3::new(r * phi.cos(), r * phi.sin(), (1.0 - u1).max(0.0).sqrt())
-        };
-        (l.z > 0.0).then(|| self.t * l.x + self.b * l.y + self.n * l.z)
+            self.coat.sample(u1, u2)
+        }
     }
+}
+
+/// Most scattering events a subsurface random walk takes before giving up.
+const WALK_STEPS: usize = 48;
+
+/// Follow light under the surface at `s`: enter by a cosine-weighted direction, then fly
+/// exponential distances (one color channel's extinction picked per step, weighted by the
+/// average density over the channels) and scatter isotropically until the path leaves the
+/// mesh. Returns the exit point, the outward geometric normal there and the per-channel weight.
+fn random_walk(scene: &TraceScene, s: &Surface, rng: &mut Rng) -> Option<(Vec3, Vec3, Vec3)> {
+    let sigma = scene.scatter_sigma;
+    let mean = |v: Vec3| (v.x + v.y + v.z) / 3.0;
+    let mut p = s.pos - s.geo * scene.eps;
+    let mut d = cosine_around(-s.geo, rng);
+    let mut w = Vec3::ONE;
+    for _ in 0..WALK_STEPS {
+        let c = ((rng.next() * 3.0) as usize).min(2);
+        let t = -(1.0 - rng.next()).max(1e-12).ln() / sigma[c];
+        if let Some(hit) = scene.bvh.closest(p, d, t) {
+            let tr = (-sigma * hit.t).exp();
+            w *= tr / mean(tr).max(1e-30);
+            let m = &scene.mesh;
+            let i = hit.tri as usize * 3;
+            let q = [m.indices.get(i)?, m.indices.get(i + 1)?, m.indices.get(i + 2)?].map(|k| m.positions.get(*k as usize).copied().unwrap_or(Vec3::ZERO));
+            let n = (q[1] - q[0]).cross(q[2] - q[0]).normalize_or(-d);
+            let out = if n.dot(d) > 0.0 { n } else { -n };
+            return w.is_finite().then_some((p + d * hit.t, out, w));
+        }
+        let tr = (-sigma * t).exp();
+        w *= sigma * tr / mean(sigma * tr).max(1e-30);
+        p += d * t;
+        let z = 1.0 - 2.0 * rng.next();
+        let phi = TAU * rng.next();
+        let r = (1.0 - z * z).max(0.0).sqrt();
+        d = Vec3::new(r * phi.cos(), r * phi.sin(), z);
+    }
+    None
 }
 
 /// Power-heuristic MIS weight of a strategy with density `a` against one with density `b`.
@@ -608,6 +830,20 @@ fn mis(a: f32, b: f32) -> f32 {
 fn clamp_firefly(c: Vec3) -> Vec3 {
     let lum = luminance(c);
     if lum > 32.0 { c * (32.0 / lum) } else { c }
+}
+
+/// Next-event estimation toward the environment from `pos` (geometric normal `geo`): `eval`
+/// gives the BRDF × cos toward a direction and the density of the path's own sampling of it.
+fn next_event(scene: &TraceScene, pos: Vec3, geo: Vec3, thr: Vec3, rng: &mut Rng, eval: impl Fn(Vec3) -> (Vec3, f32)) -> Vec3 {
+    let Some((wl, pdf_env)) = scene.sample_env(rng) else { return Vec3::ZERO };
+    if wl.dot(geo) <= 0.0 {
+        return Vec3::ZERO;
+    }
+    let (f, pdf_brdf) = eval(wl);
+    if f.max_element() <= 0.0 || scene.bvh.occluded(pos + geo * scene.eps, wl, f32::MAX) {
+        return Vec3::ZERO;
+    }
+    clamp_firefly(thr * f * scene.env(wl) * (mis(pdf_env, pdf_brdf) / pdf_env))
 }
 
 /// Radiance along a camera ray; None when it misses the mesh. Environment light is gathered
@@ -641,22 +877,35 @@ fn trace(scene: &TraceScene, mut o: Vec3, mut d: Vec3, settings: &TraceSettings,
             break;
         }
         let bsdf = Bsdf::new(&s, -d);
-        // Next-event estimation toward the environment.
-        if let Some((wl, pdf_env)) = scene.sample_env(rng)
-            && wl.dot(s.geo) > 0.0
-        {
-            let (f, pdf_brdf) = bsdf.eval(wl);
-            if f.max_element() > 0.0 && !scene.bvh.occluded(s.pos + s.geo * scene.eps, wl, f32::MAX) {
-                l += clamp_firefly(thr * f * scene.env(wl) * (mis(pdf_env, pdf_brdf) / pdf_env));
+        // The BRDF is sampled with probability 1 − p_walk (densities below include that).
+        let keep = 1.0 - bsdf.p_walk;
+        l += next_event(scene, s.pos, s.geo, thr, rng, |wl| {
+            let (f, pdf) = bsdf.eval(wl);
+            (f, pdf * keep)
+        });
+        let (wi, geo) = if bsdf.p_walk > 0.0 && rng.next() < bsdf.p_walk {
+            let Some((exit, out, w)) = random_walk(scene, &s, rng) else { break };
+            thr *= bsdf.walk_albedo * w / bsdf.p_walk;
+            // The light leaves the exit point like a Lambertian emitter.
+            l += next_event(scene, exit, out, thr, rng, |wl| {
+                let c = wl.dot(out).max(0.0) / PI;
+                (Vec3::splat(c), c)
+            });
+            let wi = cosine_around(out, rng);
+            brdf_pdf = Some(wi.dot(out).max(1e-6) / PI);
+            o = exit;
+            (wi, out)
+        } else {
+            let Some(wi) = bsdf.sample(rng) else { break };
+            let (f, pdf) = bsdf.eval(wi);
+            if pdf <= 0.0 {
+                break;
             }
-        }
-        let Some(wi) = bsdf.sample(rng) else { break };
-        let (f, pdf) = bsdf.eval(wi);
-        if pdf <= 0.0 {
-            break;
-        }
-        thr *= f / pdf;
-        brdf_pdf = Some(pdf);
+            thr *= f / (pdf * keep);
+            brdf_pdf = Some(pdf * keep);
+            o = s.pos;
+            (wi, s.geo)
+        };
         if bounce >= 2 {
             let p = thr.max_element().clamp(0.05, 0.95);
             if rng.next() > p {
@@ -664,8 +913,8 @@ fn trace(scene: &TraceScene, mut o: Vec3, mut d: Vec3, settings: &TraceSettings,
             }
             thr /= p;
         }
-        let side = if wi.dot(s.geo) >= 0.0 { 1.0 } else { -1.0 };
-        o = s.pos + s.geo * scene.eps * side;
+        let side = if wi.dot(geo) >= 0.0 { 1.0 } else { -1.0 };
+        o += geo * scene.eps * side;
         d = wi;
         bounce += 1;
     }
@@ -778,6 +1027,124 @@ mod tests {
         let ((d_raw, m_raw), (d_clean, m_clean)) = (stats(&raw), stats(&clean));
         assert!(d_clean < d_raw * 0.6, "noise {d_raw} -> {d_clean}");
         assert!((m_raw - m_clean).abs() < 0.08 * m_raw.max(1.0), "mean {m_raw} -> {m_clean}");
+    }
+
+    type Values = Vec<(Channel, [f32; 3])>;
+
+    /// A sphere whose texture set holds the uniform channel `values`.
+    fn material_scene(env: Arc<EnvImage>, values: &[(Channel, [f32; 3])]) -> TraceScene {
+        let mesh = Arc::new(primitives::sphere(1.0, 32, 16));
+        let bvh = Arc::new(Bvh::new(&mesh));
+        let chans: Vec<Channel> = values.iter().map(|(c, _)| *c).collect();
+        let mut composite = Composite::new(&chans, 64);
+        for (c, v) in values {
+            let raw: Vec<u16> = v[..c.components()].iter().map(|x| texturecraft_texel::to_u16(*x)).collect();
+            let img = composite.channels.get_mut(c).unwrap();
+            for y in 0..64 {
+                for x in 0..64 {
+                    img.set(x, y, &raw);
+                }
+            }
+        }
+        TraceScene::new(mesh, bvh, vec![TraceSet { material: 0, composite, height_strength: 0.0 }], env, 0.0)
+    }
+
+    /// Mean radiance of parallel rays over the whole disc of the sphere (grazing hits included)
+    /// in a uniform white environment.
+    fn furnace(values: &[(Channel, [f32; 3])]) -> Vec3 {
+        let env = Arc::new(EnvImage { width: 8, height: 4, data: vec![[1.0; 3]; 32] });
+        let s = material_scene(env, values);
+        let mut rng = Rng::new(4, 5, 6);
+        let (mut sum, mut n) = (Vec3::ZERO, 0);
+        while n < 6000 {
+            let (x, y) = (rng.next() * 2.0 - 1.0, rng.next() * 2.0 - 1.0);
+            if x * x + y * y > 0.97 {
+                continue;
+            }
+            sum += trace(&s, Vec3::new(x, y, 4.0), Vec3::NEG_Z, &TraceSettings { bounces: 8 }, &mut rng).map_or(Vec3::ZERO, |s| s.radiance);
+            n += 1;
+        }
+        sum / n as f32
+    }
+
+    const WHITE: [(Channel, [f32; 3]); 3] = [(Channel::BaseColor, [1.0; 3]), (Channel::Metallic, [0.0; 3]), (Channel::Roughness, [0.5; 3])];
+
+    #[test]
+    fn white_furnace_with_each_lobe_at_full_weight_stays_bounded() {
+        use Channel::*;
+        let lobes: [(&str, Values); 5] = [
+            ("coat", vec![(CoatWeight, [1.0; 3]), (CoatRoughness, [0.2; 3])]),
+            ("sheen", vec![(SheenWeight, [1.0; 3]), (SheenColor, [1.0; 3]), (SheenRoughness, [0.5; 3])]),
+            ("anisotropic metal", vec![(AnisotropyLevel, [1.0; 3]), (AnisotropyAngle, [0.3; 3]), (Metallic, [1.0; 3]), (Roughness, [0.4; 3])]),
+            ("scattering", vec![(ScatterWeight, [1.0; 3])]),
+            ("everything", vec![(CoatWeight, [1.0; 3]), (SheenWeight, [1.0; 3]), (AnisotropyLevel, [1.0; 3]), (ScatterWeight, [1.0; 3])]),
+        ];
+        for (name, extra) in lobes {
+            // Later values of a channel win (the anisotropic metal's metallic and roughness).
+            let mut values: Values = WHITE.into_iter().filter(|(c, _)| !extra.iter().any(|(e, _)| e == c)).collect();
+            values.extend(extra);
+            let avg = furnace(&values);
+            assert!(avg.max_element() <= 1.05 && avg.min_element() > 0.5, "{name}: {avg}");
+        }
+    }
+
+    #[test]
+    fn lobes_sample_and_evaluate_consistently() {
+        // Light sampling and BRDF sampling (MIS) against BRDF sampling alone: equal means only
+        // when every lobe's density matches what it samples.
+        use Channel::*;
+        let env = Arc::new(crate::ibl::environment("Studio Soft", 128));
+        let lit = material_scene(
+            env,
+            &[
+                (BaseColor, [0.8, 0.5, 0.3]),
+                (Roughness, [0.35; 3]),
+                (CoatWeight, [0.8; 3]),
+                (CoatRoughness, [0.15; 3]),
+                (SheenWeight, [0.6; 3]),
+                (SheenColor, [0.4, 0.6, 1.0]),
+                (AnisotropyLevel, [0.8; 3]),
+                (AnisotropyAngle, [0.2; 3]),
+                (ScatterWeight, [0.7; 3]),
+            ],
+        );
+        let unlit = TraceScene { light: None, ..lit.clone() };
+        let mean = |s: &TraceScene| {
+            let mut rng = Rng::new(9, 9, 9);
+            let n = 100_000;
+            let mut sum = Vec3::ZERO;
+            for _ in 0..n {
+                sum += trace(s, Vec3::new(0.3, 0.4, 4.0), Vec3::new(-0.07, -0.1, -1.0).normalize(), &TraceSettings { bounces: 3 }, &mut rng)
+                    .map_or(Vec3::ZERO, |s| s.radiance);
+            }
+            sum / n as f32
+        };
+        let (a, b) = (mean(&lit), mean(&unlit));
+        assert!((a - b).length() < 0.05 * b.length().max(0.05), "with light sampling {a}, without {b}");
+    }
+
+    #[test]
+    fn sheen_albedo_fit_matches_the_integral() {
+        for r in [0.25f32, 0.5, 0.75, 1.0] {
+            let a = r * r;
+            for nov in [0.2f32, 0.5, 0.8, 1.0] {
+                let v = Vec3::new((1.0 - nov * nov).sqrt(), 0.0, nov);
+                let (nt, np) = (128, 256);
+                let mut e = 0.0;
+                for i in 0..nt {
+                    let th = (i as f32 + 0.5) / nt as f32 * PI / 2.0;
+                    for j in 0..np {
+                        let ph = (j as f32 + 0.5) / np as f32 * TAU;
+                        let l = Vec3::new(th.sin() * ph.cos(), th.sin() * ph.sin(), th.cos());
+                        let h = (l + v).normalize();
+                        e += d_charlie(a, h.z) * sheen_vis(nov, l.z, a) * l.z * th.sin();
+                    }
+                }
+                e *= (PI / 2.0 / nt as f32) * (TAU / np as f32);
+                let fit = sheen_albedo(nov, r);
+                assert!((fit - e).abs() < 0.04, "r {r} cos {nov}: integral {e}, fit {fit}");
+            }
+        }
     }
 
     #[test]

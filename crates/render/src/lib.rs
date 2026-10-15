@@ -19,5 +19,5 @@ pub mod ibl;
 pub mod renderer;
 pub mod trace;
 
-pub use renderer::{COLOR_FORMAT, Frame, MSAA, Renderer, Shade, ViewKind};
+pub use renderer::{COLOR_FORMAT, Frame, MSAA, Renderer, Shade, ViewKind, aux_size, uv_view_scale};
 pub use wgpu;

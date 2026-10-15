@@ -114,7 +114,7 @@ fn work(app: &TextureCraftApp, size: (u32, u32)) -> Work {
         .texture_sets
         .iter()
         .zip(&s.caches)
-        .map(|(ts, c)| TraceSet { material: ts.material, composite: c.composite.clone(), height_strength: ts.height_strength })
+        .map(|(ts, c)| TraceSet { material: ts.material, composite: c.composite.clone(), height_strength: ts.atlas_height_strength() })
         .collect();
     let env_image = d.environment_resource().and_then(|n| s.images.get(n));
     Work {

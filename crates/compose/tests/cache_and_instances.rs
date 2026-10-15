@@ -80,7 +80,7 @@ fn heavy_stack(f: &mut Fixture) -> LayerId {
     blurred.effects.push(effect(f, EffectKind::Fill { source: procedural(ProceduralKind::Checker, 0.0, 1.0), projection: Projection::default() }));
     blurred.effects.push(effect(f, EffectKind::Filter(Filter::Blur { radius: 24.0 })));
     let top = add(f, 0, LayerKind::Paint, Some(blurred));
-    let img = f.pixels.layer_mut(top, Channel::BaseColor, RES);
+    let img = f.pixels.layer_mut(top, Channel::BaseColor, (RES, RES));
     for y in 40..200 {
         for x in 30..220 {
             img.set(x, y, &[to_u16(0.4), to_u16(0.1), 0, to_u16(0.5)]);
@@ -103,7 +103,7 @@ fn run(f: &Fixture, ts: usize, tiles: &[(u32, u32)], below: Option<&mut BelowCac
 fn reference(f: &Fixture, ts: usize) -> Composite {
     let (images, baked) = (Default::default(), Default::default());
     let mut out = Composite::new(&f.project.texture_sets[ts].channel_list(), RES);
-    composite_tiles(&inputs(f, ts, &images, &baked), &mut out, &all_tiles(RES));
+    composite_tiles(&inputs(f, ts, &images, &baked), &mut out, &all_tiles(RES, RES));
     out
 }
 
@@ -115,39 +115,39 @@ fn below_cache_and_blocks_match_the_full_composite_exactly() {
     // Tile by tile (each its own block and neighbourhood region) gives the same bits.
     let mut one_by_one = Composite::new(&f.project.texture_sets[0].channel_list(), RES);
     let (images, baked) = (Default::default(), Default::default());
-    for t in all_tiles(RES) {
+    for t in all_tiles(RES, RES) {
         composite_tiles(&inputs(&f, 0, &images, &baked), &mut one_by_one, &[t]);
     }
     assert!(one_by_one == want, "per-tile composites differ from one pass");
 
     let mut cache = BelowCache::default();
     cache.set_hot(Some(top));
-    let half: Vec<(u32, u32)> = all_tiles(RES).into_iter().filter(|t| (t.0 + t.1) % 2 == 0).collect();
+    let half: Vec<(u32, u32)> = all_tiles(RES, RES).into_iter().filter(|t| (t.0 + t.1) % 2 == 0).collect();
     // Cold, half warm and fully warm caches.
     let mut out = run(&f, 0, &half, Some(&mut cache));
     assert!(!cache.is_empty(), "the stack below the hot layer is cached");
-    composite_tiles_cached(&inputs(&f, 0, &images, &baked), &mut out, &all_tiles(RES), Some(&mut cache));
+    composite_tiles_cached(&inputs(&f, 0, &images, &baked), &mut out, &all_tiles(RES, RES), Some(&mut cache));
     assert!(out == want, "a partly cached composite differs");
-    let warm = run(&f, 0, &all_tiles(RES), Some(&mut cache));
+    let warm = run(&f, 0, &all_tiles(RES, RES), Some(&mut cache));
     assert!(warm == want, "a cached composite differs");
 
     // Painting the hot layer keeps the cache; editing below it empties it.
-    f.pixels.layer_mut(top, Channel::BaseColor, RES).set(5, 5, &[to_u16(1.0), 0, 0, to_u16(1.0)]);
+    f.pixels.layer_mut(top, Channel::BaseColor, (RES, RES)).set(5, 5, &[to_u16(1.0), 0, 0, to_u16(1.0)]);
     let n = cache.len();
-    assert!(run(&f, 0, &all_tiles(RES), Some(&mut cache)) == reference(&f, 0));
+    assert!(run(&f, 0, &all_tiles(RES, RES), Some(&mut cache)) == reference(&f, 0));
     assert_eq!(cache.len(), n);
     let low = f.project.texture_sets[0].stack[0];
     if let LayerKind::Fill(fl) = &mut f.project.layer_mut(low).unwrap().kind {
         fl.sources.insert(Channel::Roughness, Source::Uniform([0.9; 3]));
     }
-    assert!(run(&f, 0, &all_tiles(RES), Some(&mut cache)) == reference(&f, 0), "a stale cache was used");
+    assert!(run(&f, 0, &all_tiles(RES, RES), Some(&mut cache)) == reference(&f, 0), "a stale cache was used");
     // A hot layer inside a folder caches below the folder.
     let group = f.project.texture_sets[0].stack[2];
     let inner = f.project.layer(group).unwrap().children()[0];
     cache.set_hot(Some(inner));
-    run(&f, 0, &all_tiles(RES), Some(&mut cache));
+    run(&f, 0, &all_tiles(RES, RES), Some(&mut cache));
     assert!(!cache.is_empty());
-    assert!(run(&f, 0, &all_tiles(RES), Some(&mut cache)) == reference(&f, 0));
+    assert!(run(&f, 0, &all_tiles(RES, RES), Some(&mut cache)) == reference(&f, 0));
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn instances_draw_their_source_across_texture_sets() {
     let a = reference(&f, 0);
     assert!(reference(&f, 1).channels == a.channels, "instances draw like their sources");
     // An edit to the source shows in the instance.
-    f.pixels.layer_mut(top, Channel::BaseColor, RES).set(100, 100, &[to_u16(1.0), 0, 0, to_u16(1.0)]);
+    f.pixels.layer_mut(top, Channel::BaseColor, (RES, RES)).set(100, 100, &[to_u16(1.0), 0, 0, to_u16(1.0)]);
     let (a, b) = (reference(&f, 0), reference(&f, 1));
     assert!(b.channels == a.channels);
     // The instance's own mask overrides the source's.
@@ -237,7 +237,7 @@ fn generator_mask(f: &mut Fixture, kind: GeneratorKind, blur: Option<f32>) -> Ma
 /// Paint a half-covered rectangle into a paint layer's base color and roughness.
 fn paint_rect(f: &mut Fixture, id: LayerId, (x0, y0): (u32, u32), (w, h): (u32, u32), v: f32) {
     for (ch, px) in [(Channel::BaseColor, vec![to_u16(v * 0.5), to_u16(0.1), 0, to_u16(0.5)]), (Channel::Roughness, vec![to_u16(v * 0.5), to_u16(0.5)])] {
-        let img = f.pixels.layer_mut(id, ch, RES);
+        let img = f.pixels.layer_mut(id, ch, (RES, RES));
         for y in y0..y0 + h {
             for x in x0..x0 + w {
                 img.set(x, y, &px);
@@ -335,7 +335,7 @@ fn run_with(f: &Fixture, ts: usize, tiles: &[(u32, u32)], below: Option<&mut Bel
 /// With `hot` cached, cold, partly warm and warm composites (and, for paint layers, a live
 /// stroke on it) match the full composite bit for bit. Returns the warm cache.
 fn check_cached(f: &Fixture, ts: usize, hot: LayerId) -> BelowCache {
-    let all = all_tiles(RES);
+    let all = all_tiles(RES, RES);
     let want = reference(f, ts);
     let mut cache = BelowCache::default();
     cache.set_hot(Some(hot));
@@ -368,7 +368,7 @@ fn hot_layers_anywhere_in_nested_folders_composite_exactly() {
     let mut cache = check_cached(&f, 0, n.deep);
     let len = cache.len();
     paint_rect(&mut f, n.deep, (60, 100), (100, 40), 0.1);
-    assert!(run(&f, 0, &all_tiles(RES), Some(&mut cache)) == reference(&f, 0));
+    assert!(run(&f, 0, &all_tiles(RES, RES), Some(&mut cache)) == reference(&f, 0));
     assert_eq!(cache.len(), len);
 }
 
@@ -408,7 +408,7 @@ fn anchor_readers_fall_back_to_full_evaluation() {
 fn edits_off_the_hot_layer_invalidate_and_edits_to_it_do_not() {
     let mut f = fixture();
     let n = nested_stack(&mut f);
-    let all = all_tiles(RES);
+    let all = all_tiles(RES, RES);
     let mut cache = check_cached(&f, 0, n.deep);
     // One tile composited after an edit: a cache emptied by the edit holds just that tile.
     let mut emptied = |f: &Fixture| {

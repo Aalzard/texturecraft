@@ -83,12 +83,22 @@ pub struct BakeTask {
     /// The merged high polys, unless the set bakes from the low poly.
     pub high: Option<(Arc<Mesh>, Arc<Bvh>)>,
     pub cage: Option<Arc<Mesh>>,
+    /// UV tile grid (columns, rows) of the set; (1, 1) without UV tiles.
+    pub tiles: (u32, u32),
 }
 
 impl BakeTask {
     pub fn run(&self, progress: &Progress) -> Result<BakeOutput> {
         let high = self.high.as_ref().map(|(mesh, bvh)| HighPoly { mesh, bvh });
-        let req = BakeRequest { mesh: &self.mesh, bvh: &self.bvh, material: self.material, settings: &self.settings, high, cage: self.cage.as_deref() };
+        let req = BakeRequest {
+            mesh: &self.mesh,
+            bvh: &self.bvh,
+            material: self.material,
+            settings: &self.settings,
+            high,
+            cage: self.cage.as_deref(),
+            tiles: self.tiles,
+        };
         bake(&req, progress).map_err(|e| EngineError::Other(format!("bake failed: {e}")))
     }
 }
@@ -116,7 +126,8 @@ impl Session {
         let set = self.doc.project.texture_set(ts)?;
         let high = if set.bake.use_low_as_high { None } else { self.bake_meshes.merged.clone() };
         let cage = high.as_ref().and(self.bake_meshes.cage.as_ref()).map(|c| c.mesh.clone());
-        Ok(BakeTask { ts, mesh: self.mesh.clone(), bvh: self.bvh.clone(), material: set.material, settings: set.bake.clone(), high, cage })
+        let tiles = set.tile_grid().map_or((1, 1), |g| (g.cols, g.rows));
+        Ok(BakeTask { ts, mesh: self.mesh.clone(), bvh: self.bvh.clone(), material: set.material, settings: set.bake.clone(), high, cage, tiles })
     }
 
     /// Store a finished bake (one undo step).

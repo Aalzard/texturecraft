@@ -304,7 +304,7 @@ fn stl_ascii_and_binary() {
 
 /// Every prefix and some corruptions of a valid file: errors, never panics (and never an
 /// error from the panic guard, which would mean a parser panicked).
-pub(super) fn hammer(name: &str, good: &[u8]) {
+pub(crate) fn hammer(name: &str, good: &[u8]) {
     let check = |bytes: &[u8]| {
         if std::env::var("TC_TRACE").is_ok() {
             std::fs::write(std::env::temp_dir().join("tc_last_case.bin"), bytes).unwrap();

@@ -55,6 +55,7 @@ struct GlobalsRaw {
     light_vp: [[f32; 4]; 4],
     shadow: [f32; 4],
     material: [f32; 4],
+    scatter: [f32; 4],
 }
 
 /// The post pass uniform (see `Post` in post.wgsl).
@@ -126,6 +127,17 @@ pub struct Shade {
     pub parallax: bool,
     /// Idle accumulation of jittered frames in the 3D view.
     pub taa: bool,
+    /// Per-channel diffuse wrap where the scattering weight is 1 (0 = plain Lambert), see
+    /// [`scatter_wrap`].
+    pub scatter: [f32; 3],
+}
+
+/// The viewport's subsurface scattering approximation: the diffuse lighting wraps around the
+/// terminator by `min(1, 4 × radius × color)` per channel (radius as a fraction of the mesh
+/// size, about the softening angle on mesh-scale curvature; the path tracer walks the real
+/// distance).
+pub fn scatter_wrap(d: &DisplaySettings) -> [f32; 3] {
+    d.scatter_color.map(|c| (4.0 * d.scatter_radius.max(0.0) * c.max(0.0)).min(1.0))
 }
 
 impl Shade {
@@ -150,6 +162,7 @@ impl Shade {
             spec_gloss: d.spec_gloss,
             parallax: d.parallax,
             taa: d.taa,
+            scatter: scatter_wrap(d),
             ..Shade::default()
         }
     }
@@ -180,6 +193,7 @@ impl Default for Shade {
             spec_gloss: false,
             parallax: false,
             taa: false,
+            scatter: scatter_wrap(&DisplaySettings::default()),
         }
     }
 }
@@ -216,6 +230,27 @@ fn mip_count(size: u32) -> u32 {
     32 - size.max(1).leading_zeros()
 }
 
+/// Clip-space half extents of the 2D view's UV square in a view of `aspect` (width / height)
+/// at `zoom`: fit into the view and stretched to the set's `size` (a UV tile atlas is wider or
+/// taller), keeping texels square.
+pub fn uv_view_scale(aspect: f32, zoom: f32, size: (u32, u32)) -> [f32; 2] {
+    let z = zoom.clamp(0.05, 64.0) * 0.92;
+    let (sx, sy) = if aspect >= 1.0 { (z / aspect, z) } else { (z, z * aspect) };
+    let a = size.0.max(1) as f32 / size.1.max(1) as f32;
+    if a >= 1.0 { [sx, sy / a] } else { [sx * a, sy] }
+}
+
+/// Display texture size of a set of `size` texels halved `shift` times.
+fn display_dims(size: (u32, u32), shift: u32) -> (u32, u32) {
+    ((size.0 >> shift).max(1), (size.1 >> shift).max(1))
+}
+
+/// Side of the square aux (mesh map / mask / quick mask) texture of a set of `size` texels; it
+/// stretches over the set like its other textures.
+pub fn aux_size(size: (u32, u32)) -> u32 {
+    size.0.max(size.1).clamp(1, 2048)
+}
+
 impl Tex {
     fn new(device: &wgpu::Device, label: &str, w: u32, h: u32, format: wgpu::TextureFormat, mips: u32) -> Tex {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -234,8 +269,12 @@ impl Tex {
 }
 
 struct SetGpu {
-    res: u32,
-    /// The five display textures in [`DisplayKind::ALL`] order, then the aux (mesh map) texture.
+    /// Texels across and down (a UV-tiled set's whole atlas).
+    size: (u32, u32),
+    /// Display textures hold the set at `size >> shift`: halved until they fit the device.
+    shift: u32,
+    /// The display textures in [`DisplayKind::ALL`] order, then the aux (mesh map) texture.
+    /// [`lazy`] kinds stay 1×1 until a tile with a non-default value arrives.
     tex: Vec<Tex>,
     bind_group: wgpu::BindGroup,
     mips_dirty: Vec<bool>,
@@ -333,6 +372,8 @@ pub struct Renderer {
     shadow: ShadowMap,
     /// 1×1 black texture for unused effect inputs.
     black: wgpu::TextureView,
+    /// [`DisplayKind::default_texel`] in [`DisplayKind::ALL`] order.
+    default_texels: Vec<Vec<u8>>,
     accum_pipeline: wgpu::RenderPipeline,
     env: Tex,
     env_name: String,
@@ -377,21 +418,38 @@ fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 
 fn display_format(k: DisplayKind) -> wgpu::TextureFormat {
     match k {
-        DisplayKind::BaseColor | DisplayKind::Emissive => wgpu::TextureFormat::Rgba8UnormSrgb,
-        DisplayKind::Orm | DisplayKind::Normal => wgpu::TextureFormat::Rgba8Unorm,
+        DisplayKind::BaseColor | DisplayKind::Emissive | DisplayKind::Sheen => wgpu::TextureFormat::Rgba8UnormSrgb,
+        DisplayKind::Orm | DisplayKind::Normal | DisplayKind::Lobes => wgpu::TextureFormat::Rgba8Unorm,
         DisplayKind::Height => wgpu::TextureFormat::Rgba16Float,
     }
 }
 
-/// Default (neutral) texel of a display texture before any upload.
-fn default_texel(k: DisplayKind) -> Vec<u8> {
-    match k {
-        DisplayKind::BaseColor => vec![188, 188, 188, 255],
-        DisplayKind::Orm => vec![255, 128, 0, 128],
-        DisplayKind::Normal => vec![128, 128, 255, 255],
-        DisplayKind::Height => [0.0, 0.04, 0.04, 0.04].iter().flat_map(|v| half::f16::from_f32(*v).to_le_bytes()).collect(),
-        DisplayKind::Emissive => vec![0, 0, 0, 255],
-    }
+/// Textures of the optional lobe channels: most sets never use them, so they cost no memory or
+/// bandwidth (a 1×1 neutral texture) until painted.
+fn lazy(k: DisplayKind) -> bool {
+    matches!(k, DisplayKind::Lobes | DisplayKind::Sheen)
+}
+
+/// A `w × h` texture filled with `texel`.
+fn neutral_tex(device: &wgpu::Device, queue: &wgpu::Queue, (w, h): (u32, u32), format: wgpu::TextureFormat, mips: u32, texel: &[u8]) -> Tex {
+    let t = Tex::new(device, "tc_set", w, h, format, mips);
+    let row: Vec<u8> = texel.iter().copied().cycle().take(texel.len() * w as usize).collect();
+    let data: Vec<u8> = row.iter().copied().cycle().take(row.len() * h as usize).collect();
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo { texture: &t.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        &data,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * texel.len() as u32), rows_per_image: Some(h) },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    t
+}
+
+/// The bind group of a set's textures (`set_bgl`): textures, then the sampler.
+fn set_bind_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, tex: &[Tex]) -> wgpu::BindGroup {
+    let mut entries: Vec<wgpu::BindGroupEntry> =
+        tex.iter().enumerate().map(|(i, t)| wgpu::BindGroupEntry { binding: i as u32, resource: wgpu::BindingResource::TextureView(&t.view) }).collect();
+    entries.push(wgpu::BindGroupEntry { binding: tex.len() as u32, resource: wgpu::BindingResource::Sampler(sampler) });
+    device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("tc_set"), layout, entries: &entries })
 }
 
 /// The color output of a pipeline: fragment entry point, format, blending. `fs_wire*` entry
@@ -541,7 +599,10 @@ impl Renderer {
                 fragment_entry(4, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison)),
             ],
         );
-        let set_bgl = bgl("tc_set", &[tex_entry(0), tex_entry(1), tex_entry(2), tex_entry(3), tex_entry(4), tex_entry(5), sampler_entry(6)]);
+        // The display textures, the aux texture, the sampler.
+        let textures = DisplayKind::ALL.len() as u32 + 1;
+        let set_entries: Vec<_> = (0..textures).map(tex_entry).chain(std::iter::once(sampler_entry(textures))).collect();
+        let set_bgl = bgl("tc_set", &set_entries);
         let blit_bgl = bgl("tc_blit", &[tex_entry(0), sampler_entry(1), uniform_entry(2)]);
         let mip_bgl = bgl("tc_mip", &[tex_entry(0), sampler_entry(1)]);
         let fx_bgl = bgl("tc_fx", &[tex_entry(0), sampler_entry(1), uniform_entry(3), tex_entry(4)]);
@@ -657,6 +718,7 @@ impl Renderer {
             shadow_sampler,
             shadow,
             black,
+            default_texels: DisplayKind::ALL.map(DisplayKind::default_texel).to_vec(),
             env,
             env_name: String::new(),
             sh: [[0.0; 4]; 9],
@@ -757,35 +819,35 @@ impl Renderer {
         self.content_rev += 1;
     }
 
-    /// Make the per-texture-set textures match `sets` (resolution per set) and map mesh
-    /// materials to sets. Re-created textures start neutral; returns the sets that were reset
-    /// (the caller must upload all their tiles).
-    pub fn set_texture_sets(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, sets: &[(u32, usize)], material_count: usize) -> Vec<usize> {
+    /// Make the per-texture-set textures match `sets` (texels across and down per set: a
+    /// UV-tiled set's atlas) and map mesh materials to sets. Re-created textures start neutral;
+    /// returns the sets that were reset (the caller must upload all their tiles).
+    pub fn set_texture_sets(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, sets: &[((u32, u32), usize)], material_count: usize) -> Vec<usize> {
         let mut reset = Vec::new();
         self.content_rev += 1;
         self.sets.truncate(sets.len());
-        for (i, &(res, _)) in sets.iter().enumerate() {
-            if self.sets.get(i).is_some_and(|s| s.res == res) {
+        let max = device.limits().max_texture_dimension_2d.max(1);
+        for (i, &(size, _)) in sets.iter().enumerate() {
+            if self.sets.get(i).is_some_and(|s| s.size == size) {
+                // shortcut: a set larger than the device's textures shows every 2^shift-th texel;
+                // a texture array per UV tile would keep full detail on such devices.
                 continue;
             }
-            let mips = mip_count(res);
-            let mut tex: Vec<Tex> = DisplayKind::ALL.iter().map(|k| Tex::new(device, "tc_set", res, res, display_format(*k), mips)).collect();
-            tex.push(Tex::new(device, "tc_aux", res.min(2048), res.min(2048), wgpu::TextureFormat::Rgba8Unorm, mip_count(res.min(2048))));
-            for (t, k) in tex.iter().zip(DisplayKind::ALL.iter().map(|k| Some(*k)).chain(std::iter::once(None))) {
-                let texel = k.map(default_texel).unwrap_or_else(|| vec![128, 128, 128, 255]);
-                let (w, h) = (t.texture.width(), t.texture.height());
-                let row: Vec<u8> = texel.iter().copied().cycle().take(texel.len() * w as usize).collect();
-                let data: Vec<u8> = row.iter().copied().cycle().take(row.len() * h as usize).collect();
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo { texture: &t.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                    &data,
-                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * texel.len() as u32), rows_per_image: Some(h) },
-                    wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                );
-            }
-            let bind_group = self.set_bind_group(device, &tex);
+            let shift = (0..31).find(|s| size.0.max(size.1) >> s <= max).unwrap_or(0);
+            let dims = display_dims(size, shift);
+            let mut tex: Vec<Tex> = DisplayKind::ALL
+                .iter()
+                .zip(&self.default_texels)
+                .map(|(k, texel)| {
+                    let (d, mips) = if lazy(*k) { ((1, 1), 1) } else { (dims, mip_count(dims.0.max(dims.1))) };
+                    neutral_tex(device, queue, d, display_format(*k), mips, texel)
+                })
+                .collect();
+            let aux = aux_size(size);
+            tex.push(neutral_tex(device, queue, (aux, aux), wgpu::TextureFormat::Rgba8Unorm, mip_count(aux), &[128, 128, 128, 255]));
+            let bind_group = set_bind_group(device, &self.set_bgl, &self.sampler, &tex);
             let n = tex.len();
-            let gpu = SetGpu { res, tex, bind_group, mips_dirty: vec![true; n] };
+            let gpu = SetGpu { size, shift, tex, bind_group, mips_dirty: vec![true; n] };
             if i < self.sets.len() {
                 self.sets[i] = gpu;
             } else {
@@ -802,28 +864,49 @@ impl Renderer {
         reset
     }
 
-    fn set_bind_group(&self, device: &wgpu::Device, tex: &[Tex]) -> wgpu::BindGroup {
-        let mut entries: Vec<wgpu::BindGroupEntry> =
-            tex.iter().enumerate().map(|(i, t)| wgpu::BindGroupEntry { binding: i as u32, resource: wgpu::BindingResource::TextureView(&t.view) }).collect();
-        entries.push(wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(&self.sampler) });
-        device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("tc_set"), layout: &self.set_bgl, entries: &entries })
-    }
-
     /// Upload one 64×64 tile of a display texture (bytes from `compose::tile_bytes`).
-    pub fn upload_tile(&mut self, queue: &wgpu::Queue, ts: usize, kind: DisplayKind, tx: u32, ty: u32, bytes: &[u8]) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn upload_tile(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, ts: usize, kind: DisplayKind, tx: u32, ty: u32, bytes: &[u8]) {
         let Some(set) = self.sets.get_mut(ts) else { return };
         let Some(ki) = DisplayKind::ALL.iter().position(|k| *k == kind) else { return };
-        let Some(t) = set.tex.get(ki) else { return };
+        let (Some(t), Some(texel)) = (set.tex.get(ki), self.default_texels.get(ki)) else { return };
         let bpt = kind.bytes_per_texel() as u32;
         let (x, y) = (tx * TILE, ty * TILE);
-        if x >= set.res || y >= set.res || bytes.len() < (TILE * TILE * bpt) as usize {
+        if x >= set.size.0 || y >= set.size.1 || bytes.len() < (TILE * TILE * bpt) as usize {
             return;
         }
-        let (w, h) = (TILE.min(set.res - x), TILE.min(set.res - y));
+        let dims = display_dims(set.size, set.shift);
+        if t.texture.width() < dims.0 {
+            // A lazy placeholder: neutral tiles change nothing, the first real one allocates it.
+            if bytes.chunks_exact(texel.len()).all(|px| px == texel.as_slice()) {
+                return;
+            }
+            let full = neutral_tex(device, queue, dims, display_format(kind), mip_count(dims.0.max(dims.1)), texel);
+            if let Some(slot) = set.tex.get_mut(ki) {
+                *slot = full;
+            }
+            set.bind_group = set_bind_group(device, &self.set_bgl, &self.sampler, &set.tex);
+        }
+        let Some(t) = set.tex.get(ki) else { return };
+        // Downscaled sets take every `step`-th texel of the tile.
+        let (step, n) = (1usize << set.shift.min(6), TILE >> set.shift.min(6));
+        let small: Vec<u8>;
+        let data = if step == 1 {
+            bytes
+        } else {
+            let texel = |r: usize, c: usize| bytes.get((r * TILE as usize + c) * bpt as usize..).unwrap_or_default().iter().take(bpt as usize);
+            small = (0..n as usize).flat_map(|r| (0..n as usize).flat_map(move |c| texel(r * step, c * step))).copied().collect();
+            &small
+        };
+        let (ox, oy) = (x >> set.shift, y >> set.shift);
+        let (w, h) = (n.min(dims.0.saturating_sub(ox)), n.min(dims.1.saturating_sub(oy)));
+        if w == 0 || h == 0 {
+            return;
+        }
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &t.texture, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
-            bytes,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(TILE * bpt), rows_per_image: Some(TILE) },
+            wgpu::TexelCopyTextureInfo { texture: &t.texture, mip_level: 0, origin: wgpu::Origin3d { x: ox, y: oy, z: 0 }, aspect: wgpu::TextureAspect::All },
+            data,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * bpt), rows_per_image: Some(n) },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
         self.content_rev += 1;
@@ -1102,10 +1185,8 @@ impl Renderer {
         let s = &frame.shade;
         let (uv_view, uv_xform) = match frame.kind {
             ViewKind::Scene => (0.0, [1.0, 1.0, 0.0, 0.0]),
-            ViewKind::Uv { zoom, pan, .. } => {
-                // Fit the 0..1 square into the view, keeping texels square.
-                let z = zoom.clamp(0.05, 64.0) * 0.92;
-                let (sx, sy) = if aspect >= 1.0 { (z / aspect, z) } else { (z, z * aspect) };
+            ViewKind::Uv { ts, zoom, pan } => {
+                let [sx, sy] = uv_view_scale(aspect, zoom, self.sets.get(ts).map_or((1, 1), |s| s.size));
                 (1.0, [sx, sy, pan[0], pan[1]])
             }
         };
@@ -1139,6 +1220,7 @@ impl Renderer {
             // Normal offset: 1.5 shadow texels of the light frustum (2 × radius wide).
             shadow: [if shadow_vp.is_some() { 1.0 } else { 0.0 }, 1.0 / SHADOW_SIZE as f32, radius * 3.0 / SHADOW_SIZE as f32, 0.0],
             material: [if s.spec_gloss { 1.0 } else { 0.0 }, if s.parallax { 1.0 } else { 0.0 }, sample as f32, 0.0],
+            scatter: [s.scatter[0], s.scatter[1], s.scatter[2], 0.0],
         };
         let flag = |b: bool| if b { 1.0 } else { 0.0 };
         let post = PostRaw {

@@ -26,10 +26,24 @@ const TAG_COLORS: [Color32; 8] = [
 ];
 
 pub(crate) fn texture_set_list(app: &mut TextureCraftApp, ui: &mut Ui) {
-    let sets: Vec<(String, u32, bool)> = app.session.doc.project.texture_sets.iter().map(|t| (t.name.clone(), t.resolution, t.visible)).collect();
+    let sets: Vec<(String, String, bool)> = app
+        .session
+        .doc
+        .project
+        .texture_sets
+        .iter()
+        .map(|t| {
+            let res = t.resolution;
+            let size = match t.uv_tiles.len() {
+                0 => format!("{res}x{res}"),
+                n => format!("{res}x{res}, {n} UDIM"),
+            };
+            (t.name.clone(), size, t.visible)
+        })
+        .collect();
     let active = app.session.ts();
     egui::ScrollArea::vertical().id_salt("ts_scroll").show(ui, |ui| {
-        for (i, (name, res, visible)) in sets.into_iter().enumerate() {
+        for (i, (name, size, visible)) in sets.into_iter().enumerate() {
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
             let p = ui.painter();
             let bg = if i == active {
@@ -56,7 +70,7 @@ pub(crate) fn texture_set_list(app: &mut TextureCraftApp, ui: &mut Ui) {
                 right -= 10.0;
             }
             if rect.width() >= 170.0 {
-                let g = p.layout_no_wrap(format!("{res}x{res}"), egui::FontId::proportional(11.0), TOKENS.text_dim);
+                let g = p.layout_no_wrap(size, egui::FontId::proportional(11.0), TOKENS.text_dim);
                 let x = (rect.left() + rect.width() * 0.48).min(right - g.size().x);
                 p.galley(pos2(x, cy - g.size().y * 0.5), g, TOKENS.text_dim);
                 right = x - 8.0;
@@ -555,6 +569,11 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
                 }
             });
             ui.end_row();
+            if !set.uv_tiles.is_empty() {
+                ui.label("UV tiles");
+                ui.label(set.uv_tiles.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")).on_hover_text("UDIM tiles painted by this texture set, each at the set's size");
+                ui.end_row();
+            }
             ui.label("Shader instance");
             ui.label("Main shader");
             ui.end_row();

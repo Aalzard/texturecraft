@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use texturecraft_core::{BakedMap, Channel, ToneMapping};
 use texturecraft_geom::glam::Vec3;
 
-use crate::commands::{CommandSpec, always, bad, boolp, can_redo, can_undo, f32p, strp};
+use crate::commands::{CommandSpec, always, bad, boolp, can_redo, can_undo, color_param, f32p, strp};
 use crate::session::ViewMode;
 use crate::{Result, Session, cmd};
 
@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Display settings",
             [],
             None,
-            "{environment?: <built-in>|resource:<image resource>, exposure?, blur?, rotation?, opacity?, toneMapping?: linear|aces, fov?, shadows?, aoIntensity?, bloom?, vignette?, sharpen?, grain?, postEffects?, taa?, specGloss?, parallax?}",
+            "{environment?: <built-in>|resource:<image resource>, exposure?, blur?, rotation?, opacity?, toneMapping?: linear|aces, fov?, shadows?, aoIntensity?, bloom?, vignette?, sharpen?, grain?, postEffects?, taa?, specGloss?, parallax?, scatterColor?: [r,g,b] (linear) | \"#rrggbb\", scatterRadius? (0..1 of the mesh radius)}",
             always,
             display
         ),
@@ -179,6 +179,7 @@ fn display(s: &mut Session, p: &Value) -> Result<Value> {
         ("vignette", &mut d.vignette, 0.0, 1.0),
         ("sharpen", &mut d.sharpen, 0.0, 1.0),
         ("grain", &mut d.grain, 0.0, 1.0),
+        ("scatterRadius", &mut d.scatter_radius, 0.0, 1.0),
     ] {
         if let Some(v) = f32p(p, k) {
             *slot = v.clamp(lo, hi);
@@ -186,6 +187,9 @@ fn display(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(t) = tm {
         d.tone_mapping = t;
+    }
+    if let Some(c) = color_param(p, "scatterColor") {
+        d.scatter_color = c.map(|v| v.clamp(0.0, 1.0));
     }
     if let Some(b) = boolp(p, "shadows") {
         d.shadows = b;
@@ -216,10 +220,16 @@ mod tests {
         let res = &s.images[&name];
         assert!(!res.srgb && res.rgba[0][0] > 30.0, "HDR keeps values above 1");
         let env = format!("resource:{name}");
-        let r = execute(&mut s, "display.set", &json!({"environment": env, "specGloss": true, "parallax": true, "taa": false})).unwrap();
+        let r = execute(
+            &mut s,
+            "display.set",
+            &json!({"environment": env, "specGloss": true, "parallax": true, "taa": false, "scatterColor": [2.0, 0.5, 0.25], "scatterRadius": 0.3}),
+        )
+        .unwrap();
         assert_eq!(r["environment"], json!(env));
         let d = &s.doc.project.display;
         assert!(d.spec_gloss && d.parallax && !d.taa);
+        assert_eq!((d.scatter_color, d.scatter_radius), ([1.0, 0.5, 0.25], 0.3), "scatter settings (clamped)");
         assert_eq!(d.environment_resource(), Some(name.as_str()));
         execute(&mut s, "file.removeUnused", &Value::Null).unwrap();
         assert!(s.doc.resources.contains_key(&name), "the environment's image counts as used");

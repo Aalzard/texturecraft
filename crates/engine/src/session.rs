@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use texturecraft_compose::{BakedMaps, BelowCache, Composite, PaintTarget, PixelStore, StackKey, StrokePreview, covered_tiles, pad_tiles};
-use texturecraft_core::{Channel, Layer, LayerId, LayerKind, Project, TextureSet};
+use texturecraft_core::{Channel, Layer, LayerId, LayerKind, Project, TextureSet, TileGrid};
 use texturecraft_geom::glam::Vec2;
 use texturecraft_geom::{Bvh, Mesh, OrbitCamera, UvGBuffer};
 use texturecraft_paint::{BrushSettings, EyeDepth, Stroke, StrokeCanvas};
@@ -30,7 +30,8 @@ pub struct Document {
 
 /// Derived per-texture-set data (rebuilt when the mesh or resolution changes).
 pub struct SetCache {
-    pub resolution: u32,
+    /// Texels across and down (`TextureSet::size`).
+    pub size: (u32, u32),
     pub gbuf: Arc<UvGBuffer>,
     pub dilation: Arc<DilationMap>,
     pub covered_tiles: Arc<Vec<(u32, u32)>>,
@@ -47,17 +48,18 @@ pub struct SetCache {
 
 impl SetCache {
     fn new(mesh: &Mesh, ts: &TextureSet) -> SetCache {
-        let res = ts.resolution;
-        let gbuf = UvGBuffer::new(mesh, ts.material, res, res);
-        let dilation = DilationMap::new(&gbuf.coverage_mask(), res, res, Some(DISPLAY_PADDING));
+        let (w, h) = ts.size();
+        let gbuf = UvGBuffer::new(mesh, ts.material, w, h);
+        // Padding stays inside each UV tile.
+        let dilation = DilationMap::in_blocks(&gbuf.coverage_mask(), w, h, Some(DISPLAY_PADDING), ts.resolution);
         let covered = covered_tiles(&gbuf);
-        let all: BTreeSet<(u32, u32)> = texturecraft_compose::all_tiles(res).into_iter().collect();
+        let all: BTreeSet<(u32, u32)> = texturecraft_compose::all_tiles(w, h).into_iter().collect();
         SetCache {
-            resolution: res,
+            size: (w, h),
             gbuf: Arc::new(gbuf),
             dilation: Arc::new(dilation),
             covered_tiles: Arc::new(covered),
-            composite: Composite::new(&ts.channel_list(), res),
+            composite: Composite::with_size(&ts.channel_list(), w, h),
             dirty: all.clone(),
             upload: all,
             revision: 0,
@@ -321,9 +323,11 @@ pub struct Session {
 }
 
 impl Session {
-    /// A session for `project` on `mesh` (texture sets must reference mesh materials).
+    /// A session for `project` on `mesh` (texture sets must reference mesh materials). The
+    /// UVs of UV-tiled sets are mapped into their tile atlas (see [`Session::source_mesh`]).
     pub fn new(doc: Document, mesh: Mesh, mesh_source: Option<(String, Vec<u8>)>) -> Result<Session> {
         mesh.validate().map_err(|e| EngineError::Other(e.to_string()))?;
+        let mesh = map_tiled_uvs(mesh, &doc.project, TileGrid::to_atlas);
         let bvh = Bvh::new(&mesh);
         let mut camera = OrbitCamera { yaw: 0.6, pitch: 0.25, ..OrbitCamera::default() };
         let (lo, hi) = mesh.bounds();
@@ -369,20 +373,44 @@ impl Session {
         *self = next;
     }
 
-    /// A new project: one texture set per mesh material, each with an empty paint layer.
+    /// A new project: one texture set per mesh material, each with an empty paint layer. Sets
+    /// whose UVs leave tile 1001 paint UV tiles (see [`Session::new_project_tiled`]).
     pub fn new_project(name: &str, mesh: Mesh, mesh_ref: &str, mesh_source: Option<(String, Vec<u8>)>, resolution: u32) -> Result<Session> {
+        Session::new_project_tiled(name, mesh, mesh_ref, mesh_source, resolution, None)
+    }
+
+    /// [`Session::new_project`] choosing Painter's UV tile (UDIM) mode: `Some(true)` for every
+    /// set, `Some(false)` for none, `None` for the sets whose UVs leave tile 1001.
+    pub fn new_project_tiled(
+        name: &str,
+        mesh: Mesh,
+        mesh_ref: &str,
+        mesh_source: Option<(String, Vec<u8>)>,
+        resolution: u32,
+        uv_tiles: Option<bool>,
+    ) -> Result<Session> {
         let res = check_resolution(resolution)?;
         let mut project = Project::new(name, mesh_ref);
         let mats = if mesh.materials.is_empty() { vec!["Default".to_string()] } else { mesh.materials.clone() };
+        let mut log = Vec::new();
         for (i, m) in mats.iter().enumerate() {
             let mut ts = TextureSet::new(m.clone(), i, res);
+            ts.uv_tiles = detect_uv_tiles(&mesh, i, uv_tiles, &mut log).map_err(|e| EngineError::Other(format!("texture set \"{m}\": {e}")))?;
+            check_size(&ts)?;
             let id = project.alloc_id();
             let layer = Layer::new(id, "Layer 1", LayerKind::Paint, &ts.channel_list());
             project.layers.insert(id, layer);
             ts.stack.push(id);
             project.texture_sets.push(ts);
         }
-        Session::new(Document { project, pixels: PixelStore::default(), baked: BTreeMap::new(), resources: BTreeMap::new() }, mesh, mesh_source)
+        let mut s = Session::new(Document { project, pixels: PixelStore::default(), baked: BTreeMap::new(), resources: BTreeMap::new() }, mesh, mesh_source)?;
+        s.log.extend(log);
+        Ok(s)
+    }
+
+    /// The mesh with its own UVs: UV-tiled sets' atlas UVs mapped back (for mesh export).
+    pub fn source_mesh(&self) -> Mesh {
+        map_tiled_uvs((*self.mesh).clone(), &self.doc.project, TileGrid::from_atlas)
     }
 
     pub fn project(&self) -> &Project {
@@ -472,11 +500,11 @@ impl Session {
         self.caches.truncate(sets.len());
         for (i, ts) in sets.iter().enumerate() {
             match self.caches.get_mut(i) {
-                Some(c) if c.resolution == ts.resolution => {
+                Some(c) if c.size == ts.size() => {
                     let want = ts.channel_list();
                     if c.composite.channels.keys().copied().collect::<Vec<_>>() != want {
-                        c.composite = Composite::new(&want, ts.resolution);
-                        c.upload.extend(texturecraft_compose::all_tiles(ts.resolution));
+                        c.composite = Composite::with_size(&want, c.size.0, c.size.1);
+                        c.upload.extend(texturecraft_compose::all_tiles(c.size.0, c.size.1));
                         c.invalidate_all();
                     }
                 }
@@ -553,7 +581,7 @@ impl Session {
         let mut chunk = if budget_ms.is_finite() { rayon::current_num_threads().clamp(1, CHUNK) } else { CHUNK };
         // The layer being edited: everything else is cached per tile.
         let hot = self.stroke.as_ref().and_then(|s| s.target).map(|t| self.paint_owner(t)).or_else(|| self.selected_layer());
-        let stroke_res = self.stroke.as_ref().and_then(|s| self.caches.get(s.ts)).map(|c| c.resolution);
+        let stroke_size = self.stroke.as_ref().and_then(|s| self.caches.get(s.ts)).map(|c| c.size);
         let preview = self.stroke.as_ref().and_then(|s| {
             Some(StrokePreview {
                 target: s.target?,
@@ -574,7 +602,7 @@ impl Session {
             cache.below.set_hot(hot);
             cache.below.pass = cache.dirty.len();
             // Instances in sets of the stroke's size show the live stroke too.
-            let preview = preview.as_ref().filter(|_| Some(cache.resolution) == stroke_res);
+            let preview = preview.as_ref().filter(|_| Some(cache.size) == stroke_size);
             while !cache.dirty.is_empty() {
                 let t0 = clock();
                 let tiles = next_chunk(&mut cache.dirty, chunk);
@@ -627,11 +655,11 @@ impl Session {
     /// Mark `tiles` of texture set `ts` dirty after painting `target`, and the same tiles of
     /// other sets of that size drawing it through an instance.
     pub(crate) fn mark_painted(&mut self, ts: usize, target: Option<PaintTarget>, tiles: impl IntoIterator<Item = (u32, u32)>) {
-        let res = self.caches.get(ts).map(|c| c.resolution);
+        let size = self.caches.get(ts).map(|c| c.size);
         let sets = target.map(|t| self.doc.project.sets_drawing(self.paint_owner(t))).unwrap_or_default();
         let tiles: Vec<(u32, u32)> = tiles.into_iter().collect();
         for (i, c) in self.caches.iter_mut().enumerate() {
-            if i == ts || (sets.contains(&i) && Some(c.resolution) == res) {
+            if i == ts || (sets.contains(&i) && Some(c.size) == size) {
                 c.dirty.extend(tiles.iter().copied());
             }
         }
@@ -713,4 +741,59 @@ pub fn check_resolution(r: u32) -> Result<u32> {
     } else {
         Err(EngineError::Other(format!("resolution {r} must be a power of two between 128 and 8192")))
     }
+}
+
+/// A texture set's texels over all its UV tiles must stay within what bakes and caches hold.
+pub fn check_size(ts: &TextureSet) -> Result<()> {
+    let (w, h) = ts.size();
+    if u64::from(w) * u64::from(h) > texturecraft_bake::MAX_TEXELS {
+        return Err(EngineError::Other(format!(
+            "{} UV tiles at {} exceed {} texels: lower the resolution",
+            ts.uv_tiles.len(),
+            ts.resolution,
+            texturecraft_bake::MAX_TEXELS
+        )));
+    }
+    Ok(())
+}
+
+/// UDIM numbers of the UV tiles material `m` of `mesh` paints, ascending: `mode` as in
+/// [`Session::new_project_tiled`]. Tiles outside 1001..=2000 are an error in UV tile mode and
+/// leave an automatic set classic (with a note in `log`).
+fn detect_uv_tiles(mesh: &Mesh, m: usize, mode: Option<bool>, log: &mut Vec<String>) -> std::result::Result<Vec<u32>, String> {
+    if mode == Some(false) {
+        return Ok(Vec::new());
+    }
+    let cells = mesh.uv_tiles(m);
+    // Mesh v points down: UDIM row r is v in -r..1-r.
+    let udims: Option<Vec<u32>> =
+        cells.iter().map(|&(u, v)| ((0..=9).contains(&u) && (-99..=0).contains(&v)).then(|| 1001 + u.unsigned_abs() + 10 * v.unsigned_abs())).collect();
+    match (mode, udims) {
+        (Some(true), Some(t)) if t.is_empty() => Ok(vec![1001]),
+        (None, Some(t)) if t == [1001] || t.is_empty() => Ok(Vec::new()),
+        (_, Some(mut t)) => {
+            t.sort_unstable();
+            Ok(t)
+        }
+        (Some(true), None) => Err("UVs lie outside UDIM tiles 1001..2000".into()),
+        (None, None) => {
+            log.push(format!("material {m}: UVs outside UDIM tiles 1001..2000; painting tile 1001 only"));
+            Ok(Vec::new())
+        }
+        (Some(false), _) => Ok(Vec::new()),
+    }
+}
+
+/// `mesh` with the UVs of each UV-tiled set's material mapped by `f` (`TileGrid::to_atlas` or
+/// `from_atlas`).
+fn map_tiled_uvs(mut mesh: Mesh, project: &Project, f: fn(&TileGrid, [f32; 2]) -> [f32; 2]) -> Mesh {
+    let mut done = BTreeSet::new();
+    for ts in &project.texture_sets {
+        if let Some(grid) = ts.tile_grid()
+            && done.insert(ts.material)
+        {
+            mesh.map_material_uvs(ts.material, |uv| Vec2::from(f(&grid, uv.to_array())));
+        }
+    }
+    mesh
 }

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use rayon::prelude::*;
 use texturecraft_core::{
     BakedMap, BlendMode, Channel, ChannelKind, CompareOp, Effect, EffectKind, Fill, Filter, Generator, GeneratorKind, HeightMask, Layer, LayerId, LayerKind,
-    Mask, MaskBackground, Project, Projection, Source, blend1, blend3, hsl_adjust, lum, mix3,
+    Mask, MaskBackground, Project, Projection, Source, TextureSet, TileGrid, blend1, blend3, hsl_adjust, lum, mix3,
 };
 use texturecraft_geom::glam::{Vec2, Vec3};
 use texturecraft_geom::{Mesh, NO_TRI, UvGBuffer};
@@ -99,16 +99,35 @@ pub struct Inputs<'a> {
     pub bounds: (Vec3, Vec3),
 }
 
+impl Inputs<'_> {
+    /// The UV tile grid of a UV-tiled set (the mesh's UVs for this set are in atlas space).
+    fn tile_grid(&self) -> Option<TileGrid> {
+        self.project.texture_set(self.ts).ok().and_then(TextureSet::tile_grid)
+    }
+
+    /// Texels per UV tile across (the whole width for a classic set): filter radii scale with it.
+    fn tile_res(&self) -> u32 {
+        self.gbuf.width / self.tile_grid().map_or(1, |g| g.cols.max(1))
+    }
+}
+
 /// The composited channels of one texture set.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Composite {
+    /// Width in texels (the resolution of a classic, square set).
     pub resolution: u32,
+    pub height: u32,
     pub channels: BTreeMap<Channel, TileImage>,
 }
 
 impl Composite {
+    /// A square composite.
     pub fn new(channels: &[Channel], resolution: u32) -> Composite {
-        Composite { resolution, channels: channels.iter().map(|c| (*c, TileImage::new(resolution, resolution, c.components()))).collect() }
+        Composite::with_size(channels, resolution, resolution)
+    }
+
+    pub fn with_size(channels: &[Channel], width: u32, height: u32) -> Composite {
+        Composite { resolution: width, height, channels: channels.iter().map(|c| (*c, TileImage::new(width, height, c.components()))).collect() }
     }
 
     /// Channel value at a texel (the channel default when absent).
@@ -123,10 +142,10 @@ impl Composite {
     }
 }
 
-/// Every tile of an image of `res`.
-pub fn all_tiles(res: u32) -> Vec<(u32, u32)> {
-    let n = res.div_ceil(TILE);
-    (0..n).flat_map(|y| (0..n).map(move |x| (x, y))).collect()
+/// Every tile of a `width × height` image.
+pub fn all_tiles(width: u32, height: u32) -> Vec<(u32, u32)> {
+    let (nx, ny) = (width.div_ceil(TILE), height.div_ceil(TILE));
+    (0..ny).flat_map(|y| (0..nx).map(move |x| (x, y))).collect()
 }
 
 /// Tiles that hold at least one covered texel.
@@ -288,10 +307,10 @@ fn transpose(src: &[i64], w: usize, h: usize) -> Vec<i64> {
 
 /// Covered texels of tile (tx, ty): (x, y, offset inside the tile).
 fn tile_texels(gbuf: &UvGBuffer, tx: u32, ty: u32) -> impl Iterator<Item = (u32, u32, usize)> + '_ {
-    let res = gbuf.width;
+    let (w, h) = (gbuf.width, gbuf.height);
     (0..TILE).flat_map(|ly| (0..TILE).map(move |lx| (lx, ly))).filter_map(move |(lx, ly)| {
         let (x, y) = (tx * TILE + lx, ty * TILE + ly);
-        (x < res && y < res && gbuf.tri.get((y * res + x) as usize).is_some_and(|t| *t != NO_TRI)).then_some((x, y, (ly * TILE + lx) as usize))
+        (x < w && y < h && gbuf.tri.get((y * w + x) as usize).is_some_and(|t| *t != NO_TRI)).then_some((x, y, (ly * TILE + lx) as usize))
     })
 }
 
@@ -343,21 +362,21 @@ enum Job<'a> {
 /// One neighbourhood-filtered field of `layer` over `tiles` plus the filter's reach, built on
 /// the fields already computed below it.
 fn field(inp: &Inputs, channels: &[Channel], below: &Fields, id: LayerId, job: Job, tiles: &[(u32, u32)]) -> Option<Field> {
-    let res = inp.gbuf.width;
+    let (gw, gh) = (inp.gbuf.width, inp.gbuf.height);
     let effects = match job {
         Job::Mask(m) => &m.effects,
         Job::Content(_) => &inp.project.content_layer(id)?.content_effects,
     };
-    let (k, radius, sharpen) = neighbourhood(effects, res)?;
+    let (k, radius, sharpen) = neighbourhood(effects, inp.tile_res())?;
     let opacity = effects.iter().filter(|e| e.visible).nth(k).map(|e| e.opacity.clamp(0.0, 1.0)).unwrap_or(1.0);
     // Clamped: a hostile radius must not overflow the halo and window arithmetic.
-    let r = radius.round().clamp(1.0, res as f32) as u32;
+    let r = radius.round().clamp(1.0, gw.max(gh) as f32) as u32;
     // Three box passes reach 3r texels.
     let halo = (3 * r).div_ceil(TILE);
     let (tx0, ty0) = tiles.iter().fold((u32::MAX, u32::MAX), |(a, b), t| (a.min(t.0), b.min(t.1)));
     let (tx1, ty1) = tiles.iter().fold((0, 0), |(a, b), t| (a.max(t.0), b.max(t.1)));
     let (rx0, ry0) = (tx0.saturating_sub(halo) * TILE, ty0.saturating_sub(halo) * TILE);
-    let (rx1, ry1) = (((tx1 + 1 + halo) * TILE).min(res), ((ty1 + 1 + halo) * TILE).min(res));
+    let (rx1, ry1) = (((tx1 + 1 + halo) * TILE).min(gw), ((ty1 + 1 + halo) * TILE).min(gh));
     let (w, h) = (rx1.saturating_sub(rx0), ry1.saturating_sub(ry0));
     if w == 0 || h == 0 {
         return None;
@@ -750,10 +769,14 @@ impl<'a, 'b> Texel<'a, 'b> {
         let (lo, hi) = self.inp.bounds;
         let center = (lo + hi) * 0.5;
         let r = ((hi - lo).length() * 0.5).max(1e-4);
-        let c = match g.surface(self.inp.mesh, i) {
+        let mut c = match g.surface(self.inp.mesh, i) {
             Some(s) => Coords { uv: s.uv, pos: (s.pos - center) / r, nrm: s.nrm },
-            None => Coords { uv: Vec2::new((self.x as f32 + 0.5) / self.res as f32, (self.y as f32 + 0.5) / self.res as f32), pos: Vec3::ZERO, nrm: Vec3::Y },
+            None => Coords { uv: Vec2::new((self.x as f32 + 0.5) / g.width as f32, (self.y as f32 + 0.5) / g.height as f32), pos: Vec3::ZERO, nrm: Vec3::Y },
         };
+        // UV-tiled sets: projections see the mesh's own UVs (patterns repeat per tile).
+        if let Some(grid) = self.inp.tile_grid() {
+            c.uv = Vec2::from(grid.from_atlas(c.uv.to_array()));
+        }
         self.coords = Some(c);
         c
     }
@@ -1178,8 +1201,7 @@ const BLOCK: u32 = 16;
 /// filling it). Results are identical to [`composite_tiles`].
 pub fn composite_tiles_cached(inp: &Inputs, out: &mut Composite, tiles: &[(u32, u32)], mut below: Option<&mut BelowCache>) {
     let Ok(set) = inp.project.texture_set(inp.ts) else { return };
-    let res = out.resolution;
-    if inp.gbuf.width != res || inp.gbuf.height != res {
+    if (inp.gbuf.width, inp.gbuf.height) != (out.resolution, out.height) {
         return;
     }
     let split = below.as_deref_mut().and_then(|b| b.prepare(inp));
@@ -1233,7 +1255,7 @@ fn composite_block(
     quota: usize,
 ) -> Vec<((u32, u32), Vec<Band>)> {
     let channels: Vec<Channel> = inp.project.texture_set(inp.ts).map(|s| s.channel_list()).unwrap_or_default();
-    let res = out.resolution;
+    let (w, h) = (out.resolution, out.height);
     let split = below.map(|(_, l)| l);
     let cached = |t: (u32, u32)| below.and_then(|(b, _)| b.tile(t));
     let fresh: Vec<(u32, u32)> = tiles.iter().copied().filter(|t| cached(*t).is_none()).collect();
@@ -1286,15 +1308,15 @@ fn composite_block(
             let mut any = false;
             for ly in band * BAND..(band + 1) * BAND {
                 let y = ty * TILE + ly;
-                if y >= res {
+                if y >= h {
                     break;
                 }
                 for lx in 0..TILE {
                     let x = tx * TILE + lx;
-                    if x >= res {
+                    if x >= w {
                         break;
                     }
-                    let gi = (y * res + x) as usize;
+                    let gi = (y * w + x) as usize;
                     // Offset in the tile, and in this band.
                     let o = (ly * TILE + lx) as usize;
                     let ob = ((ly - band * BAND) * TILE + lx) as usize;
@@ -1442,17 +1464,17 @@ fn store_below(cache: &mut [f32], lanes: &[Lane], stride: usize, o: usize, acc: 
 /// nearest covered texel. Returns the tiles it wrote.
 pub fn pad_tiles(out: &mut Composite, dmap: &DilationMap, tiles: &[(u32, u32)]) -> std::collections::BTreeSet<(u32, u32)> {
     let mut written = std::collections::BTreeSet::new();
-    let res = out.resolution;
-    if dmap.width != res {
+    let (w, h) = (out.resolution, out.height);
+    if (dmap.width, dmap.height) != (w, h) {
         return written;
     }
-    let n = res.div_ceil(TILE) as i64;
+    let (nx, ny) = (w.div_ceil(TILE) as i64, h.div_ceil(TILE) as i64);
     let mut set = std::collections::BTreeSet::new();
     for &(tx, ty) in tiles {
         for dy in -1..=1i64 {
             for dx in -1..=1i64 {
                 let (x, y) = (tx as i64 + dx, ty as i64 + dy);
-                if x >= 0 && y >= 0 && x < n && y < n {
+                if x >= 0 && y >= 0 && x < nx && y < ny {
                     set.insert((x as u32, y as u32));
                 }
             }
@@ -1471,7 +1493,7 @@ pub fn pad_tiles(out: &mut Composite, dmap: &DilationMap, tiles: &[(u32, u32)]) 
                 for ly in 0..TILE {
                     for lx in 0..TILE {
                         let (x, y) = (tx * TILE + lx, ty * TILE + ly);
-                        if x >= res || y >= res {
+                        if x >= w || y >= h {
                             continue;
                         }
                         let Some((sx, sy)) = dmap.source(x, y) else { continue };
@@ -1497,13 +1519,13 @@ pub fn pad_tiles(out: &mut Composite, dmap: &DilationMap, tiles: &[(u32, u32)]) 
     written
 }
 
-/// The mask of layer `id` as an 8-bit grayscale image of `size × size` (nearest texel of the
-/// texture set; uncovered texels black). None when the layer has no enabled mask.
+/// The mask of layer `id` as an 8-bit grayscale image of `size × size` stretched over the
+/// texture set (nearest texel; uncovered texels black). None when the layer has no enabled mask.
 pub fn mask_image(inp: &Inputs, id: LayerId, size: u32) -> Option<Vec<u8>> {
     let mask = layer_mask(inp.project, id).filter(|m| m.enabled)?;
     let channels = inp.project.texture_set(inp.ts).map(|t| t.channel_list()).unwrap_or_default();
-    let res = inp.gbuf.width;
-    let all = all_tiles(res);
+    let (w, h) = (inp.gbuf.width, inp.gbuf.height);
+    let all = all_tiles(w, h);
     let fields = neighbourhood_fields(inp, &channels, &all);
     let tiles: Vec<(u32, u32, Vec<u8>)> = all
         .par_iter()
@@ -1528,7 +1550,7 @@ pub fn mask_image(inp: &Inputs, id: LayerId, size: u32) -> Option<Vec<u8>> {
     let lookup: std::collections::HashMap<(u32, u32), &Vec<u8>> = tiles.iter().map(|(x, y, b)| ((*x, *y), b)).collect();
     for y in 0..size {
         for x in 0..size {
-            let (sx, sy) = ((x as u64 * res as u64 / size as u64) as u32, (y as u64 * res as u64 / size as u64) as u32);
+            let (sx, sy) = ((x as u64 * w as u64 / size as u64) as u32, (y as u64 * h as u64 / size as u64) as u32);
             if let Some(t) = lookup.get(&(sx / TILE, sy / TILE))
                 && let Some(v) = t.get(((sy % TILE) * TILE + sx % TILE) as usize)
                 && let Some(d) = out.get_mut((y * size + x) as usize)
@@ -1632,7 +1654,7 @@ mod tests {
         let images = Default::default();
         let inp = Inputs { project: &f.project, ts: 0, mesh: &f.mesh, gbuf: &f.gbuf, pixels: &f.pixels, baked: &f.baked, preview, images: &images, bounds: f.mesh.bounds() };
         let mut out = Composite::new(&f.project.texture_sets[0].channel_list(), 64);
-        composite_tiles(&inp, &mut out, &all_tiles(64));
+        composite_tiles(&inp, &mut out, &all_tiles(64, 64));
         out
     }
 
@@ -1679,7 +1701,7 @@ mod tests {
         let l = Layer::new(id, "Paint", LayerKind::Paint, &[Channel::BaseColor]);
         f.project.insert_layer(0, l, None, false).unwrap();
         // Half-covered red texel: premul (0.5, 0, 0), coverage 0.5.
-        let img = f.pixels.layer_mut(id, Channel::BaseColor, 64);
+        let img = f.pixels.layer_mut(id, Channel::BaseColor, (64, 64));
         img.set(3, 3, &[to_u16(0.5), 0, 0, to_u16(0.5)]);
         let out = run(&f, None);
         assert!(close(out.value(Channel::BaseColor, 3, 3), [0.75, 0.25, 0.25]));
@@ -1837,7 +1859,7 @@ soft {soft:?}");
         content_fx(&mut f, id, EffectKind::Material(material));
         let paint = content_fx(&mut f, id, EffectKind::Paint);
         // Roughness 0.9 painted at half coverage (premultiplied).
-        f.pixels.layer_mut(paint, Channel::Roughness, 64).set(3, 3, &[to_u16(0.45), to_u16(0.5)]);
+        f.pixels.layer_mut(paint, Channel::Roughness, (64, 64)).set(3, 3, &[to_u16(0.45), to_u16(0.5)]);
         let out = run(&f, None);
         assert!(close(out.value(Channel::Roughness, 10, 10), [0.2; 3]), "the fill effect covers the empty paint layer");
         assert!(close(out.value(Channel::Roughness, 3, 3), [0.55; 3]), "{:?}", out.value(Channel::Roughness, 3, 3));
@@ -1845,7 +1867,7 @@ soft {soft:?}");
         // Flattening bakes the content effects in.
         let images = Default::default();
         let inp = Inputs { project: &f.project, ts: 0, mesh: &f.mesh, gbuf: &f.gbuf, pixels: &f.pixels, baked: &f.baked, preview: None, images: &images, bounds: f.mesh.bounds() };
-        let flat = flatten_layer(&inp, id, &all_tiles(64)).unwrap();
+        let flat = flatten_layer(&inp, id, &all_tiles(64, 64)).unwrap();
         assert!(flat.iter().all(|(c, _, _)| *c == Channel::Roughness));
         let (_, _, data) = flat.iter().find(|(_, t, _)| *t == (0, 0)).unwrap();
         let o = 3 * TILE as usize + 3;

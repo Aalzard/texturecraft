@@ -2,9 +2,9 @@
 //! web; path-based commands are native only.
 
 use serde_json::{Value, json};
-use texturecraft_core::NormalFormat;
 #[cfg(not(target_arch = "wasm32"))]
 use texturecraft_core::PROJECT_EXT;
+use texturecraft_core::{NormalFormat, TextureSet};
 use texturecraft_formats::{ExportInput, ExportOptions, ExportedFile, FileFormat, Padding, ProjectFile};
 use texturecraft_geom::{Mesh, primitives};
 
@@ -19,7 +19,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New project from a mesh file",
             [],
             None,
-            "{mesh: path to .glb/.gltf/.fbx/.dae/.obj/.ply/.stl, resolution?: 2048, name?}",
+            "{mesh: path to .glb/.gltf/.fbx/.dae/.usd/.usda/.usdc/.usdz/.obj/.ply/.stl, resolution?: 2048, name?, uvTiles?: bool (UDIM; default: when the UVs leave tile 1001)}",
             always,
             new_from_mesh
         ),
@@ -43,7 +43,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export Mesh...",
             ["File"],
             None,
-            "{path: .obj or .glb file, format?: obj|glb (default: from the extension, else obj)}",
+            "{path: .obj, .glb, .usda, .usdc or .usdz file, format?: obj|glb|usda|usdc|usdz (default: from the extension, else obj); usda/usdc write their textures next to the file} → {path, textures?}",
             always,
             export_mesh
         ),
@@ -72,32 +72,48 @@ fn stem_of(name: &str) -> String {
 }
 
 impl Session {
-    /// The working mesh as Wavefront OBJ.
+    /// The working mesh as Wavefront OBJ (with its own UVs, UDIM tiles included).
     pub fn mesh_obj_bytes(&self) -> Vec<u8> {
-        texturecraft_formats::obj_bytes(&self.mesh, &self.doc.project.name)
+        texturecraft_formats::obj_bytes(&self.source_mesh(), &self.doc.project.name)
     }
 
     /// The working mesh as binary glTF with each material's textures (from its texture set's
-    /// composite, through the texture export pipeline) embedded.
+    /// composite, through the texture export pipeline) embedded. glTF has no UV tiles: a
+    /// UV-tiled set embeds its tile atlas, with the mesh's UVs in atlas space.
     pub fn mesh_glb_bytes(&mut self) -> Result<Vec<u8>> {
-        let opts = texturecraft_formats::glb_export_options();
-        let mut textures = Vec::with_capacity(self.mesh.materials.len());
-        for m in 0..self.mesh.materials.len() {
-            let ts = self.doc.project.texture_sets.iter().position(|t| t.material == m);
-            let files = match ts {
-                Some(ts) => self.export_files(&[ts], &opts)?,
-                None => Vec::new(),
-            };
-            textures.push(texturecraft_formats::GlbTextures::from_files(files));
-        }
+        let files = self.material_files(texturecraft_formats::glb_export_options())?;
+        let textures: Vec<_> = files.into_iter().map(texturecraft_formats::GlbTextures::from_files).collect();
         texturecraft_formats::glb_bytes(&self.mesh, &self.doc.project.name, &textures).map_err(fe)
+    }
+
+    /// The working mesh as USD with a UsdPreviewSurface per material (textures like
+    /// [`Session::mesh_glb_bytes`]): usdz packages them, usda / usdc list them to write alongside.
+    pub fn mesh_usd(&mut self, format: texturecraft_formats::UsdFormat) -> Result<texturecraft_formats::UsdExport> {
+        let files = self.material_files(texturecraft_formats::usd_export_options())?;
+        texturecraft_formats::usd_bytes(&self.mesh, &self.doc.project.name, &files, format).map_err(fe)
+    }
+
+    /// Each material's texture set rendered with `opts` (as a tile atlas for UV-tiled sets).
+    fn material_files(&mut self, opts: ExportOptions) -> Result<Vec<Vec<ExportedFile>>> {
+        let opts = ExportOptions { atlas: true, ..opts };
+        (0..self.mesh.materials.len())
+            .map(|m| match self.doc.project.texture_sets.iter().position(|t| t.material == m) {
+                Some(ts) => self.export_files(&[ts], &opts),
+                None => Ok(Vec::new()),
+            })
+            .collect()
     }
 
     /// A new project from mesh file bytes (one texture set per material).
     pub fn from_mesh_bytes(file_name: &str, bytes: &[u8], resolution: u32, name: &str) -> Result<Session> {
+        Session::from_mesh_bytes_tiled(file_name, bytes, resolution, name, None)
+    }
+
+    /// [`Session::from_mesh_bytes`] with a UV tile mode (see [`Session::new_project_tiled`]).
+    pub fn from_mesh_bytes_tiled(file_name: &str, bytes: &[u8], resolution: u32, name: &str, uv_tiles: Option<bool>) -> Result<Session> {
         let imported = texturecraft_formats::import_mesh_bytes(file_name, bytes).map_err(fe)?;
         let ext = ext_of(file_name);
-        let mut s = Session::new_project(name, imported.mesh, &format!("mesh.{ext}"), Some((ext, bytes.to_vec())), resolution)?;
+        let mut s = Session::new_project_tiled(name, imported.mesh, &format!("mesh.{ext}"), Some((ext, bytes.to_vec())), resolution, uv_tiles)?;
         s.log.extend(imported.report.warnings.iter().cloned());
         s.log.push(format!(
             "Imported {} ({} triangles, {} materials{})",
@@ -134,18 +150,18 @@ impl Session {
     pub fn project_file(&self) -> ProjectFile {
         let mut pixels = self.doc.pixels.clone();
         // Drop pixel images whose size no longer matches their texture set (never unloadable).
-        let res_of = |id: texturecraft_core::LayerId| {
-            self.doc.project.locate(id).and_then(|(ts, _, _)| self.doc.project.texture_sets.get(ts)).map(|t| t.resolution).or_else(|| {
+        let size_of = |id: texturecraft_core::LayerId| {
+            self.doc.project.locate(id).and_then(|(ts, _, _)| self.doc.project.texture_sets.get(ts)).map(TextureSet::size).or_else(|| {
                 self.doc
                     .project
                     .effect(id)
                     .and_then(|(owner, _)| self.doc.project.locate(owner))
                     .and_then(|(ts, _, _)| self.doc.project.texture_sets.get(ts))
-                    .map(|t| t.resolution)
+                    .map(TextureSet::size)
             })
         };
-        pixels.layers.retain(|(id, _), img| res_of(*id) == Some(img.width()));
-        pixels.masks.retain(|id, img| res_of(*id) == Some(img.width()));
+        pixels.layers.retain(|(id, _), img| size_of(*id) == Some((img.width(), img.height())));
+        pixels.masks.retain(|id, img| size_of(*id) == Some((img.width(), img.height())));
         let (high_poly, cage) = self.saved_bake_meshes();
         ProjectFile {
             project: self.doc.project.clone(),
@@ -299,7 +315,7 @@ fn new_from_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let bytes = std::fs::read(path).map_err(|e| bad("file.new", format!("cannot read {path}: {e}")))?;
     let res = u32::try_from(u64p(p, "resolution").unwrap_or(2048)).unwrap_or(0);
     let name = strp(p, "name").map(str::to_string).unwrap_or_else(|| stem_of(path));
-    let next = Session::from_mesh_bytes(path, &bytes, res, &name)?;
+    let next = Session::from_mesh_bytes_tiled(path, &bytes, res, &name, crate::commands::boolp(p, "uvTiles"))?;
     s.switch_to(next);
     Ok(crate::inspect::session(s))
 }
@@ -373,18 +389,33 @@ fn export_textures(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn export_mesh(s: &mut Session, p: &Value) -> Result<Value> {
+    const FORMATS: [&str; 5] = ["obj", "glb", "usda", "usdc", "usdz"];
     let path = native::path_param(p, "path", "file.exportMesh")?;
     let ext = match strp(p, "format") {
-        Some(f @ ("obj" | "glb")) => f.to_string(),
-        Some(other) => return Err(bad("file.exportMesh", format!("unknown mesh format `{other}` (obj or glb)"))),
-        None if ext_of(path) == "glb" => "glb".into(),
+        Some(f) if FORMATS.contains(&f) => f.to_string(),
+        Some(other) => return Err(bad("file.exportMesh", format!("unknown mesh format `{other}` ({})", FORMATS.join(", ")))),
+        None if FORMATS.contains(&ext_of(path).as_str()) => ext_of(path),
         None => "obj".into(),
     };
     let path = if ext_of(path) == ext { path.to_string() } else { format!("{path}.{ext}") };
-    let bytes = if ext == "glb" { s.mesh_glb_bytes()? } else { s.mesh_obj_bytes() };
-    std::fs::write(&path, bytes).map_err(|e| bad("file.exportMesh", format!("cannot write {path}: {e}")))?;
+    let write = |path: &str, bytes: &[u8]| std::fs::write(path, bytes).map_err(|e| bad("file.exportMesh", format!("cannot write {path}: {e}")));
+    let mut textures = Vec::new();
+    match (ext.as_str(), texturecraft_formats::UsdFormat::from_ext(&ext)) {
+        ("glb", _) => write(&path, &s.mesh_glb_bytes()?)?,
+        (_, Some(format)) => {
+            let usd = s.mesh_usd(format)?;
+            let dir = std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new(""));
+            for (name, bytes) in &usd.textures {
+                let file = dir.join(name).display().to_string();
+                write(&file, bytes)?;
+                textures.push(file);
+            }
+            write(&path, &usd.bytes)?;
+        }
+        _ => write(&path, &s.mesh_obj_bytes())?,
+    }
     s.log.push(format!("Exported mesh to {path}"));
-    Ok(json!({ "path": path }))
+    Ok(if textures.is_empty() { json!({ "path": path }) } else { json!({ "path": path, "textures": textures }) })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -434,6 +465,31 @@ mod tests {
         // Base color, ORM and normal per texture set.
         assert_eq!(bytes.windows(9).filter(|w| *w == b"image/png").count(), 3 * s.mesh.materials.len());
         assert!(crate::execute(&mut s, "file.exportMesh", &json!({ "path": base, "format": "fbx" })).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_mesh_writes_usd_with_textures() {
+        let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
+        let dir = std::env::temp_dir().join(format!("tc_export_usd_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let usdz = crate::execute(&mut s, "file.exportMesh", &json!({ "path": dir.join("ball.usdz").display().to_string() })).unwrap();
+        assert!(usdz.get("textures").is_none(), "usdz packages its textures");
+        let bytes = std::fs::read(usdz["path"].as_str().unwrap()).unwrap();
+        let back = texturecraft_formats::import_mesh_bytes("ball.usdz", &bytes).unwrap();
+        assert_eq!(back.mesh.triangle_count(), s.mesh.triangle_count());
+        assert_eq!(back.mesh.materials, s.mesh.materials);
+        // Stored (uncompressed) entries: count the PNG signatures.
+        let pngs = bytes.windows(4).filter(|w| *w == b"\x89PNG").count();
+        assert!(pngs >= s.mesh.materials.len(), "{pngs} textures");
+        let usda = crate::execute(&mut s, "file.exportMesh", &json!({ "path": dir.join("ball").display().to_string(), "format": "usda" })).unwrap();
+        let textures = usda["textures"].as_array().unwrap();
+        assert_eq!(textures.len(), pngs);
+        let text = std::fs::read_to_string(usda["path"].as_str().unwrap()).unwrap();
+        for t in textures {
+            let t = std::path::Path::new(t.as_str().unwrap());
+            assert!(t.is_file() && text.contains(&format!("@./{}@", t.file_name().unwrap().to_str().unwrap())));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -106,7 +106,7 @@ pub struct CommitSource<'a> {
 
 /// Commit a stroke into paint layer `layer` (channels in `values`; erase clears every painted
 /// channel of the layer, or only those in `values` when it is not empty).
-pub fn commit_layer(pixels: &mut PixelStore, layer: LayerId, resolution: u32, values: &BTreeMap<Channel, [f32; 3]>, src: CommitSource) {
+pub fn commit_layer(pixels: &mut PixelStore, layer: LayerId, size: (u32, u32), values: &BTreeMap<Channel, [f32; 3]>, src: CommitSource) {
     let opacity = src.opacity.clamp(0.0, 1.0);
     let channels: Vec<Channel> = if src.erase {
         let painted: BTreeSet<Channel> = pixels.layers.keys().filter(|(id, _)| *id == layer).map(|(_, c)| *c).collect();
@@ -116,15 +116,15 @@ pub fn commit_layer(pixels: &mut PixelStore, layer: LayerId, resolution: u32, va
     };
     for c in channels {
         let v = values.get(&c).copied().unwrap_or([0.0; 3]);
-        let img = pixels.layer_mut(layer, c, resolution);
+        let img = pixels.layer_mut(layer, c, size);
         let carried = src.carried.and_then(|m| m.get(&c));
         over(img, c.kind(), &v[..c.components()], &CommitSource { opacity, ..src }, c == Channel::BaseColor, carried);
     }
 }
 
 /// Commit a stroke into the paint effect `effect` of a mask, painting gray `value`.
-pub fn commit_mask(pixels: &mut PixelStore, effect: LayerId, resolution: u32, value: f32, src: CommitSource) {
-    let img = pixels.mask_mut(effect, resolution);
+pub fn commit_mask(pixels: &mut PixelStore, effect: LayerId, size: (u32, u32), value: f32, src: CommitSource) {
+    let img = pixels.mask_mut(effect, size);
     over(img, ChannelKind::Scalar, &[value.clamp(0.0, 1.0)], &src, false, None);
 }
 
@@ -153,15 +153,15 @@ mod tests {
         let id = LayerId(1);
         let vals: BTreeMap<Channel, [f32; 3]> = [(Channel::Roughness, [0.8; 3])].into_iter().collect();
         let (a, tiles) = alpha(0.5);
-        commit_layer(&mut px, id, 64, &vals, src(&a, &tiles, 1.0, false));
+        commit_layer(&mut px, id, (64, 64), &vals, src(&a, &tiles, 1.0, false));
         let t = px.layer(id, Channel::Roughness).unwrap().get(5, 5);
         assert!((from_u16(t[0]) - 0.4).abs() < 1e-3, "premul v·a");
         assert!((from_u16(t[1]) - 0.5).abs() < 1e-3, "coverage a");
-        commit_layer(&mut px, id, 64, &vals, src(&a, &tiles, 1.0, false));
+        commit_layer(&mut px, id, (64, 64), &vals, src(&a, &tiles, 1.0, false));
         let t = px.layer(id, Channel::Roughness).unwrap().get(5, 5);
         assert!((from_u16(t[1]) - 0.75).abs() < 1e-3);
         assert!((from_u16(t[0]) - 0.6).abs() < 1e-3);
-        commit_layer(&mut px, id, 64, &BTreeMap::new(), src(&a, &tiles, 1.0, true));
+        commit_layer(&mut px, id, (64, 64), &BTreeMap::new(), src(&a, &tiles, 1.0, true));
         let t = px.layer(id, Channel::Roughness).unwrap().get(5, 5);
         assert!((from_u16(t[1]) - 0.375).abs() < 1e-3);
         assert!((from_u16(t[0]) - 0.3).abs() < 1e-3);
@@ -173,7 +173,7 @@ mod tests {
         let id = LayerId(2);
         let vals: BTreeMap<Channel, [f32; 3]> = [(Channel::Height, [-0.5; 3])].into_iter().collect();
         let (a, tiles) = alpha(1.0);
-        commit_layer(&mut px, id, 64, &vals, src(&a, &tiles, 0.5, false));
+        commit_layer(&mut px, id, (64, 64), &vals, src(&a, &tiles, 0.5, false));
         let t = px.layer(id, Channel::Height).unwrap().get(5, 5);
         assert!((from_u16_signed(t[0]) + 0.25).abs() < 1e-3);
         assert!((from_u16(t[1]) - 0.5).abs() < 1e-3);
@@ -183,9 +183,9 @@ mod tests {
     fn mask_commit_and_untouched_tiles_stay_shared() {
         let mut px = PixelStore::default();
         let (a, tiles) = alpha(1.0);
-        commit_mask(&mut px, LayerId(9), 64, 1.0, src(&a, &tiles, 1.0, false));
+        commit_mask(&mut px, LayerId(9), (64, 64), 1.0, src(&a, &tiles, 1.0, false));
         let before = px.clone();
-        commit_mask(&mut px, LayerId(9), 64, 0.0, src(&a, &tiles, 1.0, true));
+        commit_mask(&mut px, LayerId(9), (64, 64), 0.0, src(&a, &tiles, 1.0, true));
         assert_eq!(from_u16(before.masks[&LayerId(9)].get(5, 5)[1]), 1.0);
         assert_eq!(px.masks[&LayerId(9)].get(5, 5)[1], 0);
     }
@@ -198,7 +198,7 @@ mod tests {
         carried.set(5, 5, &[to_u16(0.25)]);
         let carried: BTreeMap<Channel, TileImage> = [(Channel::Roughness, carried)].into_iter().collect();
         let vals: BTreeMap<Channel, [f32; 3]> = [(Channel::Roughness, [0.8; 3])].into_iter().collect();
-        commit_layer(&mut px, LayerId(3), 64, &vals, CommitSource { carried: Some(&carried), ..src(&a, &tiles, 1.0, false) });
+        commit_layer(&mut px, LayerId(3), (64, 64), &vals, CommitSource { carried: Some(&carried), ..src(&a, &tiles, 1.0, false) });
         assert!((from_u16(px.layer(LayerId(3), Channel::Roughness).unwrap().get(5, 5)[0]) - 0.25).abs() < 1e-3);
         let mut cov = TileImage::new(64, 64, 1);
         commit_coverage(&mut cov, src(&a, &tiles, 0.5, false));

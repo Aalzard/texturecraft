@@ -226,6 +226,64 @@ pub struct TextureSet {
     pub baked: BTreeSet<BakedMap>,
     #[serde(default = "yes")]
     pub visible: bool,
+    /// UDIM numbers of the UV tiles this set paints, ascending (Painter's "UV Tiles" mode);
+    /// empty for a classic set covering UV 0..1. Each tile is `resolution²` texels of one
+    /// atlas laid out by [`TileGrid`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uv_tiles: Vec<u32>,
+}
+
+/// Lowest and highest UDIM numbers (columns 0..=9, rows 0..=99).
+pub const UDIM_RANGE: std::ops::RangeInclusive<u32> = 1001..=2000;
+
+/// The atlas of a UV-tiled texture set: the bounding grid of its tiles, `cols × rows` blocks of
+/// `resolution²` texels. Block (0, 0) is the top-left: the lowest column of the highest row, so
+/// the atlas shows the tiles as they sit in UV space. Mesh UVs use v down (glTF), so UDIM row
+/// `r` covers v in −r..1−r, and atlas coordinates are an affine map of mesh UVs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TileGrid {
+    /// UDIM column of the left blocks (0..=9).
+    pub col: u32,
+    /// UDIM row of the top blocks.
+    pub row: u32,
+    pub cols: u32,
+    pub rows: u32,
+}
+
+impl TileGrid {
+    /// The bounding grid of UDIM `tiles` (None when empty or a number is outside [`UDIM_RANGE`]).
+    pub fn of(tiles: &[u32]) -> Option<TileGrid> {
+        let mut cells = tiles.iter().map(|t| UDIM_RANGE.contains(t).then(|| ((t - 1001) % 10, (t - 1001) / 10)));
+        let first = cells.next()??;
+        let (mut c0, mut c1, mut r0, mut r1) = (first.0, first.0, first.1, first.1);
+        for cell in cells {
+            let (c, r) = cell?;
+            (c0, c1, r0, r1) = (c0.min(c), c1.max(c), r0.min(r), r1.max(r));
+        }
+        Some(TileGrid { col: c0, row: r1, cols: c1 - c0 + 1, rows: r1 - r0 + 1 })
+    }
+
+    /// UDIM number of block (bx, by).
+    pub fn udim(&self, bx: u32, by: u32) -> u32 {
+        1001 + self.col + bx + 10 * self.row.saturating_sub(by)
+    }
+
+    /// Block (bx, by) of UDIM tile `udim`, if the grid holds it.
+    pub fn block(&self, udim: u32) -> Option<(u32, u32)> {
+        let (c, r) = (udim.checked_sub(1001)? % 10, (udim.checked_sub(1001)?) / 10);
+        let (bx, by) = (c.checked_sub(self.col)?, self.row.checked_sub(r)?);
+        (bx < self.cols && by < self.rows).then_some((bx, by))
+    }
+
+    /// Mesh UV → atlas UV (0..1 over the whole grid).
+    pub fn to_atlas(&self, uv: [f32; 2]) -> [f32; 2] {
+        [(uv[0] - self.col as f32) / self.cols as f32, (uv[1] + self.row as f32) / self.rows as f32]
+    }
+
+    /// Atlas UV → mesh UV.
+    pub fn from_atlas(&self, uv: [f32; 2]) -> [f32; 2] {
+        [uv[0] * self.cols as f32 + self.col as f32, uv[1] * self.rows as f32 - self.row as f32]
+    }
 }
 
 fn one() -> f32 {
@@ -250,7 +308,25 @@ impl TextureSet {
             bake: BakeSettings::default(),
             baked: BTreeSet::new(),
             visible: true,
+            uv_tiles: Vec::new(),
         }
+    }
+
+    /// The atlas grid of a UV-tiled set (None for a classic set).
+    pub fn tile_grid(&self) -> Option<TileGrid> {
+        TileGrid::of(&self.uv_tiles)
+    }
+
+    /// Height strength for slopes measured over the whole texture width (the viewport shader,
+    /// the path tracer): a UV tile atlas is one tile per column wide.
+    pub fn atlas_height_strength(&self) -> f32 {
+        self.height_strength / self.tile_grid().map_or(1.0, |g| g.cols as f32)
+    }
+
+    /// Texels across and down: `resolution` per tile of the atlas grid.
+    pub fn size(&self) -> (u32, u32) {
+        let (cols, rows) = self.tile_grid().map_or((1, 1), |g| (g.cols, g.rows));
+        (self.resolution.saturating_mul(cols), self.resolution.saturating_mul(rows))
     }
 
     pub fn has_channel(&self, c: Channel) -> bool {
@@ -298,6 +374,11 @@ pub struct DisplaySettings {
     pub spec_gloss: bool,
     /// Parallax occlusion mapping from the height channel (same depth as height-to-normal).
     pub parallax: bool,
+    /// Subsurface scattering (where the Scattering weight channel is painted): linear color of
+    /// the light that travels under the surface; each channel scales how far it travels.
+    pub scatter_color: [f32; 3],
+    /// Subsurface scattering mean free path as a fraction of the mesh's bounding radius.
+    pub scatter_radius: f32,
 }
 
 /// Prefix of [`DisplaySettings::environment`] naming an image resource.
@@ -330,6 +411,8 @@ impl Default for DisplaySettings {
             taa: true,
             spec_gloss: false,
             parallax: false,
+            scatter_color: [1.0, 0.4, 0.25],
+            scatter_radius: 0.1,
         }
     }
 }
@@ -553,6 +636,9 @@ impl Project {
         if self.format_version > FORMAT_VERSION {
             return Err(CoreError::Invalid(format!("project format {} is newer than this TextureCraft supports ({FORMAT_VERSION})", self.format_version)));
         }
+        if let Some(t) = self.texture_sets.iter().find(|t| !t.uv_tiles.is_empty() && (t.tile_grid().is_none() || !t.uv_tiles.is_sorted_by(|a, b| a < b))) {
+            return Err(CoreError::Invalid(format!("texture set \"{}\" has invalid UV tiles {:?}", t.name, t.uv_tiles)));
+        }
         let mut seen = BTreeSet::new();
         for ts in 0..self.texture_sets.len() {
             for (id, depth) in self.walk(ts) {
@@ -730,6 +816,31 @@ mod tests {
         assert_eq!(p.instance_cycle(), Some(loop_id));
         assert!(p.validate().is_err());
         assert!(p.content_layer(LayerId(999)).is_none());
+    }
+
+    #[test]
+    fn tile_grids_map_mesh_uvs_to_atlas_blocks() {
+        assert_eq!(TileGrid::of(&[]), None);
+        assert_eq!(TileGrid::of(&[1001, 3000]), None);
+        // 1001 alone is the identity.
+        let one = TileGrid::of(&[1001]).unwrap();
+        assert_eq!((one.cols, one.rows, one.to_atlas([0.25, 0.75])), (1, 1, [0.25, 0.75]));
+        // 1002 and 1013: columns 1..=2, rows 0..=1; the top row is row 1.
+        let g = TileGrid::of(&[1002, 1013]).unwrap();
+        assert_eq!(g, TileGrid { col: 1, row: 1, cols: 2, rows: 2 });
+        assert_eq!([g.udim(0, 0), g.udim(1, 0), g.udim(0, 1), g.udim(1, 1)], [1012, 1013, 1002, 1003]);
+        assert_eq!((g.block(1013), g.block(1002), g.block(1001), g.block(5)), (Some((1, 0)), Some((0, 1)), None, None));
+        // Mesh v is down: UDIM row 1 is v in -1..0, the top half of the atlas.
+        assert_eq!(g.to_atlas([2.5, -0.5]), [0.75, 0.25]);
+        assert_eq!(g.from_atlas([0.75, 0.25]), [2.5, -0.5]);
+        let mut p = project();
+        p.texture_sets[0].uv_tiles = vec![1002, 1001];
+        assert!(p.validate().is_err(), "unsorted");
+        p.texture_sets[0].uv_tiles = vec![1001, 1002];
+        p.validate().unwrap();
+        assert_eq!(p.texture_sets[0].size(), (1024, 512));
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(serde_json::from_str::<Project>(&json).unwrap(), p);
     }
 
     #[test]

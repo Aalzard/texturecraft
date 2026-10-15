@@ -26,6 +26,8 @@ use texturecraft_texel::DilationMap;
 pub const MAX_RESOLUTION: u32 = 8192;
 /// Largest accepted ray count per texel (AO, thickness).
 pub const MAX_RAYS: u32 = 4096;
+/// Largest accepted output (texels over every UV tile).
+pub const MAX_TEXELS: u64 = 1 << 27;
 /// Supersampled texels rasterized at once: bounds the G-buffer at ~200 MB for any resolution × AA.
 const STRIP_TEXELS: usize = 1 << 24;
 
@@ -71,13 +73,18 @@ pub struct BakeRequest<'a> {
     pub high: Option<HighPoly<'a>>,
     /// Cage: the low poly inflated (same triangles); transfer rays start on it.
     pub cage: Option<&'a Mesh>,
+    /// UV tile grid (columns, rows) of the texture set: the maps are `settings.resolution` per
+    /// tile, (1, 1) for a classic set. The mesh's UVs are in atlas space (0..1 over the grid).
+    pub tiles: (u32, u32),
 }
 
-/// Baked maps: row-major `resolution × resolution`, `BakedMap::components()` floats per texel,
+/// Baked maps: row-major `resolution × height`, `BakedMap::components()` floats per texel,
 /// rows top → bottom (y = v·H, as [`UvGBuffer`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct BakeOutput {
+    /// Width in texels.
     pub resolution: u32,
+    pub height: u32,
     pub maps: BTreeMap<BakedMap, Vec<f32>>,
 }
 
@@ -94,6 +101,10 @@ fn validate(req: &BakeRequest) -> Result<(), BakeError> {
     let invalid = |m: String| Err(BakeError::Invalid(m));
     if s.resolution == 0 || s.resolution > MAX_RESOLUTION {
         return invalid(format!("resolution {} is not in 1..={MAX_RESOLUTION}", s.resolution));
+    }
+    let (cols, rows) = req.tiles;
+    if cols == 0 || rows == 0 || (s.resolution as u64 * cols as u64) * (s.resolution as u64 * rows as u64) > MAX_TEXELS {
+        return invalid(format!("{cols} × {rows} UV tiles at {} exceed {MAX_TEXELS} texels", s.resolution));
     }
     if ![1, 2, 4, 8].contains(&s.antialiasing) {
         return invalid(format!("antialiasing {} is not 1, 2, 4 or 8", s.antialiasing));
@@ -145,7 +156,8 @@ pub fn bake(req: &BakeRequest, progress: &Progress) -> Result<BakeOutput, BakeEr
 fn bake_in_strips(req: &BakeRequest, progress: &Progress, strip_texels: usize) -> Result<BakeOutput, BakeError> {
     validate(req)?;
     let s = req.settings;
-    let (res, aa) = (s.resolution as usize, s.antialiasing as usize);
+    let (tile_res, aa) = (s.resolution as usize, s.antialiasing as usize);
+    let (w, h) = (tile_res * req.tiles.0 as usize, tile_res * req.tiles.1 as usize);
     let ctx = maps::Ctx::new(req)?;
     progress.done.store(0, Relaxed);
 
@@ -155,31 +167,31 @@ fn bake_in_strips(req: &BakeRequest, progress: &Progress, strip_texels: usize) -
     if from_normal && !maps.contains(&BakedMap::Normal) {
         maps.push(BakedMap::Normal);
     }
-    let mut bufs = maps.iter().map(|m| alloc(res * res * m.components(), 0.0f32)).collect::<Result<Vec<_>, _>>()?;
-    let mut covered = alloc(res * res, false)?;
-    let total = res.max(1) as u64;
+    let mut bufs = maps.iter().map(|m| alloc(w * h * m.components(), 0.0f32)).collect::<Result<Vec<_>, _>>()?;
+    let mut covered = alloc(w * h, false)?;
+    let total = h.max(1) as u64;
     let rows_done = AtomicU64::new(0);
     let strip_err = || BakeError::Invalid("strip out of range".into());
 
     // Rasterize in horizontal strips of the supersampled image: a strip's G-buffer is built from
     // UVs shifted so that y = v*H - strip_top, which keeps memory bounded at 8K x 8 AA.
-    let sw = res * aa;
-    let strip_rows = (strip_texels / (sw * aa)).max(1).min(res);
+    let (sw, full_h) = (w * aa, h * aa);
+    let strip_rows = (strip_texels / (sw * aa)).max(1).min(h);
     let mut strip_mesh = Mesh { indices: req.mesh.indices.clone(), submeshes: req.mesh.submeshes.clone(), ..Mesh::default() };
-    for y0 in (0..res).step_by(strip_rows) {
-        let rows = strip_rows.min(res - y0);
+    for y0 in (0..h).step_by(strip_rows) {
+        let rows = strip_rows.min(h - y0);
         let (sy0, sh) = (y0 * aa, rows * aa);
-        strip_mesh.uvs = req.mesh.uvs.iter().map(|uv| Vec2::new(uv.x, (uv.y * sw as f32 - sy0 as f32) / sh as f32)).collect();
+        strip_mesh.uvs = req.mesh.uvs.iter().map(|uv| Vec2::new(uv.x, (uv.y * full_h as f32 - sy0 as f32) / sh as f32)).collect();
         let g = UvGBuffer::new(&strip_mesh, req.material, sw as u32, sh as u32);
         let subsamples = |r: usize, x: usize| (0..aa * aa).map(move |k| (r * aa + k / aa) * sw + x * aa + k % aa);
 
         // Per output row: its coverage and its slice of every map.
-        let cov = covered.get_mut(y0 * res..(y0 + rows) * res).ok_or_else(strip_err)?;
-        let mut out_rows: Vec<(&mut [bool], Vec<&mut [f32]>)> = cov.chunks_mut(res).map(|c| (c, Vec::with_capacity(maps.len()))).collect();
+        let cov = covered.get_mut(y0 * w..(y0 + rows) * w).ok_or_else(strip_err)?;
+        let mut out_rows: Vec<(&mut [bool], Vec<&mut [f32]>)> = cov.chunks_mut(w).map(|c| (c, Vec::with_capacity(maps.len()))).collect();
         for (m, data) in maps.iter().zip(bufs.iter_mut()) {
             let comps = m.components();
-            let strip = data.get_mut(y0 * res * comps..(y0 + rows) * res * comps).ok_or_else(strip_err)?;
-            for ((_, row), chunk) in out_rows.iter_mut().zip(strip.chunks_mut(res * comps)) {
+            let strip = data.get_mut(y0 * w * comps..(y0 + rows) * w * comps).ok_or_else(strip_err)?;
+            for ((_, row), chunk) in out_rows.iter_mut().zip(strip.chunks_mut(w * comps)) {
                 row.push(chunk);
             }
         }
@@ -188,7 +200,7 @@ fn bake_in_strips(req: &BakeRequest, progress: &Progress, strip_texels: usize) -
                 return Err(BakeError::Cancelled);
             }
             let mut sample = [[0.0f32; 3]; BakedMap::ALL.len()];
-            for x in 0..res {
+            for x in 0..w {
                 let mut acc = [[0.0f32; 3]; BakedMap::ALL.len()];
                 let mut n = 0u32;
                 for i in subsamples(r, x) {
@@ -222,15 +234,16 @@ fn bake_in_strips(req: &BakeRequest, progress: &Progress, strip_texels: usize) -
     if from_normal {
         let normal = if s.maps.contains(&BakedMap::Normal) { out.get(&BakedMap::Normal).cloned() } else { out.remove(&BakedMap::Normal) };
         if let (Some(normal), Some(curv)) = (normal, out.get_mut(&BakedMap::Curvature)) {
-            maps::curvature_from_normal(&normal, &covered, res, s.curvature_strength, curv);
+            maps::curvature_from_normal(&normal, &covered, w, tile_res, s.curvature_strength, curv);
         }
     }
     if s.dilation > 0 {
-        let pad = DilationMap::new(&covered, s.resolution, s.resolution, Some(s.dilation));
+        // Padding stays inside each UV tile.
+        let pad = DilationMap::in_blocks(&covered, w as u32, h as u32, Some(s.dilation), s.resolution);
         for (m, data) in out.iter_mut() {
             pad.apply(data, m.components());
         }
     }
     progress.done.store(10_000, Relaxed);
-    Ok(BakeOutput { resolution: s.resolution, maps: out })
+    Ok(BakeOutput { resolution: w as u32, height: h as u32, maps: out })
 }

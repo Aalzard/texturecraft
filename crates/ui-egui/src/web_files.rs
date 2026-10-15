@@ -16,7 +16,7 @@ use texturecraft_engine::formats::mesh_import::MESH_EXTENSIONS;
 use crate::TextureCraftApp;
 
 /// What File › Open accepts: projects and meshes.
-pub const OPEN_EXTS: &[&str] = &[PROJECT_EXT, "glb", "gltf", "fbx", "dae", "obj", "ply", "stl"];
+pub const OPEN_EXTS: &[&str] = &[PROJECT_EXT, "glb", "gltf", "fbx", "dae", "usd", "usda", "usdc", "usdz", "obj", "ply", "stl"];
 
 /// Images File › Import resources accepts.
 pub const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "tga", "tif", "tiff", "bmp", "webp", "exr", "hdr"];
@@ -242,11 +242,16 @@ mod web {
         }
     }
 
-    /// File › Export Mesh: download the working mesh as GLB with its textures embedded (the
-    /// browser has no save dialog to pick a format; the desktop also offers OBJ).
-    pub fn export_mesh(app: &mut TextureCraftApp) {
-        let name = format!("{}.glb", sanitize_file_stem(&app.session.doc.project.name));
-        match app.session.mesh_glb_bytes().map_err(|e| e.to_string()).and_then(|b| download(&name, &b)) {
+    /// File › Export Mesh: download the working mesh as `ext`: `glb` or `usdz` with its
+    /// textures inside, else OBJ.
+    pub fn export_mesh(app: &mut TextureCraftApp, ext: &str) {
+        let name = format!("{}.{ext}", sanitize_file_stem(&app.session.doc.project.name));
+        let bytes = match ext {
+            "glb" => app.session.mesh_glb_bytes(),
+            "usdz" => app.session.mesh_usd(texturecraft_engine::formats::UsdFormat::Usdz).map(|u| u.bytes),
+            _ => Ok(app.session.mesh_obj_bytes()),
+        };
+        match bytes.map_err(|e| e.to_string()).and_then(|b| download(&name, &b)) {
             Ok(()) => app.toast(format!("Downloaded {name}"), false),
             Err(e) => app.toast(format!("Couldn't export the mesh: {e}"), true),
         }

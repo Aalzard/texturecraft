@@ -15,7 +15,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New project from a built-in mesh",
             [],
             None,
-            "{mesh?: material_ball|sphere|cube|rounded_cube|cylinder|torus|plane|crate, resolution?: 1024, name?}",
+            "{mesh?: material_ball|sphere|cube|rounded_cube|cylinder|torus|plane|crate|udim_plane, resolution?: 1024, name?, uvTiles?: bool (UDIM; default: when the UVs leave tile 1001)}",
             always,
             new
         ),
@@ -41,7 +41,7 @@ fn new(s: &mut Session, p: &Value) -> Result<Value> {
     let mesh = primitives::builtin(mesh_id).ok_or_else(|| bad("project.new", format!("unknown built-in mesh `{mesh_id}`")))?;
     let res = u64p(p, "resolution").unwrap_or(1024);
     let name = strp(p, "name").unwrap_or("Untitled");
-    let next = Session::new_project(name, mesh, &format!("builtin:{mesh_id}"), None, u32::try_from(res).unwrap_or(0))?;
+    let next = Session::new_project_tiled(name, mesh, &format!("builtin:{mesh_id}"), None, u32::try_from(res).unwrap_or(0), boolp(p, "uvTiles"))?;
     s.switch_to(next);
     Ok(crate::inspect::session(s))
 }

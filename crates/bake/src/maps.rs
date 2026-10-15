@@ -249,9 +249,10 @@ fn tangent_normal(s: &Surface, n: Vec3) -> [f32; 3] {
 
 /// Curvature from a baked tangent-space normal map: the divergence of its XY over `radius`
 /// texels (convex = above 0.5). Writes covered texels of `out` (one float per texel).
-pub(crate) fn curvature_from_normal(normal: &[f32], covered: &[bool], res: usize, strength: f32, out: &mut [f32]) {
+/// `res` is the image width; the sampling step follows the resolution of one UV tile.
+pub(crate) fn curvature_from_normal(normal: &[f32], covered: &[bool], res: usize, tile_res: usize, strength: f32, out: &mut [f32]) {
     use rayon::prelude::*;
-    let r = (res / 512).max(1);
+    let r = (tile_res / 512).max(1);
     let n = |x: usize, y: usize, c: usize, fallback: f32| match covered.get(y * res + x) {
         Some(true) => normal.get((y * res + x) * 3 + c).copied().unwrap_or(fallback),
         _ => fallback,

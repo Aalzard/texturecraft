@@ -7,6 +7,10 @@
 //! composited normal channel and the normal derived from height combined with Reoriented Normal
 //! Mapping. Color maps are sRGB-encoded in 8/16-bit formats and linear in float formats; data
 //! maps are always linear. Height is stored with 0.5 = zero (`h * 0.5 + 0.5`) in every format.
+//!
+//! A UV-tiled (UDIM) texture set writes one file per map per tile: `$udim` in the file name
+//! becomes the tile number, and names without it get `.$udim` appended. Padding never crosses
+//! tiles.
 
 use std::collections::BTreeSet;
 use std::io::Cursor;
@@ -32,12 +36,13 @@ const MAX_STEM: usize = 200;
 pub const MAX_PRESET_NAME: usize = 64;
 
 /// File name template variables with what they become (see [`list_outputs`]).
-pub const FILE_TOKENS: [(&str, &str); 5] = [
+pub const FILE_TOKENS: [(&str, &str); 6] = [
     ("$mesh", "Mesh file name"),
     ("$textureSet", "Texture set name"),
     ("$project", "Project name"),
     ("$channel", "Channel or map id"),
     ("$colorSpace", "sRGB or linear"),
+    ("$udim", "UV tile number (1001 for sets without UV tiles)"),
 ];
 
 /// Why `template` is not a valid file name template: path separators, `..`, control characters
@@ -146,10 +151,12 @@ pub enum VirtualMap {
     Roughness,
     /// Tangent-space normal from the height channel alone (the export's normal convention).
     HeightNormal,
+    /// Sheen color × sheen weight (glTF's sheen color, a color map).
+    SheenTint,
 }
 
 impl VirtualMap {
-    pub const ALL: [VirtualMap; 7] = [
+    pub const ALL: [VirtualMap; 8] = [
         VirtualMap::NormalOpenGl,
         VirtualMap::NormalDirectX,
         VirtualMap::HeightNormal,
@@ -157,6 +164,7 @@ impl VirtualMap {
         VirtualMap::Roughness,
         VirtualMap::AoMixed,
         VirtualMap::F0,
+        VirtualMap::SheenTint,
     ];
 
     pub fn id(self) -> &'static str {
@@ -166,6 +174,7 @@ impl VirtualMap {
             VirtualMap::Roughness => "roughness",
             VirtualMap::AoMixed => "ambientOcclusion",
             VirtualMap::F0 => "f0",
+            VirtualMap::SheenTint => "sheenTint",
         }
     }
 
@@ -178,13 +187,14 @@ impl VirtualMap {
             VirtualMap::Roughness => "Roughness from glossiness",
             VirtualMap::AoMixed => "Mixed AO",
             VirtualMap::F0 => "F0 from specular level",
+            VirtualMap::SheenTint => "Sheen color × weight",
         }
     }
 
-    /// 3 for normals, 1 otherwise.
+    /// 3 for normals and colors, 1 otherwise.
     pub fn components(self) -> usize {
         match self {
-            VirtualMap::NormalOpenGl | VirtualMap::NormalDirectX | VirtualMap::HeightNormal => 3,
+            VirtualMap::NormalOpenGl | VirtualMap::NormalDirectX | VirtualMap::HeightNormal | VirtualMap::SheenTint => 3,
             _ => 1,
         }
     }
@@ -310,16 +320,19 @@ pub struct ExportOptions {
     pub size: Option<u32>,
     /// Normal convention for every normal output instead of the project's / preset's.
     pub normal_format: Option<NormalFormat>,
+    /// UV-tiled sets: one image of the whole tile atlas per map instead of a file per tile
+    /// (for formats without UDIM support, with the mesh's UVs in atlas space).
+    pub atlas: bool,
 }
 
 impl ExportOptions {
     pub fn new(preset: ExportPreset) -> ExportOptions {
-        ExportOptions { preset, format_override: None, bit_depth_override: None, padding: Padding::Infinite, size: None, normal_format: None }
+        ExportOptions { preset, format_override: None, bit_depth_override: None, padding: Padding::Infinite, size: None, normal_format: None, atlas: false }
     }
 }
 
-/// What is exported: one texture set's composite with its baked maps and UV coverage
-/// (`resolution²` flags, row-major).
+/// What is exported: one texture set's composite with its baked maps and UV coverage (one flag
+/// per composite texel, row-major).
 #[derive(Clone, Copy)]
 pub struct ExportInput<'a> {
     pub project: &'a Project,
@@ -347,6 +360,8 @@ pub struct PlannedFile {
     pub map: usize,
     pub format: FileFormat,
     pub bit_depth: u8,
+    /// UDIM number of the tile written (None: the whole set).
+    pub tile: Option<u32>,
     pub warnings: Vec<String>,
 }
 
@@ -368,6 +383,7 @@ fn source_present(set: &TextureSet, s: &SourceRef) -> bool {
         SourceRef::Virtual { map: VirtualMap::F0, .. } => set.has_channel(Channel::SpecularLevel),
         SourceRef::Virtual { map: VirtualMap::Roughness, .. } => set.has_channel(Channel::Glossiness),
         SourceRef::Virtual { map: VirtualMap::HeightNormal, .. } => set.has_channel(Channel::Height),
+        SourceRef::Virtual { map: VirtualMap::SheenTint, .. } => set.has_channel(Channel::SheenWeight),
         SourceRef::Baked { map, .. } => set.baked.contains(map),
         SourceRef::Constant(_) => false,
     }
@@ -390,7 +406,14 @@ fn layout<'m>(set: &TextureSet, map: &'m MapSpec) -> Vec<(Dest, &'m SourceRef)> 
 }
 
 fn is_color(map: &MapSpec) -> bool {
-    map.channels.iter().any(|(d, s)| *d != Dest::A && matches!(s, SourceRef::Channel { channel, .. } if channel.kind() == ChannelKind::Color))
+    map.channels.iter().any(|(d, s)| {
+        *d != Dest::A
+            && match s {
+                SourceRef::Channel { channel, .. } => channel.kind() == ChannelKind::Color,
+                SourceRef::Virtual { map, .. } => *map == VirtualMap::SheenTint,
+                _ => false,
+            }
+    })
 }
 
 fn channel_label(map: &MapSpec) -> &'static str {
@@ -432,6 +455,7 @@ pub fn list_outputs(project: &Project, ts: usize, mesh_name: &str, opts: &Export
     }
     let mut used = BTreeSet::new();
     let mut out = Vec::new();
+    let tiles: Vec<Option<u32>> = if set.uv_tiles.is_empty() || opts.atlas { vec![None] } else { set.uv_tiles.iter().copied().map(Some).collect() };
     for (i, map) in opts.preset.maps.iter().enumerate() {
         if !map.channels.iter().any(|(_, s)| source_present(set, s)) {
             continue;
@@ -439,28 +463,32 @@ pub fn list_outputs(project: &Project, ts: usize, mesh_name: &str, opts: &Export
         let format = opts.format_override.unwrap_or(map.format);
         let bit_depth = format.depth(opts.bit_depth_override.unwrap_or(map.bit_depth));
         let color_space = if is_color(map) && !format.is_float() { "sRGB" } else { "linear" };
-        let stem = map
-            .file
-            .replace("$project", &project.name)
-            .replace("$mesh", mesh_name)
-            .replace("$textureSet", &set.name)
-            .replace("$channel", channel_label(map))
-            .replace("$colorSpace", color_space);
-        let stem = sanitize_file_stem(&stem);
-        let ext = format.extension();
-        let mut name = format!("{stem}.{ext}");
-        let mut warnings = Vec::new();
-        // Case-insensitive: Windows and macOS file systems are.
-        let mut k = 2;
-        while used.contains(&name.to_ascii_lowercase()) {
-            name = format!("{stem}_{k}.{ext}");
-            k += 1;
+        // One file per UV tile: names without `$udim` get it appended.
+        let template = if tiles.iter().any(Option::is_some) && !map.file.contains("$udim") { format!("{}.$udim", map.file) } else { map.file.clone() };
+        for &tile in &tiles {
+            let stem = template
+                .replace("$udim", &tile.unwrap_or(1001).to_string())
+                .replace("$project", &project.name)
+                .replace("$mesh", mesh_name)
+                .replace("$textureSet", &set.name)
+                .replace("$channel", channel_label(map))
+                .replace("$colorSpace", color_space);
+            let stem = sanitize_file_stem(&stem);
+            let ext = format.extension();
+            let mut name = format!("{stem}.{ext}");
+            let mut warnings = Vec::new();
+            // Case-insensitive: Windows and macOS file systems are.
+            let mut k = 2;
+            while used.contains(&name.to_ascii_lowercase()) {
+                name = format!("{stem}_{k}.{ext}");
+                k += 1;
+            }
+            if k > 2 {
+                warnings.push(format!("\"{stem}.{ext}\" is produced by more than one map; this one was renamed to \"{name}\""));
+            }
+            used.insert(name.to_ascii_lowercase());
+            out.push(PlannedFile { name, map: i, format, bit_depth, tile, warnings });
         }
-        if k > 2 {
-            warnings.push(format!("\"{stem}.{ext}\" is produced by more than one map; this one was renamed to \"{name}\""));
-        }
-        used.insert(name.to_ascii_lowercase());
-        out.push(PlannedFile { name, map: i, format, bit_depth, warnings });
     }
     Ok(out)
 }
@@ -481,7 +509,11 @@ struct Sampler<'a> {
     comp: &'a Composite,
     baked: &'a BakedMaps,
     coverage: &'a [bool],
+    /// Composite width.
     res: u32,
+    /// Texels per UV tile (`res` for a classic set): the height slope and the Sobel window
+    /// follow the tile.
+    tile_res: u32,
     /// Normal convention overriding every normal output.
     normal_override: Option<NormalFormat>,
     project_normal: NormalFormat,
@@ -520,14 +552,16 @@ impl Sampler<'_> {
     /// Normal from the height channel (3×3 Sobel; uncovered neighbours repeat the centre).
     fn height_normal(&self, x: u32, y: u32) -> Vec3 {
         let center = self.channel(Channel::Height, At::Texel(x, y))[0];
-        let last = self.res.saturating_sub(1) as i64;
+        // Clamped to the texel's UV tile.
+        let t = self.tile_res.max(1);
+        let (x0, y0, last) = ((x / t * t) as i64, (y / t * t) as i64, t as i64 - 1);
         let h = |dx: i64, dy: i64| {
-            let (sx, sy) = ((x as i64 + dx).clamp(0, last) as u32, (y as i64 + dy).clamp(0, last) as u32);
+            let (sx, sy) = ((x as i64 + dx).clamp(x0, x0 + last) as u32, (y as i64 + dy).clamp(y0, y0 + last) as u32);
             if self.covered(sx, sy) { self.channel(Channel::Height, At::Texel(sx, sy))[0] } else { center }
         };
         let gx = (h(1, -1) + 2.0 * h(1, 0) + h(1, 1) - h(-1, -1) - 2.0 * h(-1, 0) - h(-1, 1)) / 8.0;
         let gy = (h(-1, 1) + 2.0 * h(0, 1) + h(1, 1) - h(-1, -1) - 2.0 * h(0, -1) - h(1, -1)) / 8.0;
-        let s = self.set.height_strength * self.res as f32 / HEIGHT_SPAN;
+        let s = self.set.height_strength * self.tile_res as f32 / HEIGHT_SPAN;
         // Image y points down; OpenGL normals have +Y up the image.
         Vec3::new(-gx * s, gy * s, 1.0).try_normalize().unwrap_or(Vec3::Z)
     }
@@ -569,6 +603,7 @@ impl Sampler<'_> {
                 VirtualMap::Glossiness => [1.0 - self.channel(Channel::Roughness, at)[0]; 3],
                 VirtualMap::F0 => [0.08 * self.channel(Channel::SpecularLevel, at)[0]; 3],
                 VirtualMap::Roughness => [1.0 - self.channel(Channel::Glossiness, at)[0]; 3],
+                VirtualMap::SheenTint => self.channel(Channel::SheenColor, at).map(|c| c * self.channel(Channel::SheenWeight, at)[0]),
                 VirtualMap::HeightNormal => {
                     let n = match at {
                         At::Texel(x, y) => self.height_normal(x, y),
@@ -595,17 +630,20 @@ impl Sampler<'_> {
 pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<ExportedFile>> {
     let planned = list_outputs(input.project, input.ts, input.mesh_name, opts)?;
     let set = input.project.texture_set(input.ts)?;
-    let res = input.composite.resolution;
-    if res == 0 || res > MAX_IMAGE_SIZE {
-        return Err(FormatError::Invalid(format!("composite resolution {res} is out of range")));
+    let (res, height) = (input.composite.resolution, input.composite.height);
+    let grid = set.tile_grid();
+    let tile_res = res / grid.map_or(1, |g| g.cols.max(1));
+    if tile_res == 0 || tile_res > MAX_IMAGE_SIZE || height != tile_res * grid.map_or(1, |g| g.rows) {
+        return Err(FormatError::Invalid(format!("composite size {res}×{height} does not fit texture set \"{}\"", set.name)));
     }
-    if input.coverage.len() != res as usize * res as usize {
-        return Err(FormatError::Invalid(format!("coverage has {} texels, expected {res}²", input.coverage.len())));
+    if input.coverage.len() != res as usize * height as usize {
+        return Err(FormatError::Invalid(format!("coverage has {} texels, expected {res}×{height}", input.coverage.len())));
     }
+    // Padding stays inside each UV tile.
     let dmap = match opts.padding {
         Padding::None => None,
-        Padding::Dilation(d) | Padding::DilationDefault(d) => Some(DilationMap::new(input.coverage, res, res, Some(d))),
-        Padding::Infinite => Some(DilationMap::new(input.coverage, res, res, None)),
+        Padding::Dilation(d) | Padding::DilationDefault(d) => Some(DilationMap::in_blocks(input.coverage, res, height, Some(d), tile_res)),
+        Padding::Infinite => Some(DilationMap::in_blocks(input.coverage, res, height, None, tile_res)),
     };
     let beyond_default = matches!(opts.padding, Padding::DilationDefault(_) | Padding::Infinite);
     let sampler = Sampler {
@@ -614,6 +652,7 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
         baked: input.baked,
         coverage: input.coverage,
         res,
+        tile_res,
         normal_override: opts.normal_format,
         project_normal: input.project.normal_format,
     };
@@ -623,10 +662,18 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
             let map = opts.preset.maps.get(p.map).ok_or_else(|| FormatError::Invalid("planned map out of range".into()))?;
             let lay = layout(set, map);
             let n = lay.len();
-            let mut data = vec![0.0f32; res as usize * res as usize * n];
-            data.par_chunks_mut(res as usize * n).enumerate().for_each(|(y, row)| {
-                let y = y as u32;
-                for x in 0..res {
+            // The texels written: one tile, or the whole set.
+            let (x0, y0, w, h) = match (p.tile, grid) {
+                (Some(t), Some(g)) => {
+                    let (bx, by) = g.block(t).ok_or_else(|| FormatError::Invalid(format!("UV tile {t} is not in the set's grid")))?;
+                    (bx * tile_res, by * tile_res, tile_res, tile_res)
+                }
+                _ => (0, 0, res, height),
+            };
+            let mut data = vec![0.0f32; w as usize * h as usize * n];
+            data.par_chunks_mut(w as usize * n).enumerate().for_each(|(row_y, row)| {
+                let y = y0 + row_y as u32;
+                for (col, x) in (x0..x0 + w).enumerate() {
                     let at = if sampler.covered(x, y) {
                         Some(At::Texel(x, y))
                     } else {
@@ -638,43 +685,46 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
                     let Some(at) = at else { continue };
                     let mut cache = None;
                     for (k, (_, src)) in lay.iter().enumerate() {
-                        if let Some(v) = row.get_mut(x as usize * n + k) {
+                        if let Some(v) = row.get_mut(col * n + k) {
                             *v = sampler.sample(src, at, &mut cache);
                         }
                     }
                 }
             });
-            let size = opts.size.unwrap_or(res);
-            let data = resize(data, res, n, size);
+            // `size` is per tile: an atlas scales with it.
+            let scale = |v: u32| (u64::from(v) * u64::from(opts.size.unwrap_or(tile_res)) / u64::from(tile_res)) as u32;
+            let size = (scale(w), scale(h));
+            let data = resize(data, (w, h), n, size);
             let srgb: Vec<bool> = lay.iter().map(|(d, _)| *d != Dest::A && is_color(map) && !p.format.is_float()).collect();
             let mut warnings = p.warnings;
             let bytes = encode(p.format, p.bit_depth, size, n, &data, &srgb, &mut warnings)?;
-            Ok(ExportedFile { name: p.name, bytes, width: size, height: size, warnings })
+            Ok(ExportedFile { name: p.name, bytes, width: size.0, height: size.1, warnings })
         })
         .collect()
 }
 
-/// Resample a square `res²×n` image to `to²`: box filter when shrinking by an integer factor,
-/// bilinear otherwise.
-fn resize(data: Vec<f32>, res: u32, n: usize, to: u32) -> Vec<f32> {
-    if to == res || res == 0 || to == 0 {
+/// Resample a `from` (width, height) image of `n` components to `to` (same aspect): box filter
+/// when shrinking by an integer factor, bilinear otherwise.
+fn resize(data: Vec<f32>, from: (u32, u32), n: usize, to: (u32, u32)) -> Vec<f32> {
+    if to == from || from.0 == 0 || from.1 == 0 || to.0 == 0 || to.1 == 0 {
         return data;
     }
-    let (r, t) = (res as usize, to as usize);
-    let mut out = vec![0.0f32; t * t * n];
+    let ((r, rh), (t, th)) = ((from.0 as usize, from.1 as usize), (to.0 as usize, to.1 as usize));
+    let mut out = vec![0.0f32; t * th * n];
     let px = |x: usize, y: usize, k: usize| data.get((y * r + x) * n + k).copied().unwrap_or(0.0);
+    let boxed = r > t && r % t == 0 && rh % th == 0 && r / t == rh / th;
     out.par_chunks_mut(t * n).enumerate().for_each(|(y, row)| {
         for x in 0..t {
             for k in 0..n {
-                let v = if r > t && r % t == 0 {
+                let v = if boxed {
                     let f = r / t;
                     let sum: f32 = (0..f).flat_map(|dy| (0..f).map(move |dx| (dx, dy))).map(|(dx, dy)| px(x * f + dx, y * f + dy, k)).sum();
                     sum / (f * f) as f32
                 } else {
-                    let s = r as f32 / t as f32;
-                    let (fx, fy) = (((x as f32 + 0.5) * s - 0.5).max(0.0), ((y as f32 + 0.5) * s - 0.5).max(0.0));
-                    let (x0, y0) = ((fx as usize).min(r - 1), (fy as usize).min(r - 1));
-                    let (x1, y1) = ((x0 + 1).min(r - 1), (y0 + 1).min(r - 1));
+                    let (sx, sy) = (r as f32 / t as f32, rh as f32 / th as f32);
+                    let (fx, fy) = (((x as f32 + 0.5) * sx - 0.5).max(0.0), ((y as f32 + 0.5) * sy - 0.5).max(0.0));
+                    let (x0, y0) = ((fx as usize).min(r - 1), (fy as usize).min(rh - 1));
+                    let (x1, y1) = ((x0 + 1).min(r - 1), (y0 + 1).min(rh - 1));
                     let (ax, ay) = (fx - x0 as f32, fy - y0 as f32);
                     let top = px(x0, y0, k) * (1.0 - ax) + px(x1, y0, k) * ax;
                     let bottom = px(x0, y1, k) * (1.0 - ax) + px(x1, y1, k) * ax;
@@ -689,8 +739,9 @@ fn resize(data: Vec<f32>, res: u32, n: usize, to: u32) -> Vec<f32> {
     out
 }
 
-/// Encode a square `size²×n` image (n = 1 L, 2 LA, 3 RGB, 4 RGBA; linear values).
-fn encode(format: FileFormat, depth: u8, size: u32, n: usize, data: &[f32], srgb: &[bool], warnings: &mut Vec<String>) -> Result<Vec<u8>> {
+/// Encode a `size` (width, height) image of `n` components (1 L, 2 LA, 3 RGB, 4 RGBA; linear
+/// values).
+fn encode(format: FileFormat, depth: u8, size: (u32, u32), n: usize, data: &[f32], srgb: &[bool], warnings: &mut Vec<String>) -> Result<Vec<u8>> {
     let failed = |e: &dyn std::fmt::Display| FormatError::Invalid(format!("{} encoding failed: {e}", format.extension()));
     match format {
         FileFormat::Exr => return write_exr(size, n, data, depth == 16).map_err(|e| failed(&e)),
@@ -731,12 +782,12 @@ fn remap(data: &[f32], n: usize, pick: &[usize]) -> Vec<f32> {
     data.chunks_exact(n.max(1)).flat_map(|px| pick.iter().map(|k| px.get(*k).copied().unwrap_or(0.0))).collect()
 }
 
-fn write_image(format: FileFormat, bytes: &[u8], size: u32, color: image::ExtendedColorType) -> image::ImageResult<Vec<u8>> {
+fn write_image(format: FileFormat, bytes: &[u8], (w, h): (u32, u32), color: image::ExtendedColorType) -> image::ImageResult<Vec<u8>> {
     let mut out = Cursor::new(Vec::new());
     let fmt = match format {
         FileFormat::Jpeg => {
             use image::ImageEncoder;
-            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY).write_image(bytes, size, size, color)?;
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY).write_image(bytes, w, h, color)?;
             return Ok(out.into_inner());
         }
         FileFormat::Png => image::ImageFormat::Png,
@@ -747,12 +798,12 @@ fn write_image(format: FileFormat, bytes: &[u8], size: u32, color: image::Extend
         FileFormat::Hdr => image::ImageFormat::Hdr,
         FileFormat::Exr => image::ImageFormat::OpenExr,
     };
-    image::write_buffer_with_format(&mut out, bytes, size, size, color, fmt)?;
+    image::write_buffer_with_format(&mut out, bytes, w, h, color, fmt)?;
     Ok(out.into_inner())
 }
 
 /// OpenEXR with Y / YA / RGB / RGBA channels, half or full float, ZIP compression.
-fn write_exr(size: u32, n: usize, data: &[f32], half: bool) -> exr::error::Result<Vec<u8>> {
+fn write_exr((w, h): (u32, u32), n: usize, data: &[f32], half: bool) -> exr::error::Result<Vec<u8>> {
     use exr::prelude::*;
     let names: &[&str] = match n {
         1 => &["Y"],
@@ -769,7 +820,7 @@ fn write_exr(size: u32, n: usize, data: &[f32], half: bool) -> exr::error::Resul
             AnyChannel::new(*name, samples)
         })
         .collect();
-    let layer = Layer::new((size as usize, size as usize), LayerAttributes::default(), Encoding::SMALL_LOSSLESS, AnyChannels::sort(channels));
+    let layer = Layer::new((w as usize, h as usize), LayerAttributes::default(), Encoding::SMALL_LOSSLESS, AnyChannels::sort(channels));
     let mut out = Cursor::new(Vec::new());
     let image = Image::from_layer(layer);
     let writer = image.write();

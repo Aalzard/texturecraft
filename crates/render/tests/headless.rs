@@ -41,7 +41,7 @@ fn setup() -> Option<(Headless, Frame)> {
     };
     let mesh = primitives::material_ball();
     h.renderer.set_mesh(&h.device, &h.queue, &mesh, 1);
-    h.renderer.set_texture_sets(&h.device, &h.queue, &[(256, 0), (256, 1)], 2);
+    h.renderer.set_texture_sets(&h.device, &h.queue, &[((256, 256), 0), ((256, 256), 1)], 2);
     let mut cam = OrbitCamera { yaw: 0.6, pitch: 0.25, ..OrbitCamera::default() };
     let (lo, hi) = mesh.bounds();
     cam.frame(lo, hi);
@@ -209,7 +209,7 @@ fn ortho_background_matches_perspective() {
 #[ignore]
 fn bench_1080p() {
     let Some((mut h, frame)) = setup() else { return };
-    h.renderer.set_texture_sets(&h.device, &h.queue, &[(2048, 0), (2048, 1)], 2);
+    h.renderer.set_texture_sets(&h.device, &h.queue, &[((2048, 2048), 0), ((2048, 2048), 1)], 2);
     let frame = Frame { size: [1920, 1080], ..frame };
     let run = |h: &mut Headless, frame: &Frame| {
         for _ in 0..5 {
@@ -248,6 +248,12 @@ fn bench_1080p() {
     });
     println!("everything: {:.3} ms/frame", run(&mut h, &all));
     println!("parallax occlusion: {:.3} ms/frame", run(&mut h, &shaded(&frame, |s| s.parallax = true)));
+    // Every extra lobe painted (full-size lobe textures), with the key light.
+    fill_res(&mut h, 2048, &[0, 1], DisplayKind::Lobes, &[255, 25, 200, 60]);
+    fill_res(&mut h, 2048, &[0, 1], DisplayKind::Sheen, &[200, 150, 255, 200]);
+    fill_res(&mut h, 2048, &[0, 1], DisplayKind::Emissive, &[0, 0, 0, 200]);
+    println!("all lobes: {:.3} ms/frame", run(&mut h, &frame));
+    println!("all lobes + key light: {:.3} ms/frame", run(&mut h, &shaded(&frame, |s| s.light = LIGHT)));
     let taa = shaded(&frame, |s| s.taa = true);
     h.render(&taa);
     let t = std::time::Instant::now();
@@ -275,7 +281,7 @@ fn upload_height(h: &mut Headless, f: impl Fn(u32, u32) -> [f32; 4]) {
     for ts in 0..2 {
         for (tx, ty) in (0..16).map(|i| (i % 4, i / 4)) {
             let bytes: Vec<u8> = (0..64 * 64).flat_map(|i| f(tx * 64 + i % 64, ty * 64 + i / 64)).flat_map(|v| half::f16::from_f32(v).to_le_bytes()).collect();
-            h.renderer.upload_tile(&h.queue, ts, DisplayKind::Height, tx, ty, &bytes);
+            h.renderer.upload_tile(&h.device, &h.queue, ts, DisplayKind::Height, tx, ty, &bytes);
         }
     }
 }
@@ -349,4 +355,150 @@ fn idle_accumulation_converges_then_stops() {
     assert_eq!(render(&mut h, &taa, "taa_idle").px, last.px, "a converged view keeps its image");
     render(&mut h, &shaded(&taa, |s| s.env_rotation_deg = 30.0), "taa_changed");
     assert!(h.renderer.accumulating(1), "a change restarts accumulation");
+}
+
+// ---- Extra lobes (clear coat, sheen, anisotropy, subsurface scattering) -----------------------
+
+/// Fill a display texture of texture sets `sets` (256², see `setup`) with one texel.
+fn fill(h: &mut Headless, sets: &[usize], kind: DisplayKind, texel: &[u8]) {
+    fill_res(h, 256, sets, kind, texel);
+}
+
+fn fill_res(h: &mut Headless, res: u32, sets: &[usize], kind: DisplayKind, texel: &[u8]) {
+    let bytes = texel.repeat(64 * 64);
+    let n = res / 64;
+    for &ts in sets {
+        for (tx, ty) in (0..n * n).map(|i| (i % n, i / n)) {
+            h.renderer.upload_tile(&h.device, &h.queue, ts, kind, tx, ty, &bytes);
+        }
+    }
+}
+
+/// Pixels showing texture sets `sets`: those a change of their base color reaches. Leaves the
+/// base color at its default.
+fn mesh_mask(h: &mut Headless, frame: &Frame, sets: &[usize]) -> Vec<bool> {
+    fill(h, sets, DisplayKind::BaseColor, &[255, 0, 0, 255]);
+    let a = render(h, frame, "mask_red");
+    fill(h, sets, DisplayKind::BaseColor, &[0, 255, 0, 255]);
+    let b = render(h, frame, "mask_green");
+    fill(h, sets, DisplayKind::BaseColor, &DisplayKind::BaseColor.default_texel());
+    a.px.chunks(4).zip(b.px.chunks(4)).map(|(x, y)| x != y).collect()
+}
+
+/// Mean of `f(x, y)` over the pixels in `region`.
+fn region_mean(region: &[bool], f: impl Fn(u32, u32) -> f32) -> f32 {
+    let (mut sum, mut n) = (0.0, 0.0);
+    for (i, _) in region.iter().enumerate().filter(|(_, r)| **r) {
+        sum += f(i as u32 % 480, i as u32 / 480);
+        n += 1.0;
+    }
+    sum / f32::max(n, 1.0)
+}
+
+/// Mesh pixels within `r` pixels of the silhouette (`near`), or farther from it.
+fn rim(mask: &[bool], r: usize, near: bool) -> Vec<bool> {
+    let (w, h) = (480, mask.len() / 480);
+    let edge = |x: usize, y: usize| (y.saturating_sub(r)..(y + r + 1).min(h)).any(|yy| (x.saturating_sub(r)..(x + r + 1).min(w)).any(|xx| !mask[yy * w + xx]));
+    (0..mask.len()).map(|i| mask[i] && edge(i % w, i / w) == near).collect()
+}
+
+/// Σ|∂luma/∂y| / Σ|∂luma/∂x| inside `mask`: above 1 where the shading streaks sideways.
+fn gradient_ratio(img: &Img, mask: &[bool]) -> f32 {
+    let (mut gx, mut gy) = (0.0, 0.0);
+    for y in 0..359 {
+        for x in 0..479 {
+            let at = |dx: u32, dy: u32| mask[((y + dy) * 480 + x + dx) as usize];
+            if at(0, 0) && at(1, 0) && at(0, 1) {
+                gx += (img.luma(x + 1, y) - img.luma(x, y)).abs();
+                gy += (img.luma(x, y + 1) - img.luma(x, y)).abs();
+            }
+        }
+    }
+    gy / f32::max(gx, 1e-3)
+}
+
+#[test]
+fn lobe_channels_at_their_defaults_change_nothing() {
+    let Some((mut h, frame)) = setup() else { return };
+    let lit = shaded(&frame, |s| s.light = LIGHT);
+    let base = render(&mut h, &lit, "lobes_absent");
+    // Paint every lobe, then go back to the defaults: full-size textures shade like the placeholders.
+    fill(&mut h, &[0, 1], DisplayKind::Lobes, &[255, 200, 255, 90]);
+    fill(&mut h, &[0, 1], DisplayKind::Sheen, &[255, 0, 0, 255]);
+    fill(&mut h, &[0, 1], DisplayKind::Emissive, &[0, 0, 0, 255]);
+    assert_ne!(render(&mut h, &lit, "lobes_painted").px, base.px);
+    for k in [DisplayKind::Lobes, DisplayKind::Sheen, DisplayKind::Emissive] {
+        fill(&mut h, &[0, 1], k, &k.default_texel());
+    }
+    assert_eq!(render(&mut h, &lit, "lobes_defaults").px, base.px);
+}
+
+#[test]
+fn clear_coat_adds_a_sharp_highlight_over_a_rough_base() {
+    let Some((mut h, frame)) = setup() else { return };
+    let lit = shaded(&frame, |s| s.light = LIGHT);
+    let mask = mesh_mask(&mut h, &lit, &[0, 1]);
+    fill(&mut h, &[0, 1], DisplayKind::Orm, &[255, 255, 0, 128]);
+    let rough = render(&mut h, &lit, "coat_off");
+    fill(&mut h, &[0, 1], DisplayKind::Lobes, &[255, 13, 0, 0]);
+    let coated = render(&mut h, &lit, "coat_on");
+    let peak = |img: &Img| (0..mask.len()).filter(|i| mask[*i]).map(|i| img.luma(i as u32 % 480, i as u32 / 480)).fold(0.0, f32::max);
+    let (p0, p1) = (peak(&rough), peak(&coated));
+    assert!(p1 > p0 + 25.0, "the coat adds a highlight: peak {p0} -> {p1}");
+    // Elsewhere a thin layer of reflection replaces a little of the base.
+    let (m0, m1) = (region_mean(&mask, |x, y| rough.luma(x, y)), region_mean(&mask, |x, y| coated.luma(x, y)));
+    assert!((m1 - m0).abs() < 15.0, "mean {m0} -> {m1}");
+}
+
+#[test]
+fn sheen_brightens_grazing_angles() {
+    let Some((mut h, frame)) = setup() else { return };
+    let mask = mesh_mask(&mut h, &frame, &[0, 1]);
+    fill(&mut h, &[0, 1], DisplayKind::BaseColor, &[30, 30, 30, 255]);
+    let plain = render(&mut h, &frame, "sheen_off");
+    fill(&mut h, &[0, 1], DisplayKind::Sheen, &[255, 255, 255, 255]);
+    let velvet = render(&mut h, &frame, "sheen_on");
+    let gain = |region: &[bool]| region_mean(region, |x, y| velvet.luma(x, y) - plain.luma(x, y));
+    let (g_edge, g_inner) = (gain(&rim(&mask, 4, true)), gain(&rim(&mask, 25, false)));
+    assert!(g_edge > 10.0 && g_edge > 1.5 * g_inner, "rim +{g_edge}, facing +{g_inner}");
+}
+
+#[test]
+fn anisotropy_stretches_highlights_along_the_tangent() {
+    let Some((mut h, frame)) = setup() else { return };
+    let lit = shaded(&frame, |s| s.light = LIGHT);
+    let ball = mesh_mask(&mut h, &lit, &[0]);
+    // A smooth metal ball.
+    fill(&mut h, &[0], DisplayKind::Orm, &[255, 90, 255, 128]);
+    let iso = gradient_ratio(&render(&mut h, &lit, "aniso_off"), &ball);
+    fill(&mut h, &[0], DisplayKind::Lobes, &[0, 25, 255, 0]);
+    let along_u = gradient_ratio(&render(&mut h, &lit, "aniso_along_u"), &ball);
+    fill(&mut h, &[0], DisplayKind::Lobes, &[0, 25, 255, 128]);
+    let along_v = gradient_ratio(&render(&mut h, &lit, "aniso_along_v"), &ball);
+    // The tangent (+u) runs around the ball, across the screen: angle 0 streaks the reflections
+    // sideways, a quarter turn (angle 0.5) up and down.
+    assert!(along_u > 1.15 * iso && along_v < 0.6 * iso, "vertical/horizontal gradients: isotropic {iso}, angle 0 {along_u}, angle 0.5 {along_v}");
+}
+
+#[test]
+fn subsurface_scattering_softens_the_terminator() {
+    let Some((mut h, frame)) = setup() else { return };
+    let lit = shaded(&frame, |s| s.light = LIGHT);
+    let mask = mesh_mask(&mut h, &lit, &[0, 1]);
+    fill(&mut h, &[0, 1], DisplayKind::BaseColor, &[230, 230, 230, 255]);
+    let lambert = render(&mut h, &lit, "sss_off");
+    fill(&mut h, &[0, 1], DisplayKind::Emissive, &[0, 0, 0, 255]);
+    let skin = render(&mut h, &lit, "sss_on");
+    // Quartiles of the Lambert shading: the shadowed side brightens and warms, contrast drops.
+    let luma_of = |i: usize| lambert.luma(i as u32 % 480, i as u32 / 480);
+    let mut lumas: Vec<f32> = (0..mask.len()).filter(|i| mask[*i]).map(luma_of).collect();
+    lumas.sort_by(f32::total_cmp);
+    let (q1, q3) = (lumas[lumas.len() / 4], lumas[lumas.len() * 3 / 4]);
+    let dark: Vec<bool> = (0..mask.len()).map(|i| mask[i] && luma_of(i) <= q1).collect();
+    let bright: Vec<bool> = (0..mask.len()).map(|i| mask[i] && luma_of(i) >= q3).collect();
+    let luma = |img: &Img, region: &[bool]| region_mean(region, |x, y| img.luma(x, y));
+    let warm = |img: &Img| region_mean(&dark, |x, y| img.at(x, y)[0] as f32 - img.at(x, y)[2] as f32);
+    assert!(luma(&skin, &dark) > luma(&lambert, &dark) + 3.0, "shadow side {} -> {}", luma(&lambert, &dark), luma(&skin, &dark));
+    assert!(luma(&skin, &bright) - luma(&skin, &dark) < luma(&lambert, &bright) - luma(&lambert, &dark), "contrast drops");
+    assert!(warm(&skin) > warm(&lambert) + 2.0, "the scatter color tints the falloff ({} -> {})", warm(&lambert), warm(&skin));
 }

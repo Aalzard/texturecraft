@@ -64,7 +64,7 @@ fn shade(app: &TextureCraftApp) -> Shade {
         ViewMode::UvChecker => (3, 0),
     };
     let ts = app.session.ts();
-    let hs = app.session.doc.project.texture_sets.get(ts).map(|t| t.height_strength).unwrap_or(1.0);
+    let hs = app.session.doc.project.texture_sets.get(ts).map(|t| t.atlas_height_strength()).unwrap_or(1.0);
     Shade {
         height_strength: hs,
         view_mode,
@@ -535,9 +535,9 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
             app.ui.uv_zoom = new;
         }
     }
-    let aspect = size.x / size.y.max(1.0);
-    let z = app.ui.uv_zoom * 0.92;
-    let (sx, sy) = if aspect >= 1.0 { (z / aspect, z) } else { (z, z * aspect) };
+    let ts = app.session.ts();
+    let set = app.session.doc.project.texture_sets.get(ts);
+    let [sx, sy] = texturecraft_render::uv_view_scale(size.x / size.y.max(1.0), app.ui.uv_zoom, set.map_or((1, 1), |t| t.size()));
     let pan = app.ui.uv_pan;
     let to_uv = |p: egui::Pos2| {
         let xc = (p.x - rect.left()) / size.x * 2.0 - 1.0;
@@ -591,7 +591,6 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         app.ui.uv_zoom = 1.0;
         app.ui.uv_pan = [0.0, 0.0];
     }
-    let ts = app.session.ts();
     let frame = Frame {
         view_id: VIEW_2D,
         size: [(size.x * ui.ctx().pixels_per_point()).max(1.0) as u32, (size.y * ui.ctx().pixels_per_point()).max(1.0) as u32],
@@ -602,13 +601,23 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     };
     add_callback(app, ui, rect, frame, sync);
     crate::shelf::drop_target(app, ui, &resp, true);
-    // The 0..1 tile outline and the path being edited.
-    ui.painter_at(rect).rect_stroke(
-        Rect::from_two_pos(to(0.0, 0.0), to(1.0, 1.0)),
-        0.0,
-        Stroke::new(1.0, Color32::from_white_alpha(40)),
-        egui::StrokeKind::Outside,
-    );
+    // The UV tile outlines (numbered for UDIM sets) and the path being edited.
+    let painter = ui.painter_at(rect);
+    let set = app.session.doc.project.texture_sets.get(ts);
+    let outline = |r: Rect| painter.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_white_alpha(40)), egui::StrokeKind::Outside);
+    match set.and_then(|t| Some((t, t.tile_grid()?))) {
+        Some((t, g)) => {
+            for (udim, (bx, by)) in t.uv_tiles.iter().filter_map(|u| Some((*u, g.block(*u)?))) {
+                let (u0, v0) = (bx as f32 / g.cols as f32, by as f32 / g.rows as f32);
+                let r = Rect::from_two_pos(to(u0, v0), to(u0 + 1.0 / g.cols as f32, v0 + 1.0 / g.rows as f32));
+                outline(r);
+                painter.text(r.left_top() + vec2(6.0, 4.0), egui::Align2::LEFT_TOP, udim.to_string(), egui::FontId::proportional(11.0), TOKENS.text_dim);
+            }
+        }
+        None => {
+            outline(Rect::from_two_pos(to(0.0, 0.0), to(1.0, 1.0)));
+        }
+    }
     if app.ui.mode == crate::state::Mode::Painting && path_tool {
         path_overlay(app, ui, rect, &resp, true, show);
     }

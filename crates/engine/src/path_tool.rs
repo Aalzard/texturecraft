@@ -148,7 +148,7 @@ impl Session {
         let (gbuf, mut canvas) = self.fill_canvas(ts)?;
         let w = gbuf.width.max(1);
         if uv {
-            let lasso = Lasso::new(poly.iter().map(|p| *p * w as f32).collect());
+            let lasso = Lasso::new(poly.iter().map(|p| *p * Vec2::new(w as f32, gbuf.height as f32)).collect());
             fill_coverage(&mut canvas, &gbuf, |i, _| lasso.coverage(Vec2::new((i as u32 % w) as f32 + 0.5, (i as u32 / w) as f32 + 0.5)));
         } else {
             let lasso = Lasso::new(poly);

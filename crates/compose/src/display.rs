@@ -1,4 +1,20 @@
 //! Conversion of composited tiles to the texture formats the viewport samples.
+//!
+//! GPU packing (one texture per [`DisplayKind`], all `TILE`-aligned, same resolution):
+//!
+//! | texture   | format   | r                 | g              | b                 | a                 |
+//! |-----------|----------|-------------------|----------------|-------------------|-------------------|
+//! | BaseColor | sRGB8    | base color        |                |                   | opacity           |
+//! | Orm       | RGBA8    | AO (× baked)      | roughness      | metallic          | specular level    |
+//! | Normal    | RGBA8    | normal x          | normal y       | normal z          | sheen roughness   |
+//! | Height    | RGBA16F  | height            | Specular (F0) r| g                 | b                 |
+//! | Emissive  | sRGB8    | emissive          |                |                   | scattering weight |
+//! | Lobes     | RGBA8    | coat weight       | coat roughness | anisotropy level  | anisotropy angle  |
+//! | Sheen     | sRGB8    | sheen color       |                |                   | sheen weight      |
+//!
+//! Alpha of sRGB formats is linear. Channels a set lacks pack their default values, which switch
+//! the extra lobes off, so the renderer can keep Lobes and Sheen as 1×1 placeholders until a
+//! tile with a non-default value arrives.
 
 use texturecraft_core::{BakedMap, Channel};
 use texturecraft_texel::{TILE, TILE_AREA, srgb_lut};
@@ -18,12 +34,17 @@ pub enum DisplayKind {
     Normal,
     /// RGBA16F: height in r, the linear Specular (F0) color in gba.
     Height,
-    /// sRGB8: emissive color.
+    /// sRGB8: emissive color, alpha = scattering weight.
     Emissive,
+    /// RGBA8 linear: coat weight, coat roughness, anisotropy level, anisotropy angle.
+    Lobes,
+    /// sRGB8: sheen color, alpha = sheen weight.
+    Sheen,
 }
 
 impl DisplayKind {
-    pub const ALL: [DisplayKind; 5] = [DisplayKind::BaseColor, DisplayKind::Orm, DisplayKind::Normal, DisplayKind::Height, DisplayKind::Emissive];
+    pub const ALL: [DisplayKind; 7] =
+        [DisplayKind::BaseColor, DisplayKind::Orm, DisplayKind::Normal, DisplayKind::Height, DisplayKind::Emissive, DisplayKind::Lobes, DisplayKind::Sheen];
 
     /// Bytes per texel of the upload format.
     pub fn bytes_per_texel(self) -> usize {
@@ -34,11 +55,20 @@ impl DisplayKind {
     pub fn of_channel(c: Channel) -> DisplayKind {
         match c {
             Channel::BaseColor | Channel::Opacity => DisplayKind::BaseColor,
-            Channel::Normal => DisplayKind::Normal,
+            Channel::Normal | Channel::SheenRoughness => DisplayKind::Normal,
             Channel::Height | Channel::Specular => DisplayKind::Height,
-            Channel::Emissive => DisplayKind::Emissive,
+            Channel::Emissive | Channel::ScatterWeight => DisplayKind::Emissive,
+            Channel::CoatWeight | Channel::CoatRoughness | Channel::AnisotropyLevel | Channel::AnisotropyAngle => DisplayKind::Lobes,
+            Channel::SheenColor | Channel::SheenWeight => DisplayKind::Sheen,
             _ => DisplayKind::Orm,
         }
+    }
+
+    /// The texel of a set that has none of this texture's channels (the GPU clear value).
+    pub fn default_texel(self) -> Vec<u8> {
+        let mut px = tile_bytes(&Composite::new(&[], TILE), &BakedMaps::default(), self, 0, 0);
+        px.truncate(self.bytes_per_texel());
+        px
     }
 }
 
@@ -55,10 +85,19 @@ pub fn tile_bytes(comp: &Composite, baked: &BakedMaps, kind: DisplayKind, tx: u3
     let get = |c: Channel| comp.channels.get(&c).and_then(|img| img.tile(tx, ty));
     let res = comp.resolution;
     let default16 = |c: Channel| texturecraft_texel::to_u16(c.default_value()[0]);
+    // A scalar channel's texel `i` as 8 bits (its default where the set lacks it).
+    let scalar8 = |c: Channel| {
+        let (t, d) = (get(c), default16(c));
+        move |i: usize| u8_of(t.and_then(|t| t.get(i).copied()).unwrap_or(d))
+    };
     match kind {
-        DisplayKind::BaseColor | DisplayKind::Emissive => {
-            let (c, alpha) = if kind == DisplayKind::BaseColor { (Channel::BaseColor, get(Channel::Opacity)) } else { (Channel::Emissive, None) };
-            let src = get(c);
+        DisplayKind::BaseColor | DisplayKind::Emissive | DisplayKind::Sheen => {
+            let (c, alpha) = match kind {
+                DisplayKind::BaseColor => (Channel::BaseColor, Channel::Opacity),
+                DisplayKind::Emissive => (Channel::Emissive, Channel::ScatterWeight),
+                _ => (Channel::SheenColor, Channel::SheenWeight),
+            };
+            let (src, alpha) = (get(c), scalar8(alpha));
             let d = c.default_value().map(|v| (texturecraft_texel::linear_to_srgb(v) * 255.0 + 0.5) as u8);
             for i in 0..TILE_AREA {
                 let px = &mut out[i * 4..i * 4 + 4];
@@ -70,7 +109,15 @@ pub fn tile_bytes(comp: &Composite, baked: &BakedMaps, kind: DisplayKind, tx: u3
                     }
                     None => px[..3].copy_from_slice(&d),
                 }
-                px[3] = alpha.map(|a| u8_of(a.get(i).copied().unwrap_or(65535))).unwrap_or(255);
+                px[3] = alpha(i);
+            }
+        }
+        DisplayKind::Lobes => {
+            let lanes = [Channel::CoatWeight, Channel::CoatRoughness, Channel::AnisotropyLevel, Channel::AnisotropyAngle].map(scalar8);
+            for (i, px) in out.chunks_exact_mut(4).enumerate() {
+                for (d, lane) in px.iter_mut().zip(&lanes) {
+                    *d = lane(i);
+                }
             }
         }
         DisplayKind::Orm => {
@@ -91,7 +138,7 @@ pub fn tile_bytes(comp: &Composite, baked: &BakedMaps, kind: DisplayKind, tx: u3
             }
         }
         DisplayKind::Normal => {
-            let n = get(Channel::Normal);
+            let (n, sheen_rough) = (get(Channel::Normal), scalar8(Channel::SheenRoughness));
             for i in 0..TILE_AREA {
                 let px = &mut out[i * 4..i * 4 + 4];
                 match n {
@@ -102,7 +149,7 @@ pub fn tile_bytes(comp: &Composite, baked: &BakedMaps, kind: DisplayKind, tx: u3
                     }
                     None => px[..3].copy_from_slice(&[128, 128, 255]),
                 }
-                px[3] = 255;
+                px[3] = sheen_rough(i);
             }
         }
         DisplayKind::Height => {
@@ -143,7 +190,13 @@ mod tests {
         let orm = tile_bytes(&comp, &BakedMaps::default(), DisplayKind::Orm, 0, 0);
         assert_eq!(&orm[..4], &[255, 128, 0, 128]);
         let n = tile_bytes(&comp, &BakedMaps::default(), DisplayKind::Normal, 0, 0);
-        assert_eq!(&n[..4], &[128, 128, 255, 255]);
+        assert_eq!(&n[..4], &[128, 128, 255, 128], "sheen roughness 0.5 rides in alpha");
+        assert_eq!(&tile_bytes(&comp, &BakedMaps::default(), DisplayKind::Emissive, 0, 0)[..4], &[0, 0, 0, 0]);
+        assert_eq!(&tile_bytes(&comp, &BakedMaps::default(), DisplayKind::Lobes, 0, 0)[..4], &[0, 25, 0, 0], "lobes off, coat roughness 0.1");
+        assert_eq!(&tile_bytes(&comp, &BakedMaps::default(), DisplayKind::Sheen, 0, 0)[..4], &[255, 255, 255, 0]);
+        for k in DisplayKind::ALL {
+            assert_eq!(k.default_texel(), tile_bytes(&comp, &BakedMaps::default(), k, 3, 5)[..k.bytes_per_texel()]);
+        }
         let h = tile_bytes(&comp, &BakedMaps::default(), DisplayKind::Height, 0, 0);
         assert_eq!(h.len(), TILE_AREA * 8);
         assert_eq!(half::f16::from_le_bytes([h[2], h[3]]).to_f32(), half::f16::from_f32(0.04).to_f32(), "default F0");
@@ -162,5 +215,27 @@ mod tests {
         assert!((at(1) - 1.0).abs() < 1e-3 && (at(2) - 0.5).abs() < 1e-3 && at(3) == 0.0);
         assert_eq!(DisplayKind::of_channel(Channel::Specular), DisplayKind::Height);
         assert_eq!(DisplayKind::of_channel(Channel::Glossiness), DisplayKind::Orm);
+    }
+
+    #[test]
+    fn lobe_channels_pack_into_lobes_sheen_and_spare_alphas() {
+        let mut comp = Composite::new(&Channel::LOBES, 64);
+        let mut set = |c: Channel, v: &[u16]| comp.channels.get_mut(&c).unwrap().set(1, 0, v);
+        set(Channel::CoatWeight, &[to_u16(1.0)]);
+        set(Channel::CoatRoughness, &[to_u16(0.2)]);
+        set(Channel::AnisotropyLevel, &[to_u16(0.6)]);
+        set(Channel::AnisotropyAngle, &[to_u16(0.25)]);
+        set(Channel::SheenColor, &[to_u16(1.0), 0, to_u16(0.5)]);
+        set(Channel::SheenWeight, &[to_u16(0.8)]);
+        set(Channel::SheenRoughness, &[to_u16(0.3)]);
+        set(Channel::ScatterWeight, &[to_u16(0.4)]);
+        let px = |k: DisplayKind| tile_bytes(&comp, &BakedMaps::default(), k, 0, 0)[4..8].to_vec();
+        let near = |a: &[u8], b: &[u8]| a.iter().zip(b).all(|(x, y)| x.abs_diff(*y) <= 1);
+        assert!(near(&px(DisplayKind::Lobes), &[255, 51, 153, 64]), "{:?}", px(DisplayKind::Lobes));
+        assert!(near(&px(DisplayKind::Sheen), &[255, 0, 188, 204]), "{:?}", px(DisplayKind::Sheen));
+        assert!(near(&px(DisplayKind::Normal)[3..], &[77]) && near(&px(DisplayKind::Emissive)[3..], &[102]));
+        for c in Channel::LOBES {
+            assert_ne!(DisplayKind::of_channel(c), DisplayKind::Orm, "{c:?}");
+        }
     }
 }

@@ -13,7 +13,7 @@ use texturecraft_render::ibl::ENVIRONMENTS;
 use crate::TextureCraftApp;
 use crate::state::Mode;
 use crate::theme::{TOKENS, caption};
-use crate::widgets::{icon_button, slider};
+use crate::widgets::{color_swatch, icon_button, slider};
 
 pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
     new_project(app, ctx);
@@ -21,6 +21,8 @@ pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
     settings(app, ctx);
     crate::keymap::window(app, ctx);
     crate::windows::export(app, ctx);
+    #[cfg(target_arch = "wasm32")]
+    export_mesh(app, ctx);
     if app.ui.mode == Mode::Baking {
         bake_bar(app, ctx);
     }
@@ -96,10 +98,20 @@ pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
     } else {
         "Base color, Metallic, Roughness and Specular level."
     };
-    ui.label(RichText::new(format!("GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading. {channels}")).color(TOKENS.text_dim));
+    ui.label(RichText::new(format!("GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading. {channels} Optional channels add a clear coat (Coat weight, Coat roughness), sheen (Sheen weight, color, roughness), anisotropy (Anisotropy level, angle) and subsurface scattering (Scattering weight).")).color(TOKENS.text_dim));
     ui.add_space(6.0);
     ui.checkbox(&mut d.parallax, "Parallax occlusion (height channel)")
         .on_hover_text("Offsets the textures by the height channel, at the height to normal strength");
+    ui.add_space(6.0);
+    ui.label(caption("Subsurface scattering"));
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Scatter color").color(TOKENS.text));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| color_swatch(ui, "shader_scatter_color", &mut d.scatter_color, 44.0))
+    })
+    .response
+    .on_hover_text("Color of the light that travels under the surface (each channel goes as far as its value)");
+    slider(ui, "Scatter radius", &mut d.scatter_radius, 0.0..=1.0, 3)
+        .on_hover_text("How far light travels under the surface, as a fraction of the mesh size (where the Scattering weight channel is painted)");
     if d != before {
         app.session.doc.project.display = d;
     }
@@ -176,6 +188,18 @@ fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
                 }
             });
             ui.end_row();
+            ui.label("UV tiles (UDIM)");
+            let tiles_label = |m: Option<bool>| match m {
+                None => "Automatic (from the mesh UVs)",
+                Some(true) => "On",
+                Some(false) => "Off",
+            };
+            egui::ComboBox::from_id_salt("np_tiles").selected_text(tiles_label(app.ui.new_project.uv_tiles)).show_ui(ui, |ui| {
+                for m in [None, Some(true), Some(false)] {
+                    ui.selectable_value(&mut app.ui.new_project.uv_tiles, m, tiles_label(m));
+                }
+            });
+            ui.end_row();
             ui.label("Name");
             ui.text_edit_singleline(&mut app.ui.new_project.name);
             ui.end_row();
@@ -195,8 +219,8 @@ fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
     if create {
         let np = app.ui.new_project.clone();
         let r = match &np.file {
-            Some(path) => file_new_from_mesh(app, path, np.resolution, &np.name),
-            None => app.run("project.new", json!({"mesh": np.mesh, "resolution": np.resolution, "name": np.name})).map(|_| ()),
+            Some(path) => app.run("file.new", json!({"mesh": path, "resolution": np.resolution, "name": np.name, "uvTiles": np.uv_tiles})).map(|_| ()),
+            None => app.run("project.new", json!({"mesh": np.mesh, "resolution": np.resolution, "name": np.name, "uvTiles": np.uv_tiles})).map(|_| ()),
         };
         if r.is_some() {
             app.ui.windows.new_project = false;
@@ -239,6 +263,35 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
         }
     });
     app.ui.windows.settings = open;
+}
+
+/// Browser File › Export Mesh: pick the download format (the desktop picks it in the save
+/// dialog).
+#[cfg(target_arch = "wasm32")]
+fn export_mesh(app: &mut TextureCraftApp, ctx: &egui::Context) {
+    const FORMATS: [(&str, &str, &str); 3] = [
+        ("glb", "glTF binary (.glb)", "Textures embedded; for game engines and most viewers"),
+        ("usdz", "USDZ (.usdz)", "Textures packaged; for USD tools and AR Quick Look"),
+        ("obj", "Wavefront OBJ (.obj)", "Geometry and UVs only"),
+    ];
+    if !app.ui.windows.export_mesh {
+        return;
+    }
+    let mut open = true;
+    let mut picked = None;
+    egui::Window::new("Export mesh").open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
+        ui.label(caption("Download as"));
+        for (ext, label, hint) in FORMATS {
+            if ui.add_sized(vec2(220.0, 24.0), egui::Button::new(label)).on_hover_text(hint).clicked() {
+                picked = Some(ext);
+            }
+        }
+    });
+    if let Some(ext) = picked {
+        crate::web_files::export_mesh(app, ext);
+        open = false;
+    }
+    app.ui.windows.export_mesh = open;
 }
 
 fn about(app: &mut TextureCraftApp, ctx: &egui::Context) {
@@ -515,10 +568,6 @@ fn pick_mesh_file() -> Option<String> {
     None
 }
 
-fn file_new_from_mesh(app: &mut TextureCraftApp, path: &str, resolution: u32, name: &str) -> Option<()> {
-    app.run("file.new", json!({"mesh": path, "resolution": resolution, "name": name})).map(|_| ())
-}
-
 /// Remember a project path in File ▸ Recent projects.
 pub fn remember(app: &mut TextureCraftApp, path: &str) {
     app.ui.recent.retain(|p| p != path);
@@ -604,8 +653,14 @@ pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) ->
         }
         "file.exportMesh" => {
             let name = format!("{}.obj", texturecraft_engine::formats::export::sanitize_file_stem(&app.session.doc.project.name));
-            if let Some(p) =
-                rfd::FileDialog::new().add_filter("Wavefront OBJ", &["obj"]).add_filter("glTF binary with textures", &["glb"]).set_file_name(name).save_file()
+            if let Some(p) = rfd::FileDialog::new()
+                .add_filter("Wavefront OBJ", &["obj"])
+                .add_filter("glTF binary with textures", &["glb"])
+                .add_filter("USDZ with textures", &["usdz"])
+                .add_filter("USD text, textures alongside", &["usda"])
+                .add_filter("USD binary, textures alongside", &["usdc"])
+                .set_file_name(name)
+                .save_file()
                 && let Some(r) = app.run("file.exportMesh", json!({"path": p.display().to_string()}))
             {
                 let p = r.get("path").and_then(|p| p.as_str()).unwrap_or_default().to_string();
@@ -639,7 +694,7 @@ pub fn file_action(app: &mut TextureCraftApp, ctx: &egui::Context, id: &str) -> 
         "file.open" => crate::web_files::open(ctx),
         "file.importResources" | "resource.import" => crate::web_files::import_images(ctx),
         "file.save" | "file.saveAs" | "file.saveCopy" => crate::web_files::save_project(app),
-        "file.exportMesh" => crate::web_files::export_mesh(app),
+        "file.exportMesh" => app.ui.windows.export_mesh = true,
         _ => return false,
     }
     true

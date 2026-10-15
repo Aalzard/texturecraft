@@ -1,5 +1,7 @@
 // TextureCraft viewport shaders: metal/roughness (or specular/glossiness) PBR with image-based
-// lighting and optional parallax occlusion mapping, the 2D UV view,
+// lighting and optional parallax occlusion mapping, plus the optional lobes of the extra channels
+// (clear coat, sheen, anisotropy, subsurface scattering; packing in compose/src/display.rs), the
+// 2D UV view,
 // the background, debug views and the 3D wireframe. Output is scene-linear HDR, premultiplied by
 // alpha = scene coverage over the flat studio backdrop; exposure, tone mapping and sRGB encoding
 // happen in the post pass (post.wgsl). WebGPU/WebGL2-safe (fragment passes only).
@@ -17,6 +19,7 @@ struct Globals {
     light_vp: mat4x4<f32>, // world -> shadow map clip space
     shadow: vec4<f32>,   // x shadows on (1), y shadow map texel (uv), z normal offset (world units), w -
     material: vec4<f32>, // x specular/glossiness shading (1), y parallax occlusion (1), z accumulation sample index, w -
+    scatter: vec4<f32>,  // xyz per-channel diffuse wrap at scattering weight 1 (0 = Lambert), w -
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -30,8 +33,10 @@ struct Globals {
 @group(1) @binding(2) var t_nrm: texture_2d<f32>;
 @group(1) @binding(3) var t_height: texture_2d<f32>;
 @group(1) @binding(4) var t_emis: texture_2d<f32>;
-@group(1) @binding(5) var t_aux: texture_2d<f32>;
-@group(1) @binding(6) var samp: sampler;
+@group(1) @binding(5) var t_lobes: texture_2d<f32>;
+@group(1) @binding(6) var t_sheen: texture_2d<f32>;
+@group(1) @binding(7) var t_aux: texture_2d<f32>;
+@group(1) @binding(8) var samp: sampler;
 
 struct VIn {
     @location(0) pos: vec3<f32>,
@@ -87,21 +92,91 @@ fn env_rotate(d: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(c * d.x - s * d.z, d.y, s * d.x + c * d.z);
 }
 
-fn sh_irradiance(n0: vec3<f32>) -> vec3<f32> {
+// Diffuse irradiance from the SH environment. `wrap` (per channel, 0..1) convolves with the
+// wrapped-Lambert kernel max(cos + w, 0) / (1 + w)^2 instead of the cosine: its bands 1 and 2
+// scale by exactly 1 - w/2 and (1 - w)^2 (w = 0 is plain Lambert).
+fn sh_irradiance(n0: vec3<f32>, wrap: vec3<f32>) -> vec3<f32> {
     let n = env_rotate(n0);
     let x = n.x;
     let y = n.y;
     let z = n.z;
+    let f1 = 1.0 - 0.5 * wrap;
+    let f2 = (1.0 - wrap) * (1.0 - wrap);
     var r = g.sh[0].xyz * 0.282095;
-    r += g.sh[1].xyz * (0.488603 * y);
-    r += g.sh[2].xyz * (0.488603 * z);
-    r += g.sh[3].xyz * (0.488603 * x);
-    r += g.sh[4].xyz * (1.092548 * x * y);
-    r += g.sh[5].xyz * (1.092548 * y * z);
-    r += g.sh[6].xyz * (0.315392 * (3.0 * z * z - 1.0));
-    r += g.sh[7].xyz * (1.092548 * x * z);
-    r += g.sh[8].xyz * (0.546274 * (x * x - y * y));
+    r += f1 * (g.sh[1].xyz * (0.488603 * y));
+    r += f1 * (g.sh[2].xyz * (0.488603 * z));
+    r += f1 * (g.sh[3].xyz * (0.488603 * x));
+    r += f2 * (g.sh[4].xyz * (1.092548 * x * y));
+    r += f2 * (g.sh[5].xyz * (1.092548 * y * z));
+    r += f2 * (g.sh[6].xyz * (0.315392 * (3.0 * z * z - 1.0)));
+    r += f2 * (g.sh[7].xyz * (1.092548 * x * z));
+    r += f2 * (g.sh[8].xyz * (0.546274 * (x * x - y * y)));
     return max(r, vec3<f32>(0.0));
+}
+
+fn max3(c: vec3<f32>) -> f32 {
+    return max(c.r, max(c.g, c.b));
+}
+
+fn schlick(f0: f32, cos_t: f32) -> f32 {
+    return f0 + (1.0 - f0) * pow(1.0 - cos_t, 5.0);
+}
+
+// GGX distribution × height-correlated Smith visibility (isotropic, alpha = roughness^2).
+fn ggx_dv(a: f32, nov: f32, nol: f32, noh: f32) -> f32 {
+    let a2 = a * a;
+    let d = a2 / (PI * pow(noh * noh * (a2 - 1.0) + 1.0, 2.0));
+    let vis = 0.5 / max(nol * sqrt(nov * nov * (1.0 - a2) + a2) + nov * sqrt(nol * nol * (1.0 - a2) + a2), 1e-5);
+    return d * vis;
+}
+
+// Anisotropic GGX × height-correlated Smith visibility (Heitz 2014). `tb_*`: the (tangent,
+// bitangent) components of h, v and l in the anisotropy frame.
+fn ggx_dv_aniso(at: f32, ab: f32, tb_h: vec2<f32>, noh: f32, tb_v: vec2<f32>, nov: f32, tb_l: vec2<f32>, nol: f32) -> f32 {
+    let a2 = at * ab;
+    let dd = vec3<f32>(ab * tb_h.x, at * tb_h.y, a2 * noh);
+    let w2 = a2 / dot(dd, dd);
+    let d = a2 * w2 * w2 / PI;
+    let lv = nol * length(vec3<f32>(at * tb_v.x, ab * tb_v.y, nov));
+    let ll = nov * length(vec3<f32>(at * tb_l.x, ab * tb_l.y, nol));
+    return d * 0.5 / max(lv + ll, 1e-5);
+}
+
+// Sheen: the "Charlie" distribution and the visibility of Estevez & Kulla, "Production Friendly
+// Microfacet Sheen BRDF" (2017), alpha = sheen roughness^2. Same math as trace.rs.
+fn d_charlie(a: f32, noh: f32) -> f32 {
+    let inv = 1.0 / a;
+    let sin2 = max(1.0 - noh * noh, 1e-4);
+    return (2.0 + inv) * pow(sin2, inv * 0.5) / (2.0 * PI);
+}
+
+fn sheen_l(x: f32, a: f32) -> f32 {
+    let o = (1.0 - a) * (1.0 - a);
+    let p = mix(vec4<f32>(21.5473, 3.82987, 0.19823, -1.97760), vec4<f32>(25.3245, 3.32435, 0.16801, -1.27393), o);
+    let e = mix(-4.32054, -4.85967, o);
+    return p.x / (1.0 + p.y * pow(max(x, 1e-4), p.z)) + p.w * x + e;
+}
+
+fn sheen_lambda(c: f32, a: f32) -> f32 {
+    if (c < 0.5) {
+        return exp(sheen_l(c, a));
+    }
+    return exp(2.0 * sheen_l(0.5, a) - sheen_l(1.0 - c, a));
+}
+
+fn sheen_vis(nov: f32, nol: f32, a: f32) -> f32 {
+    return clamp(1.0 / ((1.0 + sheen_lambda(nov, a) + sheen_lambda(nol, a)) * 4.0 * nov * max(nol, 1e-4)), 0.0, 1.0);
+}
+
+// Directional albedo of the sheen lobe: a fit of its numerical integral (error under 0.03 for
+// sheen roughness 0.2..1 away from grazing angles; trace.rs tests it). It lights the sheen from
+// the environment and scales the layers below so base + sheen stays energy preserving.
+fn sheen_albedo(nov: f32, r: f32) -> f32 {
+    let a = 1.2416 - 1.7580 * r + 1.7164 * r * r;
+    let b = 6.2757 / (r + 0.2077) - 8.6381 + 4.4979 * r;
+    let q = 1.2287 - 0.5161 * r;
+    let c = 0.1121 * r - 0.3840 * r * r;
+    return clamp(a * exp(-b * pow(nov, q)) + c, 0.0, 1.0);
 }
 
 // Analytic split-sum environment BRDF (Karis, "Physically Based Shading on Mobile").
@@ -153,6 +228,20 @@ fn rnm(base: vec3<f32>, detail: vec3<f32>) -> vec3<f32> {
     let t = base + vec3<f32>(0.0, 0.0, 1.0);
     let u = detail * vec3<f32>(-1.0, -1.0, 1.0);
     return normalize(t * dot(t, u) - u * t.z);
+}
+
+// Channel views of the extra lobes (`Channel::ALL` indices 11..18).
+fn lobe_view(ch: i32, lobes: vec4<f32>, sheen: vec4<f32>, sheen_rough: f32, scatter: f32) -> vec4<f32> {
+    switch ch {
+        case 11: { return raw_out(vec3<f32>(lobes.r)); }
+        case 12: { return raw_out(vec3<f32>(lobes.g)); }
+        case 13: { return raw_out(vec3<f32>(sheen.a)); }
+        case 14: { return data_out(sheen.rgb); }
+        case 15: { return raw_out(vec3<f32>(sheen_rough)); }
+        case 16: { return raw_out(vec3<f32>(lobes.b)); }
+        case 17: { return raw_out(vec3<f32>(lobes.a)); }
+        default: { return raw_out(vec3<f32>(scatter)); }
+    }
 }
 
 fn hash12(p: vec2<f32>) -> f32 {
@@ -207,8 +296,12 @@ fn fs_mesh(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32
     }
     let base_s = textureSample(t_base, samp, uv);
     let orm = textureSample(t_orm, samp, uv);
-    let nrm_s = textureSample(t_nrm, samp, uv).xyz;
-    let emis = textureSample(t_emis, samp, uv).rgb;
+    let nrm_t = textureSample(t_nrm, samp, uv);
+    let nrm_s = nrm_t.xyz;
+    let emis_t = textureSample(t_emis, samp, uv);
+    let emis = emis_t.rgb;
+    let lobes = textureSample(t_lobes, samp, uv);
+    let sheen_t = textureSample(t_sheen, samp, uv);
     let aux = textureSample(t_aux, samp, uv);
     let dims = vec2<f32>(textureDimensions(t_height));
     let ts = 1.0 / dims;
@@ -231,6 +324,9 @@ fn fs_mesh(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32
     let mode = i32(g.mode.x + 0.5);
     if (mode == 1) {
         let ch = i32(g.mode.y + 0.5);
+        if (ch >= 11) {
+            return lobe_view(ch, lobes, sheen_t, nrm_t.a, emis_t.a);
+        }
         switch ch {
             case 0: { return data_out(base_s.rgb); }
             case 1: { return data_out(vec3<f32>(orm.b)); }
@@ -278,31 +374,88 @@ fn fs_mesh(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32
         diffuse_col = albedo * (1.0 - max(f0.r, max(f0.g, f0.b)));
     }
 
-    let diffuse = sh_irradiance(n) * diffuse_col * ao;
-    let r = reflect(-v, n);
+    // The extra lobes; their defaults (weights 0) leave the base shading as it is.
+    let coat_w = lobes.r;
+    let coat_rough = clamp(lobes.g, 0.045, 1.0);
+    let aniso = lobes.b;
+    let sheen_col = sheen_t.rgb * sheen_t.a;
+    let sheen_max = max3(sheen_col);
+    let sheen_rough = clamp(nrm_t.a, 0.07, 1.0);
+    // Subsurface scattering: wrapped diffuse, wider for the channels the scatter color carries further.
+    let wrap = emis_t.a * g.scatter.xyz;
+    // Anisotropy: GGX roughness stretched along the mesh tangent turned by the angle (0..1 → 0..π).
+    let a = rough * rough;
+    let at = max(a * (1.0 + aniso), 0.002);
+    let ab = max(a * (1.0 - aniso), 0.002);
+    let ang = lobes.a * PI;
+    let ta0 = t * cos(ang) + b * sin(ang);
+    let ta1 = ta0 - n * dot(n, ta0);
+    let ta = ta1 * inverseSqrt(max(dot(ta1, ta1), 1e-8));
+    let ba = cross(n, ta);
+    // The clear coat is smooth: it follows the mesh normal, not the normal and height channels.
+    let nov_c = clamp(abs(dot(n_geo, v)), 1e-4, 1.0);
+    let coat_t = 1.0 - coat_w * schlick(0.04, nov_c);
+    // What reaches the layers below: the coat's transmission and the sheen albedo scaling.
+    var base_scale = coat_t;
+    var sheen_e = 0.0;
+    if (sheen_max > 0.0) {
+        sheen_e = sheen_albedo(nov, sheen_rough);
+        base_scale *= 1.0 - sheen_max * sheen_e;
+    }
+
+    let diffuse = sh_irradiance(n, wrap) * diffuse_col * ao;
+    var r = reflect(-v, n);
+    if (aniso > 0.0) {
+        // Bent reflection vector: the standard real-time approximation of anisotropic IBL.
+        let bent = cross(cross(ba, v), ba);
+        r = reflect(-v, normalize(mix(n, bent, aniso * clamp(5.0 * rough, 0.0, 1.0))));
+    }
     let pre = textureSampleLevel(env_tex, env_samp, env_uv(r), rough * g.env.y).rgb;
     // Horizon fading: reflections that point below the geometric surface are dimmed.
     let horizon = clamp(1.0 + 1.3 * dot(r, n_geo), 0.0, 1.0);
     let spec = pre * env_brdf(f0, rough, nov) * ao * horizon * horizon;
+    var layers = vec3<f32>(0.0);
+    if (sheen_max > 0.0) {
+        let pre_s = textureSampleLevel(env_tex, env_samp, env_uv(reflect(-v, n)), sheen_rough * g.env.y).rgb;
+        layers += pre_s * sheen_col * (sheen_e * ao * coat_t);
+    }
+    if (coat_w > 0.0) {
+        let pre_c = textureSampleLevel(env_tex, env_samp, env_uv(reflect(-v, n_geo)), coat_rough * g.env.y).rgb;
+        layers += pre_c * env_brdf(vec3<f32>(0.04), coat_rough, nov_c) * (coat_w * ao);
+    }
 
     var direct = vec3<f32>(0.0);
     if (g.light.w > 0.0) {
         let l = normalize(g.light.xyz);
         let h = normalize(l + v);
-        let nol = max(dot(n, l), 0.0);
+        let nol_raw = dot(n, l);
+        let nol = max(nol_raw, 0.0);
         let noh = max(dot(n, h), 0.0);
-        let a = rough * rough;
-        let a2 = a * a;
-        let d = a2 / (PI * pow(noh * noh * (a2 - 1.0) + 1.0, 2.0));
-        let vis = 0.5 / max(nol * sqrt(nov * nov * (1.0 - a2) + a2) + nov * sqrt(nol * nol * (1.0 - a2) + a2), 1e-5);
-        let f = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - max(dot(v, h), 0.0), 5.0);
-        direct = ((vec3<f32>(1.0) - f) * diffuse_col / PI + d * vis * f) * nol * g.light.w;
+        let voh = max(dot(v, h), 0.0);
+        var dv = 0.0;
+        if (aniso > 0.0) {
+            dv = ggx_dv_aniso(at, ab, vec2<f32>(dot(ta, h), dot(ba, h)), noh, vec2<f32>(dot(ta, v), dot(ba, v)), nov, vec2<f32>(dot(ta, l), dot(ba, l)), nol);
+        } else {
+            dv = ggx_dv(a, nov, nol, noh);
+        }
+        let f = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - voh, 5.0);
+        // Energy-conserving wrapped Lambert (plain Lambert where nothing scatters).
+        let diff_nol = max((nol_raw + wrap) / ((1.0 + wrap) * (1.0 + wrap)), vec3<f32>(0.0));
+        direct = ((vec3<f32>(1.0) - f) * diffuse_col / PI * diff_nol + dv * f * nol) * (g.light.w * base_scale);
+        if (sheen_max > 0.0) {
+            let sa = sheen_rough * sheen_rough;
+            direct += sheen_col * (d_charlie(sa, noh) * sheen_vis(nov, nol, sa) * nol * g.light.w * coat_t);
+        }
+        if (coat_w > 0.0) {
+            let nol_c = max(dot(n_geo, l), 0.0);
+            direct += vec3<f32>(ggx_dv(coat_rough * coat_rough, nov_c, nol_c, max(dot(n_geo, h), 0.0)) * schlick(0.04, voh) * coat_w * nol_c * g.light.w);
+        }
         if (g.shadow.x > 0.5 && nol > 0.0) {
             direct *= shadow_factor(i.wpos, n_geo);
         }
     }
 
-    return vec4<f32>(diffuse + spec + direct + emis, 1.0);
+    return vec4<f32>((diffuse + spec) * base_scale + layers + direct + emis, 1.0);
 }
 
 // The 2D UV view: unlit material color (or the selected debug channel) over the UV layout.
@@ -313,6 +466,11 @@ fn fs_uv(i: VOut) -> @location(0) vec4<f32> {
     let mode = i32(g.mode.x + 0.5);
     if (mode == 1) {
         let ch = i32(g.mode.y + 0.5);
+        if (ch >= 11) {
+            let lobes = textureSample(t_lobes, samp, i.uv);
+            let sheen = textureSample(t_sheen, samp, i.uv);
+            return lobe_view(ch, lobes, sheen, textureSample(t_nrm, samp, i.uv).a, textureSample(t_emis, samp, i.uv).a);
+        }
         switch ch {
             case 1: { return data_out(vec3<f32>(orm.b)); }
             case 2: { return data_out(vec3<f32>(orm.g)); }

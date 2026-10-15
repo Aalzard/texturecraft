@@ -51,8 +51,7 @@ fn put(img: &mut TileImage, c: Channel, x: u32, y: u32, v: [f32; 3]) {
 impl Pickup {
     /// A pickup reading `source` (whose resolution is the stroke's) for `channels`.
     pub fn new(mode: PickupMode, source: Composite, gbuf: Arc<UvGBuffer>, channels: impl IntoIterator<Item = Channel>) -> Pickup {
-        let res = source.resolution;
-        let values = channels.into_iter().map(|c| (c, TileImage::new(res, res, c.components()))).collect();
+        let values = channels.into_iter().map(|c| (c, TileImage::new(source.resolution, source.height, c.components()))).collect();
         Pickup { mode, source, gbuf, values, prev: None, reads: Vec::new(), read_values: Vec::new() }
     }
 
@@ -81,13 +80,13 @@ impl Pickup {
                 ([-(d[0].round() as i64), -(d[1].round() as i64)], strength.clamp(0.0, 1.0), true)
             }
         };
-        let res = i64::from(self.source.resolution);
+        let (w, h) = (i64::from(self.source.resolution), i64::from(self.source.height));
         self.reads.clear();
         self.read_values.clear();
         for &(x, y, a) in texels {
             let a = a * strength;
             let (sx, sy) = (i64::from(x) + shift[0], i64::from(y) + shift[1]);
-            if !(a > 0.0 && (0..res).contains(&sx) && (0..res).contains(&sy) && self.covered(sx as u32, sy as u32)) {
+            if !(a > 0.0 && (0..w).contains(&sx) && (0..h).contains(&sy) && self.covered(sx as u32, sy as u32)) {
                 continue;
             }
             let (sx, sy) = (sx as u32, sy as u32);

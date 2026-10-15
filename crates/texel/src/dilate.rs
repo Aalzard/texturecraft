@@ -19,6 +19,12 @@ impl DilationMap {
     /// `covered.len()` must be `width × height` (shorter input is treated as uncovered).
     /// `max_dist` limits padding in texels (Chebyshev steps); `None` fills everything reachable.
     pub fn new(covered: &[bool], width: u32, height: u32, max_dist: Option<u32>) -> DilationMap {
+        DilationMap::in_blocks(covered, width, height, max_dist, 0)
+    }
+
+    /// [`DilationMap::new`] that never pads across the borders of `block × block` squares (the
+    /// UV tiles of an atlas); 0 means one block.
+    pub fn in_blocks(covered: &[bool], width: u32, height: u32, max_dist: Option<u32>, block: u32) -> DilationMap {
         let n = (width as usize).saturating_mul(height as usize);
         let mut src = vec![NONE; n];
         let mut dist = vec![u32::MAX; n];
@@ -31,7 +37,7 @@ impl DilationMap {
             }
         }
         let limit = max_dist.unwrap_or(u32::MAX);
-        let (w, h) = (width as i64, height as i64);
+        let (w, h, b) = (width as i64, height as i64, if block == 0 { i64::MAX } else { block as i64 });
         while let Some(i) = queue.pop_front() {
             let d = dist[i];
             if d >= limit {
@@ -40,7 +46,7 @@ impl DilationMap {
             let (x, y) = ((i as i64) % w, (i as i64) / w);
             for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
                 let (nx, ny) = (x + dx, y + dy);
-                if nx < 0 || ny < 0 || nx >= w || ny >= h {
+                if nx < 0 || ny < 0 || nx >= w || ny >= h || nx / b != x / b || ny / b != y / b {
                     continue;
                 }
                 let j = (ny * w + nx) as usize;
@@ -106,6 +112,14 @@ mod tests {
         assert_eq!(m.src[8], 8);
         assert_eq!(m.source(2, 2), Some((2, 2)));
         assert_eq!(m.source(9, 9), None);
+    }
+
+    #[test]
+    fn blocks_never_pad_across_their_borders() {
+        // 4×1 strip of two 2-texel blocks, only texel 0 covered.
+        let covered = [true, false, false, false];
+        assert_eq!(DilationMap::in_blocks(&covered, 4, 1, None, 2).src, vec![0, 0, NONE, NONE]);
+        assert_eq!(DilationMap::new(&covered, 4, 1, None).src, vec![0; 4]);
     }
 
     #[test]

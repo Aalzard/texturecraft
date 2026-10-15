@@ -12,7 +12,7 @@ fn settings(res: u32, maps: &[BakedMap]) -> BakeSettings {
 
 fn run(mesh: &Mesh, s: &BakeSettings) -> Result<BakeOutput, BakeError> {
     let bvh = Bvh::new(mesh);
-    bake(&BakeRequest { mesh, bvh: &bvh, material: 0, settings: s, high: None, cage: None }, &Progress::new())
+    bake(&BakeRequest { mesh, bvh: &bvh, material: 0, settings: s, high: None, cage: None, tiles: (1, 1) }, &Progress::new())
 }
 
 /// Values of `map` (first component) at texels the UV layout covers, with their surface positions.
@@ -124,7 +124,7 @@ fn strips_match_a_single_pass() {
     let m = primitives::material_ball();
     let bvh = Bvh::new(&m);
     let s = BakeSettings { antialiasing: 2, rays: 4, maps: BakedMap::ALL.into_iter().collect(), ..settings(64, &[]) };
-    let req = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None };
+    let req = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, tiles: (1, 1) };
     let whole = bake(&req, &Progress::new()).unwrap();
     // 128 × 2 supersampled texels per strip = 1 output row: 64 strips.
     let strips = bake_in_strips(&req, &Progress::new(), 128 * 2).unwrap();
@@ -140,7 +140,7 @@ fn cancel_and_progress() {
     let m = primitives::sphere(1.0, 16, 8);
     let bvh = Bvh::new(&m);
     let s = settings(16, &[BakedMap::AmbientOcclusion, BakedMap::Position]);
-    let req = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None };
+    let req = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, tiles: (1, 1) };
     let p = Progress::new();
     p.cancel();
     assert!(matches!(bake(&req, &p), Err(BakeError::Cancelled)));
@@ -169,7 +169,7 @@ fn invalid_requests_are_errors() {
         assert!(matches!(run(&m, s), Err(BakeError::Invalid(_))), "{s:?}");
     }
     let bvh = Bvh::new(&m);
-    let req = |mesh: &Mesh, material| bake(&BakeRequest { mesh, bvh: &bvh, material, settings: &ok, high: None, cage: None }, &Progress::new());
+    let req = |mesh: &Mesh, material| bake(&BakeRequest { mesh, bvh: &bvh, material, settings: &ok, high: None, cage: None, tiles: (1, 1) }, &Progress::new());
     assert!(matches!(req(&m, 1), Err(BakeError::Invalid(_))));
     let mut broken = m.clone();
     broken.indices[0] = 99;
@@ -214,9 +214,11 @@ fn normal_and_height_transfer_from_a_high_poly() {
     high.compute_tangents();
     let (lb, hb) = (Bvh::new(&low), Bvh::new(&high));
     let s = settings(16, &[BakedMap::Normal, BakedMap::Height]);
-    let out =
-        bake(&BakeRequest { mesh: &low, bvh: &lb, material: 0, settings: &s, high: Some(HighPoly { mesh: &high, bvh: &hb }), cage: None }, &Progress::new())
-            .unwrap();
+    let out = bake(
+        &BakeRequest { mesh: &low, bvh: &lb, material: 0, settings: &s, high: Some(HighPoly { mesh: &high, bvh: &hb }), cage: None, tiles: (1, 1) },
+        &Progress::new(),
+    )
+    .unwrap();
     let i = 8 * 16 + 8;
     let n = &out.maps[&BakedMap::Normal][i * 3..i * 3 + 3];
     // Tangent = +X (u), bitangent = −Z (up the image), normal = +Y.
@@ -232,7 +234,7 @@ fn normal_and_height_transfer_from_a_high_poly() {
 
 fn transfer(low: &Mesh, high: &Mesh, cage: Option<&Mesh>, s: &BakeSettings) -> Result<BakeOutput, BakeError> {
     let (lb, hb) = (Bvh::new(low), Bvh::new(high));
-    bake(&BakeRequest { mesh: low, bvh: &lb, material: 0, settings: s, high: Some(HighPoly { mesh: high, bvh: &hb }), cage }, &Progress::new())
+    bake(&BakeRequest { mesh: low, bvh: &lb, material: 0, settings: s, high: Some(HighPoly { mesh: high, bvh: &hb }), cage, tiles: (1, 1) }, &Progress::new())
 }
 
 /// Texel (x, y) of a `res`² bake of [`quad`] sits over world (2u − 1, 0, 2v − 1).
@@ -417,7 +419,28 @@ fn bench_material_ball_2k() {
     {
         let s = BakeSettings { maps: maps.into_iter().collect(), ..all.clone() };
         let t = std::time::Instant::now();
-        let out = bake(&BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None }, &Progress::new()).unwrap();
+        let out = bake(&BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, tiles: (1, 1) }, &Progress::new()).unwrap();
         println!("material ball, material 0, {}² × {:?}, {} rays: {:.2?}", out.resolution, out.maps.keys(), s.rays, t.elapsed());
     }
+}
+
+#[test]
+fn uv_tiles_bake_side_by_side_in_one_atlas() {
+    // Tiles 1001 (x < 0) and 1002 (x > 0) of the UDIM plane, in atlas UVs.
+    let mut m = primitives::udim_plane();
+    let grid = texturecraft_core::TileGrid::of(&[1001, 1002]).unwrap();
+    m.map_material_uvs(0, |uv| Vec2::from(grid.to_atlas(uv.to_array())));
+    let s = BakeSettings { dilation: 4, ..settings(32, &[BakedMap::Position]) };
+    let bvh = Bvh::new(&m);
+    let out = bake(&BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, tiles: (2, 1) }, &Progress::new()).unwrap();
+    assert_eq!((out.resolution, out.height), (64, 32));
+    let pos = &out.maps[&BakedMap::Position];
+    assert_eq!(pos.len(), 64 * 32 * 3);
+    let x_at = |x: usize, y: usize| pos[(y * 64 + x) * 3];
+    for y in [1, 16, 30] {
+        assert!(x_at(2, y) < 0.3 && x_at(29, y) < 0.5, "tile 1001 holds the left plane");
+        assert!(x_at(34, y) > 0.5 && x_at(62, y) > 0.7, "tile 1002 holds the right plane");
+    }
+    let too_many = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, tiles: (0, 1) };
+    assert!(bake(&too_many, &Progress::new()).is_err());
 }

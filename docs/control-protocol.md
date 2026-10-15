@@ -108,7 +108,7 @@ a `path`) is refused, and so is any command given a `path` or `dir` (`resource.i
 | `project_new` | `{mesh?, resolution?, name?}` | Built-in mesh: material_ball, sphere, cube, rounded_cube, cylinder, torus, plane, crate |
 | `project_open` | `{path}` | `.tcraft` or a mesh file, relative to the read root |
 | `project_save` | `{path?}` | `.tcraft` (appended if missing), relative to the write root |
-| `mesh_import` | `{path, resolution?}` | New project from .glb/.gltf/.fbx/.dae/.obj/.ply/.stl |
+| `mesh_import` | `{path, resolution?}` | New project from .glb/.gltf/.fbx/.dae/.usd/.usda/.usdc/.usdz/.obj/.ply/.stl |
 | `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil` |
 | `material_save` | `{path, layer?, name?}` | A layer or folder as a `.tcmat` smart material below the write root |
 | `material_load` | `{path}` | Add a `.tcmat` smart material above the selection |

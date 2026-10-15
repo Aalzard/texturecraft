@@ -1,16 +1,22 @@
 //! Mesh export of the working mesh: Wavefront OBJ (positions, UVs, normals, one group per
-//! submesh) and binary glTF (one primitive per submesh, a metallic-roughness material per
-//! material with its textures embedded).
+//! submesh), binary glTF (one primitive per submesh, a metallic-roughness material per
+//! material with its textures embedded) and USD (usda / usdc / usdz, see [`usd`]).
 
+mod usd;
+mod usdc;
+
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use serde_json::{Map, Value, json};
-use texturecraft_core::NormalFormat;
+use texturecraft_core::{Channel, NormalFormat};
 use texturecraft_geom::glam::Vec3;
 use texturecraft_geom::{Mesh, SubMesh};
 
-use crate::presets::{GLTF_BASE_COLOR, GLTF_EMISSIVE, GLTF_NORMAL, GLTF_ORM, gltf_pbr_maps};
+use crate::presets::{GLTF_BASE_COLOR, GLTF_CLEARCOAT, GLTF_EMISSIVE, GLTF_NORMAL, GLTF_ORM, GLTF_SHEEN, gltf_pbr_maps};
 use crate::{ExportOptions, ExportPreset, ExportedFile, FileFormat, FormatError, Result};
+
+pub use usd::{UsdExport, UsdFormat, usd_bytes, usd_export_options};
 
 /// The mesh as OBJ text (UV v flipped back to OBJ's bottom-up convention).
 pub fn obj_bytes(mesh: &Mesh, name: &str) -> Vec<u8> {
@@ -70,6 +76,10 @@ pub struct GlbTextures {
     /// OpenGL convention (+Y up the image), as glTF expects.
     pub normal: Option<Vec<u8>>,
     pub emissive: Option<Vec<u8>>,
+    /// KHR_materials_clearcoat: weight (R), roughness (G).
+    pub clearcoat: Option<Vec<u8>>,
+    /// KHR_materials_sheen: color × weight (RGB), roughness (A, when the set has it).
+    pub sheen: Option<Vec<u8>>,
 }
 
 impl GlbTextures {
@@ -82,6 +92,8 @@ impl GlbTextures {
                 GLTF_ORM => &mut t.orm,
                 GLTF_NORMAL => &mut t.normal,
                 GLTF_EMISSIVE if !is_black(&f.bytes) => &mut t.emissive,
+                GLTF_CLEARCOAT => &mut t.clearcoat,
+                GLTF_SHEEN => &mut t.sheen,
                 _ => continue,
             };
             *slot = Some(f.bytes);
@@ -92,10 +104,15 @@ impl GlbTextures {
 
 /// Texture export options for [`GlbTextures`]: the glTF maps as 8-bit PNG named by slot.
 pub fn glb_export_options() -> ExportOptions {
-    let mut o = ExportOptions::new(ExportPreset { name: "glTF binary".into(), maps: gltf_pbr_maps(str::to_string) });
+    png8_options(ExportPreset { name: "glTF binary".into(), maps: gltf_pbr_maps(str::to_string) }, NormalFormat::OpenGl)
+}
+
+/// `preset` as 8-bit PNGs with normals in `normal` convention.
+fn png8_options(preset: ExportPreset, normal: NormalFormat) -> ExportOptions {
+    let mut o = ExportOptions::new(preset);
     o.format_override = Some(FileFormat::Png);
     o.bit_depth_override = Some(8);
-    o.normal_format = Some(NormalFormat::OpenGl);
+    o.normal_format = Some(normal);
     o
 }
 
@@ -116,7 +133,12 @@ struct GlbBuilder {
     accessors: Vec<Value>,
     images: Vec<Value>,
     textures: Vec<Value>,
+    /// Material extensions used (`extensionsUsed`).
+    extensions: BTreeSet<String>,
 }
+
+const KHR_CLEARCOAT: &str = "KHR_materials_clearcoat";
+const KHR_SHEEN: &str = "KHR_materials_sheen";
 
 impl GlbBuilder {
     fn view(&mut self, bytes: &[u8], target: Option<u32>) -> usize {
@@ -179,6 +201,27 @@ impl GlbBuilder {
             m.insert("emissiveFactor".into(), json!([1.0, 1.0, 1.0]));
         }
         m.insert("pbrMetallicRoughness".into(), pbr.into());
+        let mut ext = Map::new();
+        if let Some(png) = &t.clearcoat {
+            let tex = self.texture(png);
+            let coat = json!({ "clearcoatFactor": 1.0, "clearcoatTexture": tex, "clearcoatRoughnessFactor": 1.0, "clearcoatRoughnessTexture": tex });
+            ext.insert(KHR_CLEARCOAT.into(), coat);
+        }
+        if let Some(png) = &t.sheen {
+            let tex = self.texture(png);
+            let mut sheen = json!({ "sheenColorFactor": [1.0, 1.0, 1.0], "sheenColorTexture": tex });
+            if png_has_alpha(png) {
+                sheen["sheenRoughnessFactor"] = 1.0.into();
+                sheen["sheenRoughnessTexture"] = tex;
+            } else {
+                sheen["sheenRoughnessFactor"] = Channel::SheenRoughness.default_value()[0].into();
+            }
+            ext.insert(KHR_SHEEN.into(), sheen);
+        }
+        if !ext.is_empty() {
+            self.extensions.extend(ext.keys().cloned());
+            m.insert("extensions".into(), ext.into());
+        }
         m.into()
     }
 }
@@ -236,6 +279,9 @@ pub fn glb_bytes(mesh: &Mesh, name: &str, textures: &[GlbTextures]) -> Result<Ve
     if !g.textures.is_empty() {
         doc["samplers"] = json!([{ "magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497 }]);
     }
+    if !g.extensions.is_empty() {
+        doc["extensionsUsed"] = json!(g.extensions);
+    }
     // glTF forbids empty arrays.
     for (key, list) in [("materials", materials), ("images", g.images), ("textures", g.textures)] {
         if !list.is_empty() {
@@ -280,5 +326,34 @@ mod tests {
         let uv_sum = |m: &Mesh| m.indices.iter().map(|&i| m.uvs[i as usize].y as f64).sum::<f64>();
         assert!((uv_sum(&mesh) - uv_sum(&back)).abs() < 1e-3 * mesh.indices.len() as f64);
         assert!(String::from_utf8(bytes).unwrap().contains("o My_box"));
+    }
+
+    #[test]
+    fn glb_writes_clearcoat_and_sheen_extensions() {
+        let png = |color: image::ColorType| {
+            let mut out = std::io::Cursor::new(Vec::new());
+            image::write_buffer_with_format(&mut out, &vec![200u8; 4 * color.channel_count() as usize], 2, 2, color, image::ImageFormat::Png).unwrap();
+            out.into_inner()
+        };
+        let file = |name: &str, bytes: Vec<u8>| ExportedFile { name: name.into(), bytes, width: 2, height: 2, warnings: vec![] };
+        let mesh = texturecraft_geom::primitives::sphere(1.0, 8, 4);
+        let json_of = |t: GlbTextures| {
+            let glb = glb_bytes(&mesh, "Ball", &[t]).unwrap();
+            let len = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+            serde_json::from_slice::<Value>(&glb[20..20 + len]).unwrap()
+        };
+        let t = GlbTextures::from_files(vec![file("Clearcoat.png", png(image::ColorType::Rgb8)), file("Sheen.png", png(image::ColorType::Rgb8))]);
+        let doc = json_of(t);
+        assert_eq!(doc["extensionsUsed"], json!([KHR_CLEARCOAT, KHR_SHEEN]));
+        let ext = &doc["materials"][0]["extensions"];
+        let coat = &ext[KHR_CLEARCOAT];
+        assert_eq!(coat["clearcoatTexture"], coat["clearcoatRoughnessTexture"], "one map: weight in R, roughness in G");
+        let sheen = &ext[KHR_SHEEN];
+        assert!(sheen["sheenColorTexture"].is_object() && sheen["sheenRoughnessTexture"].is_null(), "no alpha: no roughness texture");
+        assert_eq!(sheen["sheenRoughnessFactor"], json!(0.5));
+        let doc = json_of(GlbTextures::from_files(vec![file("Sheen.png", png(image::ColorType::Rgba8))]));
+        assert_eq!(doc["extensionsUsed"], json!([KHR_SHEEN]));
+        assert_eq!(doc["materials"][0]["extensions"][KHR_SHEEN]["sheenRoughnessTexture"], doc["materials"][0]["extensions"][KHR_SHEEN]["sheenColorTexture"]);
+        assert!(json_of(GlbTextures::default()).get("extensionsUsed").is_none());
     }
 }
