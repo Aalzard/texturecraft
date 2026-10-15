@@ -5,6 +5,13 @@ use egui::{Color32, Response, RichText, Sense, Stroke, Ui, vec2};
 
 use crate::theme::TOKENS;
 
+/// The drag-and-drop payload of type `T` released on `resp` this frame. Unlike
+/// [`Response::dnd_release_payload`] (which clears a payload of any type), it leaves payloads
+/// of other types for the next drop target.
+pub fn dnd_release<T: std::any::Any + Send + Sync>(resp: &Response) -> Option<std::sync::Arc<T>> {
+    resp.dnd_hover_payload::<T>().and_then(|_| resp.dnd_release_payload::<T>())
+}
+
 /// A labelled slider in two rows: "Label ........ value" over a slim track with a round knob.
 /// Returns the response of the track (`.changed()` when dragged, `.drag_stopped()` at the end).
 pub fn slider(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) -> Response {

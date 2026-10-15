@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use texturecraft_compose::ImageRes;
 use texturecraft_texel::noise;
 
+use crate::alphas::AlphaImage;
+
 /// How the stamp plane is oriented.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Alignment {
@@ -83,20 +85,30 @@ impl BrushAlpha {
     }
 }
 
-/// A stamp shape ready to sample: the procedural alpha, or an image alpha when one is set.
+/// A stamp shape ready to sample: an image alpha when one is set, else a library alpha when one
+/// is set, else the procedural alpha.
 #[derive(Clone, Copy)]
 pub struct Shape<'a> {
     pub alpha: BrushAlpha,
     pub image: Option<&'a ImageRes>,
+    pub library: Option<&'a AlphaImage>,
+    /// Mip level of `library` to sample (set per stamp by [`Shape::at_radius`]).
+    pub level: usize,
 }
 
 impl Shape<'_> {
     /// Shape value at local stamp coordinates (see [`BrushAlpha::sample`]).
     pub fn sample(&self, lx: f32, ly: f32, hardness: f32, seed: u32) -> f32 {
-        match self.image {
-            Some(img) => image_alpha(img, lx, ly),
-            None => self.alpha.sample(lx, ly, hardness, seed),
+        match (self.image, self.library) {
+            (Some(img), _) => image_alpha(img, lx, ly),
+            (None, Some(lib)) => lib.sample(self.level, lx, ly),
+            (None, None) => self.alpha.sample(lx, ly, hardness, seed),
         }
+    }
+
+    /// This shape for a stamp `radius` texels wide (picks the library alpha's mip level).
+    pub fn at_radius(self, radius: f32) -> Self {
+        Shape { level: self.library.map_or(0, |l| l.level_for(radius)), ..self }
     }
 }
 
@@ -109,7 +121,7 @@ pub fn image_alpha(img: &ImageRes, lx: f32, ly: f32) -> f32 {
     ((0.2126 * r + 0.7152 * g + 0.0722 * b) * a).clamp(0.0, 1.0)
 }
 
-fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+pub(crate) fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0).max(1e-6)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
@@ -179,6 +191,9 @@ pub struct BrushSettings {
     /// Image resource used as the stamp shape instead of `alpha` (grayscale, rotated with the stamp).
     #[serde(default)]
     pub alpha_image: Option<String>,
+    /// Built-in library alpha id used as the stamp shape (see [`crate::alphas`]).
+    #[serde(default)]
+    pub alpha_library: Option<String>,
     /// Only paint surfaces facing the camera.
     pub backface_culling: bool,
     /// Half-depth of the stamp volume relative to the radius (thinner = less bleed into folds).
@@ -210,6 +225,7 @@ impl Default for BrushSettings {
             jitter_position: 0.0,
             alpha: BrushAlpha::Round,
             alpha_image: None,
+            alpha_library: None,
             backface_culling: true,
             depth: 1.0,
             symmetry: Symmetry::default(),
@@ -271,7 +287,7 @@ mod tests {
     fn image_alpha_follows_the_image_and_is_zero_outside() {
         // Left half white, right half black (2×1 image, sampled at texel centers).
         let img = ImageRes { width: 2, height: 1, rgba: vec![[1.0; 4], [0.0, 0.0, 0.0, 1.0]], srgb: true };
-        let shape = Shape { alpha: BrushAlpha::Round, image: Some(&img) };
+        let shape = Shape { alpha: BrushAlpha::Round, image: Some(&img), library: None, level: 0 };
         assert!(shape.sample(-0.5, 0.0, 0.5, 0) > 0.99);
         assert!(shape.sample(0.5, 0.0, 0.5, 0) < 0.01);
         assert_eq!(shape.sample(1.5, 0.0, 0.5, 0), 0.0);

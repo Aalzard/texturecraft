@@ -110,6 +110,12 @@ pub struct ExportUi {
     /// Texture sets excluded from export.
     pub skip: Vec<usize>,
     pub tab: u8,
+    /// Output templates tab: the selected user preset being edited (saved whenever it is valid).
+    #[serde(skip)]
+    pub draft: Option<texturecraft_engine::formats::ExportPreset>,
+    /// Output templates tab: the new name while renaming the selected preset.
+    #[serde(skip)]
+    pub renaming: Option<String>,
 }
 
 impl Default for ExportUi {
@@ -125,6 +131,8 @@ impl Default for ExportUi {
             normal_format: String::new(),
             skip: Vec::new(),
             tab: 0,
+            draft: None,
+            renaming: None,
         }
     }
 }

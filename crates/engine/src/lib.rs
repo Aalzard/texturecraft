@@ -20,6 +20,7 @@ pub mod material_lib;
 pub mod materials;
 pub mod painting;
 pub mod path_tool;
+pub mod preset_cmds;
 pub mod preview;
 pub mod project_cmds;
 pub mod quick_mask;

@@ -81,6 +81,11 @@ pub(crate) fn encode_png(w: u32, h: u32, rgba: Vec<u8>) -> Option<(u32, u32, Vec
 pub fn handle(app: &mut TextureCraftApp, ctx: &egui::Context, method: &str, p: &Value) -> Value {
     match method {
         "ping" => ok(json!("pong")),
+        "debug.frames" => ok(app.profiler.report()),
+        "debug.paintTest" => match crate::profile::start_paint_test(app, p) {
+            Ok(()) => ok(Value::Null),
+            Err(e) => err(e),
+        },
         "command.run" => {
             let Some(id) = p.get("id").and_then(Value::as_str) else { return err("`id` is required") };
             let params = p.get("params").cloned().unwrap_or(Value::Null);

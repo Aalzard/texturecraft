@@ -39,6 +39,8 @@ enum Pick {
     HighPoly,
     /// Bake mode: the cage mesh.
     Cage,
+    /// Export dialog › Output templates: an export template (`.json`).
+    ExportPreset,
 }
 
 /// Files picked in the browser, waiting for the next frame: (file name, bytes, purpose).
@@ -56,6 +58,13 @@ pub fn poll(app: &mut TextureCraftApp) {
             Pick::Environment => app.session.import_resource_bytes(&name, bytes).map(|res| use_environment(app, &res)),
             Pick::HighPoly => app.session.add_high_poly_bytes(&name, bytes).map(|n| app.toast(format!("High poly: {n}"), false)),
             Pick::Cage => app.session.set_cage_bytes(&name, bytes).map(|n| app.toast(format!("Cage: {n}"), false)),
+            Pick::ExportPreset => {
+                match texturecraft_engine::formats::preset_from_json(&String::from_utf8_lossy(&bytes)) {
+                    Ok(p) => crate::export_templates::import(app, &p),
+                    Err(e) => app.toast(format!("Couldn't import {name}: {e}"), true),
+                }
+                continue;
+            }
         };
         if let Err(e) = done {
             app.toast(format!("Couldn't import {name}: {e}"), true);
@@ -113,9 +122,8 @@ pub fn load(app: &mut TextureCraftApp, name: &str, bytes: &[u8]) {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
     let next = if ext == PROJECT_EXT { Session::from_project_bytes(bytes) } else { Session::from_mesh_bytes(name, bytes, MESH_RESOLUTION, stem) };
     match next {
-        Ok(mut next) => {
-            next.viewport = app.session.viewport;
-            app.session = next;
+        Ok(next) => {
+            app.session.switch_to(next);
             app.toast(format!("Opened {name}"), false);
         }
         Err(e) => app.toast(format!("Couldn't open {name}: {e}"), true),
@@ -174,7 +182,7 @@ fn zip_files(files: &[ExportedFile]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{download, export_mesh, export_textures, import_bake_mesh, import_environment, import_images, open, save_project};
+pub use web::{download, export_mesh, export_textures, import_bake_mesh, import_environment, import_images, import_preset, open, save_project};
 
 #[cfg(target_arch = "wasm32")]
 mod web {
@@ -201,6 +209,11 @@ mod web {
     /// Bake mode: pick high-definition meshes (or the cage); they load on a later frame.
     pub fn import_bake_mesh(_app: &mut TextureCraftApp, ctx: &egui::Context, cage: bool) {
         pick(ctx, "Meshes", &MESH_EXTENSIONS, !cage, if cage { Pick::Cage } else { Pick::HighPoly });
+    }
+
+    /// Export dialog › Output templates › Import: pick a template; it is added on a later frame.
+    pub fn import_preset(ctx: &egui::Context) {
+        pick(ctx, "Export templates", &["json"], false, Pick::ExportPreset);
     }
 
     fn pick(ctx: &egui::Context, filter: &'static str, exts: &'static [&'static str], multiple: bool, kind: Pick) {
@@ -249,7 +262,7 @@ mod web {
     }
 
     fn export(app: &mut TextureCraftApp, params: &Value, sets: &[usize]) -> Result<String, String> {
-        let opts = texturecraft_engine::file_cmds::export_options(params, "file.exportTextures").map_err(|e| e.to_string())?;
+        let opts = texturecraft_engine::file_cmds::export_options(&app.session, params, "file.exportTextures").map_err(|e| e.to_string())?;
         let files = app.session.export_files(sets, &opts).map_err(|e| e.to_string())?;
         app.session.log.extend(files.iter().flat_map(|f| f.warnings.iter().cloned()));
         let name = match files.as_slice() {

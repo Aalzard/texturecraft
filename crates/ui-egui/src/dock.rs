@@ -5,13 +5,14 @@ use egui::{Color32, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use egui_phosphor::regular as ic;
 use serde_json::{Value, json};
 use texturecraft_engine::core::{BakedMap, BlendMode, Channel, EffectKind, Fill, Filter, GeneratorKind, Layer, LayerId, LayerKind, ProceduralKind, Source};
-use texturecraft_engine::paint::BrushAlpha;
+use texturecraft_engine::paint::{BrushAlpha, alphas};
 use texturecraft_engine::{StackTarget, Tool};
 
 use crate::TextureCraftApp;
+use crate::shelf::{Asset, ShelfDrag};
 use crate::state::PropsTab;
 use crate::theme::{TOKENS, caption};
-use crate::widgets::{chip, color_swatch, elided, icon_button, section, slider};
+use crate::widgets::{chip, color_swatch, dnd_release, elided, icon_button, section, slider};
 
 const TAG_COLORS: [Color32; 8] = [
     Color32::from_rgb(0xc0, 0x40, 0x40),
@@ -126,15 +127,22 @@ pub(crate) fn layers(app: &mut TextureCraftApp, ui: &mut Ui) {
         for id in stack {
             layer_tree(app, ui, id, 0);
         }
-        // Click on empty space deselects nothing; leave room to drop at the bottom.
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
-        if let Some(dragged) = resp.dnd_release_payload::<u64>() {
+        // Click on empty space deselects nothing; the space below the rows drops at the bottom.
+        let free = ui.available_height();
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), if free.is_finite() { free.max(24.0) } else { 24.0 }), Sense::hover());
+        if let Some(dragged) = dnd_release::<u64>(&resp) {
             let bottom = app.session.doc.project.texture_sets.get(ts).and_then(|t| t.stack.first().copied());
             if bottom.map(|b| b.0) != Some(*dragged) {
                 app.run("layer.move", json!({"layer": *dragged, "index": 0}));
             }
         }
-        if resp.dnd_hover_payload::<u64>().is_some() {
+        if let Some(d) = dnd_release::<ShelfDrag>(&resp)
+            && let Asset::Material(m) = d.asset
+        {
+            app.run("material.apply", json!({"material": m, "index": 0}));
+        }
+        let material = resp.dnd_hover_payload::<ShelfDrag>().is_some_and(|d| matches!(d.asset, Asset::Material(_)));
+        if resp.dnd_hover_payload::<u64>().is_some() || material {
             ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(2.0, TOKENS.accent));
         }
     });
@@ -391,21 +399,33 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     if resp.drag_started() {
         resp.dnd_set_drag_payload(layer.id.0);
     }
-    if let Some(src) = resp.dnd_hover_payload::<u64>()
-        && *src != layer.id.0
-    {
-        let inside = layer.is_group() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| (p.y - rect.center().y).abs() < h * 0.25);
+    // Drops: a layer or a shelf material lands above this row (inside a folder when dropped on
+    // its middle); a shelf smart mask replaces this layer's mask.
+    let inside = layer.is_group() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| (p.y - rect.center().y).abs() < h * 0.25);
+    let shelf = resp.dnd_hover_payload::<ShelfDrag>().map(|d| d.asset);
+    let moving = resp.dnd_hover_payload::<u64>().is_some_and(|src| *src != layer.id.0);
+    if moving || matches!(shelf, Some(Asset::Material(_))) {
         if inside {
             p.rect_stroke(rect, 2.0, Stroke::new(2.0, TOKENS.accent), egui::StrokeKind::Inside);
         } else {
             p.line_segment([rect.left_top(), rect.right_top()], Stroke::new(2.0, TOKENS.accent));
         }
+    } else if matches!(shelf, Some(Asset::SmartMask(_))) {
+        p.rect_stroke(mask_rect.expand(2.0), 2.0, Stroke::new(2.0, TOKENS.accent), egui::StrokeKind::Outside);
     }
-    if let Some(src) = resp.dnd_release_payload::<u64>()
+    if let Some(src) = dnd_release::<u64>(&resp)
         && *src != layer.id.0
     {
-        let inside = layer.is_group() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| (p.y - rect.center().y).abs() < h * 0.25);
         app.run("layer.move", json!({"layer": *src, "above": layer.id.0, "inside": inside}));
+    }
+    match dnd_release::<ShelfDrag>(&resp).map(|d| d.asset) {
+        Some(Asset::Material(m)) => {
+            app.run("material.apply", json!({"material": m, "above": layer.id.0, "inside": inside}));
+        }
+        Some(Asset::SmartMask(m)) => {
+            app.run("mask.smart.apply", json!({"name": m, "layer": layer.id.0}));
+        }
+        Some(Asset::Alpha(_)) | None => {}
     }
     resp.context_menu(|ui| layer_context_menu(app, ui, layer));
 }
@@ -915,12 +935,23 @@ fn alpha_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     });
     let brush = &app.session.tool.brush;
     let (current, image, hardness) = (brush.alpha, brush.alpha_image.clone(), brush.hardness);
+    let library = if image.is_none() { brush.alpha_library.as_deref().and_then(alphas::find) } else { None };
     let mut pick = None;
-    ui.horizontal_wrapped(|ui| {
+    let zone = ui.horizontal_wrapped(|ui| {
         for a in BrushAlpha::ALL {
-            if alpha_tile(ui, image.is_none() && current == a, a.label(), |p, r| crate::thumbs::paint_alpha(p, r, a, hardness)).clicked() {
+            let on = image.is_none() && library.is_none() && current == a;
+            if alpha_tile(ui, on, a.label(), |p, r| crate::thumbs::paint_alpha(p, r, a, hardness)).clicked() {
                 pick = Some(json!(a.label()));
             }
+        }
+        // The library alpha in use (picked from the shelf's Alphas tab).
+        if let Some(a) = library {
+            let tex = app.thumbs.alpha(ui.ctx(), a);
+            alpha_tile(ui, true, &a.label, |p, r| {
+                if let Some(t) = tex {
+                    p.image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                }
+            });
         }
         // Imported images, sampled as grayscale.
         for name in app.session.doc.resources.keys() {
@@ -939,6 +970,8 @@ fn alpha_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     if let Some(alpha) = pick {
         app.run("tool.brush", json!({ "alpha": alpha }));
     }
+    ui.label(RichText::new("More in Assets > Alphas: click one, or drag it here").size(10.0).color(TOKENS.text_dim));
+    crate::shelf::drop_target(app, ui, &zone.response, false);
 }
 
 fn material_section(app: &mut TextureCraftApp, ui: &mut Ui) {

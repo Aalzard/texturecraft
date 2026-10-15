@@ -10,11 +10,13 @@
 pub mod control;
 pub mod dock;
 pub mod docking;
+pub mod export_templates;
 pub mod gpu;
 pub mod i18n;
 pub mod keymap;
 pub mod menus;
 pub mod parity;
+pub mod profile;
 pub mod render_mode;
 pub mod shelf;
 pub mod state;
@@ -68,6 +70,8 @@ pub struct TextureCraftApp {
     pub render: render_mode::RenderView,
     /// Smoothed CPU time spent building the UI per frame (ms).
     pub ui_ms: f32,
+    /// Frame timing and the scripted paint test (`debug.*` control methods).
+    pub profiler: profile::Profiler,
     /// Where the last 3D stroke ended (viewport pixels), for Shift+click straight lines.
     pub last_paint_point: Option<texturecraft_engine::geom::glam::Vec2>,
     /// The wgpu state (screenshots read the renderer's targets).
@@ -97,6 +101,7 @@ impl TextureCraftApp {
             screenshot_waiters: Vec::new(),
             fps: 0.0,
             ui_ms: 0.0,
+            profiler: profile::Profiler::default(),
             library: None,
             render: render_mode::RenderView::default(),
             last_paint_point: None,
@@ -107,6 +112,7 @@ impl TextureCraftApp {
         };
         app.ui.rename = None;
         app.ui.windows.new_project = false;
+        export_templates::load_library(&mut app, cc.storage);
         app
     }
 
@@ -247,6 +253,7 @@ impl TextureCraftApp {
 impl eframe::App for TextureCraftApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, "ui", &self.ui);
+        export_templates::save_library(self, storage);
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -275,6 +282,7 @@ impl eframe::App for TextureCraftApp {
         self.autosave(now);
         i18n::set_language(&self.ui.prefs.language);
         menus::shortcuts(self, ctx);
+        profile::drive(self, ctx);
         self.toasts.retain(|t| t.until > now);
     }
 
@@ -298,8 +306,10 @@ impl eframe::App for TextureCraftApp {
         });
         windows::show(self, &ctx);
         toasts(self, &ctx);
-        let dt = (now_ms() - t0) as f32;
+        let end = now_ms();
+        let dt = (end - t0) as f32;
         self.ui_ms = if self.ui_ms == 0.0 { dt } else { self.ui_ms * 0.9 + dt * 0.1 };
+        self.profiler.end_frame(end, dt);
     }
 }
 

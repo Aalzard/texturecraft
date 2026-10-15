@@ -4,7 +4,7 @@
 use serde_json::{Value, json};
 use texturecraft_core::Channel;
 use texturecraft_geom::glam::Vec2;
-use texturecraft_paint::{Alignment, BrushAlpha};
+use texturecraft_paint::{Alignment, BrushAlpha, alphas};
 
 use crate::commands::{CommandSpec, always, bad, boolp, channel_param, color_param, f32p, strp};
 use crate::session::{CloneSource, FillMode, Tool};
@@ -25,12 +25,24 @@ pub fn specs() -> Vec<CommandSpec> {
             "Brush settings",
             [],
             None,
-            "{size?: 0..100, flow?: 0..100, opacity?: 0..100, spacing?: 1..1000, hardness?: 0..100, angle?, followPath?, alignment?: tangent|camera, lazy?, jitterSize?, jitterAngle?, jitterFlow?, jitterPosition?, alpha?: name | {image: resource name}, backfaceCulling?, symmetryX?, symmetryY?, symmetryZ?, minSize?, smudgeStrength?: 0..100, particles?: {enabled?, count?: 1..16, lifetime?: 1..128 steps, gravity?: 0..2}}",
+            "{size?: 0..100, flow?: 0..100, opacity?: 0..100, spacing?: 1..1000, hardness?: 0..100, angle?, followPath?, alignment?: tangent|camera, lazy?, jitterSize?, jitterAngle?, jitterFlow?, jitterPosition?, alpha?: procedural name | {image: resource name} | {library: id (alpha.list)}, backfaceCulling?, symmetryX?, symmetryY?, symmetryZ?, minSize?, smudgeStrength?: 0..100, particles?: {enabled?, count?: 1..16, lifetime?: 1..128 steps, gravity?: 0..2}}",
             always,
             brush
         ),
+        cmd!("alpha.list", "List brush alphas", [], None, "{} — procedural alphas and the built-in library", always, |_, _| Ok(json!({
+            "procedural": BrushAlpha::ALL.map(BrushAlpha::label),
+            "library": alphas::library().iter().map(|a| json!({"id": a.id, "label": a.label, "category": a.category})).collect::<Vec<_>>(),
+        }))),
         cmd!("tool.material", "Tool material", [], None, "{channel, color?|value?, enabled?} or {maskValue?: 0..1}", always, material),
-        cmd!("tool.stencil", "Projection stencil", [], None, "{image?: resource name, center?: [x,y] NDC, scale?: 0.01..10, rotation?: degrees, tile?, opacity?, clear?: bool}", always, stencil),
+        cmd!(
+            "tool.stencil",
+            "Projection stencil",
+            [],
+            None,
+            "{image?: resource name, center?: [x,y] NDC, scale?: 0.01..10, rotation?: degrees, tile?, opacity?, clear?: bool}",
+            always,
+            stencil
+        ),
         cmd!(
             "tool.cloneSource",
             "Set clone source",
@@ -42,7 +54,15 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("tool.fillMode", "Polygon fill mode", [], None, "{mode: triangle|uvIsland|mesh}", always, fill_mode),
         cmd!("tool.stroke", "Paint stroke", [], None, "{points: [[x,y],...] viewport pixels, viewport?: [w,h]} — paints with the current tool", always, stroke),
-        cmd!("tool.strokeUv", "Paint stroke in the 2D view", [], None, "{points: [[u,v],...] texture coordinates 0..1} — paints in UV space like the 2D view", always, stroke_uv),
+        cmd!(
+            "tool.strokeUv",
+            "Paint stroke in the 2D view",
+            [],
+            None,
+            "{points: [[u,v],...] texture coordinates 0..1} — paints in UV space like the 2D view",
+            always,
+            stroke_uv
+        ),
         cmd!("tool.click", "Tool click", [], None, "{x, y, viewport?: [w,h]} — polygon fill / color picker / single dab", always, click),
         cmd!("tool.state", "Tool state", [], None, "{}", always, |s, _| Ok(serde_json::to_value(&s.tool).unwrap_or(Value::Null))),
     ]
@@ -107,14 +127,20 @@ fn brush(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(v) = f32p(p, "jitterPosition") {
         b.jitter_position = v / 100.0;
     }
+    let alpha = p.get("alpha");
     if let Some(a) = strp(p, "alpha") {
         b.alpha = BrushAlpha::parse(a).ok_or_else(|| bad("tool.brush", format!("unknown alpha `{a}`")))?;
-        b.alpha_image = None;
-    } else if let Some(name) = p.get("alpha").and_then(|a| a.get("image")).and_then(Value::as_str) {
+        (b.alpha_image, b.alpha_library) = (None, None);
+    } else if let Some(name) = alpha.and_then(|a| a.get("image")).and_then(Value::as_str) {
         if !s.images.contains_key(name) {
             return Err(bad("tool.brush", format!("no image resource `{name}` (import it first)")));
         }
-        b.alpha_image = Some(name.to_string());
+        (b.alpha_image, b.alpha_library) = (Some(name.to_string()), None);
+    } else if let Some(id) = alpha.and_then(|a| a.get("library")).and_then(Value::as_str) {
+        let a = alphas::find(id).ok_or_else(|| bad("tool.brush", format!("unknown library alpha `{id}` (see alpha.list)")))?;
+        // Render it now rather than on the first stamp.
+        a.image();
+        (b.alpha_image, b.alpha_library) = (None, Some(a.id.clone()));
     }
     if let Some(v) = boolp(p, "backfaceCulling") {
         b.backface_culling = v;
@@ -148,7 +174,11 @@ pub(crate) fn brush_json(s: &Session) -> Value {
         "size": b.size / 0.25 * 100.0, "minSize": b.min_size * 100.0, "flow": b.flow * 100.0, "opacity": b.opacity * 100.0,
         "spacing": b.spacing * 100.0, "hardness": b.hardness * 100.0, "angle": b.angle, "followPath": b.follow_path,
         "alignment": format!("{:?}", b.alignment).to_lowercase(), "lazy": b.lazy,
-        "alpha": match &b.alpha_image { Some(name) => json!({ "image": name }), None => json!(b.alpha.label()) },
+        "alpha": match (&b.alpha_image, &b.alpha_library) {
+            (Some(name), _) => json!({ "image": name }),
+            (None, Some(id)) => json!({ "library": id }),
+            (None, None) => json!(b.alpha.label()),
+        },
         "backfaceCulling": b.backface_culling, "symmetry": [b.symmetry.x, b.symmetry.y, b.symmetry.z],
         "smudgeStrength": s.tool.smudge_strength * 100.0, "particles": b.particles,
     })

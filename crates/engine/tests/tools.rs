@@ -1,4 +1,4 @@
-//! Clone, smudge, image alphas and the quick mask, driven through engine commands the way
+//! Clone, smudge, image and library alphas and the quick mask, driven through engine commands the way
 //! agents paint.
 
 use serde_json::{Value, json};
@@ -97,6 +97,58 @@ fn image_alpha_shapes_the_stamp() {
     // A procedural alpha clears the image.
     let r = execute(&mut s, "tool.brush", &json!({"alpha": "round"})).unwrap();
     assert_eq!(r["alpha"], json!("Round"));
+}
+
+/// Offsets (dx, dy) of red composite texels within `r` texels of (cx, cy), with their lengths.
+fn red_offsets(s: &Session, cx: i32, cy: i32, r: i32) -> Vec<(i32, i32, f32)> {
+    let mut out = Vec::new();
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let (x, y) = (cx + dx, cy + dy);
+            if (0..RES as i32).contains(&x) && (0..RES as i32).contains(&y) && red(s.caches[0].composite.value(Channel::BaseColor, x as u32, y as u32)) {
+                out.push((dx, dy, ((dx * dx + dy * dy) as f32).sqrt()));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn library_alphas_shape_the_stamp() {
+    let mut s = session();
+    paint_red(&mut s, 20.0);
+    let list = execute(&mut s, "alpha.list", &Value::Null).unwrap();
+    assert!(list["library"].as_array().is_some_and(|a| a.len() >= 60), "{list}");
+    assert_eq!(list["procedural"][0], json!("Round"));
+    assert!(execute(&mut s, "tool.brush", &json!({"alpha": {"library": "nope"}})).is_err());
+    let r = execute(&mut s, "tool.brush", &json!({"alpha": {"library": "Ring"}})).unwrap();
+    assert_eq!(r["alpha"], json!({"library": "ring"}));
+
+    // 2D view: a ring with a clean middle.
+    execute(&mut s, "tool.strokeUv", &json!({"points": [[0.5, 0.5]]})).unwrap();
+    let ring = red_offsets(&s, 128, 128, 48);
+    let outer = ring.iter().map(|t| t.2).fold(0.0, f32::max);
+    assert!(outer > 6.0 && outer < 47.0, "{outer}");
+    assert!(ring.iter().all(|t| t.2 > outer * 0.45), "the middle stays clean");
+    let mid = (outer * 0.72 / 0.92).round() as i32;
+    for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+        assert!(ring.iter().any(|t| (t.0, t.1) == (dx * mid, dy * mid)), "ring at {:?}", (dx * mid, dy * mid));
+    }
+
+    // 3D view: the same hollow stamp on the sphere.
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    s.update();
+    dab(&mut s, 200.0, 200.0);
+    let hit = s.pick(Vec2::new(200.0, 200.0), s.viewport).unwrap();
+    let (cx, cy) = ((hit.uv.x * RES) as i32, (hit.uv.y * RES) as i32);
+    let ring = red_offsets(&s, cx, cy, 48);
+    assert!(!ring.is_empty(), "painted");
+    assert!(ring.iter().all(|t| t.2 > 2.0), "the middle stays clean");
+
+    // A procedural alpha clears the library alpha.
+    let r = execute(&mut s, "tool.brush", &json!({"alpha": "square"})).unwrap();
+    assert_eq!(r["alpha"], json!("Square"));
+    assert!(s.tool.brush.alpha_library.is_none());
 }
 
 #[test]

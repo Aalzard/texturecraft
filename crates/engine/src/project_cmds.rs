@@ -4,7 +4,8 @@ use serde_json::{Value, json};
 use texturecraft_compose::BakedMaps;
 use texturecraft_geom::primitives;
 
-use crate::commands::{CommandSpec, always, bad, strp, u64p};
+use crate::commands::{CommandSpec, always, bad, boolp, strp, u64p};
+use crate::materials::Place;
 use crate::{Result, Session, cmd};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -20,7 +21,15 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("project.sample", "Open sample project", ["File"], None, "{}", always, sample),
         cmd!("project.inspect", "Inspect project", [], None, "{}", always, |s, _| Ok(crate::inspect::session(s))),
-        cmd!("material.apply", "Add smart material", [], None, "{material: id or label}", always, material),
+        cmd!(
+            "material.apply",
+            "Add smart material",
+            [],
+            None,
+            "{material: id or label, above?: layer id, inside?: bool, index?: n} — above the selection by default; `above` (+ `inside` for a folder) or `index` in the top-level stack (0 = bottom) place it",
+            always,
+            material
+        ),
         cmd!("material.list", "List materials", [], None, "{}", always, |_, _| Ok(json!(
             crate::materials::MATERIALS.iter().map(|m| json!({"id": m.id, "label": m.label, "smart": m.smart})).collect::<Vec<_>>()
         ))),
@@ -32,15 +41,19 @@ fn new(s: &mut Session, p: &Value) -> Result<Value> {
     let mesh = primitives::builtin(mesh_id).ok_or_else(|| bad("project.new", format!("unknown built-in mesh `{mesh_id}`")))?;
     let res = u64p(p, "resolution").unwrap_or(1024);
     let name = strp(p, "name").unwrap_or("Untitled");
-    let mut next = Session::new_project(name, mesh, &format!("builtin:{mesh_id}"), None, u32::try_from(res).unwrap_or(0))?;
-    next.viewport = s.viewport;
-    *s = next;
+    let next = Session::new_project(name, mesh, &format!("builtin:{mesh_id}"), None, u32::try_from(res).unwrap_or(0))?;
+    s.switch_to(next);
     Ok(crate::inspect::session(s))
 }
 
 fn material(s: &mut Session, p: &Value) -> Result<Value> {
     let id = strp(p, "material").ok_or_else(|| bad("material.apply", "`material` is required"))?;
-    let l = crate::materials::apply(s, id)?;
+    let place = match (u64p(p, "above"), u64p(p, "index")) {
+        (Some(above), _) => Place::Above(texturecraft_core::LayerId(above), boolp(p, "inside").unwrap_or(false)),
+        (None, Some(i)) => Place::Index(usize::try_from(i).unwrap_or(usize::MAX)),
+        (None, None) => Place::Selection,
+    };
+    let l = crate::materials::apply_at(s, id, place)?;
     Ok(json!({ "layer": l.0 }))
 }
 
@@ -63,9 +76,8 @@ pub fn sample_session(resolution: u32, bake_resolution: u32) -> Result<Session> 
 }
 
 fn sample(s: &mut Session, _: &Value) -> Result<Value> {
-    let mut next = sample_session(2048, 1024)?;
-    next.viewport = s.viewport;
-    *s = next;
+    let next = sample_session(2048, 1024)?;
+    s.switch_to(next);
     Ok(crate::inspect::session(s))
 }
 

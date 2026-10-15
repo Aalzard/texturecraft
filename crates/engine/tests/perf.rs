@@ -121,7 +121,7 @@ fn bench(res: u32) {
         }
     }
     let m = s.memory();
-    println!("[{res}²] memory: layer pixels {:.1} MB, composites {:.1} MB, below-stack cache {:.1} MB", mb(m.pixels), mb(m.composites), mb(m.cache));
+    println!("[{res}²] memory: layer pixels {:.1} MB, composites {:.1} MB, hot-layer cache {:.1} MB", mb(m.pixels), mb(m.composites), mb(m.cache));
 }
 
 #[test]
@@ -134,4 +134,143 @@ fn bench_4k() {
 #[ignore]
 fn bench_8k() {
     bench(8192);
+}
+
+/// What one interactive painting frame costs in the app, stage by stage, on the startup sample
+/// project (2K material ball with a smart material folder): stamping, compositing the dirty
+/// tiles, display conversion; then the commit at release. Painted twice: a new layer inside the
+/// smart material folder (on top of its fills), then the bottom layer (everything above it).
+#[test]
+#[ignore]
+fn bench_sample_painting() {
+    let mut s = texturecraft_engine::project_cmds::sample_session(2048, 512).unwrap();
+    s.viewport = Vec2::new(1000.0, 880.0);
+    let bottom = s.doc.project.texture_sets[0].stack[0];
+    execute(&mut s, "layer.add.paint", &Value::Null).unwrap();
+    s.update();
+    upload_bytes(&mut s);
+    for place in ["in the smart material folder", "at the bottom of the stack"] {
+        if place == "at the bottom of the stack" {
+            execute(&mut s, "layer.select", &json!({"layer": bottom.0})).unwrap();
+        }
+        for (size, brush) in [(0.02, "default brush"), (0.08, "large brush")] {
+            s.tool.brush.size = size;
+            let (mut stamp, mut comp, mut conv, mut worst, mut tiles) = (Duration::ZERO, Duration::ZERO, Duration::ZERO, Duration::ZERO, 0usize);
+            let t = Instant::now();
+            s.begin_stroke(Vec2::new(350.0, 400.0), s.viewport, 1.0).unwrap();
+            let begin = t.elapsed();
+            let frames = 60;
+            for i in 0..frames {
+                let p = Vec2::new(350.0 + i as f32 * 5.0, 400.0 + (i as f32 * 0.2).sin() * 60.0);
+                let t = Instant::now();
+                s.continue_stroke(p, 1.0);
+                let a = t.elapsed();
+                tiles += s.caches.iter().map(|c| c.dirty.len()).sum::<usize>();
+                let t = Instant::now();
+                s.update();
+                let b = t.elapsed();
+                let t = Instant::now();
+                upload_bytes(&mut s);
+                let c = t.elapsed();
+                stamp += a;
+                comp += b;
+                conv += c;
+                worst = worst.max(a + b + c);
+            }
+            let t = Instant::now();
+            s.end_stroke().unwrap();
+            let end = t.elapsed();
+            let committed = s.caches[0].dirty.len();
+            let t = Instant::now();
+            s.update();
+            let after = t.elapsed();
+            let f = frames as u32;
+            let below = &s.caches[0].below;
+            println!(
+                "[sample] {place}, {brush}: begin {begin:.2?}; per frame stamp {:.2?} + composite {:.2?} ({:.2?}/tile) + display {:.2?}, worst {worst:.2?} ({:.0} dirty tiles/frame); end_stroke {end:.2?} + update {after:.2?} ({committed} tiles); cache {} tiles, {:.1} MB, {:.0} KB/tile",
+                stamp / f,
+                comp / f,
+                comp / tiles.max(1) as u32,
+                conv / f,
+                tiles as f64 / frames as f64,
+                below.len(),
+                mb(below.bytes()),
+                below.tile_bytes().unwrap_or(0) as f64 / 1024.0
+            );
+        }
+    }
+}
+
+/// Per-texel overhead of the compositor on a one-paint-layer project.
+#[test]
+#[ignore]
+fn bench_minimal_stack() {
+    let mut s = Session::new_project("min", primitives::sphere(1.0, 64, 32), "builtin:sphere", None, 2048).unwrap();
+    s.viewport = Vec2::new(800.0, 800.0);
+    s.update();
+    for label in ["empty set", "one paint layer"] {
+        if label == "one paint layer" {
+            execute(&mut s, "layer.add.paint", &Value::Null).unwrap();
+            execute(&mut s, "tool.stroke", &json!({"points": [[200, 300], [600, 500]]})).unwrap();
+            s.update();
+        }
+        s.caches[0].invalidate_all();
+        let n = s.caches[0].dirty.len();
+        let t = Instant::now();
+        s.update();
+        println!("[min] {label}: {n} tiles in {:.2?} ({:.2?}/tile)", t.elapsed(), t.elapsed() / n.max(1) as u32);
+    }
+}
+
+/// Full-composite cost of every built-in material on the sample ball (1K, baked), slowest first.
+#[test]
+#[ignore]
+fn bench_materials() {
+    let mut rows = Vec::new();
+    for m in texturecraft_engine::materials::MATERIALS {
+        let mut s = texturecraft_engine::project_cmds::sample_session(1024, 256).unwrap();
+        let top = s.doc.project.texture_sets[0].stack.clone();
+        for id in top {
+            let _ = execute(&mut s, "layer.remove", &json!({"layer": id.0}));
+        }
+        execute(&mut s, "material.apply", &json!({"material": m.id})).unwrap();
+        s.caches[0].invalidate_all();
+        let n = s.caches[0].dirty.len();
+        let t = Instant::now();
+        s.update();
+        rows.push((t.elapsed() / n.max(1) as u32, m.id));
+    }
+    rows.sort();
+    rows.reverse();
+    for (per_tile, id) in rows {
+        println!("[materials] {id:<28} {per_tile:.2?}/tile");
+    }
+}
+
+/// Per-tile cost of single-layer stacks, to find fixed per-texel overhead (run single-threaded).
+#[test]
+#[ignore]
+fn bench_single_layers() {
+    let cases: &[(&str, &[(&str, Value)])] = &[
+        ("uniform fill", &[("layer.add.fill", json!({"color": [0.5, 0.5, 0.5], "roughness": 0.4}))]),
+        ("fill + clouds", &[("layer.add.fill", json!({})), ("layer.fill.set", json!({"channel": "baseColor", "procedural": "clouds"}))]),
+        ("fill + triplanar clouds", &[("layer.add.fill", json!({})), ("layer.fill.set", json!({"channel": "baseColor", "procedural": "clouds"})), ("layer.fill.projection", json!({"projection": "triplanar"}))]),
+        ("fill + black mask + edge wear", &[("layer.add.fill", json!({})), ("mask.add.black", Value::Null), ("effect.add.generator", json!({"generator": "edgeWear"}))]),
+        ("fill + black mask + dirt", &[("layer.add.fill", json!({})), ("mask.add.black", Value::Null), ("effect.add.generator", json!({"generator": "dirt"}))]),
+    ];
+    for (label, cmds) in cases {
+        let mut s = texturecraft_engine::project_cmds::sample_session(1024, 256).unwrap();
+        for id in s.doc.project.texture_sets[0].stack.clone() {
+            let _ = execute(&mut s, "layer.remove", &json!({"layer": id.0}));
+        }
+        for (id, p) in cmds.iter() {
+            execute(&mut s, id, p).unwrap();
+        }
+        s.update();
+        s.caches[0].invalidate_all();
+        let n = s.caches[0].dirty.len();
+        let t = Instant::now();
+        s.update();
+        println!("[single] {label:<32} {:.2?}/tile ({n} tiles)", t.elapsed() / n.max(1) as u32);
+    }
 }

@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use rayon::prelude::*;
 use texturecraft_compose::PixelStore;
 use texturecraft_core::{Channel, ChannelKind, LayerId};
 use texturecraft_texel::{TILE, TILE_AREA, TileImage, from_u16, from_u16_signed, to_u16, to_u16_signed};
@@ -23,53 +24,67 @@ fn over(img: &mut TileImage, kind: ChannelKind, value: &[f32], src: &CommitSourc
     let comps = img.comps();
     let n = comps.saturating_sub(1);
     let opacity = src.opacity.clamp(0.0, 1.0);
-    for &(tx, ty) in src.tiles {
-        let Some(a) = src.alpha.tile(tx, ty) else { continue };
-        if src.erase && !img.is_allocated(tx, ty) {
-            continue;
-        }
-        let carried = match carried.map(|c| c.tile(tx, ty)) {
-            Some(None) => continue,
-            Some(Some(t)) => Some(t),
-            None => None,
-        };
-        // New tiles start empty: zero coverage and a zero value (32768 in signed encoding).
-        let mut fill = vec![enc(kind, 0.0); n];
-        fill.push(0);
-        let Some(dst) = img.tile_mut(tx, ty, &fill) else { continue };
-        for i in 0..TILE_AREA {
-            let mut m = from_u16(a.get(i).copied().unwrap_or(0)) * opacity;
-            if m <= 0.0 {
-                continue;
+    // New tiles start empty: zero coverage and a zero value (32768 in signed encoding).
+    let mut empty = vec![enc(kind, 0.0); n];
+    empty.push(0);
+    let tiles: Vec<(u32, u32)> = src.tiles.iter().copied().collect();
+    // Tiles blend independently: build each new tile in parallel, then swap them in. The old
+    // tile data stays shared with undo snapshots.
+    let image = &*img;
+    let updated: Vec<((u32, u32), Vec<u16>)> = tiles
+        .par_iter()
+        .filter_map(|&(tx, ty)| {
+            let a = src.alpha.tile(tx, ty)?;
+            if src.erase && !image.is_allocated(tx, ty) {
+                return None;
             }
-            let mut color = None;
-            if let Some(f) = src.per_texel {
-                let (x, y) = (tx * TILE + i as u32 % TILE, ty * TILE + i as u32 / TILE);
-                match f(x, y) {
-                    Some((c, af)) => {
-                        m *= af;
-                        color = Some(c);
-                    }
-                    None => continue,
-                }
+            let carried = match carried.map(|c| c.tile(tx, ty)) {
+                Some(None) => return None,
+                Some(Some(t)) => Some(t),
+                None => None,
+            };
+            let mut dst = match image.tile(tx, ty) {
+                Some(t) => t.to_vec(),
+                None => empty.iter().copied().cycle().take(TILE_AREA * comps).collect(),
+            };
+            for i in 0..TILE_AREA {
+                let mut m = from_u16(a.get(i).copied().unwrap_or(0)) * opacity;
                 if m <= 0.0 {
                     continue;
                 }
+                let mut color = None;
+                if let Some(f) = src.per_texel {
+                    let (x, y) = (tx * TILE + i as u32 % TILE, ty * TILE + i as u32 / TILE);
+                    match f(x, y) {
+                        Some((c, af)) => {
+                            m *= af;
+                            color = Some(c);
+                        }
+                        None => continue,
+                    }
+                    if m <= 0.0 {
+                        continue;
+                    }
+                }
+                let Some(px) = dst.get_mut(i * comps..(i + 1) * comps) else { continue };
+                let cov = from_u16(px[n]);
+                for k in 0..n {
+                    let p = dec(kind, px[k]);
+                    let target = match (carried, color) {
+                        (Some(t), _) => dec(kind, t.get(i * n + k).copied().unwrap_or(0)),
+                        (None, Some(c)) if stencil_color => c.get(k).copied().unwrap_or(0.0),
+                        _ => value.get(k).copied().unwrap_or(0.0),
+                    };
+                    let v = if src.erase { p * (1.0 - m) } else { target * m + p * (1.0 - m) };
+                    px[k] = enc(kind, v);
+                }
+                px[n] = to_u16(if src.erase { cov * (1.0 - m) } else { m + cov * (1.0 - m) });
             }
-            let Some(px) = dst.get_mut(i * comps..(i + 1) * comps) else { continue };
-            let cov = from_u16(px[n]);
-            for k in 0..n {
-                let p = dec(kind, px[k]);
-                let target = match (carried, color) {
-                    (Some(t), _) => dec(kind, t.get(i * n + k).copied().unwrap_or(0)),
-                    (None, Some(c)) if stencil_color => c.get(k).copied().unwrap_or(0.0),
-                    _ => value.get(k).copied().unwrap_or(0.0),
-                };
-                let v = if src.erase { p * (1.0 - m) } else { target * m + p * (1.0 - m) };
-                px[k] = enc(kind, v);
-            }
-            px[n] = to_u16(if src.erase { cov * (1.0 - m) } else { m + cov * (1.0 - m) });
-        }
+            Some(((tx, ty), dst))
+        })
+        .collect();
+    for ((tx, ty), data) in updated {
+        img.set_tile(tx, ty, Some(std::sync::Arc::new(data)));
     }
 }
 

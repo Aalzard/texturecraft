@@ -13,11 +13,14 @@ use texturecraft_geom::glam::{Vec2, Vec3};
 use texturecraft_geom::{Mesh, NO_TRI, UvGBuffer};
 use texturecraft_texel::{DilationMap, TILE, TILE_AREA, TileImage, from_u16, to_u16, to_u16_signed};
 
-use crate::below::BelowCache;
+use crate::below::{Band, BelowCache, Level};
 use crate::pattern::{Coords, image_samples, procedural, world_noise};
 use crate::store::{BakedMaps, ImageStore, PixelStore, decode};
 
 const NCH: usize = Channel::ALL.len();
+
+/// Stack values being composited, per channel.
+type Acc = [[f32; 3]; NCH];
 
 /// What a live stroke paints into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -536,60 +539,85 @@ fn mask_plan<'a>(inp: &Inputs<'a>, id: LayerId, mask: &'a Mask, tx: u32, ty: u32
 }
 
 fn plan<'a>(inp: &Inputs<'a>, list: &[LayerId], channels: &[Channel], tx: u32, ty: u32, depth: usize, fields: Option<&'a Fields>) -> Vec<Node<'a>> {
-    let mut out = Vec::new();
     if depth > texturecraft_core::project::MAX_DEPTH {
-        return out;
+        return Vec::new();
     }
-    for id in list {
-        let Some(own): Option<&'a Layer> = inp.project.layers.get(id) else { continue };
-        // Instances draw their source's content (a missing source draws nothing).
-        let Some(layer): Option<&'a Layer> = inp.project.content_layer(*id) else { continue };
-        if !own.visible {
-            continue;
-        }
-        let paint = matches!(layer.kind, LayerKind::Paint);
-        let fx = !layer.is_group() && layer.content_effects.iter().any(|e| e.visible);
-        let fx_start = if fx { neighbourhood(&layer.content_effects, inp.gbuf.width).map(|n| n.0) } else { None };
-        let chans = channels
-            .iter()
-            .filter_map(|c| {
-                let b = layer.blend(*c)?;
-                if b.mode == BlendMode::Disable || b.opacity <= 0.0 {
-                    return None;
-                }
-                // shortcut: an instance in a set of another resolution draws no painted pixels;
-                // resample the source's pixels if instances across sizes become common.
-                let data =
-                    if paint { inp.pixels.layer(layer.id, *c).filter(|img| img.width() == inp.gbuf.width).and_then(|img| img.tile(tx, ty)) } else { None };
-                let effects = if fx { effect_plans(inp, &layer.content_effects, tx, ty, Some(*c)) } else { Vec::new() };
-                let start = fx_start.zip(fields.and_then(|f| f.get(&FieldKey::Content(*id, *c))));
-                Some(ChanPlan { ch: c.index(), kind: c.kind(), comps: c.components(), blend: b.mode, opacity: b.opacity.clamp(0.0, 1.0), data, effects, start })
-            })
-            .collect::<Vec<_>>();
-        let content = match &layer.kind {
-            LayerKind::Paint => Content::Paint { preview: inp.preview.is_some_and(|p| p.target == PaintTarget::Layer(layer.id)) },
-            LayerKind::Fill(f) => Content::Fill(f),
-            LayerKind::Group { children, .. } => Content::Group(plan(inp, children, channels, tx, ty, depth + 1, fields)),
-            // `content_layer` already followed instance links.
-            LayerKind::Instance { .. } => continue,
-        };
-        // A paint layer with nothing painted (and not being painted) or added by its content
-        // effects contributes nothing.
-        if let Content::Paint { preview: false } = content
-            && chans.iter().all(|c| c.data.is_none() && c.effects.is_empty())
-        {
-            continue;
-        }
-        if chans.is_empty() {
-            continue;
-        }
-        let mask = layer_mask(inp.project, *id).and_then(|m| mask_plan(inp, *id, m, tx, ty, fields));
-        let anchors: Vec<LayerId> =
-            if fx { layer.content_effects.iter().filter(|e| e.visible && matches!(e.kind, EffectKind::Anchor)).map(|e| e.id).collect() } else { Vec::new() };
-        let has_anchor = !anchors.is_empty() || matches!(&content, Content::Group(nodes) if nodes.iter().any(|n| n.has_anchor));
-        out.push(Node { id: *id, content, chans, mask, anchors, has_anchor, height_mask: layer.height_mask });
+    list.iter().filter_map(|id| plan_node(inp, *id, channels, tx, ty, depth, fields, true)).collect()
+}
+
+/// The plan of layer `id` at `depth` (None where it draws nothing); a folder's children are
+/// planned when `kids`.
+#[allow(clippy::too_many_arguments)]
+fn plan_node<'a>(inp: &Inputs<'a>, id: LayerId, channels: &[Channel], tx: u32, ty: u32, depth: usize, fields: Option<&'a Fields>, kids: bool) -> Option<Node<'a>> {
+    let own: &'a Layer = inp.project.layers.get(&id)?;
+    // Instances draw their source's content (a missing source draws nothing).
+    let layer: &'a Layer = inp.project.content_layer(id)?;
+    if !own.visible {
+        return None;
     }
-    out
+    let paint = matches!(layer.kind, LayerKind::Paint);
+    let fx = !layer.is_group() && layer.content_effects.iter().any(|e| e.visible);
+    let fx_start = if fx { neighbourhood(&layer.content_effects, inp.gbuf.width).map(|n| n.0) } else { None };
+    let chans = channels
+        .iter()
+        .filter_map(|c| {
+            let b = layer.blend(*c)?;
+            if b.mode == BlendMode::Disable || b.opacity <= 0.0 {
+                return None;
+            }
+            // shortcut: an instance in a set of another resolution draws no painted pixels;
+            // resample the source's pixels if instances across sizes become common.
+            let data = if paint { inp.pixels.layer(layer.id, *c).filter(|img| img.width() == inp.gbuf.width).and_then(|img| img.tile(tx, ty)) } else { None };
+            let effects = if fx { effect_plans(inp, &layer.content_effects, tx, ty, Some(*c)) } else { Vec::new() };
+            let start = fx_start.zip(fields.and_then(|f| f.get(&FieldKey::Content(id, *c))));
+            Some(ChanPlan { ch: c.index(), kind: c.kind(), comps: c.components(), blend: b.mode, opacity: b.opacity.clamp(0.0, 1.0), data, effects, start })
+        })
+        .collect::<Vec<_>>();
+    let content = match &layer.kind {
+        LayerKind::Paint => Content::Paint { preview: inp.preview.is_some_and(|p| p.target == PaintTarget::Layer(layer.id)) },
+        LayerKind::Fill(f) => Content::Fill(f),
+        LayerKind::Group { children, .. } => Content::Group(if kids { plan(inp, children, channels, tx, ty, depth + 1, fields) } else { Vec::new() }),
+        // `content_layer` already followed instance links.
+        LayerKind::Instance { .. } => return None,
+    };
+    // A paint layer with nothing painted (and not being painted) or added by its content
+    // effects contributes nothing.
+    if let Content::Paint { preview: false } = content
+        && chans.iter().all(|c| c.data.is_none() && c.effects.is_empty())
+    {
+        return None;
+    }
+    if chans.is_empty() {
+        return None;
+    }
+    let mask = layer_mask(inp.project, id).and_then(|m| mask_plan(inp, id, m, tx, ty, fields));
+    let anchors: Vec<LayerId> =
+        if fx { layer.content_effects.iter().filter(|e| e.visible && matches!(e.kind, EffectKind::Anchor)).map(|e| e.id).collect() } else { Vec::new() };
+    let has_anchor = !anchors.is_empty() || matches!(&content, Content::Group(nodes) if nodes.iter().any(|n| n.has_anchor));
+    Some(Node { id, content, chans, mask, anchors, has_anchor, height_mask: layer.height_mask })
+}
+
+/// One level of the path to the hot layer (see [`Level`]) planned for a tile.
+struct LevelPlan<'a> {
+    below: Vec<Node<'a>>,
+    /// A folder planned without its children, or (last level) the hot layer.
+    at: Option<Node<'a>>,
+    above: Vec<Node<'a>>,
+}
+
+/// Plan the path to the hot layer for tile (tx, ty); the layers before the path are left out
+/// on tiles the cache holds (`warm`).
+fn plan_levels<'a>(inp: &Inputs<'a>, levels: &[Level], channels: &[Channel], tx: u32, ty: u32, fields: &'a Fields, warm: bool) -> Vec<LevelPlan<'a>> {
+    let last = levels.len().saturating_sub(1);
+    levels
+        .iter()
+        .enumerate()
+        .map(|(d, l)| LevelPlan {
+            below: if warm { Vec::new() } else { plan(inp, &l.below, channels, tx, ty, d, Some(fields)) },
+            at: plan_node(inp, l.at, channels, tx, ty, d, Some(fields), d == last),
+            above: plan(inp, &l.above, channels, tx, ty, d, Some(fields)),
+        })
+        .collect()
 }
 
 /// Apply a 0..1 function to each component of a channel value: signed values map through
@@ -630,12 +658,87 @@ struct Texel<'a, 'b> {
     /// `eval` stops when it reaches this layer.
     stop: Option<LayerId>,
     /// Stack values recorded by the anchor points evaluated so far.
-    anchors: Vec<(LayerId, [[f32; 3]; NCH])>,
+    anchors: Vec<(LayerId, Acc)>,
+    /// Where `eval` takes layer masks and content from.
+    tape: Tape<'b>,
+}
+
+/// What a layer contributes (its mask, its content value and coverage per channel): evaluated
+/// (`Off`), evaluated and recorded, or replayed from a recording.
+enum Tape<'t> {
+    Off,
+    Record(Vec<f32>),
+    Replay(&'t [f32], usize),
+}
+
+impl<'t> Tape<'t> {
+    fn next(&mut self) -> f32 {
+        self.take(1).first().copied().unwrap_or(0.0)
+    }
+
+    /// The next `n` replayed values (empty when not replaying).
+    fn take(&mut self, n: usize) -> &'t [f32] {
+        match self {
+            Tape::Replay(t, i) => {
+                let t: &'t [f32] = t;
+                let end = i.saturating_add(n);
+                let s = t.get(*i..end).unwrap_or_default();
+                *i = end;
+                s
+            }
+            _ => &[],
+        }
+    }
 }
 
 impl<'a, 'b> Texel<'a, 'b> {
     fn new(inp: &'b Inputs<'a>, x: u32, y: u32, o: usize, stroke: f32) -> Self {
-        Texel { inp, x, y, o, res: inp.gbuf.width, coords: None, stroke, stop: None, anchors: Vec::new() }
+        Texel { inp, x, y, o, res: inp.gbuf.width, coords: None, stroke, stop: None, anchors: Vec::new(), tape: Tape::Off }
+    }
+
+    /// Run `f` with `tape` as this texel's tape.
+    fn taped<R>(&mut self, tape: &mut Tape<'b>, f: impl FnOnce(&mut Self) -> R) -> R {
+        std::mem::swap(&mut self.tape, tape);
+        let r = f(self);
+        std::mem::swap(&mut self.tape, tape);
+        r
+    }
+
+    /// [`Texel::node_mask`] through the tape.
+    fn tape_mask(&mut self, n: &Node) -> f32 {
+        if let Tape::Replay(..) = self.tape {
+            return self.tape.next();
+        }
+        let m = self.node_mask(n);
+        if let Tape::Record(t) = &mut self.tape {
+            t.push(m);
+        }
+        m
+    }
+
+    /// [`Texel::content`] through the tape: the coverage (0 where empty), then the value.
+    fn tape_content(&mut self, content: &Content, c: &ChanPlan) -> Option<([f32; 3], f32)> {
+        if let Tape::Replay(..) = self.tape {
+            let cov = self.tape.next();
+            // Recorded as 0 where empty.
+            if cov <= 0.0 {
+                return None;
+            }
+            let v = if c.comps == 3 { [self.tape.next(), self.tape.next(), self.tape.next()] } else { [self.tape.next(); 3] };
+            return Some((v, cov));
+        }
+        let r = self.content(content, c);
+        if let Tape::Record(t) = &mut self.tape {
+            match r {
+                Some((v, cov)) => {
+                    t.push(cov);
+                    let n = if c.comps == 3 { 3 } else { 1 };
+                    t.extend_from_slice(&v[..n]);
+                }
+                None => t.push(0.0),
+            }
+        }
+        r
     }
 
     fn coords(&mut self) -> Coords {
@@ -803,12 +906,12 @@ impl<'a, 'b> Texel<'a, 'b> {
 
     /// Composite `nodes` over `acc`, recording anchors. Returns true when it reached the `stop`
     /// layer (`acc` then holds the stack below it).
-    fn eval(&mut self, nodes: &[Node], acc: &mut [[f32; 3]; NCH]) -> bool {
+    fn eval(&mut self, nodes: &[Node], acc: &mut Acc) -> bool {
         for n in nodes {
             if self.stop == Some(n.id) {
                 return true;
             }
-            let m = self.node_mask(n);
+            let m = self.tape_mask(n);
             match &n.content {
                 // A masked-out group still runs when it records anchors (they hold its inner
                 // stack) or may hold the stop layer.
@@ -818,18 +921,12 @@ impl<'a, 'b> Texel<'a, 'b> {
                         return true;
                     }
                     if m > 0.0 {
-                        for c in &n.chans {
-                            if let (Some(a), Some(b)) = (acc.get(c.ch).copied(), inner.get(c.ch).copied())
-                                && let Some(slot) = acc.get_mut(c.ch)
-                            {
-                                *slot = mix3(a, b, c.opacity * m);
-                            }
-                        }
+                        mix_group(acc, &inner, &n.chans, m);
                     }
                 }
                 Content::Fill(_) | Content::Paint { .. } if m > 0.0 => {
                     for c in &n.chans {
-                        if let Some((v, cov)) = self.content(&n.content, c) {
+                        if let Some((v, cov)) = self.tape_content(&n.content, c) {
                             apply(acc, c, v, cov, m);
                         }
                     }
@@ -841,6 +938,64 @@ impl<'a, 'b> Texel<'a, 'b> {
             }
         }
         false
+    }
+
+    /// [`Texel::eval`] of the whole stack over `acc`, split along the path to the hot layer
+    /// (`levels`, top level first). Cold (`warm` false) it evaluates everything, leaving in
+    /// `accs` the stack before the path layer of each level and recording on `tape` the masks
+    /// of the folders on the path and what the layers after the path contribute. Warm (`accs`
+    /// loaded from the cache, `tape` replaying) only the hot layer is evaluated and the blends
+    /// after it are replayed. The order of evaluation differs from `eval` only in masks, which
+    /// read no stack values (given no anchor readers, see `BelowCache::prepare`), so the result
+    /// is identical.
+    fn eval_split(&mut self, mut acc: Acc, levels: &[LevelPlan], accs: &mut [Acc], masks: &mut [f32], warm: bool, tape: &mut Tape<'b>) -> Acc {
+        let last = levels.len().saturating_sub(1);
+        // Down the path: the deepest level the stack reaches (a folder masked out or not drawn
+        // here stops it).
+        let mut reach = last;
+        for (d, lv) in levels.iter().enumerate() {
+            if !warm {
+                self.eval(&lv.below, &mut acc);
+                if let Some(slot) = accs.get_mut(d) {
+                    *slot = acc;
+                }
+            }
+            if d == last {
+                break;
+            }
+            let m = match &lv.at {
+                Some(g) => self.taped(tape, |t| t.tape_mask(g)),
+                None => 0.0,
+            };
+            if let Some(slot) = masks.get_mut(d) {
+                *slot = m;
+            }
+            if m > 0.0 {
+                continue;
+            }
+            reach = d;
+            break;
+        }
+        let mut acc = accs.get(reach).copied().unwrap_or(acc);
+        if reach == last
+            && let Some(hot) = levels.get(last).and_then(|l| l.at.as_ref())
+        {
+            self.eval(std::slice::from_ref(hot), &mut acc);
+        }
+        // Back up: the layers after the path, then each folder's mix over the stack outside it.
+        for d in (0..=reach).rev() {
+            if let Some(lv) = levels.get(d) {
+                self.taped(tape, |t| t.eval(&lv.above, &mut acc));
+            }
+            if let Some(o) = d.checked_sub(1)
+                && let (Some(outer), Some(g), Some(m)) = (accs.get(o), levels.get(o).and_then(|l| l.at.as_ref()), masks.get(o))
+            {
+                let inner = acc;
+                acc = *outer;
+                mix_group(&mut acc, &inner, &g.chans, *m);
+            }
+        }
+        acc
     }
 
     /// The mask of node `n` at this texel, combined with the layer's height when it masks with
@@ -990,8 +1145,19 @@ impl<'a, 'b> Texel<'a, 'b> {
     }
 }
 
+/// Mix a folder's inner stack into the stack outside it by its opacity and mask `m`.
+fn mix_group(acc: &mut Acc, inner: &Acc, chans: &[ChanPlan], m: f32) {
+    for c in chans {
+        if let (Some(a), Some(b)) = (acc.get(c.ch).copied(), inner.get(c.ch).copied())
+            && let Some(slot) = acc.get_mut(c.ch)
+        {
+            *slot = mix3(a, b, c.opacity * m);
+        }
+    }
+}
+
 #[inline]
-fn apply(acc: &mut [[f32; 3]; NCH], c: &ChanPlan, v: [f32; 3], cov: f32, mask: f32) {
+fn apply(acc: &mut Acc, c: &ChanPlan, v: [f32; 3], cov: f32, mask: f32) {
     let Some(a) = acc.get(c.ch).copied() else { return };
     let w = if c.blend == BlendMode::Replace { c.opacity * mask } else { cov * c.opacity * mask };
     let blended = blend_chan(c, c.blend, a, v);
@@ -1008,7 +1174,7 @@ pub fn composite_tiles(inp: &Inputs, out: &mut Composite, tiles: &[(u32, u32)]) 
 /// Tiles per side of the blocks a composite works through (bounds neighbourhood-filter memory).
 const BLOCK: u32 = 16;
 
-/// [`composite_tiles`], serving the stack below the hot layer from `below` where it can (and
+/// [`composite_tiles`], serving everything but the hot layer from `below` where it can (and
 /// filling it). Results are identical to [`composite_tiles`].
 pub fn composite_tiles_cached(inp: &Inputs, out: &mut Composite, tiles: &[(u32, u32)], mut below: Option<&mut BelowCache>) {
     let Ok(set) = inp.project.texture_set(inp.ts) else { return };
@@ -1018,9 +1184,11 @@ pub fn composite_tiles_cached(inp: &Inputs, out: &mut Composite, tiles: &[(u32, 
     }
     let split = below.as_deref_mut().and_then(|b| b.prepare(inp));
     // A pass over more tiles than the cache holds records only what fits: recording the rest
-    // would just evict it again.
-    let tile_bytes = TILE_AREA * set.channel_list().iter().map(|c| c.components()).sum::<usize>() * std::mem::size_of::<f32>();
-    let fits = below.as_deref().is_some_and(|b| tiles.len().max(b.pass) <= b.budget / tile_bytes.max(1));
+    // would just evict it again. Tiles hold the stack per level plus a tape of varying size.
+    let levels = split.as_ref().map_or(1, Vec::len);
+    let estimate = TILE_AREA * levels * set.channel_list().iter().map(|c| c.components()).sum::<usize>() * std::mem::size_of::<f32>();
+    let tile_bytes = below.as_deref().and_then(BelowCache::tile_bytes).unwrap_or(estimate).max(1);
+    let fits = below.as_deref().is_some_and(|b| tiles.len().max(b.pass) <= b.limit() / tile_bytes);
     let mut blocks: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
     for t in tiles {
         blocks.entry((t.1 / BLOCK, t.0 / BLOCK)).or_default().push(*t);
@@ -1028,13 +1196,17 @@ pub fn composite_tiles_cached(inp: &Inputs, out: &mut Composite, tiles: &[(u32, 
     for block in blocks.values() {
         let quota = match below.as_deref() {
             Some(_) if fits => usize::MAX,
-            Some(b) => b.budget.saturating_sub(b.bytes()) / tile_bytes.max(1),
+            Some(b) => b.limit().saturating_sub(b.bytes()) / tile_bytes,
             None => 0,
         };
-        let snaps = composite_block(inp, &set.stack, out, block, below.as_deref().zip(split), quota);
+        let cached = below.as_deref().zip(split.as_deref());
+        let records = composite_block(inp, &set.stack, out, block, cached, quota);
         if let Some(b) = below.as_deref_mut() {
-            for (t, snap) in snaps {
-                b.insert(t, snap);
+            for t in block {
+                b.touch(*t);
+            }
+            for (t, bands) in records {
+                b.insert(t, bands);
             }
         }
     }
@@ -1043,45 +1215,73 @@ pub fn composite_tiles_cached(inp: &Inputs, out: &mut Composite, tiles: &[(u32, 
 /// Rows of a tile composited as one parallel task.
 const BAND: u32 = 16;
 
-/// One band of a tile: per-channel buffers, the stack-below values to cache (empty when not
-/// recorded) and whether any texel is covered.
-type BandResult = (Vec<Vec<u16>>, Vec<f32>, bool);
+/// One band of a tile: per-channel buffers, what to cache of it (when recorded) and whether
+/// any texel is covered.
+type BandResult = (Vec<Vec<u16>>, Option<Band>, bool);
 
-/// Composite one block of tiles; returns the stack-below values to cache (for at most `quota`
-/// tiles).
+/// Per-channel tiles of one composited tile and whether any texel is covered.
+type Joined = (Vec<Option<std::sync::Arc<Vec<u16>>>>, bool);
+
+/// Composite one block of tiles, split along the path to the hot layer when `below` holds it;
+/// returns what to cache (for at most `quota` tiles).
 fn composite_block(
     inp: &Inputs,
     stack: &[LayerId],
     out: &mut Composite,
     tiles: &[(u32, u32)],
-    below: Option<(&BelowCache, usize)>,
+    below: Option<(&BelowCache, &[Level])>,
     quota: usize,
-) -> Vec<((u32, u32), Vec<f32>)> {
+) -> Vec<((u32, u32), Vec<Band>)> {
     let channels: Vec<Channel> = inp.project.texture_set(inp.ts).map(|s| s.channel_list()).unwrap_or_default();
     let res = out.resolution;
-    // Layers below the split are only evaluated on tiles the cache lacks.
-    let (lo, hi) = stack.split_at(below.map_or(0, |(_, i)| i.min(stack.len())));
+    let split = below.map(|(_, l)| l);
     let cached = |t: (u32, u32)| below.and_then(|(b, _)| b.tile(t));
     let fresh: Vec<(u32, u32)> = tiles.iter().copied().filter(|t| cached(*t).is_none()).collect();
-    let recorded: std::collections::BTreeSet<(u32, u32)> = if lo.is_empty() { Default::default() } else { fresh.iter().copied().take(quota).collect() };
-    let mut fields = fields_of(inp, &channels, lo, &fresh);
-    fields.extend(fields_of(inp, &channels, hi, tiles));
-    let stride: usize = channels.iter().map(|c| c.components()).sum();
+    let recorded: std::collections::BTreeSet<(u32, u32)> = if split.is_some() { fresh.iter().copied().take(quota).collect() } else { Default::default() };
+    // Off the path, layers are only evaluated on tiles the cache lacks.
+    let fields = match split.and_then(<[Level]>::last) {
+        Some(hot) if fresh.len() < tiles.len() => {
+            let mut fields = fields_of(inp, &channels, stack, &fresh);
+            fields.extend(fields_of(inp, &channels, &[hot.at], tiles));
+            fields
+        }
+        _ => fields_of(inp, &channels, stack, tiles),
+    };
+    let lanes: Vec<Lane> = channels.iter().map(|c| Lane { ch: c.index(), n: c.components(), signed: c.kind() == ChannelKind::Signed }).collect();
+    let stride: usize = lanes.iter().map(|l| l.n).sum();
+    let nlev = split.map_or(0, <[Level]>::len);
+    let defaults: Acc = Channel::ALL.map(Channel::default_value);
     // Tiles split into bands of rows, so a handful of tiles still keeps every thread busy.
     let bands = TILE / BAND;
     let tasks: Vec<((u32, u32), u32)> = tiles.iter().flat_map(|t| (0..bands).map(move |b| (*t, b))).collect();
-    let results: Vec<BandResult> = tasks
+    let mut results: Vec<BandResult> = tasks
         .par_iter()
         .map(|&((tx, ty), band)| {
-            let cached = cached((tx, ty));
-            let record = recorded.contains(&(tx, ty));
-            let lo_nodes = if cached.is_none() { plan(inp, lo, &channels, tx, ty, 0, Some(&fields)) } else { Vec::new() };
-            let nodes = plan(inp, hi, &channels, tx, ty, 0, Some(&fields));
+            let warm = cached((tx, ty)).and_then(|b| b.get(band as usize));
+            let record = warm.is_none() && recorded.contains(&(tx, ty));
+            let levels = split.map(|l| plan_levels(inp, l, &channels, tx, ty, &fields, warm.is_some()));
+            let nodes = if levels.is_none() { plan(inp, stack, &channels, tx, ty, 0, Some(&fields)) } else { Vec::new() };
             let rows = (BAND * TILE) as usize;
-            let mut snap = if record { vec![0.0f32; rows * stride] } else { Vec::new() };
+            let mut accs = vec![defaults; nlev];
+            let mut masks = vec![0.0f32; nlev];
+            let mut tape = match warm {
+                Some(b) => Tape::Replay(b, 0),
+                None if record => Tape::Record(Vec::new()),
+                None => Tape::Off,
+            };
+            // The levels whose stack the band stores (its header): a level with nothing drawn
+            // before the path layer repeats the level above it.
+            let stored: Vec<bool> = match (&levels, warm) {
+                (Some(_), Some(_)) => tape.take(nlev).iter().map(|v| *v > 0.0).collect(),
+                (Some(levels), None) => levels.iter().map(|l| !l.below.is_empty()).collect(),
+                (None, _) => Vec::new(),
+            };
+            if let Tape::Record(t) = &mut tape {
+                t.extend(stored.iter().map(|s| if *s { 1.0 } else { 0.0 }));
+            }
+            let slots = stored.iter().filter(|s| **s).count() * stride;
             let preview_tile = inp.preview.and_then(|p| p.alpha.tile(tx, ty));
             let mut bufs: Vec<Vec<u16>> = channels.iter().map(|c| vec![0u16; rows * c.components()]).collect();
-            let defaults: [[f32; 3]; NCH] = Channel::ALL.map(Channel::default_value);
             let mut anchors = Vec::new();
             let mut any = false;
             for ly in band * BAND..(band + 1) * BAND {
@@ -1102,37 +1302,52 @@ fn composite_block(
                     let mut acc = defaults;
                     if covered {
                         any = true;
-                        if let Some(c) = cached {
-                            load_below(c, &channels, stride, o, &mut acc);
-                        }
                         let mut tex = Texel::new(inp, x, y, o, stroke_at(preview_tile, o));
                         // Reuse one anchor buffer per band.
                         tex.anchors = std::mem::take(&mut anchors);
-                        tex.eval(&lo_nodes, &mut acc);
-                        if record {
-                            store_below(&mut snap, &channels, stride, ob, &acc);
+                        match &levels {
+                            Some(levels) => {
+                                // The texel's stream starts with the stack at each level.
+                                let start = match &mut tape {
+                                    Tape::Record(t) => {
+                                        t.resize(t.len() + slots, 0.0);
+                                        t.len() - slots
+                                    }
+                                    _ => 0,
+                                };
+                                if warm.is_some() {
+                                    load_levels(tape.take(slots), &lanes, stride, &stored, &defaults, &mut accs);
+                                }
+                                acc = tex.eval_split(defaults, levels, &mut accs, &mut masks, warm.is_some(), &mut tape);
+                                if let Tape::Record(t) = &mut tape
+                                    && let Some(below) = t.get_mut(start..start + slots)
+                                {
+                                    store_levels(below, &lanes, stride, &stored, &accs);
+                                }
+                            }
+                            None => {
+                                tex.eval(&nodes, &mut acc);
+                            }
                         }
-                        tex.eval(&nodes, &mut acc);
                         anchors = tex.anchors;
                         anchors.clear();
                     }
-                    for (c, buf) in channels.iter().zip(&mut bufs) {
-                        let v = acc.get(c.index()).copied().unwrap_or([0.0; 3]);
-                        let n = c.components();
-                        for (k, x) in v.iter().take(n).enumerate() {
-                            let enc = if c.kind() == ChannelKind::Signed { to_u16_signed(*x) } else { to_u16(*x) };
-                            if let Some(slot) = buf.get_mut(ob * n + k) {
+                    for (l, buf) in lanes.iter().zip(&mut bufs) {
+                        let v = acc.get(l.ch).copied().unwrap_or([0.0; 3]);
+                        for (k, x) in v.iter().take(l.n).enumerate() {
+                            let enc = if l.signed { to_u16_signed(*x) } else { to_u16(*x) };
+                            if let Some(slot) = buf.get_mut(ob * l.n + k) {
                                 *slot = enc;
                             }
                         }
                     }
                 }
             }
-            (bufs, snap, any)
+            let cache = if let Tape::Record(t) = tape { Some(t) } else { None };
+            (bufs, cache, any)
         })
         .collect();
     // Join the bands of each tile (in parallel; uncovered tiles are freed).
-    type Joined = (Vec<Option<std::sync::Arc<Vec<u16>>>>, Option<Vec<f32>>);
     let joined: Vec<Joined> = results
         .par_chunks(bands as usize)
         .map(|parts| {
@@ -1148,45 +1363,78 @@ fn composite_block(
                     })
                 })
                 .collect();
-            let snap = parts.first().is_some_and(|p| !p.1.is_empty()).then(|| parts.iter().flat_map(|p| p.1.as_slice()).copied().collect());
-            (data, snap)
+            (data, any)
         })
         .collect();
-    let mut snaps = Vec::new();
-    for (&(tx, ty), (data, snap)) in tiles.iter().zip(joined) {
+    let mut records = Vec::new();
+    for ((&(tx, ty), (data, any)), parts) in tiles.iter().zip(joined).zip(results.chunks_mut(bands as usize)) {
         for (c, d) in channels.iter().zip(data) {
             if let Some(img) = out.channels.get_mut(c) {
                 img.set_tile(tx, ty, d);
             }
         }
-        if let Some(snap) = snap {
-            snaps.push(((tx, ty), snap));
+        // Tiles without covered texels cost nothing to composite: not worth caching.
+        if any && let Some(bands) = parts.iter_mut().map(|p| p.1.take()).collect::<Option<Vec<Band>>>() {
+            records.push(((tx, ty), bands));
         }
     }
-    snaps
+    records
 }
 
-/// Restore the cached stack value of texel `o`. Scalars are cached once: only their first
-/// component is ever read.
-fn load_below(cache: &[f32], channels: &[Channel], stride: usize, o: usize, acc: &mut [[f32; 3]; NCH]) {
-    let mut i = o * stride;
-    for c in channels {
-        let n = c.components();
-        if let (Some(src), Some(slot)) = (cache.get(i..i + n), acc.get_mut(c.index())) {
-            *slot = if n == 3 { [src[0], src[1], src[2]] } else { [src[0]; 3] };
+/// Restore the stack at each nesting level of a texel: the `stored` levels from `src`, the
+/// others repeat the level above them (the defaults at the top).
+fn load_levels(src: &[f32], lanes: &[Lane], stride: usize, stored: &[bool], defaults: &Acc, accs: &mut [Acc]) {
+    let (mut k, mut above) = (0, *defaults);
+    for (a, s) in accs.iter_mut().zip(stored) {
+        if *s {
+            load_below(src, lanes, stride, k, a);
+            k += 1;
+        } else {
+            *a = above;
         }
-        i += n;
+        above = *a;
     }
 }
 
-fn store_below(cache: &mut [f32], channels: &[Channel], stride: usize, o: usize, acc: &[[f32; 3]; NCH]) {
+/// Store the `stored` levels of a texel's stack (see [`load_levels`]).
+fn store_levels(dst: &mut [f32], lanes: &[Lane], stride: usize, stored: &[bool], accs: &[Acc]) {
+    for (k, a) in accs.iter().zip(stored).filter(|(_, s)| **s).map(|(a, _)| a).enumerate() {
+        store_below(dst, lanes, stride, k, a);
+    }
+}
+
+/// Where a texture set channel lives in a stack value, its components and whether it is signed.
+#[derive(Clone, Copy)]
+struct Lane {
+    ch: usize,
+    n: usize,
+    signed: bool,
+}
+
+/// Restore the cached stack value of slot `o` (a texel at one nesting level). Scalars are
+/// cached once: only their first component is ever read.
+fn load_below(cache: &[f32], lanes: &[Lane], stride: usize, o: usize, acc: &mut Acc) {
     let mut i = o * stride;
-    for c in channels {
-        let n = c.components();
-        if let (Some(dst), Some(v)) = (cache.get_mut(i..i + n), acc.get(c.index())) {
-            dst.copy_from_slice(&v[..n]);
+    for l in lanes {
+        if let (Some(src), Some(slot)) = (cache.get(i..i + l.n), acc.get_mut(l.ch)) {
+            *slot = match src {
+                [a, b, c] => [*a, *b, *c],
+                _ => [src.first().copied().unwrap_or(0.0); 3],
+            };
         }
-        i += n;
+        i += l.n;
+    }
+}
+
+fn store_below(cache: &mut [f32], lanes: &[Lane], stride: usize, o: usize, acc: &Acc) {
+    let mut i = o * stride;
+    for l in lanes {
+        if let (Some(dst), Some(v)) = (cache.get_mut(i..i + l.n), acc.get(l.ch)) {
+            for (d, x) in dst.iter_mut().zip(v) {
+                *d = *x;
+            }
+        }
+        i += l.n;
     }
 }
 

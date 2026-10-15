@@ -47,6 +47,8 @@ fresh random token the app writes to `<temp>/texturecraft-control-<port>.token` 
 | `ui.set` | fields of the UI state, e.g. `{"layout": "Only3D"}`; `dock` is the panel layout (`{main, windows}`: `{"tabs": {"tabs": [...], "active": 0}}` or `{"split": {"vertical", "fraction", "first", "second"}}` nodes over `Viewport`, `Assets`, `TextureSetList`, `Layers`, `TextureSetSettings`, `Properties`, `Display`, `Shader`, `History`, `Log`), `keymap` the custom shortcuts (`{"file.save": "F5"}`, `""` unbinds) | `null` |
 | `viewport.screenshot` | `{view?: "3d" \| "2d"}` | `{width, height, png}` (PNG, base64) |
 | `ui.screenshot` | | `{width, height, png}` of the whole window, after the next frame |
+| `debug.paintTest` | `{from: [x, y], to: [x, y], frames?: 120}` | Paints a straight stroke through the real frame loop (viewport pixels, one point per frame) for performance work |
+| `debug.frames` | | Frame timing since the last call (then cleared): `{frames, intervalMs, uiMs, syncMs}` each `{avg, p95, max}`; `syncMs` is compositing plus display tile conversion |
 
 Example session:
 

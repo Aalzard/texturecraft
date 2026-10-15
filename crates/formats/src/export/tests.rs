@@ -216,12 +216,12 @@ fn templates_are_sanitized_and_collisions_suffixed() {
     let preset = ExportPreset {
         name: "t".into(),
         maps: vec![
-            rough("$project/..\\$textureSet:$channel ($colorSpace)"),
-            rough("$project/..\\$textureSet:$channel ($colorSpace)"),
+            rough("$project $textureSet:$channel ($colorSpace)"),
+            rough("$project $textureSet:$channel ($colorSpace)"),
             rough("con"),
             rough("A"),
             rough("a"),
-            rough("..."),
+            rough("."),
         ],
     };
     let opts = ExportOptions::new(preset);
@@ -229,7 +229,7 @@ fn templates_are_sanitized_and_collisions_suffixed() {
     let names: Vec<&str> = planned.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(
         names,
-        ["My_Project_.._Body_Set_roughness__linear_.png", "My_Project_.._Body_Set_roughness__linear__2.png", "_con.png", "A.png", "a_2.png", "texture.png"]
+        ["My_Project_Body_Set_roughness__linear_.png", "My_Project_Body_Set_roughness__linear__2.png", "_con.png", "A.png", "a_2.png", "texture.png"]
     );
     assert!(planned[0].warnings.is_empty());
     assert_eq!(planned[1].warnings.len(), 1);
@@ -352,4 +352,72 @@ fn write_files_is_atomic_and_refuses_paths() {
     let evil = ExportedFile { name: "../evil.png".into(), ..files[0].clone() };
     assert!(write_files(&[evil], &dir).is_err());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn gray_map(file: &str, src: SourceRef) -> MapSpec {
+    MapSpec { file: file.into(), format: FileFormat::Png, bit_depth: 8, channels: vec![(Dest::L, src)] }
+}
+
+#[test]
+fn validation_rejects_bad_presets() {
+    let ok = ExportPreset { name: "Mine".into(), maps: vec![gray_map("$mesh_$textureSet_$channel ($colorSpace) $project", SourceRef::Constant(1.0))] };
+    ok.validate().unwrap();
+    let refused = |f: &dyn Fn(&mut ExportPreset)| {
+        let mut p = ok.clone();
+        f(&mut p);
+        p.validate().is_err()
+    };
+    let long = "x".repeat(300);
+    for file in ["a/b", r"a\b", "..", "x..y", "$meshes_$foo", "$", "", " ", "a\u{7}b", long.as_str()] {
+        assert!(refused(&|p| p.maps[0].file = file.into()), "file template {file:?} must be refused");
+    }
+    assert!(refused(&|p| p.name = "  ".into()));
+    assert!(refused(&|p| p.name = "x".repeat(MAX_PRESET_NAME + 1)));
+    assert!(refused(&|p| p.name = "a\nb".into()));
+    assert!(refused(&|p| p.maps[0].bit_depth = 12));
+    assert!(refused(&|p| p.maps[0].channels[0].1 = SourceRef::Channel { channel: Channel::BaseColor, component: 3 }));
+    assert!(refused(&|p| p.maps[0].channels[0].1 = SourceRef::Constant(f32::NAN)));
+    assert!(refused(&|p| p.maps = vec![p.maps[0].clone(); MAX_MAPS + 1]));
+    // The same checks guard JSON from disk or agents.
+    let json = preset_to_json(&ok).unwrap();
+    assert_eq!(preset_from_json(&json).unwrap(), ok);
+    assert!(preset_from_json(&json.replace("$mesh_", "../")).is_err());
+    assert!(preset_from_json(&" ".repeat(2 << 20)).is_err());
+}
+
+#[test]
+fn converted_maps_invert_and_derive_normals() {
+    let mut fx = Fx::new(&[Channel::BaseColor, Channel::Roughness, Channel::Glossiness, Channel::Height]);
+    fx.set_all(Channel::Glossiness, |_, _| [0.2; 3]);
+    fx.set_all(Channel::Height, |x, y| [(x as f32 + y as f32) / 160.0; 3]);
+    fx.project.texture_sets[0].height_strength = 8.0;
+    let virt = |map| SourceRef::Virtual { map, component: 0 };
+    let rgb = |file: &str, map| MapSpec {
+        file: file.into(),
+        format: FileFormat::Png,
+        bit_depth: 8,
+        channels: [Dest::R, Dest::G, Dest::B].into_iter().zip(0u8..).map(|(d, k)| (d, SourceRef::Virtual { map, component: k })).collect(),
+    };
+    let preset = ExportPreset {
+        name: "converted".into(),
+        maps: vec![
+            gray_map("gloss", virt(VirtualMap::Glossiness)),
+            gray_map("rough", virt(VirtualMap::Roughness)),
+            rgb("hn", VirtualMap::HeightNormal),
+            rgb("dx", VirtualMap::NormalDirectX),
+        ],
+    };
+    let files = fx.render(&ExportOptions::new(preset));
+    assert_eq!(decode(find(&files, "gloss")).to_luma8().get_pixel(4, 4)[0], 191, "1 - roughness 0.25");
+    assert_eq!(decode(find(&files, "rough")).to_luma8().get_pixel(4, 4)[0], 204, "1 - glossiness 0.2");
+    let hn = decode(find(&files, "hn")).to_rgb8();
+    let full = decode(find(&fx.render_preset("Separate maps"), "_normal.png")).to_rgb8();
+    assert_eq!(hn.get_pixel(30, 30), full.get_pixel(30, 30), "without a normal channel the final normal is the height normal");
+    let (a, b) = (hn.get_pixel(30, 30), decode(find(&files, "dx")).to_rgb8().get_pixel(30, 30).to_owned());
+    assert!(a[1] > 136 && (a[1] as i32 + b[1] as i32 - 255).abs() <= 1, "DirectX flips green: {a:?} vs {b:?}");
+    // Converted maps only exist when their source channel does.
+    let fx = Fx::new(&default_channels());
+    let only = ExportPreset { name: "c".into(), maps: vec![gray_map("rough", virt(VirtualMap::Roughness)), rgb("hn", VirtualMap::HeightNormal)] };
+    let names: Vec<String> = list_outputs(&fx.project, 0, "m", &ExportOptions::new(only)).unwrap().into_iter().map(|p| p.name).collect();
+    assert_eq!(names, ["hn.png"], "the default set has height but no glossiness");
 }

@@ -480,30 +480,56 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
     }
 }
 
+/// Where [`apply_at`] puts a material.
+#[derive(Clone, Copy, Debug)]
+pub enum Place {
+    /// Above the selected layer (inside it when it is a folder).
+    Selection,
+    /// Above a layer, or at the top of a folder when `inside` (shelf drag and drop).
+    Above(LayerId, bool),
+    /// At this index of the top-level stack (0 = bottom).
+    Index(usize),
+}
+
 /// Add material `id` above the selection: a single fill layer, or a folder for multi-layer
 /// materials. Returns the new top-level layer id.
 pub fn apply(s: &mut Session, id: &str) -> Result<LayerId> {
+    apply_at(s, id, Place::Selection)
+}
+
+/// [`apply`] at `place` (one undo step).
+pub fn apply_at(s: &mut Session, id: &str, place: Place) -> Result<LayerId> {
     let m = find(id).ok_or_else(|| EngineError::Other(format!("unknown material `{id}`")))?;
     let label = format!("Add {}", m.label);
     s.edit(&label, |s| {
         let channels = s.doc.project.texture_set(s.ts())?.channel_list();
         let layers = build(&mut Builder { p: &mut s.doc.project, channels: channels.clone() }, m.id)?;
-        if layers.len() == 1 {
+        let top = if layers.len() == 1 {
             let l = layers.into_iter().next().ok_or_else(|| EngineError::Other("empty material".into()))?;
-            return crate::layer_cmds::insert_selected(s, l);
+            crate::layer_cmds::insert_selected(s, l)?
+        } else {
+            let gid = s.doc.project.alloc_id();
+            let mut group = Layer::new(gid, m.label, LayerKind::Group { children: Vec::new(), collapsed: false }, &channels);
+            for c in group.channels.values_mut() {
+                *c = ChannelBlend { mode: BlendMode::Passthrough, opacity: 1.0 };
+            }
+            let gid = crate::layer_cmds::insert_selected(s, group)?;
+            let ts = s.ts();
+            for l in layers {
+                s.doc.project.insert_layer(ts, l, Some(gid), true)?;
+            }
+            s.selected.insert(ts, gid);
+            gid
+        };
+        match place {
+            Place::Selection => {}
+            Place::Above(target, inside) => s.doc.project.move_above(top, Some(target), inside)?,
+            Place::Index(i) => {
+                s.doc.project.move_above(top, None, false)?;
+                s.doc.project.move_layer(top, i)?;
+            }
         }
-        let gid = s.doc.project.alloc_id();
-        let mut group = Layer::new(gid, m.label, LayerKind::Group { children: Vec::new(), collapsed: false }, &channels);
-        for c in group.channels.values_mut() {
-            *c = ChannelBlend { mode: BlendMode::Passthrough, opacity: 1.0 };
-        }
-        let gid = crate::layer_cmds::insert_selected(s, group)?;
-        let ts = s.ts();
-        for l in layers {
-            s.doc.project.insert_layer(ts, l, Some(gid), true)?;
-        }
-        s.selected.insert(ts, gid);
-        Ok(gid)
+        Ok(top)
     })
 }
 
@@ -533,6 +559,30 @@ mod tests {
         assert!(MATERIALS.iter().filter(|m| m.smart).count() >= 15);
         assert!(find("Gold Polished").is_some());
         assert!(find("nope").is_none());
+    }
+
+    #[test]
+    fn materials_land_where_they_are_dropped() {
+        let mut s = Session::new_project("t", texturecraft_geom::primitives::sphere(1.0, 16, 8), "builtin:sphere", None, 128).unwrap();
+        let run = |s: &mut Session, id: &str, p: serde_json::Value| LayerId(crate::execute(s, id, &p).unwrap()["layer"].as_u64().unwrap());
+        let stack = |s: &Session| s.doc.project.texture_sets[0].stack.clone();
+        let base = stack(&s);
+        let a = run(&mut s, "layer.add.paint", serde_json::json!({}));
+        let b = run(&mut s, "layer.add.paint", serde_json::json!({}));
+        let m = run(&mut s, "material.apply", serde_json::json!({"material": "gold_polished", "above": a.0}));
+        assert_eq!(stack(&s), [base.clone(), vec![a, m, b]].concat());
+        // A multi-layer smart material (a folder) at the bottom of the stack.
+        let n = run(&mut s, "material.apply", serde_json::json!({"material": "steel_painted_worn", "index": 0}));
+        assert_eq!(stack(&s), [vec![n], base.clone(), vec![a, m, b]].concat());
+        // Into a folder.
+        let x = run(&mut s, "material.apply", serde_json::json!({"material": "copper", "above": n.0, "inside": true}));
+        assert_eq!(s.doc.project.layers[&n].children().last(), Some(&x));
+        s.undo().unwrap();
+        assert!(!s.doc.project.layers[&n].children().contains(&x), "one undo step");
+        // Default: above the selection.
+        crate::execute(&mut s, "layer.select", &serde_json::json!({"layer": a.0})).unwrap();
+        let y = run(&mut s, "material.apply", serde_json::json!({"material": "copper"}));
+        assert_eq!(stack(&s), [vec![n], base, vec![a, y, m, b]].concat());
     }
 
     /// Base color, roughness and metallic at a grid of texels of texture set `ts`.

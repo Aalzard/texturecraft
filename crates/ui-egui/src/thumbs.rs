@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use egui::{Color32, ColorImage, Painter, Pos2, Rect, TextureHandle, TextureOptions};
 use texturecraft_engine::core::ProceduralKind;
-use texturecraft_engine::paint::BrushAlpha;
+use texturecraft_engine::paint::{BrushAlpha, alphas};
 use texturecraft_engine::preview::{self, Sample};
 use texturecraft_engine::texel::linear_to_srgb;
 
@@ -17,7 +17,7 @@ const SPHERE_PX: usize = 72;
 
 #[derive(Default)]
 pub struct Thumbs {
-    /// Shelf thumbnails by key (`mat:<id>`, `mask:<id>`, `proc:<kind>`).
+    /// Shelf thumbnails by key (`mat:<id>`, `mask:<id>`, `proc:<kind>`, `alpha:<id>`).
     shelf: HashMap<String, TextureHandle>,
     images: HashMap<String, TextureHandle>,
     /// (frame, thumbnails rendered in it).
@@ -177,6 +177,14 @@ impl Thumbs {
                 *px = Color32::from_gray((v.clamp(0.0, 1.0) * 255.0) as u8);
             }
             img
+        })
+    }
+
+    /// White-on-black swatch of library alpha `a`.
+    pub fn alpha(&mut self, ctx: &egui::Context, a: &alphas::LibraryAlpha) -> Option<TextureHandle> {
+        self.shelf(ctx, format!("alpha:{}", a.id), || {
+            let n = 64usize;
+            ColorImage::new([n, n], a.render(n, 2).into_iter().map(|v| Color32::from_gray((v * 255.0 + 0.5) as u8)).collect())
         })
     }
 }

@@ -214,7 +214,7 @@ impl Headless {
     /// Export textures to `dir` (`file.exportTextures` params: preset, ts, format, padding, size…).
     pub fn export(&mut self, p: &Value) -> Result<Value, AutomationError> {
         let dir = p.get("dir").and_then(Value::as_str).filter(|d| !d.is_empty()).ok_or_else(|| bad("`dir` is required"))?;
-        let opts = file_cmds::export_options(p, "textures.export")?;
+        let opts = file_cmds::export_options(&self.session, p, "textures.export")?;
         let n = self.session.set_count();
         let sets: Vec<usize> = match p.get("ts") {
             None | Some(Value::Null) => (0..n).collect(),

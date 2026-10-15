@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export textures",
             ["File"],
             None,
-            "{dir, preset?: name, ts?: index|\"all\", format?: png|jpg|tga|tif|exr|..., bitDepth?, padding?: none|dilation|dilationDefault|infinite, dilation?: px, size?: px, normalFormat?: openGl|directX}",
+            "{dir, preset?: built-in or user preset name, or a preset object {name, maps}, ts?: index|\"all\", format?: png|jpg|tga|tif|exr|..., bitDepth?, padding?: none|dilation|dilationDefault|infinite, dilation?: px, size?: px, normalFormat?: openGl|directX}",
             always,
             export_textures
         ),
@@ -47,10 +47,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             export_mesh
         ),
-        cmd!("export.presets", "Export presets", [], None, "{}", always, |_, _| Ok(json!(
-            texturecraft_formats::builtin_presets().iter().map(|p| json!({"name": p.name, "maps": p.maps.len()})).collect::<Vec<_>>()
-        ))),
-        cmd!("export.plan", "List export outputs", [], None, "{preset?, ts?, format?}", always, plan),
+        cmd!(
+            "export.plan",
+            "List export outputs",
+            [],
+            None,
+            "{preset?: name or preset object, ts?, format?, bitDepth?, size?} → [{ts, map, file, format, bitDepth, warnings}]",
+            always,
+            plan
+        ),
     ]
 }
 
@@ -190,10 +195,16 @@ fn check_materials(p: &texturecraft_core::Project, mesh: &Mesh) -> Result<()> {
     Ok(())
 }
 
-/// Export options from command params.
-pub fn export_options(p: &Value, cmd: &str) -> Result<ExportOptions> {
-    let name = strp(p, "preset").unwrap_or("Document channels + Normal + AO");
-    let preset = texturecraft_formats::builtin_preset(name).ok_or_else(|| bad(cmd, format!("unknown export preset `{name}`")))?;
+/// Export options from command params; `preset` is a built-in or user preset name, or an inline
+/// preset object (validated).
+pub fn export_options(s: &Session, p: &Value, cmd: &str) -> Result<ExportOptions> {
+    let preset = match p.get("preset") {
+        None | Some(Value::Null) => s.export_preset("Document channels + Normal + AO"),
+        Some(Value::String(name)) => s.export_preset(name),
+        Some(v @ Value::Object(_)) => Some(crate::preset_cmds::preset_param(v, cmd)?),
+        Some(_) => return Err(bad(cmd, "`preset` must be a preset name or a preset object")),
+    };
+    let preset = preset.ok_or_else(|| bad(cmd, format!("unknown export preset {}", p.get("preset").unwrap_or(&Value::Null))))?;
     let mut o = ExportOptions::new(preset);
     if let Some(f) = strp(p, "format") {
         o.format_override = Some(FileFormat::from_extension(f).ok_or_else(|| bad(cmd, format!("unknown format `{f}`")))?);
@@ -232,12 +243,12 @@ fn sets_param(s: &Session, p: &Value, cmd: &str) -> Result<Vec<usize>> {
 }
 
 fn plan(s: &mut Session, p: &Value) -> Result<Value> {
-    let opts = export_options(p, "export.plan")?;
+    let opts = export_options(s, p, "export.plan")?;
     let mesh_name = stem_of(s.doc.project.mesh.trim_start_matches("builtin:"));
     let mut names = Vec::new();
     for ts in sets_param(s, p, "export.plan")? {
         for f in texturecraft_formats::list_outputs(&s.doc.project, ts, &mesh_name, &opts).map_err(fe)? {
-            names.push(json!({"ts": ts, "file": f.name, "format": f.format.extension(), "bitDepth": f.bit_depth, "warnings": f.warnings}));
+            names.push(json!({"ts": ts, "map": f.map, "file": f.name, "format": f.format.extension(), "bitDepth": f.bit_depth, "warnings": f.warnings}));
         }
     }
     Ok(json!(names))
@@ -288,18 +299,16 @@ fn new_from_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let bytes = std::fs::read(path).map_err(|e| bad("file.new", format!("cannot read {path}: {e}")))?;
     let res = u32::try_from(u64p(p, "resolution").unwrap_or(2048)).unwrap_or(0);
     let name = strp(p, "name").map(str::to_string).unwrap_or_else(|| stem_of(path));
-    let mut next = Session::from_mesh_bytes(path, &bytes, res, &name)?;
-    next.viewport = s.viewport;
-    *s = next;
+    let next = Session::from_mesh_bytes(path, &bytes, res, &name)?;
+    s.switch_to(next);
     Ok(crate::inspect::session(s))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let path = native::path_param(p, "path", "file.open")?;
-    let mut next = native::open_path(path)?;
-    next.viewport = s.viewport;
-    *s = next;
+    let next = native::open_path(path)?;
+    s.switch_to(next);
     Ok(crate::inspect::session(s))
 }
 
@@ -345,15 +354,14 @@ fn reimport(s: &mut Session, p: &Value) -> Result<Value> {
     let source = s.mesh_source.clone();
     let mut next = Session::new(doc, mesh, source)?;
     next.path = s.path.clone();
-    next.viewport = s.viewport;
-    *s = next;
+    s.switch_to(next);
     Ok(Value::Null)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn export_textures(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = native::path_param(p, "dir", "file.exportTextures")?.to_string();
-    let opts = export_options(p, "file.exportTextures")?;
+    let opts = export_options(s, p, "file.exportTextures")?;
     let sets = sets_param(s, p, "file.exportTextures")?;
     std::fs::create_dir_all(&dir).map_err(|e| bad("file.exportTextures", format!("cannot create {dir}: {e}")))?;
     let files = s.export_files(&sets, &opts)?;
@@ -401,9 +409,8 @@ use unsupported as export_textures;
 use unsupported as export_mesh;
 
 fn close(s: &mut Session, _: &Value) -> Result<Value> {
-    let mut next = Session::new_project("Untitled", primitives::material_ball(), "builtin:material_ball", None, 2048)?;
-    next.viewport = s.viewport;
-    *s = next;
+    let next = Session::new_project("Untitled", primitives::material_ball(), "builtin:material_ball", None, 2048)?;
+    s.switch_to(next);
     Ok(Value::Null)
 }
 

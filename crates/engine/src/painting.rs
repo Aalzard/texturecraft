@@ -15,6 +15,21 @@ use crate::session::{ActiveStroke, FillMode, Session, StackTarget, Tool};
 use crate::{EngineError, Result};
 
 impl Session {
+    /// Camera visibility for a stroke at `viewport` (cached until the camera, size or mesh change).
+    fn eye_depth(&mut self, viewport: Vec2) -> std::sync::Arc<EyeDepth> {
+        let size = ((viewport.x / 2.0).max(64.0) as u32, (viewport.y / 2.0).max(64.0) as u32);
+        if let Some((cam, sz, mesh, depth)) = &self.depth_cache
+            && *cam == self.camera
+            && *sz == size
+            && *mesh == self.mesh_id
+        {
+            return depth.clone();
+        }
+        let depth = std::sync::Arc::new(EyeDepth::render(&self.mesh, &self.camera, size.0, size.1));
+        self.depth_cache = Some((self.camera, size, self.mesh_id, depth.clone()));
+        depth
+    }
+
     pub fn pick(&self, screen: Vec2, viewport: Vec2) -> Option<SurfaceHit> {
         let ctx = PickCtx { mesh: &self.mesh, bvh: &self.bvh, camera: &self.camera, viewport };
         pick(&ctx, screen)
@@ -116,7 +131,7 @@ impl Session {
             self.doc = before;
             return Err(EngineError::Other(msg.into()));
         }
-        let depth = (!uv_mode).then(|| EyeDepth::render(&self.mesh, &self.camera, (viewport.x / 2.0).max(64.0) as u32, (viewport.y / 2.0).max(64.0) as u32));
+        let depth = (!uv_mode).then(|| self.eye_depth(viewport));
         let mut brush = self.tool.brush.clone();
         if tool == Tool::Smudge {
             // shortcut: smudge drags one stamp trail; mirrored trails would need one pickup each.
@@ -188,9 +203,15 @@ impl Session {
         }
     }
 
-    /// The brush shape: the alpha image when one is set and loaded, else the procedural alpha.
+    /// The brush shape: the alpha image when one is set and loaded, else the library alpha when
+    /// one is set, else the procedural alpha.
     fn shape<'a>(images: &'a texturecraft_compose::ImageStore, b: &texturecraft_paint::BrushSettings) -> Shape<'a> {
-        Shape { alpha: b.alpha, image: b.alpha_image.as_ref().and_then(|n| images.get(n)).map(|i| &**i) }
+        Shape {
+            alpha: b.alpha,
+            image: b.alpha_image.as_ref().and_then(|n| images.get(n)).map(|i| &**i),
+            library: b.alpha_library.as_deref().and_then(texturecraft_paint::alphas::find).map(|a| a.image()),
+            level: 0,
+        }
     }
 
     /// The stencil placed for the current camera and viewport.
@@ -288,7 +309,7 @@ impl Session {
             bvh: &self.bvh,
             gbuf: &cache.gbuf,
             material,
-            depth: st.depth.as_ref(),
+            depth: st.depth.as_deref(),
             eye: st.camera.eye(),
             backface_culling: st.stroke.settings.backface_culling,
             angle_fade: st.stroke.settings.angle_fade,

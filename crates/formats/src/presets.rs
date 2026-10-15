@@ -168,3 +168,10 @@ pub fn preset_from_json(json: &str) -> Result<ExportPreset> {
 pub fn preset_to_json(preset: &ExportPreset) -> Result<String> {
     serde_json::to_string_pretty(preset).map_err(|e| FormatError::Invalid(e.to_string()))
 }
+
+/// Read a user preset file (size-capped, validated).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_preset(path: &std::path::Path) -> Result<ExportPreset> {
+    let bytes = crate::read_capped(path, MAX_PRESET_JSON as u64)?;
+    preset_from_json(&String::from_utf8_lossy(&bytes))
+}

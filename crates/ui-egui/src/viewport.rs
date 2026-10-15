@@ -11,7 +11,7 @@ use texturecraft_engine::{Tool, ViewMode};
 use texturecraft_render::{Frame, Shade, ViewKind};
 
 use crate::TextureCraftApp;
-use crate::gpu::{SceneSync, ViewCallback};
+use crate::gpu::ViewCallback;
 use crate::state::ViewLayout;
 use crate::theme::TOKENS;
 
@@ -25,7 +25,7 @@ pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
         ViewMode::Mask(id) => Some(crate::gpu::AuxView::Mask(id)),
         _ => None,
     };
-    let mut sync = app.gpu.as_mut().map(|g| g.sync(&mut app.session, aux));
+    let mut sync = PendingSync(Some(aux));
     let full = ui.max_rect();
     let mode = app.ui.mode;
     path_keys(app, ui);
@@ -75,12 +75,25 @@ fn shade(app: &TextureCraftApp) -> Shade {
     }
 }
 
-fn add_callback(app: &TextureCraftApp, ui: &Ui, rect: Rect, frame: Frame, sync: &mut Option<SceneSync>) {
+/// This frame's scene sync (compositing and GPU uploads), run by the first view drawn, after
+/// that view handled its input: a stroke shows in the frame it is painted, not the next.
+pub struct PendingSync(Option<Option<crate::gpu::AuxView>>);
+
+fn add_callback(app: &mut TextureCraftApp, ui: &Ui, rect: Rect, frame: Frame, sync: &mut PendingSync) {
+    let scene = match (sync.0.take(), app.gpu.as_mut()) {
+        (Some(aux), Some(g)) => {
+            let t0 = crate::now_ms();
+            let scene = g.sync(&mut app.session, aux);
+            app.profiler.sync_ms += (crate::now_ms() - t0) as f32;
+            Some(scene)
+        }
+        _ => None,
+    };
     let Some(gpu) = &app.gpu else {
         ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "No GPU renderer available", egui::FontId::proportional(14.0), TOKENS.text_dim);
         return;
     };
-    let cb = ViewCallback { frame, sync: Mutex::new(sync.take()), rect, lost: gpu.lost.clone() };
+    let cb = ViewCallback { frame, sync: Mutex::new(scene), rect, lost: gpu.lost.clone() };
     ui.painter().add(eframe::egui_wgpu::Callback::new_paint_callback(rect, cb));
 }
 
@@ -141,7 +154,7 @@ fn axis_gizmo(ui: &Ui, rect: Rect, app: &TextureCraftApp, uv: bool) {
     }
 }
 
-fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Option<SceneSync>) {
+fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut PendingSync) {
     let resp = ui.interact(rect, ui.id().with("view3d"), Sense::click_and_drag());
     app.viewport_rect = rect;
     let size = rect.size();
@@ -150,15 +163,23 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Option
     let local = |p: egui::Pos2| Vec2::new(p.x - rect.left(), p.y - rect.top());
     let navigating = alt || ui.input(|i| i.pointer.middle_down() || i.pointer.secondary_down());
 
-    // Navigation.
+    // Navigation (S + drag manipulates the projection stencil instead, below).
     let delta = ui.input(|i| i.pointer.delta());
-    if resp.dragged_by(PointerButton::Middle) || (alt && resp.dragged_by(PointerButton::Middle)) {
+    let s_held = ui.input(|i| i.key_down(egui::Key::S)) && !ui.ctx().egui_wants_keyboard_input();
+    let stencil_drag = s_held && app.session.tool.stencil.is_some();
+    if stencil_drag {
+        // The stencil moves, turns and scales instead of the camera (handled below).
+    } else if resp.dragged_by(PointerButton::Middle) {
         app.session.camera.pan(delta.x / size.y, delta.y / size.y);
     } else if alt && resp.dragged_by(PointerButton::Primary) {
         app.session.camera.orbit(delta.x * 0.008, delta.y * 0.008);
     } else if resp.dragged_by(PointerButton::Secondary) {
         if alt {
             app.session.camera.zoom(-delta.y * 0.01);
+        } else if shift {
+            // Shift + right drag turns the environment light (Painter's shortcut).
+            let d = &mut app.session.doc.project.display;
+            d.env_rotation = (d.env_rotation + delta.x * 0.5).rem_euclid(360.0);
         } else {
             app.session.camera.orbit(delta.x * 0.008, delta.y * 0.008);
         }
@@ -176,7 +197,6 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Option
     }
 
     // Stencil: S + left drag rotates, S + right drag scales, S + middle drag moves.
-    let s_held = ui.input(|i| i.key_down(egui::Key::S)) && !ui.ctx().egui_wants_keyboard_input();
     if s_held
         && let Some(st) = app.session.tool.stencil.as_mut()
     {
@@ -258,6 +278,8 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Option
         visible: app.session.doc.project.texture_sets.iter().map(|t| t.visible).collect(),
     };
     add_callback(app, ui, rect, frame, sync);
+    // Shelf drops: a material goes above the selection (as in Painter), an alpha on the brush.
+    crate::shelf::drop_target(app, ui, &resp, true);
 
     // Brush cursor.
     if app.ui.mode == crate::state::Mode::Painting
@@ -489,7 +511,7 @@ fn brush_cursor(app: &TextureCraftApp, ui: &Ui, rect: Rect, pos: Vec3, nrm: Vec3
     }
 }
 
-fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Option<SceneSync>) {
+fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut PendingSync) {
     let resp = ui.interact(rect, ui.id().with("view2d"), Sense::click_and_drag());
     let size = rect.size();
     let alt = ui.input(|i| i.modifiers.alt);
@@ -579,6 +601,7 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Option
         visible: app.session.doc.project.texture_sets.iter().map(|t| t.visible).collect(),
     };
     add_callback(app, ui, rect, frame, sync);
+    crate::shelf::drop_target(app, ui, &resp, true);
     // The 0..1 tile outline and the path being edited.
     ui.painter_at(rect).rect_stroke(
         Rect::from_two_pos(to(0.0, 0.0), to(1.0, 1.0)),

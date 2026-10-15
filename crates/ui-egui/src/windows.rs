@@ -675,7 +675,7 @@ fn export_sets(app: &mut TextureCraftApp) -> bool {
     true
 }
 
-fn export_params(app: &TextureCraftApp) -> serde_json::Value {
+pub(crate) fn export_params(app: &TextureCraftApp) -> serde_json::Value {
     let e = &app.ui.export;
     let mut p = json!({"preset": e.preset, "padding": e.padding, "dilation": e.dilation});
     if !e.format.is_empty() {
@@ -713,6 +713,12 @@ fn export_settings_tab(app: &mut TextureCraftApp, ui: &mut Ui, presets: &[textur
         ui.label("Output template");
         egui::ComboBox::from_id_salt("exp_preset").width(360.0).selected_text(app.ui.export.preset.clone()).show_ui(ui, |ui| {
             for p in presets {
+                ui.selectable_value(&mut app.ui.export.preset, p.name.clone(), &p.name);
+            }
+            if !app.session.export_presets.list.is_empty() {
+                ui.separator();
+            }
+            for p in &app.session.export_presets.list {
                 ui.selectable_value(&mut app.ui.export.preset, p.name.clone(), &p.name);
             }
         });
@@ -794,6 +800,10 @@ pub fn export(app: &mut TextureCraftApp, ctx: &egui::Context) {
         ui.separator();
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 360.0), egui::Layout::left_to_right(egui::Align::Min), |ui| {
             ui.set_height(360.0);
+            if app.ui.export.tab == 1 {
+                crate::export_templates::tab(app, ui, &presets);
+                return;
+            }
             ui.vertical(|ui| {
                 ui.set_width(180.0);
                 ui.label(RichText::new("Texture sets").strong());
@@ -812,22 +822,6 @@ pub fn export(app: &mut TextureCraftApp, ctx: &egui::Context) {
             ui.separator();
             ui.vertical(|ui| match app.ui.export.tab {
                 0 => export_settings_tab(app, ui, &presets),
-                1 => {
-                    if let Some(p) = presets.iter().find(|p| p.name == app.ui.export.preset) {
-                        ui.label(RichText::new(&p.name).strong());
-                        egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
-                            for m in &p.maps {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(&m.file).monospace());
-                                    ui.label(RichText::new(format!("{} {}-bit", m.format.extension(), m.bit_depth)).color(TOKENS.text_dim));
-                                });
-                                for (dest, src) in &m.channels {
-                                    ui.label(RichText::new(format!("    {dest:?} <- {src:?}")).size(11.0).color(TOKENS.text_dim));
-                                }
-                            }
-                        });
-                    }
-                }
                 _ => {
                     let mut params = export_params(app);
                     params["ts"] = json!("all");

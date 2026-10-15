@@ -28,6 +28,37 @@ const JPEG_QUALITY: u8 = 95;
 const MAX_MAPS: usize = 64;
 const MAX_TEMPLATE: usize = 256;
 const MAX_STEM: usize = 200;
+/// Longest preset name.
+pub const MAX_PRESET_NAME: usize = 64;
+
+/// File name template variables with what they become (see [`list_outputs`]).
+pub const FILE_TOKENS: [(&str, &str); 5] = [
+    ("$mesh", "Mesh file name"),
+    ("$textureSet", "Texture set name"),
+    ("$project", "Project name"),
+    ("$channel", "Channel or map id"),
+    ("$colorSpace", "sRGB or linear"),
+];
+
+/// Why `template` is not a valid file name template: path separators, `..`, control characters
+/// and unknown `$` variables are refused.
+pub fn template_error(template: &str) -> Option<String> {
+    if template.trim().is_empty() || template.len() > MAX_TEMPLATE {
+        return Some(format!("file name \"{template}\" is empty or longer than {MAX_TEMPLATE} bytes"));
+    }
+    if template.contains(['/', '\\']) || template.contains("..") || template.chars().any(char::is_control) {
+        return Some(format!("file name \"{template}\" contains a path separator, \"..\" or a control character"));
+    }
+    let mut rest = template;
+    while let Some(i) = rest.find('$') {
+        let tail = rest.get(i..).unwrap_or_default();
+        match FILE_TOKENS.iter().find(|(t, _)| tail.starts_with(t)) {
+            Some((t, _)) => rest = tail.get(t.len()..).unwrap_or_default(),
+            None => return Some(format!("file name \"{template}\" has an unknown variable (use {})", FILE_TOKENS.map(|(t, _)| t).join(", "))),
+        }
+    }
+    None
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FileFormat {
@@ -111,15 +142,50 @@ pub enum VirtualMap {
     AoMixed,
     /// Dielectric reflectance at normal incidence: 0.08 × specular level.
     F0,
+    /// 1 − glossiness (specular/glossiness projects).
+    Roughness,
+    /// Tangent-space normal from the height channel alone (the export's normal convention).
+    HeightNormal,
 }
 
 impl VirtualMap {
+    pub const ALL: [VirtualMap; 7] = [
+        VirtualMap::NormalOpenGl,
+        VirtualMap::NormalDirectX,
+        VirtualMap::HeightNormal,
+        VirtualMap::Glossiness,
+        VirtualMap::Roughness,
+        VirtualMap::AoMixed,
+        VirtualMap::F0,
+    ];
+
     pub fn id(self) -> &'static str {
         match self {
-            VirtualMap::NormalOpenGl | VirtualMap::NormalDirectX => "normal",
+            VirtualMap::NormalOpenGl | VirtualMap::NormalDirectX | VirtualMap::HeightNormal => "normal",
             VirtualMap::Glossiness => "glossiness",
+            VirtualMap::Roughness => "roughness",
             VirtualMap::AoMixed => "ambientOcclusion",
             VirtualMap::F0 => "f0",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            VirtualMap::NormalOpenGl => "Normal OpenGL",
+            VirtualMap::NormalDirectX => "Normal DirectX",
+            VirtualMap::HeightNormal => "Normal from height",
+            VirtualMap::Glossiness => "Glossiness from roughness",
+            VirtualMap::Roughness => "Roughness from glossiness",
+            VirtualMap::AoMixed => "Mixed AO",
+            VirtualMap::F0 => "F0 from specular level",
+        }
+    }
+
+    /// 3 for normals, 1 otherwise.
+    pub fn components(self) -> usize {
+        match self {
+            VirtualMap::NormalOpenGl | VirtualMap::NormalDirectX | VirtualMap::HeightNormal => 3,
+            _ => 1,
         }
     }
 }
@@ -148,10 +214,24 @@ pub enum SourceRef {
 }
 
 impl SourceRef {
-    fn component(&self) -> usize {
+    fn raw_component(&self) -> usize {
         match self {
-            SourceRef::Channel { component, .. } | SourceRef::Virtual { component, .. } | SourceRef::Baked { component, .. } => (*component).min(2) as usize,
+            SourceRef::Channel { component, .. } | SourceRef::Virtual { component, .. } | SourceRef::Baked { component, .. } => *component as usize,
             SourceRef::Constant(_) => 0,
+        }
+    }
+
+    fn component(&self) -> usize {
+        self.raw_component().min(2)
+    }
+
+    /// Components the source has (1 or 3; constants are 1).
+    pub fn components(&self) -> usize {
+        match self {
+            SourceRef::Channel { channel, .. } => channel.components(),
+            SourceRef::Virtual { map, .. } => map.components(),
+            SourceRef::Baked { map, .. } => map.components(),
+            SourceRef::Constant(_) => 1,
         }
     }
 }
@@ -175,12 +255,21 @@ impl ExportPreset {
     /// Structural checks for (untrusted) presets.
     pub fn validate(&self) -> Result<()> {
         let bad = |m: String| Err(FormatError::Invalid(format!("export preset \"{}\": {m}", self.name)));
+        if self.name.trim().is_empty() || self.name.chars().count() > MAX_PRESET_NAME || self.name.chars().any(char::is_control) {
+            return bad(format!("the name must be 1 to {MAX_PRESET_NAME} characters without control characters"));
+        }
         if self.maps.len() > MAX_MAPS {
             return bad(format!("more than {MAX_MAPS} maps"));
         }
         for m in &self.maps {
-            if m.file.trim().is_empty() || m.file.len() > MAX_TEMPLATE {
-                return bad(format!("file template \"{}\" is empty or too long", m.file));
+            if let Some(e) = template_error(&m.file) {
+                return bad(e);
+            }
+            if !matches!(m.bit_depth, 8 | 16 | 32) {
+                return bad(format!("map \"{}\" has bit depth {} (8, 16 or 32)", m.file, m.bit_depth));
+            }
+            if m.channels.iter().any(|(_, s)| s.component() != s.raw_component()) {
+                return bad(format!("map \"{}\" picks a component other than 0, 1 or 2", m.file));
             }
             let dests: BTreeSet<Dest> = m.channels.iter().map(|(d, _)| *d).collect();
             if dests.len() != m.channels.len() || m.channels.is_empty() {
@@ -277,6 +366,8 @@ fn source_present(set: &TextureSet, s: &SourceRef) -> bool {
         SourceRef::Virtual { map: VirtualMap::Glossiness, .. } => set.has_channel(Channel::Roughness),
         SourceRef::Virtual { map: VirtualMap::AoMixed, .. } => set.has_channel(Channel::AmbientOcclusion) || set.baked.contains(&BakedMap::AmbientOcclusion),
         SourceRef::Virtual { map: VirtualMap::F0, .. } => set.has_channel(Channel::SpecularLevel),
+        SourceRef::Virtual { map: VirtualMap::Roughness, .. } => set.has_channel(Channel::Glossiness),
+        SourceRef::Virtual { map: VirtualMap::HeightNormal, .. } => set.has_channel(Channel::Height),
         SourceRef::Baked { map, .. } => set.baked.contains(map),
         SourceRef::Constant(_) => false,
     }
@@ -330,7 +421,7 @@ pub fn sanitize_file_stem(s: &str) -> String {
 }
 
 /// The files `opts` produces for texture set `ts`, without rendering (for the export dialog).
-/// Template variables: `$project`, `$mesh`, `$textureSet`, `$channel`, `$colorSpace`.
+/// Template variables: [`FILE_TOKENS`].
 pub fn list_outputs(project: &Project, ts: usize, mesh_name: &str, opts: &ExportOptions) -> Result<Vec<PlannedFile>> {
     opts.preset.validate()?;
     let set = project.texture_set(ts)?;
@@ -454,6 +545,11 @@ impl Sampler<'_> {
 
     fn normal(&self, at: At, format: NormalFormat, cache: &mut Option<Vec3>) -> [f32; 3] {
         let n = *cache.get_or_insert_with(|| self.final_normal(at));
+        self.pack_normal(n, format)
+    }
+
+    /// A unit OpenGL normal packed into 0..1 in `format` (or the override).
+    fn pack_normal(&self, n: Vec3, format: NormalFormat) -> [f32; 3] {
         let y = if self.normal_override.unwrap_or(format) == NormalFormat::DirectX { -n.y } else { n.y };
         [n.x * 0.5 + 0.5, y * 0.5 + 0.5, n.z * 0.5 + 0.5]
     }
@@ -472,6 +568,14 @@ impl Sampler<'_> {
                 VirtualMap::NormalDirectX => self.normal(at, NormalFormat::DirectX, cache),
                 VirtualMap::Glossiness => [1.0 - self.channel(Channel::Roughness, at)[0]; 3],
                 VirtualMap::F0 => [0.08 * self.channel(Channel::SpecularLevel, at)[0]; 3],
+                VirtualMap::Roughness => [1.0 - self.channel(Channel::Glossiness, at)[0]; 3],
+                VirtualMap::HeightNormal => {
+                    let n = match at {
+                        At::Texel(x, y) => self.height_normal(x, y),
+                        At::Default => Vec3::Z,
+                    };
+                    self.pack_normal(n, self.project_normal)
+                }
                 VirtualMap::AoMixed => {
                     let ch = self.channel(Channel::AmbientOcclusion, at)[0];
                     let baked = self.baked(BakedMap::AmbientOcclusion, at)[0];

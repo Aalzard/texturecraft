@@ -116,68 +116,90 @@ pub fn rasterize(canvas: &mut StrokeCanvas, ctx: &RasterCtx, stamps: &[Stamp]) {
             continue;
         }
         let ext = Vec3::splat(s.radius * s.depth.max(1.0) * 1.42);
-        // The stamp center in texels: the footprint texel nearest to it on the surface.
-        let mut center = ([0.0f32; 2], f32::MAX);
         tris.clear();
         ctx.bvh.query_box(s.center - ext, s.center + ext, |t| tris.push(t));
-        for &t in &tris {
-            if ctx.mesh.material_of(t as usize) != Some(ctx.material) {
-                continue;
+        // Each texel belongs to one triangle, so triangles scan independently (in parallel for
+        // large stamps); stamp alphas combine commutatively, so the order does not matter.
+        let scan = |&t: &u32| scan_triangle(ctx, s, t, w, h, fade_lo, fade_hi);
+        let parts: Vec<TriTexels> = if tris.len() > 16 { tris.par_iter().filter_map(scan).collect() } else { tris.iter().filter_map(scan).collect() };
+        // The stamp center in texels: the footprint texel nearest to it on the surface.
+        let mut center = ([0.0f32; 2], f32::MAX);
+        for (texels, c) in parts {
+            if c.1 < center.1 {
+                center = c;
             }
-            let Some([a, b, c]) = ctx.mesh.tri(t as usize) else { continue };
-            let (Some(ua), Some(ub), Some(uc)) = (ctx.mesh.uvs.get(a), ctx.mesh.uvs.get(b), ctx.mesh.uvs.get(c)) else { continue };
-            let (Some(pa), Some(pb), Some(pc)) = (ctx.mesh.positions.get(a), ctx.mesh.positions.get(b), ctx.mesh.positions.get(c)) else { continue };
-            let (Some(na), Some(nb), Some(nc)) = (ctx.mesh.normals.get(a), ctx.mesh.normals.get(b), ctx.mesh.normals.get(c)) else { continue };
-            let x0 = (ua.x.min(ub.x).min(uc.x) * w as f32).floor().max(0.0) as u32;
-            let x1 = ((ua.x.max(ub.x).max(uc.x) * w as f32).ceil().max(0.0) as u32).min(w);
-            let y0 = (ua.y.min(ub.y).min(uc.y) * h as f32).floor().max(0.0) as u32;
-            let y1 = ((ua.y.max(ub.y).max(uc.y) * h as f32).ceil().max(0.0) as u32).min(h);
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let i = (y * w + x) as usize;
-                    if ctx.gbuf.tri.get(i).copied().unwrap_or(NO_TRI) != t {
-                        continue;
-                    }
-                    let Some([b1, b2]) = ctx.gbuf.bary.get(i).copied() else { continue };
-                    let b0 = 1.0 - b1 - b2;
-                    let p = *pa * b0 + *pb * b1 + *pc * b2;
-                    let d = p - s.center;
-                    let lx = d.dot(s.tangent) / s.radius;
-                    let ly = d.dot(s.bitangent) / s.radius;
-                    if lx * lx + ly * ly > 2.0 {
-                        continue;
-                    }
-                    if d.dot(s.normal).abs() > s.radius * s.depth {
-                        continue;
-                    }
-                    let dist = d.length_squared();
-                    if dist < center.1 {
-                        center = ([x as f32 + 0.5, y as f32 + 0.5], dist);
-                    }
-                    let n = (*na * b0 + *nb * b1 + *nc * b2).try_normalize().unwrap_or(s.normal);
-                    let to_eye = (ctx.eye - p).try_normalize().unwrap_or(n);
-                    let facing = n.dot(to_eye);
-                    if ctx.backface_culling && facing <= 0.0 {
-                        continue;
-                    }
-                    if n.dot(s.normal) <= 0.0 {
-                        continue;
-                    }
-                    if let Some(depth) = ctx.depth
-                        && !depth.visible(p)
-                    {
-                        continue;
-                    }
-                    let fade = if ctx.backface_culling { smoothstep(fade_lo, fade_hi, facing) } else { 1.0 };
-                    let a = ctx.shape.sample(lx, ly, s.hardness, s.seed) * s.flow * fade;
-                    if a > 0.0 {
-                        canvas.texels.push((x, y, a));
-                    }
-                }
-            }
+            canvas.texels.extend(texels);
         }
         canvas.add_stamp(center.0);
     }
+}
+
+/// Texels of one triangle a stamp covers, and the one nearest the stamp center.
+type TriTexels = (Vec<(u32, u32, f32)>, ([f32; 2], f32));
+
+#[allow(clippy::too_many_arguments)]
+fn scan_triangle(ctx: &RasterCtx, s: &Stamp, t: u32, w: u32, h: u32, fade_lo: f32, fade_hi: f32) -> Option<TriTexels> {
+    if ctx.mesh.material_of(t as usize) != Some(ctx.material) {
+        return None;
+    }
+    let [a, b, c] = ctx.mesh.tri(t as usize)?;
+    let (ua, ub, uc) = (ctx.mesh.uvs.get(a)?, ctx.mesh.uvs.get(b)?, ctx.mesh.uvs.get(c)?);
+    let (pa, pb, pc) = (ctx.mesh.positions.get(a)?, ctx.mesh.positions.get(b)?, ctx.mesh.positions.get(c)?);
+    let (na, nb, nc) = (ctx.mesh.normals.get(a)?, ctx.mesh.normals.get(b)?, ctx.mesh.normals.get(c)?);
+    let x0 = (ua.x.min(ub.x).min(uc.x) * w as f32).floor().max(0.0) as u32;
+    let x1 = ((ua.x.max(ub.x).max(uc.x) * w as f32).ceil().max(0.0) as u32).min(w);
+    let y0 = (ua.y.min(ub.y).min(uc.y) * h as f32).floor().max(0.0) as u32;
+    let y1 = ((ua.y.max(ub.y).max(uc.y) * h as f32).ceil().max(0.0) as u32).min(h);
+    // Stamp radius in texels on this triangle: texel area over world area.
+    let uv_area = (*ub - *ua).perp_dot(*uc - *ua).abs() * w as f32 * h as f32;
+    let world_area = (*pb - *pa).cross(*pc - *pa).length();
+    let shape = ctx.shape.at_radius(s.radius * (uv_area / world_area).sqrt());
+    let mut texels = Vec::new();
+    let mut center = ([0.0f32; 2], f32::MAX);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * w + x) as usize;
+            if ctx.gbuf.tri.get(i).copied().unwrap_or(NO_TRI) != t {
+                continue;
+            }
+            let Some([b1, b2]) = ctx.gbuf.bary.get(i).copied() else { continue };
+            let b0 = 1.0 - b1 - b2;
+            let p = *pa * b0 + *pb * b1 + *pc * b2;
+            let d = p - s.center;
+            let lx = d.dot(s.tangent) / s.radius;
+            let ly = d.dot(s.bitangent) / s.radius;
+            if lx * lx + ly * ly > 2.0 {
+                continue;
+            }
+            if d.dot(s.normal).abs() > s.radius * s.depth {
+                continue;
+            }
+            let dist = d.length_squared();
+            if dist < center.1 {
+                center = ([x as f32 + 0.5, y as f32 + 0.5], dist);
+            }
+            let n = (*na * b0 + *nb * b1 + *nc * b2).try_normalize().unwrap_or(s.normal);
+            let to_eye = (ctx.eye - p).try_normalize().unwrap_or(n);
+            let facing = n.dot(to_eye);
+            if ctx.backface_culling && facing <= 0.0 {
+                continue;
+            }
+            if n.dot(s.normal) <= 0.0 {
+                continue;
+            }
+            if let Some(depth) = ctx.depth
+                && !depth.visible(p)
+            {
+                continue;
+            }
+            let fade = if ctx.backface_culling { smoothstep(fade_lo, fade_hi, facing) } else { 1.0 };
+            let a = shape.sample(lx, ly, s.hardness, s.seed) * s.flow * fade;
+            if a > 0.0 {
+                texels.push((x, y, a));
+            }
+        }
+    }
+    (center.1 < f32::MAX || !texels.is_empty()).then_some((texels, center))
 }
 
 /// Stroke alpha covering whole triangles (polygon fill): every texel of `tris` gets alpha 1.
@@ -225,7 +247,7 @@ mod tests {
             eye: Vec3::new(0.0, 5.0, 0.0),
             backface_culling: true,
             angle_fade: (70.0, 85.0),
-            shape: Shape { alpha: crate::BrushAlpha::Round, image: None },
+            shape: Shape { alpha: crate::BrushAlpha::Round, image: None, library: None, level: 0 },
         };
         let st =
             Stamp { center: Vec3::ZERO, normal: Vec3::Y, tangent: Vec3::X, bitangent: Vec3::Z, radius: 0.25, flow: 1.0, hardness: 0.9, depth: 1.0, seed: 0 };
@@ -272,6 +294,7 @@ pub fn rasterize_uv(canvas: &mut StrokeCanvas, gbuf: &UvGBuffer, shape: Shape, s
         let y0 = (cy - r * 1.42).floor().max(0.0) as u32;
         let y1 = ((cy + r * 1.42).ceil().max(0.0) as u32).min(h);
         let (sn, cs) = s.angle.to_radians().sin_cos();
+        let shape = shape.at_radius(r);
         for y in y0..y1 {
             for x in x0..x1 {
                 if gbuf.tri.get((y * w + x) as usize).copied().unwrap_or(NO_TRI) == NO_TRI {

@@ -33,6 +33,8 @@ pub use image_res::{DecodedImage, decode_image};
 pub use mesh_export::{GlbTextures, glb_bytes, glb_export_options, obj_bytes};
 pub use mesh_import::{ImportedMesh, MeshReport, import_high_poly_bytes, import_mesh_bytes};
 pub use presets::{builtin_preset, builtin_presets, preset_from_json, preset_to_json};
+#[cfg(not(target_arch = "wasm32"))]
+pub use presets::load_preset;
 pub use project_file::{ProjectFile, load_project_bytes, sanitize_resource_name, save_project_bytes};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -91,7 +93,7 @@ pub(crate) fn read_capped(path: &std::path::Path, cap: u64) -> Result<Vec<u8>> {
 
 /// Write `bytes` to `path` atomically: `<path>.tmp` first, then rename over the target.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = std::path::PathBuf::from(tmp);

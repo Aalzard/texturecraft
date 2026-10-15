@@ -41,7 +41,7 @@ pub struct SetCache {
     pub upload: BTreeSet<(u32, u32)>,
     /// Bumps on every composite change (thumbnails, exports, caches).
     pub revision: u64,
-    /// The stack below the layer being edited, per tile (repaints skip it).
+    /// Everything but the layer being edited, per tile (repaints evaluate only that layer).
     pub below: BelowCache,
 }
 
@@ -261,7 +261,7 @@ pub(crate) struct ActiveStroke {
     pub stroke: Stroke,
     pub canvas: StrokeCanvas,
     /// Camera visibility for 3D strokes (None for strokes in the 2D view).
-    pub depth: Option<EyeDepth>,
+    pub depth: Option<Arc<EyeDepth>>,
     /// 2D view strokes: last UV point and the distance carried to the next stamp.
     pub uv: Option<(Option<Vec2>, f32)>,
     pub camera: OrbitCamera,
@@ -274,6 +274,9 @@ pub(crate) struct ActiveStroke {
     pub before: Document,
     pub label: String,
 }
+
+/// A stroke visibility buffer and what it was rendered for: camera, size, mesh id.
+pub(crate) type DepthCache = (OrbitCamera, (u32, u32), u64, Arc<EyeDepth>);
 
 pub struct Session {
     pub doc: Document,
@@ -310,6 +313,11 @@ pub struct Session {
     pub revision: u64,
     /// Messages for the UI (status bar / toasts).
     pub log: Vec<String>,
+    /// The last stroke's camera visibility buffer: reused while the camera, view size and mesh
+    /// are unchanged, so back-to-back dabs start instantly.
+    pub(crate) depth_cache: Option<DepthCache>,
+    /// The user's export presets (kept when another project opens).
+    pub export_presets: crate::preset_cmds::UserPresets,
 }
 
 impl Session {
@@ -348,7 +356,17 @@ impl Session {
             modified: false,
             revision: 1,
             log: Vec::new(),
+            depth_cache: None,
+            export_presets: Default::default(),
         })
+    }
+
+    /// Replace this session with `next` (another project), keeping the viewport size and the
+    /// user's export presets.
+    pub fn switch_to(&mut self, mut next: Session) {
+        next.viewport = self.viewport;
+        next.export_presets = std::mem::take(&mut self.export_presets);
+        *self = next;
     }
 
     /// A new project: one texture set per mesh material, each with an empty paint layer.
@@ -533,7 +551,7 @@ impl Session {
     pub fn update_for(&mut self, budget_ms: f64, clock: impl Fn() -> f64) -> bool {
         let start = clock();
         let mut chunk = if budget_ms.is_finite() { rayon::current_num_threads().clamp(1, CHUNK) } else { CHUNK };
-        // The layer being edited: the stack below it is cached per tile.
+        // The layer being edited: everything else is cached per tile.
         let hot = self.stroke.as_ref().and_then(|s| s.target).map(|t| self.paint_owner(t)).or_else(|| self.selected_layer());
         let stroke_res = self.stroke.as_ref().and_then(|s| self.caches.get(s.ts)).map(|c| c.resolution);
         let preview = self.stroke.as_ref().and_then(|s| {
@@ -649,7 +667,7 @@ impl Session {
     }
 
     /// Bytes held by painted layer pixels, the composites of every texture set and their
-    /// below-stack caches.
+    /// hot-layer caches.
     pub fn memory(&self) -> Memory {
         let composites = self.caches.iter().flat_map(|c| c.composite.channels.values()).map(texturecraft_texel::TileImage::bytes).sum();
         Memory { pixels: self.doc.pixels.bytes(), composites, cache: self.caches.iter().map(|c| c.below.bytes()).sum() }
