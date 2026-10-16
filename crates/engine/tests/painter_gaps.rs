@@ -1,0 +1,235 @@
+//! The filter library, geometry decals, cloning from the selected layer, placing saved smart
+//! materials, anchors inside a content stack and instances across texture set resolutions,
+//! through engine commands.
+
+use serde_json::{Value, json};
+use texturecraft_engine::core::{Channel, EffectKind, Filter, LayerId, LayerKind, Projection};
+use texturecraft_engine::geom::NO_TRI;
+use texturecraft_engine::geom::glam::Vec2;
+use texturecraft_engine::geom::primitives;
+use texturecraft_engine::{Session, execute};
+
+fn session() -> Session {
+    let mut s = Session::new_project("t", primitives::sphere(1.0, 48, 24), "builtin:sphere", None, 256).unwrap();
+    s.viewport = Vec2::new(400.0, 400.0);
+    s.camera.yaw = 0.0;
+    s.camera.pitch = 0.0;
+    s.update();
+    s
+}
+
+fn id(v: Value, key: &str) -> LayerId {
+    LayerId(v[key].as_u64().unwrap())
+}
+
+/// Composite value of `c` under a viewport point.
+fn at(s: &mut Session, c: Channel, x: f32, y: f32) -> [f32; 3] {
+    s.update();
+    let hit = s.pick(Vec2::new(x, y), s.viewport).unwrap();
+    let (w, h) = s.caches[0].size;
+    s.caches[0].composite.value(c, (hit.uv.x * w as f32) as u32, (hit.uv.y * h as f32) as u32)
+}
+
+fn red(v: [f32; 3]) -> bool {
+    v[0] > 0.85 && v[1] < 0.15
+}
+
+fn png(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> Vec<u8> {
+    let mut out = Vec::new();
+    image::RgbaImage::from_fn(w, h, |x, y| image::Rgba(f(x, y))).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+    out
+}
+
+#[test]
+fn filter_library_adds_every_filter_and_edits_its_parameters() {
+    let mut s = session();
+    let list = execute(&mut s, "filter.list", &Value::Null).unwrap();
+    let ids: Vec<&str> = list.as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+    for want in [
+        "warp",
+        "blurDirectional",
+        "sharpen",
+        "hsl",
+        "levels",
+        "contrastLuminosity",
+        "colorBalance",
+        "gradientMap",
+        "posterize",
+        "clamp",
+        "slopeBlur",
+        "matFinishGrind",
+    ] {
+        assert!(ids.contains(&want), "{want} missing from {ids:?}");
+    }
+    let layer = id(execute(&mut s, "layer.add.fill", &json!({"color": [0.8, 0.2, 0.1], "roughness": 0.4})).unwrap(), "layer");
+    let before = at(&mut s, Channel::BaseColor, 200.0, 200.0);
+    for f in list.as_array().unwrap() {
+        let fid = f["id"].as_str().unwrap();
+        let eid = id(execute(&mut s, "effect.add.filter", &json!({"layer": layer.0, "filter": fid, "target": "content"})).unwrap(), "effect");
+        let (owner, e) = s.doc.project.effect(eid).unwrap();
+        assert_eq!(owner, layer);
+        assert_eq!(e.name, f["label"].as_str().unwrap(), "named after the shelf entry");
+        assert!(s.doc.project.layer(layer).unwrap().content_effects.iter().any(|x| x.id == eid));
+        execute(&mut s, "effect.remove", &json!({"effect": eid.0})).unwrap();
+    }
+    // A gradient map recolors the content; effect.set edits it and inspect shows it.
+    let gm =
+        id(execute(&mut s, "effect.add.filter", &json!({"filter": "gradientMap", "target": "content", "colors": [[0, 0, 1], [0, 0, 1]]})).unwrap(), "effect");
+    let blue = at(&mut s, Channel::BaseColor, 200.0, 200.0);
+    assert!(blue[2] > 0.95 && blue[0] < 0.05, "{before:?} -> {blue:?}");
+    execute(&mut s, "effect.set", &json!({"effect": gm.0, "colors": ["#00ff00"]})).unwrap();
+    assert!(at(&mut s, Channel::BaseColor, 200.0, 200.0)[1] > 0.95);
+    assert!(execute(&mut s, "effect.set", &json!({"effect": gm.0, "colors": []})).is_err());
+    let inspect = execute(&mut s, "project.inspect", &Value::Null).unwrap().to_string();
+    assert!(inspect.contains("GradientMap"), "inspect shows filter parameters");
+    execute(&mut s, "effect.remove", &json!({"effect": gm.0})).unwrap();
+    // Posterize on the mask; its steps are clamped.
+    let post = id(execute(&mut s, "effect.add.filter", &json!({"filter": "posterize", "levels": 3})).unwrap(), "effect");
+    execute(&mut s, "effect.set", &json!({"effect": post.0, "levels": 500})).unwrap();
+    assert!(s.doc.project.layer(layer).unwrap().mask.as_ref().is_some_and(|m| m.effects.iter().any(|e| e.id == post)));
+    assert!(matches!(s.doc.project.effect(post).unwrap().1.kind, EffectKind::Filter(Filter::Posterize { levels }) if levels == 64.0));
+    // Material finishes fill the content's roughness and height.
+    let fin = id(execute(&mut s, "effect.add.filter", &json!({"filter": "MatFinish Hammered"})).unwrap(), "effect");
+    assert!(s.doc.project.layer(layer).unwrap().content_effects.iter().any(|e| e.id == fin));
+    assert!(matches!(&s.doc.project.effect(fin).unwrap().1.kind, EffectKind::Material(f) if f.sources.contains_key(&Channel::Height)));
+    assert!(execute(&mut s, "effect.add.filter", &json!({"filter": "nope"})).is_err());
+    // A directional blur, slope blur and warp composite without trouble on a sphere.
+    for (fid, extra) in [("blurDirectional", json!({"radius": 40, "angle": 45})), ("slopeBlur", json!({"radius": 30})), ("warp", json!({"intensity": 50}))] {
+        let mut p = json!({"filter": fid, "target": "content"});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        execute(&mut s, "effect.add.filter", &p).unwrap();
+    }
+    assert!(at(&mut s, Channel::BaseColor, 200.0, 200.0).iter().all(|v| v.is_finite()));
+}
+
+#[test]
+fn decals_project_an_image_from_a_frame_placed_on_the_surface() {
+    let mut s = session();
+    // A red disc on a transparent background.
+    let name = s
+        .import_resource_bytes("logo.png", png(32, 32, |x, y| if (x as i32 - 16).pow(2) + (y as i32 - 16).pow(2) < 196 { [255, 0, 0, 255] } else { [0; 4] }))
+        .unwrap();
+    assert!(execute(&mut s, "layer.add.decal", &json!({"image": "missing.png"})).is_err());
+    assert!(execute(&mut s, "layer.add.decal", &json!({"image": name, "x": 2, "y": 2})).is_err(), "off the mesh");
+    let r = execute(&mut s, "layer.add.decal", &json!({"image": name, "x": 200, "y": 200, "size": 0.5})).unwrap();
+    let layer = id(r.clone(), "layer");
+    assert!((r["decal"]["size"][1].as_f64().unwrap() - 0.5).abs() < 1e-6);
+    let LayerKind::Fill(f) = &s.doc.project.layer(layer).unwrap().kind else { panic!("a fill layer") };
+    assert!(matches!(f.projection, Projection::Decal(_)));
+    assert!(red(at(&mut s, Channel::BaseColor, 200.0, 200.0)), "the decal shows where it was placed");
+    assert!(!red(at(&mut s, Channel::BaseColor, 120.0, 200.0)), "and only there");
+    // The image's transparent corners leave the surface as it was.
+    assert!(!red(at(&mut s, Channel::BaseColor, 200.0 + 30.0, 200.0 - 30.0)));
+    // Bigger, then moved along its plane, then re-placed with a click.
+    execute(&mut s, "layer.decal.set", &json!({"size": 1.2})).unwrap();
+    assert!(red(at(&mut s, Channel::BaseColor, 160.0, 200.0)));
+    execute(&mut s, "layer.decal.set", &json!({"size": 0.4, "offset": [0.6, 0.0], "rotation": 45})).unwrap();
+    assert!(!red(at(&mut s, Channel::BaseColor, 200.0, 200.0)), "moved away");
+    let r = execute(&mut s, "layer.decal.set", &json!({"x": 170, "y": 180})).unwrap();
+    assert_eq!(r["decal"]["offset"], json!([0.0, 0.0]), "re-placing resets the offset");
+    assert!(red(at(&mut s, Channel::BaseColor, 170.0, 180.0)));
+    let inspect = execute(&mut s, "project.inspect", &Value::Null).unwrap().to_string();
+    assert!(inspect.contains("Decal projection") && inspect.contains("\"rotation\":45"), "inspect shows the decal");
+    // Not a decal; one undo step per edit.
+    let plain = id(execute(&mut s, "layer.add.fill", &Value::Null).unwrap(), "layer");
+    assert!(execute(&mut s, "layer.decal.set", &json!({"layer": plain.0, "size": 1})).is_err());
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert!(!red(at(&mut s, Channel::BaseColor, 170.0, 180.0)));
+}
+
+#[test]
+fn clone_copies_the_selected_layer_alone_when_asked() {
+    let mut s = session();
+    execute(&mut s, "tool.paint", &Value::Null).unwrap();
+    execute(&mut s, "tool.material", &json!({"channel": "baseColor", "color": [1.0, 0.0, 0.0]})).unwrap();
+    execute(&mut s, "tool.brush", &json!({"size": 20, "hardness": 90})).unwrap();
+    let low = id(execute(&mut s, "layer.add.paint", &Value::Null).unwrap(), "layer");
+    execute(&mut s, "tool.stroke", &json!({"points": [[160, 200]]})).unwrap();
+    let top = id(execute(&mut s, "layer.add.paint", &Value::Null).unwrap(), "layer");
+    execute(&mut s, "tool.clone", &Value::Null).unwrap();
+    assert!(execute(&mut s, "tool.brush", &json!({"cloneSource": "nope"})).is_err());
+    let r = execute(&mut s, "tool.brush", &json!({"size": 6, "cloneSource": "layer"})).unwrap();
+    assert_eq!(r["cloneSource"], "layer");
+    execute(&mut s, "tool.cloneSource", &json!({"x": 160, "y": 200})).unwrap();
+    // The empty top layer has nothing to copy.
+    execute(&mut s, "tool.stroke", &json!({"points": [[240, 200]]})).unwrap();
+    assert!(!red(at(&mut s, Channel::BaseColor, 240.0, 200.0)));
+    assert!(s.doc.pixels.layer(top, Channel::BaseColor).is_none_or(|i| i.allocated_count() == 0));
+    // From the composite it copies what shows.
+    execute(&mut s, "tool.brush", &json!({"cloneSource": "composite"})).unwrap();
+    execute(&mut s, "tool.stroke", &json!({"points": [[240, 200]]})).unwrap();
+    assert!(red(at(&mut s, Channel::BaseColor, 240.0, 200.0)));
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    // The painted layer itself copies its paint.
+    execute(&mut s, "layer.select", &json!({"layer": low.0})).unwrap();
+    execute(&mut s, "tool.brush", &json!({"cloneSource": "layer"})).unwrap();
+    execute(&mut s, "tool.stroke", &json!({"points": [[240, 200]]})).unwrap();
+    assert!(red(at(&mut s, Channel::BaseColor, 240.0, 200.0)));
+    assert_eq!(s.tool.clone_from, texturecraft_engine::CloneFrom::Layer);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn saved_smart_materials_load_where_they_are_dropped() {
+    let mut s = session();
+    let a = id(execute(&mut s, "layer.add.fill", &json!({"roughness": 0.9})).unwrap(), "layer");
+    let b = id(execute(&mut s, "layer.add.paint", &Value::Null).unwrap(), "layer");
+    let dir = std::env::temp_dir().join(format!("tc_gaps_{}", std::process::id()));
+    let path = dir.join("rough.tcmat").display().to_string();
+    execute(&mut s, "material.save", &json!({"layer": a.0, "path": path})).unwrap();
+    let stack = |s: &Session| s.doc.project.texture_sets[0].stack.clone();
+    let bottom = id(execute(&mut s, "material.load", &json!({"path": path, "index": 0})).unwrap(), "layer");
+    assert_eq!(stack(&s).first(), Some(&bottom));
+    let above = id(execute(&mut s, "material.load", &json!({"path": path, "above": a.0})).unwrap(), "layer");
+    let st = stack(&s);
+    assert_eq!(st.iter().position(|x| *x == above), st.iter().position(|x| *x == a).map(|i| i + 1));
+    assert_eq!(st.last(), Some(&b));
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert!(!stack(&s).contains(&above), "one undo step");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn anchors_inside_a_content_stack_read_the_content_there() {
+    let mut s = session();
+    let low = id(execute(&mut s, "layer.add.fill", &json!({"height": 0.4})).unwrap(), "layer");
+    let anchor = id(execute(&mut s, "effect.add.anchor", &json!({"layer": low.0})).unwrap(), "effect");
+    execute(&mut s, "effect.add.fill", &json!({"layer": low.0, "target": "content", "height": 0.8})).unwrap();
+    let reader = id(execute(&mut s, "layer.add.fill", &Value::Null).unwrap(), "layer");
+    execute(&mut s, "layer.blend", &json!({"layer": reader.0, "channel": "all", "enabled": false})).unwrap();
+    execute(&mut s, "layer.fill.set", &json!({"layer": reader.0, "channel": "roughness", "anchor": anchor.0, "anchorChannel": "height"})).unwrap();
+    assert!((at(&mut s, Channel::Roughness, 200.0, 200.0)[0] - 0.4).abs() < 2e-3, "the anchor reads the content before the fill above it");
+    assert!((at(&mut s, Channel::Height, 200.0, 200.0)[0] - 0.8).abs() < 2e-3);
+    // Moved to the top of the content stack, it records the layer's full result again.
+    execute(&mut s, "effect.remove", &json!({"effect": anchor.0})).unwrap();
+    let end = id(execute(&mut s, "effect.add.anchor", &json!({"layer": low.0})).unwrap(), "effect");
+    execute(&mut s, "layer.fill.set", &json!({"layer": reader.0, "channel": "roughness", "anchor": end.0, "anchorChannel": "height"})).unwrap();
+    assert!((at(&mut s, Channel::Roughness, 200.0, 200.0)[0] - 0.8).abs() < 2e-3);
+}
+
+#[test]
+fn instances_show_their_source_in_sets_of_another_resolution() {
+    let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 256).unwrap();
+    s.update();
+    let src = id(execute(&mut s, "layer.add.paint", &Value::Null).unwrap(), "layer");
+    execute(&mut s, "tool.material", &json!({"channel": "baseColor", "color": [1.0, 0.0, 0.0]})).unwrap();
+    execute(&mut s, "tool.brush", &json!({"size": 100, "hardness": 100})).unwrap();
+    let pts: Vec<[f32; 2]> = (0..=20).flat_map(|i| (0..=20).map(move |j| [i as f32 / 20.0, j as f32 / 20.0])).collect();
+    execute(&mut s, "tool.strokeUv", &json!({"points": pts})).unwrap();
+    execute(&mut s, "layer.instance", &json!({"layer": src.0, "ts": 1})).unwrap();
+    let reds = |s: &mut Session| {
+        s.update();
+        let c = &s.caches[1];
+        let (w, h) = c.size;
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| c.gbuf.tri[(y * w + x) as usize] != NO_TRI && red(c.composite.value(Channel::BaseColor, x, y)))
+            .count()
+    };
+    let same = reds(&mut s);
+    assert!(same > 1000, "{same}");
+    execute(&mut s, "textureSet.resolution", &json!({"ts": 1, "resolution": 128})).unwrap();
+    let half = reds(&mut s);
+    assert!(half * 5 > same && half * 3 < same, "about a quarter of the texels: {same} -> {half}");
+}

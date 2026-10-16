@@ -11,7 +11,7 @@ use texturecraft_paint::{
     rasterize,
 };
 
-use crate::session::{ActiveStroke, FillMode, Session, StackTarget, Tool};
+use crate::session::{ActiveStroke, CloneFrom, FillMode, Session, StackTarget, Tool};
 use crate::{EngineError, Result};
 
 impl Session {
@@ -104,6 +104,13 @@ impl Session {
             // Clone and smudge read the composite: bring it up to date first.
             self.update();
         }
+        // Cloning from the selected layer reads that layer alone.
+        let layer_source = match self.selected_layer() {
+            Some(id) if pickup.is_some() && tool == Tool::Clone && self.tool.clone_from == CloneFrom::Layer => {
+                Some(self.flatten(ts, id).ok_or_else(|| EngineError::Other("clone from a paint or fill layer (folders have no content of their own)".into()))?)
+            }
+            _ => None,
+        };
         let before = self.doc.clone();
         let target = if quick_mask {
             None
@@ -151,7 +158,10 @@ impl Session {
                 }
                 m => m,
             };
-            canvas.pickup = Some(Pickup::new(mode, cache.composite.clone(), cache.gbuf.clone(), values.keys().copied()));
+            canvas.pickup = Some(match &layer_source {
+                Some(flat) => Pickup::from_layer(mode, flat, size, cache.gbuf.clone(), values.keys().copied()),
+                None => Pickup::new(mode, cache.composite.clone(), cache.gbuf.clone(), values.keys().copied()),
+            });
             if tool == Tool::Clone
                 && let Some(src) = self.tool.clone_source.as_mut()
             {

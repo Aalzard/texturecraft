@@ -4,6 +4,7 @@
 use rayon::prelude::*;
 use texturecraft_engine::compose::{DisplayKind, all_tiles, tile_bytes};
 use texturecraft_engine::{Session, ViewMode};
+use texturecraft_render::gpu_trace::GpuTracer;
 use texturecraft_render::trace::{TraceDisplay, TraceScene, TraceSet, TraceSettings, Tracer};
 use texturecraft_render::{Frame, Shade, ViewKind};
 
@@ -13,12 +14,14 @@ pub struct Gpu {
     mesh_id: u64,
     sets: Vec<((u32, u32), usize)>,
     env: String,
+    /// The GPU path tracer, created by the first [`Gpu::path_trace`].
+    tracer: Option<GpuTracer>,
 }
 
 impl Gpu {
     /// Errors when there is no GPU (or software) adapter.
     pub fn new() -> Result<Gpu, String> {
-        Ok(Gpu { h: texturecraft_render::headless::Headless::new()?, mesh_id: 0, sets: Vec::new(), env: String::new() })
+        Ok(Gpu { h: texturecraft_render::headless::Headless::new()?, mesh_id: 0, sets: Vec::new(), env: String::new(), tracer: None })
     }
 
     pub fn adapter(&self) -> &str {
@@ -84,11 +87,30 @@ impl Gpu {
         let frame = Frame { view_id: 1, size, kind, camera, shade: shade(s), visible: s.doc.project.texture_sets.iter().map(|t| t.visible).collect() };
         self.h.render(&frame)
     }
+
+    /// [`path_trace`] on the GPU (compute shaders); errors when the adapter or the scene does
+    /// not allow it.
+    pub fn path_trace(
+        &mut self,
+        s: &mut Session,
+        size: [u32; 2],
+        camera: texturecraft_engine::geom::OrbitCamera,
+        samples: u32,
+        settings: &TraceSettings,
+    ) -> Result<(u32, u32, Vec<u8>), String> {
+        self.sync(s);
+        let (scene, display) = trace_inputs(s);
+        let h = &self.h;
+        let tracer = match &mut self.tracer {
+            Some(t) => t,
+            None => self.tracer.insert(GpuTracer::new(&h.device)?),
+        };
+        tracer.render(&h.device, &h.queue, &h.renderer, &scene, &camera, settings, &display, size, samples)
+    }
 }
 
-/// A progressive CPU path trace of the session's 3D view (the app's Rendering mode), finished
-/// after `samples` passes and denoised; RGBA8 (sRGB) pixels.
-pub fn path_trace(s: &mut Session, size: [u32; 2], camera: texturecraft_engine::geom::OrbitCamera, samples: u32, settings: &TraceSettings) -> (u32, u32, Vec<u8>) {
+/// The session's 3D view as the path tracers see it, and how Rendering mode shows it (denoised).
+fn trace_inputs(s: &mut Session) -> (TraceScene, TraceDisplay) {
     s.update();
     let sets = s
         .doc
@@ -101,11 +123,24 @@ pub fn path_trace(s: &mut Session, size: [u32; 2], camera: texturecraft_engine::
     let d = &s.doc.project.display;
     let env_image = d.environment_resource().and_then(|n| s.images.get(n));
     let scene = TraceScene::for_display(s.mesh.clone(), s.bvh.clone(), sets, d, env_image.map(|i| i.as_ref()));
+    (scene, TraceDisplay { denoise: true, ..TraceDisplay::from_display(d) })
+}
+
+/// A progressive CPU path trace of the session's 3D view (the app's Rendering mode), finished
+/// after `samples` passes and denoised; RGBA8 (sRGB) pixels.
+pub fn path_trace(
+    s: &mut Session,
+    size: [u32; 2],
+    camera: texturecraft_engine::geom::OrbitCamera,
+    samples: u32,
+    settings: &TraceSettings,
+) -> (u32, u32, Vec<u8>) {
+    let (scene, display) = trace_inputs(s);
     let mut tracer = Tracer::new(size[0], size[1]);
     for _ in 0..samples {
         tracer.pass(&scene, &camera, settings);
     }
-    (tracer.width, tracer.height, tracer.rgba8(&TraceDisplay { denoise: true, ..TraceDisplay::from_display(d) }))
+    (tracer.width, tracer.height, tracer.rgba8(&display))
 }
 
 /// How the viewport shades the session (the app's `viewport::shade`).
@@ -122,7 +157,7 @@ pub fn shade(s: &Session) -> Shade {
         channel,
         // The app's default (only the 2D view draws it).
         wireframe: true,
-        ..Shade::from_display(&s.doc.project.display)
+        ..Shade::from_project(&s.doc.project)
     }
 }
 
@@ -164,6 +199,35 @@ mod tests {
         assert_ne!(base, lit, "the HDR environment changes the render");
         let warm = |px: &[u8]| px.chunks(4).map(|p| p[0] as f32 - p[2] as f32).sum::<f32>();
         assert!(warm(&lit) > warm(&base), "the orange sky warms the image");
+    }
+
+    #[test]
+    fn gpu_path_trace_matches_the_cpu_on_the_material_ball() {
+        let mesh = texturecraft_engine::geom::primitives::material_ball();
+        let mut s = Session::new_project("t", mesh, "builtin:material_ball", None, 256).unwrap();
+        execute(&mut s, "layer.add.fill", &json!({"color": [0.75, 0.42, 0.23], "roughness": 0.3, "metallic": 0.4})).unwrap();
+        let Ok(mut gpu) = Gpu::new() else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let (cam, settings, size) = (s.camera, TraceSettings { bounces: 4 }, [64, 48]);
+        let g = match gpu.path_trace(&mut s, size, cam, 384, &settings) {
+            Ok((_, _, px)) => px,
+            Err(e) => {
+                eprintln!("skipping: {e}");
+                return;
+            }
+        };
+        let (_, _, c) = path_trace(&mut s, size, cam, 384, &settings);
+        // Mean luminance per 8×8 block (8-bit levels) agrees.
+        let lum = |img: &[u8], x: usize, y: usize| {
+            let p = &img[(y * 64 + x) * 4..(y * 64 + x) * 4 + 3];
+            0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32
+        };
+        let block = |img: &[u8], bx: usize, by: usize| (0..64).map(|i| lum(img, bx * 8 + i % 8, by * 8 + i / 8)).sum::<f32>() / 64.0;
+        let worst = (0..6).flat_map(|by| (0..8).map(move |bx| (bx, by))).map(|(bx, by)| (block(&g, bx, by) - block(&c, bx, by)).abs()).fold(0.0, f32::max);
+        assert!(worst < 4.0, "worst block differs by {worst} levels");
+        assert!(g.chunks(4).any(|p| p[0] > p[2] + 40), "the orange fill shows");
     }
 
     #[test]

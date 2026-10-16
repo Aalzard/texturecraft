@@ -39,6 +39,16 @@ pub struct RenderOptions {
     pub samples: Option<u32>,
     /// Light bounces for path tracing (default 6).
     pub bounces: Option<u32>,
+    /// Path trace on the CPU even when a GPU with compute shaders exists.
+    pub cpu: bool,
+}
+
+/// A PNG render and what drew it (the GPU adapter, or the CPU path tracer).
+pub struct Rendered {
+    pub width: u32,
+    pub height: u32,
+    pub png: Vec<u8>,
+    pub by: String,
 }
 
 /// Most samples per pixel a path-traced render may take.
@@ -233,8 +243,9 @@ impl Headless {
         Ok(json!({ "files": written, "warnings": warnings }))
     }
 
-    /// Render the session to PNG: `(width, height, png)`. Errors without a GPU adapter.
-    pub fn render_png(&mut self, o: &RenderOptions) -> Result<(u32, u32, Vec<u8>), AutomationError> {
+    /// Render the session to PNG. The viewport needs a GPU adapter; path tracing (`samples`)
+    /// runs on the GPU when it has compute shaders and falls back to the CPU.
+    pub fn render_png(&mut self, o: &RenderOptions) -> Result<Rendered, AutomationError> {
         let s = &self.session;
         let kind = match o.view.as_deref().unwrap_or("3d") {
             "3d" => ViewKind::Scene,
@@ -261,12 +272,34 @@ impl Headless {
                 return Err(bad(format!("path tracing renders the 3D view with 1 to {MAX_TRACE_SAMPLES} samples")));
             }
             let settings = texturecraft_render::trace::TraceSettings { bounces: o.bounces.unwrap_or(6).clamp(1, 32) };
-            let (w, h, rgba) = crate::render::path_trace(&mut self.session, size, camera, samples, &settings);
+            let mut traced = None;
+            let mut by = "CPU path tracer".to_string();
+            if !o.cpu
+                && let Ok(gpu) = self.gpu.get_or_insert_with(Gpu::new)
+            {
+                // Last-resort guard, as for viewport renders below.
+                let session = &mut self.session;
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu.path_trace(session, size, camera, samples, &settings))) {
+                    Ok(Ok(px)) => {
+                        by = format!("{} (GPU path tracer)", gpu.adapter());
+                        traced = Some(px);
+                    }
+                    Ok(Err(e)) => by = format!("CPU path tracer ({e})"),
+                    Err(_) => {
+                        by = "CPU path tracer (the GPU path tracer failed)".into();
+                        self.gpu = None;
+                    }
+                }
+            }
+            let (w, h, rgba) = match traced {
+                Some(px) => px,
+                None => crate::render::path_trace(&mut self.session, size, camera, samples, &settings),
+            };
             let png = encode_png(w, h, rgba)?;
             if !self.trusted() {
                 check_png(png.len())?;
             }
-            return Ok((w, h, png));
+            return Ok(Rendered { width: w, height: h, png, by });
         }
         let gpu = match self.gpu.get_or_insert_with(Gpu::new) {
             Ok(g) => g,
@@ -287,7 +320,7 @@ impl Headless {
         if !self.trusted() {
             check_png(png.len())?;
         }
-        Ok((w, h, png))
+        Ok(Rendered { width: w, height: h, png, by: self.adapter().unwrap_or("GPU").to_string() })
     }
 
     /// The GPU adapter used for renders, if one was created.

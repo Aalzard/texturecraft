@@ -3,7 +3,9 @@
 //! own render pass.
 //!
 //! Per view and frame: the scene pass (MSAA, linear HDR premultiplied by scene coverage, resolved)
-//! → the bloom pyramid (only when bloom is on) → the post pass (flat studio backdrop, exposure,
+//! → the scene effects (only when on: a G-buffer pass, the screen-space subsurface blur and the
+//! depth of field, see fx.wgsl) → the bloom pyramid (only when bloom is on) → the post pass (flat
+//! studio backdrop, exposure,
 //! tone mapping, effects, sRGB) into the view's RGBA8 target that [`Renderer::blit`] and
 //! [`Renderer::read_view`] use. The key-light shadow map is re-rendered only when the mesh, the
 //! light direction or the visible texture sets change.
@@ -17,7 +19,7 @@ use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 use texturecraft_compose::{DisplayKind, ImageRes};
-use texturecraft_core::{DisplaySettings, ToneMapping};
+use texturecraft_core::{Channel, DisplaySettings, Project, ToneMapping};
 use texturecraft_geom::glam::{Mat4, Vec3};
 use texturecraft_geom::{Mesh, OrbitCamera};
 use texturecraft_texel::TILE;
@@ -39,6 +41,8 @@ const BLOOM_THRESHOLD: f32 = 1.0;
 const BLOOM_GAIN: f32 = 0.15;
 /// Frames averaged by idle accumulation (temporal anti-aliasing).
 pub const TAA_SAMPLES: u32 = 16;
+/// Largest depth of field blur radius, as a fraction of the view height.
+const MAX_COC: f32 = 0.03;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -56,6 +60,7 @@ struct GlobalsRaw {
     shadow: [f32; 4],
     material: [f32; 4],
     scatter: [f32; 4],
+    fwd: [f32; 4],
 }
 
 /// The post pass uniform (see `Post` in post.wgsl).
@@ -64,6 +69,9 @@ struct GlobalsRaw {
 struct PostRaw {
     a: [f32; 4],
     b: [f32; 4],
+    c: [f32; 4],
+    d: [f32; 4],
+    e: [f32; 4],
 }
 
 #[repr(C)]
@@ -130,6 +138,15 @@ pub struct Shade {
     /// Per-channel diffuse wrap where the scattering weight is 1 (0 = plain Lambert), see
     /// [`scatter_wrap`].
     pub scatter: [f32; 3],
+    /// Index of refraction of the Transmission channel.
+    pub ior: f32,
+    /// Depth of field (3D material view): focus depth along the view axis (0: the orbit
+    /// target) and lens radius as a fraction of the mesh's bounding radius.
+    pub dof: Option<[f32; 2]>,
+    /// Screen-space subsurface blur of the scattering diffuse light (3D material view): mean
+    /// free path per color channel as a fraction of the mesh's bounding radius. Set by
+    /// [`Shade::from_project`] for projects with a Scattering weight channel.
+    pub sss_blur: Option<[f32; 3]>,
 }
 
 /// The viewport's subsurface scattering approximation: the diffuse lighting wraps around the
@@ -163,8 +180,18 @@ impl Shade {
             parallax: d.parallax,
             taa: d.taa,
             scatter: scatter_wrap(d),
+            ior: d.ior,
+            dof: d.dof.enabled.then_some([d.dof.focus_distance, d.dof.aperture]),
             ..Shade::default()
         }
+    }
+
+    /// [`Shade::from_display`] of the project's settings, plus the subsurface blur where a
+    /// texture set has the Scattering weight channel.
+    pub fn from_project(p: &Project) -> Shade {
+        let d = &p.display;
+        let scatters = d.scatter_radius > 0.0 && p.texture_sets.iter().any(|t| t.has_channel(Channel::ScatterWeight));
+        Shade { sss_blur: scatters.then(|| d.scatter_color.map(|c| c.max(0.0) * d.scatter_radius)), ..Shade::from_display(d) }
     }
 }
 
@@ -194,6 +221,9 @@ impl Default for Shade {
             parallax: false,
             taa: false,
             scatter: scatter_wrap(&DisplaySettings::default()),
+            ior: 1.5,
+            dof: None,
+            sss_blur: None,
         }
     }
 }
@@ -260,7 +290,11 @@ impl Tex {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            // COPY_SRC: the GPU path tracer copies the display textures into its arrays.
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -292,6 +326,21 @@ struct MeshGpu {
     /// Bounding sphere (center, radius) for fitting the shadow map.
     center: Vec3,
     radius: f32,
+}
+
+/// The scene effect targets of a view (full resolution unless noted), created the first time
+/// depth of field or the subsurface blur is used.
+struct Fx {
+    /// G-buffer: scattering diffuse light, view depth (see `fs_gbuf`), and its depth buffer.
+    gbuf: wgpu::TextureView,
+    gbuf_depth: wgpu::TextureView,
+    /// The horizontal subsurface pass, then the depth of field result.
+    a: wgpu::TextureView,
+    /// The scene with the subsurface blur.
+    b: wgpu::TextureView,
+    /// Half resolution: the gathered blur and the near-field coverage.
+    half: wgpu::TextureView,
+    near: wgpu::TextureView,
 }
 
 /// The bloom pyramid of a view, created the first time bloom is used.
@@ -326,6 +375,7 @@ struct ViewTargets {
     post_buf: wgpu::Buffer,
     post_bg: wgpu::BindGroup,
     bloom: Option<Bloom>,
+    fx: Option<Fx>,
     blit_buf: wgpu::Buffer,
     blit_bg: wgpu::BindGroup,
     /// Set by [`Renderer::prepare`]: the view has content to blit.
@@ -363,6 +413,12 @@ pub struct Renderer {
     post_pipeline: wgpu::RenderPipeline,
     /// Bright pass + first downsample, downsample, additive upsample.
     bloom_pipelines: [wgpu::RenderPipeline; 3],
+    /// The G-buffer of the scene effects (`fs_gbuf`).
+    gbuf_pipeline: wgpu::RenderPipeline,
+    /// Subsurface blur (horizontal, vertical), depth of field gather and composite (fx.wgsl).
+    sss_pipelines: [wgpu::RenderPipeline; 2],
+    dof_gather_pipeline: wgpu::RenderPipeline,
+    dof_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     mip_pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     util_module: wgpu::ShaderModule,
@@ -416,10 +472,10 @@ fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn display_format(k: DisplayKind) -> wgpu::TextureFormat {
+pub(crate) fn display_format(k: DisplayKind) -> wgpu::TextureFormat {
     match k {
         DisplayKind::BaseColor | DisplayKind::Emissive | DisplayKind::Sheen => wgpu::TextureFormat::Rgba8UnormSrgb,
-        DisplayKind::Orm | DisplayKind::Normal | DisplayKind::Lobes => wgpu::TextureFormat::Rgba8Unorm,
+        DisplayKind::Orm | DisplayKind::Normal | DisplayKind::Lobes | DisplayKind::Extra => wgpu::TextureFormat::Rgba8Unorm,
         DisplayKind::Height => wgpu::TextureFormat::Rgba16Float,
     }
 }
@@ -427,7 +483,7 @@ fn display_format(k: DisplayKind) -> wgpu::TextureFormat {
 /// Textures of the optional lobe channels: most sets never use them, so they cost no memory or
 /// bandwidth (a 1×1 neutral texture) until painted.
 fn lazy(k: DisplayKind) -> bool {
-    matches!(k, DisplayKind::Lobes | DisplayKind::Sheen)
+    matches!(k, DisplayKind::Lobes | DisplayKind::Sheen | DisplayKind::Extra)
 }
 
 /// A `w × h` texture filled with `texel`.
@@ -586,7 +642,7 @@ impl Renderer {
         let shader = |label: &str, source: &str| device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) });
         let module = shader("tc_mesh", include_str!("shaders/mesh.wgsl"));
         let util_module = shader("tc_util", include_str!("shaders/util.wgsl"));
-        let post_module = shader("tc_post", concat!(include_str!("shaders/util.wgsl"), include_str!("shaders/post.wgsl")));
+        let post_module = shader("tc_post", concat!(include_str!("shaders/util.wgsl"), include_str!("shaders/post.wgsl"), include_str!("shaders/fx.wgsl")));
         let shadow_module = shader("tc_shadow", include_str!("shaders/shadow.wgsl"));
         let bgl = |label: &str, entries: &[wgpu::BindGroupLayoutEntry]| device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(label), entries });
         let globals_bgl = bgl(
@@ -605,7 +661,7 @@ impl Renderer {
         let set_bgl = bgl("tc_set", &set_entries);
         let blit_bgl = bgl("tc_blit", &[tex_entry(0), sampler_entry(1), uniform_entry(2)]);
         let mip_bgl = bgl("tc_mip", &[tex_entry(0), sampler_entry(1)]);
-        let fx_bgl = bgl("tc_fx", &[tex_entry(0), sampler_entry(1), uniform_entry(3), tex_entry(4)]);
+        let fx_bgl = bgl("tc_fx", &[tex_entry(0), sampler_entry(1), uniform_entry(3), tex_entry(4), tex_entry(5), tex_entry(6)]);
         let shadow_bgl = bgl("tc_shadow", &[uniform_entry(0)]);
         let pl = |label: &str, groups: &[Option<&wgpu::BindGroupLayout>]| {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: groups, immediate_size: 0 })
@@ -636,6 +692,26 @@ impl Renderer {
         let post_pipeline = pipeline(device, "tc_post", &fx_layout, &post_module, "vs_full", &[], Some(("fs_post", COLOR_FORMAT, None)), 1, None);
         let bloom_pipelines = [("fs_bloom_pre", None), ("fs_bloom_down", None), ("fs_bloom_up", Some(ADDITIVE))]
             .map(|(fs, blend)| pipeline(device, "tc_bloom", &fx_layout, &post_module, "vs_full", &[], hdr(fs, blend), 1, None));
+        let gbuf_pipeline = pipeline(device, "tc_gbuf", &layout, &module, "vs_mesh", &vb, hdr("fs_gbuf", None), 1, Some(depth_state(true, wgpu::CompareFunction::Less)));
+        let sss_pipelines = ["fs_sss_h", "fs_sss_v"].map(|fs| pipeline(device, "tc_sss", &fx_layout, &post_module, "vs_full", &[], hdr(fs, None), 1, None));
+        let dof_pipeline = pipeline(device, "tc_dof", &fx_layout, &post_module, "vs_full", &[], hdr("fs_dof", None), 1, None);
+        let dof_target = Some(wgpu::ColorTargetState { format: hdr_format, blend: None, write_mask: wgpu::ColorWrites::ALL });
+        let dof_gather_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("tc_dof_gather"),
+            layout: Some(&fx_layout),
+            vertex: wgpu::VertexState { module: &post_module, entry_point: Some("vs_full"), buffers: &[], compilation_options: Default::default() },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &post_module,
+                entry_point: Some("fs_dof_gather"),
+                targets: &[dof_target.clone(), dof_target],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let shadow_depth = wgpu::DepthStencilState {
             bias: wgpu::DepthBiasState { constant: 0, slope_scale: 1.5, clamp: 0.0 },
             ..depth_state(true, wgpu::CompareFunction::Less)
@@ -709,6 +785,10 @@ impl Renderer {
             blit_pipeline,
             post_pipeline,
             bloom_pipelines,
+            gbuf_pipeline,
+            sss_pipelines,
+            dof_gather_pipeline,
+            dof_pipeline,
             shadow_pipeline,
             accum_pipeline,
             mip_pipelines: HashMap::new(),
@@ -734,6 +814,17 @@ impl Renderer {
 
     pub fn environment_name(&self) -> &str {
         &self.env_name
+    }
+
+    /// Each texture set's display textures in [`DisplayKind::ALL`] order (lazy kinds may still be
+    /// 1×1 placeholders), for the GPU path tracer.
+    pub fn display_textures(&self) -> Vec<Vec<&wgpu::Texture>> {
+        self.sets.iter().map(|s| s.tex.iter().take(DisplayKind::ALL.len()).map(|t| &t.texture).collect()).collect()
+    }
+
+    /// Changes whenever what the views show changes (uploads, mesh, environment).
+    pub fn content_rev(&self) -> u64 {
+        self.content_rev
     }
 
     /// Use environment `name`: with `image`, that equirect image (an imported `.hdr`/`.exr`, or
@@ -978,8 +1069,10 @@ impl Renderer {
         }
     }
 
-    /// Effect bind group (`fx_bgl`): source texture, the post uniform, an extra texture.
-    fn fx_bind_group(&self, device: &wgpu::Device, src: &wgpu::TextureView, aux: &wgpu::TextureView, post: &wgpu::Buffer) -> wgpu::BindGroup {
+    /// Effect bind group (`fx_bgl`): source texture, the post uniform, up to three extra
+    /// textures (`fx_a`, `fx_b`, `fx_c`; missing ones read black).
+    fn fx_bind_group(&self, device: &wgpu::Device, src: &wgpu::TextureView, extra: &[&wgpu::TextureView], post: &wgpu::Buffer) -> wgpu::BindGroup {
+        let tex = |i: usize| wgpu::BindingResource::TextureView(extra.get(i).copied().unwrap_or(&self.black));
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tc_fx"),
             layout: &self.fx_bgl,
@@ -987,7 +1080,9 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 wgpu::BindGroupEntry { binding: 3, resource: post.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(aux) },
+                wgpu::BindGroupEntry { binding: 4, resource: tex(0) },
+                wgpu::BindGroupEntry { binding: 5, resource: tex(1) },
+                wgpu::BindGroupEntry { binding: 6, resource: tex(2) },
             ],
         })
     }
@@ -1029,7 +1124,7 @@ impl Renderer {
             size,
             msaa: target_view(device, "tc_msaa", size, self.hdr_format, MSAA),
             depth: target_view(device, "tc_depth", size, DEPTH_FORMAT, MSAA),
-            post_bg: self.fx_bind_group(device, &accum, &self.black, &post_buf),
+            post_bg: self.fx_bind_group(device, &accum, &[], &post_buf),
             hdr,
             accum,
             accum_bg,
@@ -1041,6 +1136,7 @@ impl Renderer {
             globals_bg: None,
             post_buf,
             bloom: None,
+            fx: None,
             blit_buf,
             blit_bg,
             ready: false,
@@ -1051,18 +1147,35 @@ impl Renderer {
     fn create_bloom(&self, device: &wgpu::Device, v: &ViewTargets) -> (Bloom, wgpu::BindGroup) {
         let levels: Vec<wgpu::TextureView> =
             (1..=BLOOM_LEVELS).map(|i| target_view(device, "tc_bloom", [(v.size[0] >> i).max(1), (v.size[1] >> i).max(1)], self.hdr_format, 1)).collect();
-        let fx = |src: &wgpu::TextureView| self.fx_bind_group(device, src, &self.black, &v.post_buf);
+        let fx = |src: &wgpu::TextureView| self.fx_bind_group(device, src, &[], &v.post_buf);
         let down = std::iter::once(&v.accum).chain(&levels).take(levels.len()).map(fx).collect();
         let up = levels.iter().skip(1).map(fx).collect();
-        let post_bg = self.fx_bind_group(device, &v.accum, levels.first().unwrap_or(&self.black), &v.post_buf);
+        let post_bg = self.fx_bind_group(device, &v.accum, &levels.iter().take(1).collect::<Vec<_>>(), &v.post_buf);
         (Bloom { levels, down, up }, post_bg)
     }
 
-    fn targets(&mut self, device: &wgpu::Device, id: u64, size: [u32; 2], bloom: bool) -> Option<&mut ViewTargets> {
+    fn create_fx(&self, device: &wgpu::Device, size: [u32; 2]) -> Fx {
+        let full = |label| target_view(device, label, size, self.hdr_format, 1);
+        let half_size = [(size[0] / 2).max(1), (size[1] / 2).max(1)];
+        Fx {
+            gbuf: full("tc_gbuf"),
+            gbuf_depth: target_view(device, "tc_gbuf_depth", size, DEPTH_FORMAT, 1),
+            a: full("tc_fx_a"),
+            b: full("tc_fx_b"),
+            half: target_view(device, "tc_dof_half", half_size, self.hdr_format, 1),
+            near: target_view(device, "tc_dof_near", half_size, self.hdr_format, 1),
+        }
+    }
+
+    fn targets(&mut self, device: &wgpu::Device, id: u64, size: [u32; 2], bloom: bool, fx: bool) -> Option<&mut ViewTargets> {
         let size = [size[0].clamp(1, 8192), size[1].clamp(1, 8192)];
         if self.views.get(&id).is_none_or(|v| v.size != size) {
             let v = self.create_targets(device, size);
             self.views.insert(id, v);
+        }
+        if fx && self.views.get(&id).is_some_and(|v| v.fx.is_none()) {
+            let f = self.create_fx(device, size);
+            self.views.get_mut(&id)?.fx = Some(f);
         }
         if bloom
             && let Some(v) = self.views.get(&id)
@@ -1206,6 +1319,23 @@ impl Renderer {
         // ray grid would show a single flat environment color).
         let bg_vp = OrbitCamera { ortho: false, ..frame.camera }.view_proj(aspect);
         let e = frame.camera.eye();
+        // Scene effects (3D material view; they need float targets for depths and signed light).
+        let scene_fx = !data && frame.kind == ViewKind::Scene && self.hdr_format == HDR_FORMAT && self.mesh.is_some();
+        let dof = s.dof.filter(|_| scene_fx);
+        let sss = s.sss_blur.filter(|m| scene_fx && m.iter().any(|v| *v > 0.0));
+        let fx_on = dof.is_some() || sss.is_some();
+        let cam = &frame.camera;
+        let half_h = (cam.fov.clamp(5.0, 150.0).to_radians() * 0.5).tan();
+        let height = frame.size[1].max(1) as f32;
+        // Pixels per world unit at view depth z: k / z in perspective, k in orthographic views.
+        let k = if cam.ortho { height / (2.0 * cam.distance.max(1e-6) * half_h) } else { height / (2.0 * half_h) };
+        let ppw = |z: f32| if cam.ortho { k } else { k / z.max(1e-6) };
+        let dof_c = dof.map_or([0.0; 4], |[focus, aperture]| {
+            let f = if focus > 0.0 { focus } else { cam.distance };
+            [aperture.max(0.0) * radius * ppw(f), f, MAX_COC * height, sample as f32]
+        });
+        let sss_d = sss.map_or([0.0; 4], |m| [m[0] * radius, m[1] * radius, m[2] * radius, k]);
+        let fwd = cam.forward();
         let raw = GlobalsRaw {
             view_proj: vp.to_cols_array_2d(),
             inv_view_proj: bg_vp.inverse().to_cols_array_2d(),
@@ -1219,15 +1349,19 @@ impl Renderer {
             light_vp: shadow_vp.unwrap_or(Mat4::IDENTITY).to_cols_array_2d(),
             // Normal offset: 1.5 shadow texels of the light frustum (2 × radius wide).
             shadow: [if shadow_vp.is_some() { 1.0 } else { 0.0 }, 1.0 / SHADOW_SIZE as f32, radius * 3.0 / SHADOW_SIZE as f32, 0.0],
-            material: [if s.spec_gloss { 1.0 } else { 0.0 }, if s.parallax { 1.0 } else { 0.0 }, sample as f32, 0.0],
-            scatter: [s.scatter[0], s.scatter[1], s.scatter[2], 0.0],
+            material: [if s.spec_gloss { 1.0 } else { 0.0 }, if s.parallax { 1.0 } else { 0.0 }, sample as f32, s.ior],
+            scatter: [s.scatter[0], s.scatter[1], s.scatter[2], if sss.is_some() { 1.0 } else { 0.0 }],
+            fwd: [fwd.x, fwd.y, fwd.z, 0.0],
         };
         let flag = |b: bool| if b { 1.0 } else { 0.0 };
         let post = PostRaw {
             a: [2f32.powf(s.exposure_ev), flag(s.aces), flag(data), fx(s.bloom) * BLOOM_GAIN],
             b: [fx(s.vignette), fx(s.sharpen), fx(s.grain), BLOOM_THRESHOLD],
+            c: dof_c,
+            d: sss_d,
+            e: [flag(cam.ortho), 0.0, 0.0, 0.0],
         };
-        let Some(v) = self.targets(device, frame.view_id, frame.size, bloom) else { return };
+        let Some(v) = self.targets(device, frame.view_id, frame.size, bloom, fx_on) else { return };
         queue.write_buffer(&v.globals, 0, bytemuck::bytes_of(&raw));
         queue.write_buffer(&v.post_buf, 0, bytemuck::bytes_of(&post));
         v.ready = true;
@@ -1235,11 +1369,32 @@ impl Renderer {
         v.samples = sample;
         let Some(v) = self.views.get(&frame.view_id) else { return };
         let Some(globals_bg) = v.globals_bg.as_ref() else { return };
-        if sample == 0 {
-            self.scene_pass(encoder, v, &v.accum, globals_bg, frame);
-        } else {
-            self.scene_pass(encoder, v, &v.hdr, globals_bg, frame);
-            fullscreen_blend(encoder, "tc_accum", &v.accum, wgpu::LoadOp::Load, &self.accum_pipeline, &v.accum_bg, 1.0 / f64::from(sample + 1));
+        let weight = 1.0 / f64::from(sample + 1);
+        match v.fx.as_ref().filter(|_| fx_on) {
+            // The effects run on every frame before it joins the average, so idle accumulation
+            // also smooths the depth of field's sampling pattern (turned each frame). Their
+            // G-buffer (unjittered) stays valid while the view accumulates.
+            Some(f) => {
+                self.scene_pass(encoder, v, &v.hdr, globals_bg, frame);
+                if sample == 0 {
+                    self.gbuf_pass(encoder, f, globals_bg, frame);
+                }
+                let out = self.scene_fx(device, encoder, v, f, sss.is_some(), dof.is_some());
+                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("tc_accum_fx"),
+                    layout: &self.mip_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(out) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    ],
+                });
+                fullscreen_blend(encoder, "tc_accum", &v.accum, wgpu::LoadOp::Load, &self.accum_pipeline, &bg, weight);
+            }
+            None if sample == 0 => self.scene_pass(encoder, v, &v.accum, globals_bg, frame),
+            None => {
+                self.scene_pass(encoder, v, &v.hdr, globals_bg, frame);
+                fullscreen_blend(encoder, "tc_accum", &v.accum, wgpu::LoadOp::Load, &self.accum_pipeline, &v.accum_bg, weight);
+            }
         }
         if bloom && let Some(b) = &v.bloom {
             let [pre, down, up] = &self.bloom_pipelines;
@@ -1251,6 +1406,81 @@ impl Renderer {
             }
         }
         fullscreen(encoder, "tc_post", &v.resolve_view, CLEAR, &self.post_pipeline, &v.post_bg);
+    }
+
+    /// The scene effects' G-buffer: the mesh again, single-sampled, into `f.gbuf`.
+    fn gbuf_pass(&self, encoder: &mut wgpu::CommandEncoder, f: &Fx, globals_bg: &wgpu::BindGroup, frame: &Frame) {
+        let Some(m) = &self.mesh else { return };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("tc_gbuf"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &f.gbuf,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations { load: CLEAR, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &f.gbuf_depth,
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.gbuf_pipeline);
+        pass.set_bind_group(0, globals_bg, &[]);
+        pass.set_vertex_buffer(0, m.vb.slice(..));
+        pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
+        for (range, set) in self.drawable(&m.draws, &frame.visible, None) {
+            pass.set_bind_group(1, &set.bind_group, &[]);
+            pass.draw_indexed(range, 0, 0..1);
+        }
+    }
+
+    /// Subsurface blur and depth of field over this frame's scene (`v.hdr`); returns the result.
+    fn scene_fx<'a>(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        v: &'a ViewTargets,
+        f: &'a Fx,
+        sss: bool,
+        dof: bool,
+    ) -> &'a wgpu::TextureView {
+        let bg = |src: &wgpu::TextureView, extra: &[&wgpu::TextureView]| self.fx_bind_group(device, src, extra, &v.post_buf);
+        let mut scene = &v.hdr;
+        if sss {
+            let [h, vert] = &self.sss_pipelines;
+            fullscreen(encoder, "tc_sss_h", &f.a, CLEAR, h, &bg(&f.gbuf, &[]));
+            fullscreen(encoder, "tc_sss_v", &f.b, CLEAR, vert, &bg(&f.a, &[&v.hdr]));
+            scene = &f.b;
+        }
+        if dof {
+            let target = |view| {
+                Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations { load: CLEAR, store: wgpu::StoreOp::Store },
+                })
+            };
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("tc_dof_gather"),
+                color_attachments: &[target(&f.half), target(&f.near)],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.dof_gather_pipeline);
+            pass.set_bind_group(0, &bg(scene, &[&f.gbuf]), &[]);
+            pass.draw(0..3, 0..1);
+            drop(pass);
+            fullscreen(encoder, "tc_dof", &f.a, CLEAR, &self.dof_pipeline, &bg(scene, &[&f.half, &f.gbuf, &f.near]));
+            scene = &f.a;
+        }
+        scene
     }
 
     /// Background, mesh and wireframe into the view's MSAA HDR target, resolved to `resolve`.
@@ -1325,31 +1555,7 @@ impl Renderer {
 
     /// Read back the rendered view as tightly packed RGBA8 (sRGB-encoded), blocking.
     pub fn read_view(&self, device: &wgpu::Device, queue: &wgpu::Queue, id: u64) -> Option<(u32, u32, Vec<u8>)> {
-        let v = self.views.get(&id)?;
-        let (w, h) = (v.size[0], v.size[1]);
-        let row = (w * 4).next_multiple_of(256);
-        let buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tc_read"),
-            size: (row * h) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("tc_read") });
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo { texture: &v.resolve, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        );
-        queue.submit([enc.finish()]);
-        buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-        let data = buf.slice(..).get_mapped_range().ok()?;
-        let mut out = Vec::with_capacity((w * h * 4) as usize);
-        for y in 0..h as usize {
-            let start = y * row as usize;
-            out.extend_from_slice(data.get(start..start + (w * 4) as usize)?);
-        }
-        Some((w, h, out))
+        crate::readback::Readback::blocking(device, queue, &self.views.get(&id)?.resolve)
     }
 
     /// Forget a view's targets (e.g. a closed panel).

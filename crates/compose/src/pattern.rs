@@ -1,6 +1,6 @@
 //! Procedural patterns and projections.
 
-use texturecraft_core::{Procedural, ProceduralKind, Projection};
+use texturecraft_core::{Decal, Procedural, ProceduralKind, Projection};
 use texturecraft_geom::glam::{Vec2, Vec3};
 use texturecraft_texel::noise;
 
@@ -199,6 +199,8 @@ pub fn procedural(pr: &Procedural, proj: &Projection, c: &Coords) -> f32 {
             let u = b.atan2(a) / std::f32::consts::TAU + 0.5;
             raw(pr.kind, Vec3::new(u * 4.0, h, 0.0) * *scale * s, pr.seed)
         }
+        // `c.uv` is already in the decal's frame (see [`decal_uv`]).
+        Projection::Decal(_) => raw(pr.kind, (c.uv * s).extend(0.0), pr.seed),
     };
     shape(pr, v)
 }
@@ -244,7 +246,46 @@ pub fn image_samples(proj: &Projection, c: &Coords) -> [(Vec2, f32); 3] {
             let u = b.atan2(a) / std::f32::consts::TAU + 0.5;
             one(Vec2::new(u, 0.5 - h * 0.5) * *scale)
         }
+        Projection::Decal(_) => one(c.uv),
     }
+}
+
+/// A decal's frame: origin (center plus offset), unit right, up and normal (None when degenerate).
+pub fn decal_axes(d: &Decal) -> Option<(Vec3, Vec3, Vec3, Vec3)> {
+    if !d.size.iter().all(|v| v.is_finite() && *v > 0.0) {
+        return None;
+    }
+    let n = Vec3::from(d.normal).try_normalize()?;
+    let up0 = (Vec3::from(d.up) - n * n.dot(Vec3::from(d.up))).try_normalize().unwrap_or_else(|| n.any_orthonormal_vector());
+    let right0 = up0.cross(n);
+    let origin = Vec3::from(d.center) + right0 * d.offset[0] + up0 * d.offset[1];
+    let (sn, cs) = d.rotation.to_radians().sin_cos();
+    let right = right0 * cs + up0 * sn;
+    let up = up0 * cs - right0 * sn;
+    origin.is_finite().then_some((origin, right, up, n))
+}
+
+/// The decal's corners in world space (top left, top right, bottom right, bottom left).
+pub fn decal_corners(d: &Decal) -> Option<[Vec3; 4]> {
+    let (o, r, u, _) = decal_axes(d)?;
+    let (hw, hh) = (d.size[0] * 0.5, d.size[1] * 0.5);
+    Some([o - r * hw + u * hh, o + r * hw + u * hh, o + r * hw - u * hh, o - r * hw - u * hh])
+}
+
+/// Where world point `p` with surface normal `nrm` falls in the decal: texture coordinates
+/// (v down) and how much the decal covers it, None outside the frame, behind it, beyond its
+/// depth or on faces turned away. Coverage fades on grazing faces and near the depth limit.
+pub fn decal_uv(d: &Decal, p: Vec3, nrm: Vec3) -> Option<(Vec2, f32)> {
+    let (o, r, u, n) = decal_axes(d)?;
+    let facing = nrm.dot(n);
+    let q = p - o;
+    let (lx, ly, lz) = (q.dot(r) / d.size[0].max(1e-6), q.dot(u) / d.size[1].max(1e-6), q.dot(n).abs());
+    let depth = d.depth.max(1e-6);
+    if facing <= 0.0 || lx.abs() > 0.5 || ly.abs() > 0.5 || lz > depth || !(lx.is_finite() && ly.is_finite()) {
+        return None;
+    }
+    let w = smoothstep(0.0, 0.3, facing) * (1.0 - smoothstep(0.75 * depth, depth, lz));
+    Some((Vec2::new(lx + 0.5, 0.5 - ly), w))
 }
 
 /// World-space noise used by generators (seamless across UV islands).
@@ -264,6 +305,15 @@ mod tests {
             Projection::Planar { scale: 1.0, axis: 1, offset: [0.0; 3] },
             Projection::Spherical { scale: 1.0 },
             Projection::Cylindrical { scale: 1.0, axis: 1 },
+            Projection::Decal(Decal {
+                center: [0.0; 3],
+                normal: [0.0, 0.0, 1.0],
+                up: [0.0, 1.0, 0.0],
+                size: [1.0; 2],
+                rotation: 0.0,
+                offset: [0.0; 2],
+                depth: 1.0,
+            }),
         ];
         for k in ProceduralKind::ALL {
             let pr = Procedural::new(k);
@@ -280,6 +330,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn decals_cover_their_frame_facing_them() {
+        let d = Decal { center: [0.0; 3], normal: [0.0, 0.0, 1.0], up: [0.0, 1.0, 0.0], size: [2.0, 1.0], rotation: 0.0, offset: [0.0; 2], depth: 0.5 };
+        let z = Vec3::Z;
+        let (uv, w) = decal_uv(&d, Vec3::new(0.5, 0.25, 0.0), z).unwrap();
+        assert!((uv - Vec2::new(0.75, 0.25)).length() < 1e-5 && (w - 1.0).abs() < 1e-5, "{uv} {w}");
+        assert!(decal_uv(&d, Vec3::new(1.1, 0.0, 0.0), z).is_none(), "outside the frame");
+        assert!(decal_uv(&d, Vec3::ZERO, -z).is_none(), "back faces");
+        assert!(decal_uv(&d, Vec3::new(0.0, 0.0, 0.6), z).is_none(), "beyond the depth");
+        // Rotated a quarter turn and shifted: the frame turns with it.
+        let r = Decal { rotation: 90.0, offset: [1.0, 0.0], ..d };
+        let (uv, _) = decal_uv(&r, Vec3::new(1.0, 0.9, 0.0), z).unwrap();
+        assert!((uv.x - 0.95).abs() < 1e-4 && (uv.y - 0.5).abs() < 1e-4, "{uv}");
+        let c = decal_corners(&d).unwrap();
+        assert!((c[0] - Vec3::new(-1.0, 0.5, 0.0)).length() < 1e-5 && (c[2] - Vec3::new(1.0, -0.5, 0.0)).length() < 1e-5);
+        assert!(decal_axes(&Decal { normal: [0.0; 3], ..d }).is_none());
+        assert!(decal_uv(&Decal { size: [f32::NAN; 2], ..d }, Vec3::ZERO, z).is_none());
     }
 
     #[test]

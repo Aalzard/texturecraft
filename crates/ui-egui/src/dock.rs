@@ -4,9 +4,12 @@
 use egui::{Color32, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use egui_phosphor::regular as ic;
 use serde_json::{Value, json};
-use texturecraft_engine::core::{BakedMap, BlendMode, Channel, EffectKind, Fill, Filter, GeneratorKind, Layer, LayerId, LayerKind, ProceduralKind, Source};
+use texturecraft_engine::core::{
+    BakedMap, BlendMode, Channel, Decal, EffectKind, Fill, Filter, GeneratorKind, Layer, LayerId, LayerKind, ProceduralKind, Source,
+};
+use texturecraft_engine::filter_lib::{FILTERS, scalar_params};
 use texturecraft_engine::paint::{BrushAlpha, alphas};
-use texturecraft_engine::{StackTarget, Tool};
+use texturecraft_engine::{CloneFrom, StackTarget, Tool};
 
 use crate::TextureCraftApp;
 use crate::shelf::{Asset, ShelfDrag};
@@ -150,12 +153,16 @@ pub(crate) fn layers(app: &mut TextureCraftApp, ui: &mut Ui) {
                 app.run("layer.move", json!({"layer": *dragged, "index": 0}));
             }
         }
-        if let Some(d) = dnd_release::<ShelfDrag>(&resp)
-            && let Asset::Material(m) = d.asset
-        {
-            app.run("material.apply", json!({"material": m, "index": 0}));
+        match dnd_release::<ShelfDrag>(&resp).map(|d| d.asset.clone()) {
+            Some(Asset::Material(m)) => {
+                app.run("material.apply", json!({"material": m, "index": 0}));
+            }
+            Some(Asset::Library(path)) => {
+                app.run("material.load", json!({"path": path, "index": 0}));
+            }
+            _ => {}
         }
-        let material = resp.dnd_hover_payload::<ShelfDrag>().is_some_and(|d| matches!(d.asset, Asset::Material(_)));
+        let material = resp.dnd_hover_payload::<ShelfDrag>().is_some_and(|d| d.asset.is_material());
         if resp.dnd_hover_payload::<u64>().is_some() || material {
             ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(2.0, TOKENS.accent));
         }
@@ -164,7 +171,7 @@ pub(crate) fn layers(app: &mut TextureCraftApp, ui: &mut Ui) {
 
 /// Whether the selection targets the layer content (the content or one of its effects) rather
 /// than the mask.
-fn targets_content(app: &TextureCraftApp) -> bool {
+pub(crate) fn targets_content(app: &TextureCraftApp) -> bool {
     let p = &app.session.doc.project;
     match app.session.target {
         StackTarget::Content => true,
@@ -185,24 +192,36 @@ fn effect_menu(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
         ("Add paint", "effect.add.paint", json!({"target": t})),
         ("Add fill", "effect.add.fill", json!({"target": t})),
         ("Add levels", "effect.add.levels", json!({"target": t})),
-        ("Add filter: blur", "effect.add.filter", json!({"target": t, "filter": "blur", "radius": 8})),
-        ("Add filter: sharpen", "effect.add.filter", json!({"target": t, "filter": "sharpen"})),
-        ("Add filter: invert", "effect.add.filter", json!({"target": t, "filter": "invert"})),
-        ("Add filter: threshold", "effect.add.filter", json!({"target": t, "filter": "threshold"})),
-        ("Add filter: HSL", "effect.add.filter", json!({"target": t, "filter": "hsl"})),
         ("Add compare mask", "effect.add.compare", json!({})),
         ("Add anchor point", "effect.add.anchor", json!({})),
     ];
+    let run = |app: &mut TextureCraftApp, id: &str, p: &Value| {
+        if app.session.selected_layer() != Some(layer.id) {
+            app.run("layer.select", json!({"layer": layer.id.0}));
+        }
+        app.run(id, with(p, json!({"layer": layer.id.0})));
+    };
     for (label, id, p) in items {
         let enabled = id != "effect.add.anchor" || !layer.is_group();
         if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
-            if app.session.selected_layer() != Some(layer.id) {
-                app.run("layer.select", json!({"layer": layer.id.0}));
-            }
-            app.run(id, with(&p, json!({"layer": layer.id.0})));
+            run(app, id, &p);
             ui.close();
         }
     }
+    // The filter library (material finishes only fill content).
+    ui.menu_button("Add filter", |ui| {
+        let mut group = "";
+        for f in FILTERS.iter().filter(|f| content || f.mask) {
+            if f.group != group {
+                ui.label(caption(f.group));
+                group = f.group;
+            }
+            if ui.button(f.label).clicked() {
+                run(app, "effect.add.filter", &json!({"target": t, "filter": f.id}));
+                ui.close();
+            }
+        }
+    });
 }
 
 fn layer_tree(app: &mut TextureCraftApp, ui: &mut Ui, id: LayerId, depth: usize) {
@@ -416,9 +435,9 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     // Drops: a layer or a shelf material lands above this row (inside a folder when dropped on
     // its middle); a shelf smart mask replaces this layer's mask.
     let inside = layer.is_group() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| (p.y - rect.center().y).abs() < h * 0.25);
-    let shelf = resp.dnd_hover_payload::<ShelfDrag>().map(|d| d.asset);
+    let shelf = resp.dnd_hover_payload::<ShelfDrag>().map(|d| d.asset.clone());
     let moving = resp.dnd_hover_payload::<u64>().is_some_and(|src| *src != layer.id.0);
-    if moving || matches!(shelf, Some(Asset::Material(_))) {
+    if moving || shelf.as_ref().is_some_and(Asset::is_material) {
         if inside {
             p.rect_stroke(rect, 2.0, Stroke::new(2.0, TOKENS.accent), egui::StrokeKind::Inside);
         } else {
@@ -426,20 +445,29 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
         }
     } else if matches!(shelf, Some(Asset::SmartMask(_))) {
         p.rect_stroke(mask_rect.expand(2.0), 2.0, Stroke::new(2.0, TOKENS.accent), egui::StrokeKind::Outside);
+    } else if matches!(shelf, Some(Asset::Filter(_))) && !layer.is_group() {
+        p.rect_stroke(rect, 2.0, Stroke::new(2.0, TOKENS.accent), egui::StrokeKind::Inside);
     }
     if let Some(src) = dnd_release::<u64>(&resp)
         && *src != layer.id.0
     {
         app.run("layer.move", json!({"layer": *src, "above": layer.id.0, "inside": inside}));
     }
-    match dnd_release::<ShelfDrag>(&resp).map(|d| d.asset) {
+    match dnd_release::<ShelfDrag>(&resp).map(|d| d.asset.clone()) {
         Some(Asset::Material(m)) => {
             app.run("material.apply", json!({"material": m, "above": layer.id.0, "inside": inside}));
+        }
+        Some(Asset::Library(path)) => {
+            app.run("material.load", json!({"path": path, "above": layer.id.0, "inside": inside}));
         }
         Some(Asset::SmartMask(m)) => {
             app.run("mask.smart.apply", json!({"name": m, "layer": layer.id.0}));
         }
-        Some(Asset::Alpha(_)) | None => {}
+        Some(Asset::Filter(f)) => {
+            app.run("layer.select", json!({"layer": layer.id.0}));
+            app.run("effect.add.filter", json!({"layer": layer.id.0, "filter": f, "target": "content"}));
+        }
+        Some(Asset::Alpha(_) | Asset::Texture(_)) | None => {}
     }
     resp.context_menu(|ui| layer_context_menu(app, ui, layer));
 }
@@ -571,7 +599,8 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
             ui.end_row();
             if !set.uv_tiles.is_empty() {
                 ui.label("UV tiles");
-                ui.label(set.uv_tiles.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")).on_hover_text("UDIM tiles painted by this texture set, each at the set's size");
+                ui.label(set.uv_tiles.iter().map(u32::to_string).collect::<Vec<_>>().join(", "))
+                    .on_hover_text("UDIM tiles painted by this texture set, each at the set's size");
                 ui.end_row();
             }
             ui.label("Shader instance");
@@ -815,6 +844,17 @@ fn import_button(app: &mut TextureCraftApp, ui: &mut Ui) {
 
 fn clone_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.label(caption("Clone"));
+    ui.horizontal(|ui| {
+        ui.label("Copy from");
+        for (mode, label, tip, id) in [
+            (CloneFrom::Composite, "All layers", "Copy what the texture set shows", "composite"),
+            (CloneFrom::Layer, "Current layer", "Copy the selected layer alone (its empty parts copy nothing)", "layer"),
+        ] {
+            if chip(ui, label, app.session.tool.clone_from == mode).on_hover_text(tip).clicked() {
+                app.run("tool.brush", json!({"cloneSource": id}));
+            }
+        }
+    });
     let Some(src) = app.session.tool.clone_source else {
         ui.label(RichText::new("Hold V and click the mesh to set the source, then paint elsewhere to copy it.").color(TOKENS.text_dim));
         return;
@@ -990,7 +1030,7 @@ fn alpha_section(app: &mut TextureCraftApp, ui: &mut Ui) {
         app.run("tool.brush", json!({ "alpha": alpha }));
     }
     ui.label(RichText::new("More in Assets > Alphas: click one, or drag it here").size(10.0).color(TOKENS.text_dim));
-    crate::shelf::drop_target(app, ui, &zone.response, false);
+    crate::shelf::drop_target(app, ui, &zone.response, crate::shelf::DropZone::Brush);
 }
 
 fn material_section(app: &mut TextureCraftApp, ui: &mut Ui) {
@@ -1085,8 +1125,37 @@ fn anchor_label(app: &TextureCraftApp, anchor: LayerId, channel: Channel) -> Str
 /// its enabled channels) or a content fill effect's (`base` = {"effect"}, `on` = the channels
 /// it has a source for). `reader` is the layer owning the fill (for anchor sources).
 fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value, on: &[Channel], reader: LayerId) {
-    use texturecraft_engine::core::{ChannelKind, Projection};
+    use texturecraft_engine::core::Projection;
     let salt = base.to_string();
+    if let Projection::Decal(d) = &fill.projection {
+        decal_editor(app, ui, d, reader);
+    } else {
+        projection_editor(app, ui, fill, base);
+    }
+    ui.add_space(6.0);
+    ui.label(caption("Material"));
+    let chans = app.session.doc.project.texture_set(app.session.ts()).map(|t| t.channel_list()).unwrap_or_default();
+    ui.horizontal_wrapped(|ui| {
+        for c in &chans {
+            let enabled = on.contains(c);
+            if chip(ui, c.short(), enabled).clicked() {
+                app.run("layer.fill.set", with(base, json!({"channel": c.id(), "enabled": !enabled})));
+            }
+        }
+    });
+    ui.add_space(4.0);
+    let anchors = anchors_below(app, reader);
+    for c in chans {
+        if !on.contains(&c) {
+            continue;
+        }
+        fill_channel(app, ui, fill, base, c, &anchors, &salt);
+    }
+}
+
+/// The projection of a fill (other than a decal): kind and scale.
+fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value) {
+    use texturecraft_engine::core::Projection;
     let proj_label = fill.projection.label();
     egui::ComboBox::from_label("Projection").selected_text(proj_label).show_ui(ui, |ui| {
         for (id, label) in [
@@ -1107,27 +1176,50 @@ fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value
         Projection::Planar { scale, .. } => (*scale, "planar"),
         Projection::Spherical { scale } => (*scale, "spherical"),
         Projection::Cylindrical { scale, .. } => (*scale, "cylindrical"),
+        Projection::Decal(_) => return,
     };
     if slider(ui, "Scale / tiling", &mut scale, 0.01..=20.0, 2).drag_stopped() {
         app.run("layer.fill.projection", with(base, json!({"projection": proj_id, "scale": scale})));
     }
-    ui.add_space(6.0);
-    ui.label(caption("Material"));
-    let chans = app.session.doc.project.texture_set(app.session.ts()).map(|t| t.channel_list()).unwrap_or_default();
-    ui.horizontal_wrapped(|ui| {
-        for c in &chans {
-            let enabled = on.contains(c);
-            if chip(ui, c.short(), enabled).clicked() {
-                app.run("layer.fill.set", with(base, json!({"channel": c.id(), "enabled": !enabled})));
-            }
-        }
-    });
-    ui.add_space(4.0);
-    let anchors = anchors_below(app, reader);
-    for c in chans {
-        if !on.contains(&c) {
-            continue;
-        }
+}
+
+/// A decal's frame: place it with a click in the 3D view, then size, turn and shift it.
+fn decal_editor(app: &mut TextureCraftApp, ui: &mut Ui, d: &Decal, layer: LayerId) {
+    ui.label(caption("Decal"));
+    let placing = app.placing_decal == Some(layer);
+    let label = if placing { format!("{} Click the mesh to place the decal", ic::CROSSHAIR) } else { format!("{} Place on the surface", ic::CROSSHAIR) };
+    if ui.selectable_label(placing, label).on_hover_text("The next click in the 3D view moves the decal there").clicked() {
+        app.placing_decal = if placing { None } else { Some(layer) };
+    }
+    let (lo, hi) = app.session.mesh.bounds();
+    let diag = (hi - lo).length().max(1e-3);
+    let mut v = [d.size[0], d.size[1], d.rotation, d.offset[0], d.offset[1], d.depth];
+    let rows = [
+        ("Width", diag * 0.01..=diag * 2.0),
+        ("Height", diag * 0.01..=diag * 2.0),
+        ("Rotation (degrees)", 0.0..=360.0),
+        ("Offset right", -diag..=diag),
+        ("Offset up", -diag..=diag),
+        ("Depth", diag * 0.005..=diag),
+    ];
+    let mut done = false;
+    for ((label, range), x) in rows.into_iter().zip(v.iter_mut()) {
+        done |= slider(ui, label, x, range, 3).drag_stopped();
+    }
+    if done {
+        app.run("layer.decal.set", json!({"layer": layer.0, "size": [v[0], v[1]], "rotation": v[2], "offset": [v[3], v[4]], "depth": v[5]}));
+    }
+    ui.label(
+        RichText::new("The image's alpha cuts the decal's shape; faces turned away and surfaces beyond its depth stay clear.")
+            .size(10.5)
+            .color(TOKENS.text_dim),
+    );
+}
+
+/// The source of one fill channel: uniform, procedural, image or anchor.
+fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value, c: Channel, anchors: &[(LayerId, String)], salt: &str) {
+    use texturecraft_engine::core::ChannelKind;
+    {
         let set = |extra: Value| with(base, with(&json!({"channel": c.id()}), extra));
         ui.group(|ui| {
             ui.horizontal(|ui| {
@@ -1153,7 +1245,7 @@ fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value
                         if !anchors.is_empty() {
                             ui.separator();
                         }
-                        for (a, label) in &anchors {
+                        for (a, label) in anchors {
                             if ui.button(format!("Anchor: {label}")).clicked() {
                                 app.run("layer.fill.set", set(json!({"anchor": a.0})));
                                 ui.close();
@@ -1187,7 +1279,10 @@ fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value
                     let mut seed = pattern.seed as f32;
                     let r3 = slider(ui, "Seed", &mut seed, 0.0..=999.0, 0);
                     if r1.drag_stopped() || r2.drag_stopped() || r3.drag_stopped() {
-                        app.run("layer.fill.set", set(json!({"procedural": pattern.kind.label(), "scale": s, "contrast": con, "seed": seed as u64, "low": low, "high": high})));
+                        app.run(
+                            "layer.fill.set",
+                            set(json!({"procedural": pattern.kind.label(), "scale": s, "contrast": con, "seed": seed as u64, "low": low, "high": high})),
+                        );
                     }
                     if c.kind() == ChannelKind::Color {
                         let (mut lo, mut hi) = (low, high);
@@ -1199,7 +1294,10 @@ fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value
                             changed |= color_swatch(ui, &format!("hi_{salt}_{}", c.id()), &mut hi, 60.0);
                         });
                         if changed {
-                            app.run("layer.fill.set", set(json!({"procedural": pattern.kind.label(), "scale": s, "contrast": con, "seed": pattern.seed, "low": lo, "high": hi})));
+                            app.run(
+                                "layer.fill.set",
+                                set(json!({"procedural": pattern.kind.label(), "scale": s, "contrast": con, "seed": pattern.seed, "low": lo, "high": hi})),
+                            );
                         }
                     }
                 }
@@ -1330,44 +1428,84 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
             );
         }
         EffectKind::Paint => {
-            let what = if layer.content_effects.iter().any(|x| x.id == eid) { "the layer content" } else { "this mask. Use the Material tab's mask value for gray" };
+            let what =
+                if layer.content_effects.iter().any(|x| x.id == eid) { "the layer content" } else { "this mask. Use the Material tab's mask value for gray" };
             ui.label(RichText::new(format!("Paint on the mesh to edit {what}.")).color(TOKENS.text_dim));
             tool_properties(app, ui);
         }
-        EffectKind::Filter(Filter::Hsl { hue, saturation, lightness }) => {
-            ui.label(caption("HSL"));
-            let (mut h, mut s, mut l) = (hue * 360.0, *saturation, *lightness);
-            let r1 = slider(ui, "Hue shift (degrees)", &mut h, -180.0..=180.0, 0);
-            let r2 = slider(ui, "Saturation", &mut s, -1.0..=1.0, 2);
-            let r3 = slider(ui, "Lightness", &mut l, -1.0..=1.0, 2);
-            if r1.drag_stopped() || r2.drag_stopped() || r3.drag_stopped() {
-                app.run("effect.set", json!({"effect": id, "hue": h / 360.0, "saturation": s, "lightness": l}));
-            }
-        }
-        EffectKind::Filter(Filter::Blur { radius }) => {
-            ui.label(caption("Blur"));
-            let mut r = *radius;
-            if slider(ui, "Intensity (texels at 2K)", &mut r, 0.0..=128.0, 1).drag_stopped() {
-                app.run("effect.set", json!({"effect": id, "radius": r}));
-            }
-        }
-        EffectKind::Filter(Filter::Sharpen { amount }) => {
-            ui.label(caption("Sharpen"));
-            let mut a = *amount;
-            if slider(ui, "Amount", &mut a, 0.0..=5.0, 2).drag_stopped() {
-                app.run("effect.set", json!({"effect": id, "amount": a}));
-            }
-        }
-        EffectKind::Filter(Filter::Threshold { level }) => {
-            ui.label(caption("Threshold"));
-            let mut l = *level;
-            if slider(ui, "Level", &mut l, 0.0..=1.0, 2).drag_stopped() {
-                app.run("effect.set", json!({"effect": id, "level": l}));
-            }
-        }
+        EffectKind::Filter(f) => filter_properties(app, ui, id, f),
         other => {
             ui.label(RichText::new(other.name()).color(TOKENS.text_dim));
         }
     }
 }
 
+/// The parameters of filter effect `id`.
+fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter) {
+    let set = |app: &mut TextureCraftApp, key: &str, v: Value| {
+        let mut p = json!({ "effect": id });
+        p[key] = v;
+        app.run("effect.set", p);
+    };
+    ui.label(caption(f.label()));
+    if let Filter::Hsl { hue, .. } = f {
+        let mut h = hue * 360.0;
+        if slider(ui, "Hue shift (degrees)", &mut h, -180.0..=180.0, 0).drag_stopped() {
+            set(app, "hue", json!(h / 360.0));
+        }
+    }
+    for (key, label, mut v, lo, hi) in scalar_params(f) {
+        let decimals = if matches!(key, "seed" | "levels") {
+            0
+        } else if hi - lo > 10.0 {
+            1
+        } else {
+            2
+        };
+        if slider(ui, label, &mut v, lo..=hi, decimals).drag_stopped() {
+            set(app, key, json!(v));
+        }
+    }
+    match f {
+        Filter::ColorBalance { shadows, midtones, highlights } => {
+            for (key, label, rgb) in [("shadows", "Shadows", shadows), ("midtones", "Midtones", midtones), ("highlights", "Highlights", highlights)] {
+                ui.label(RichText::new(label).strong());
+                let mut v = *rgb;
+                let mut done = false;
+                for (x, name) in v.iter_mut().zip(["Cyan / red", "Magenta / green", "Yellow / blue"]) {
+                    done |= slider(ui, name, x, -1.0..=1.0, 2).drag_stopped();
+                }
+                if done {
+                    set(app, key, json!(v));
+                }
+            }
+        }
+        Filter::GradientMap { colors } => {
+            let mut c = colors.clone();
+            let mut changed = false;
+            ui.horizontal_wrapped(|ui| {
+                for (i, col) in c.iter_mut().enumerate() {
+                    changed |= color_swatch(ui, &format!("gradient_{id}_{i}"), col, 36.0);
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.add_enabled(c.len() < 16, egui::Button::new(format!("{} Add color", ic::PLUS))).clicked() {
+                    c.push(c.last().copied().unwrap_or([1.0; 3]));
+                    changed = true;
+                }
+                if ui.add_enabled(c.len() > 1, egui::Button::new(format!("{} Remove last", ic::MINUS))).clicked() {
+                    c.pop();
+                    changed = true;
+                }
+            });
+            if changed {
+                set(app, "colors", json!(c));
+            }
+            ui.label(RichText::new("Dark to light: the content's luminance picks a color along these stops.").size(10.5).color(TOKENS.text_dim));
+        }
+        Filter::Warp { .. } | Filter::DirectionalBlur { .. } | Filter::SlopeBlur { .. } => {
+            ui.label(RichText::new("Works in texture space, like the blur: it does not cross UV seams.").size(10.5).color(TOKENS.text_dim));
+        }
+        _ => {}
+    }
+}

@@ -182,12 +182,16 @@ pub struct RenderParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pitch: Option<f32>,
     /// Path trace the 3D view with this many samples per pixel (1..4096) instead of the
-    /// real-time viewport: slower, physically based light transport, no GPU needed.
+    /// real-time viewport: slower, physically based light transport; on the GPU when it has
+    /// compute shaders, otherwise on the CPU (no GPU needed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<u32>,
     /// Light bounces when path tracing (default 6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounces: Option<u32>,
+    /// Path trace on the CPU even when a GPU is available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]

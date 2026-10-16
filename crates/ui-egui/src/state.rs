@@ -22,12 +22,14 @@ pub struct RenderUi {
     pub max_samples: u32,
     pub bounces: u32,
     pub denoise: bool,
+    /// Path trace on the CPU even where the GPU tracer runs.
+    pub cpu: bool,
 }
 
 impl Default for RenderUi {
     fn default() -> Self {
         // The web traces on one thread: fewer bounces keep it interactive.
-        RenderUi { max_samples: 256, bounces: if cfg!(target_arch = "wasm32") { 3 } else { 6 }, denoise: true }
+        RenderUi { max_samples: 256, bounces: if cfg!(target_arch = "wasm32") { 3 } else { 6 }, denoise: true, cpu: false }
     }
 }
 
@@ -168,6 +170,9 @@ pub struct UiState {
     /// Channel whose blending the layer rows show.
     pub layer_channel: Channel,
     pub shelf_filter: String,
+    /// The asset shelf's open tab.
+    #[serde(default)]
+    pub shelf_tab: usize,
     pub props_tab: PropsTab,
     /// Layer being renamed and the edit buffer.
     pub rename: Option<(u64, String)>,
@@ -218,6 +223,7 @@ impl Default for UiState {
             uv_pan: [0.0, 0.0],
             layer_channel: Channel::BaseColor,
             shelf_filter: String::new(),
+            shelf_tab: 0,
             props_tab: PropsTab::Brush,
             rename: None,
             new_project: NewProject::default(),

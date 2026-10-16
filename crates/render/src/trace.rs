@@ -11,7 +11,11 @@
 //! scattering part of the diffuse light enters the mesh, scatters isotropically with the
 //! project's per-channel mean free path (no absorption: the base color tints it once, on entry)
 //! and leaves where the walk next crosses the surface, as a Lambertian emitter. Walks are capped
-//! at [`WALK_STEPS`] (their energy is dropped) and need closed meshes.
+//! at [`WALK_STEPS`] (their energy is dropped) and need closed meshes. The clear coat follows the
+//! Coat normal channel where a set has it. Transmission turns that part of the dielectric base
+//! into a rough glass interface: GGX visible-normal sampling, exact Fresnel at the project's IOR,
+//! refraction through the mesh (tinted by the base color on the way in). Depth of field comes from
+//! a thin-lens camera ([`TraceScene::lens`]).
 
 use std::f32::consts::{PI, TAU};
 use std::sync::Arc;
@@ -44,17 +48,22 @@ pub struct TraceScene {
     /// Environment rotation around +Y (radians), as in the viewport.
     pub env_rotation: f32,
     /// Texture set per triangle (`usize::MAX`: none, default material).
-    tri_set: Arc<Vec<usize>>,
+    pub(crate) tri_set: Arc<Vec<usize>>,
     /// Importance sampling of the environment (None for an empty image).
-    light: Option<Arc<EnvSampler>>,
+    pub(crate) light: Option<Arc<EnvSampler>>,
     /// Specular/glossiness shading (Specular color is F0, base color is diffuse).
     pub spec_gloss: bool,
     /// Ray offset off surfaces, scaled to the mesh.
-    eps: f32,
+    pub(crate) eps: f32,
     /// Subsurface scattering extinction per color channel (1 / mean free path, world units).
-    scatter_sigma: Vec3,
-    /// Bounding radius of the mesh (scales the scatter radius).
-    radius: f32,
+    pub(crate) scatter_sigma: Vec3,
+    /// Bounding radius of the mesh (scales the scatter radius and the lens).
+    pub(crate) radius: f32,
+    /// Index of refraction of the Transmission channel.
+    pub ior: f32,
+    /// Thin lens: focus depth along the view axis (0: the camera's orbit target) and lens radius
+    /// as a fraction of the mesh's bounding radius (the viewport's depth of field).
+    pub lens: Option<[f32; 2]>,
 }
 
 impl TraceScene {
@@ -75,8 +84,21 @@ impl TraceScene {
         let eps = ((hi - lo).length() * 2e-5).max(1e-6);
         let light = EnvSampler::new(&env).map(Arc::new);
         let radius = ((hi - lo).length() * 0.5).max(1e-6);
-        let mut scene =
-            TraceScene { mesh, bvh, sets, env, env_rotation, tri_set: Arc::new(tri_set), light, spec_gloss: false, eps, scatter_sigma: Vec3::ONE, radius };
+        let mut scene = TraceScene {
+            mesh,
+            bvh,
+            sets,
+            env,
+            env_rotation,
+            tri_set: Arc::new(tri_set),
+            light,
+            spec_gloss: false,
+            eps,
+            scatter_sigma: Vec3::ONE,
+            radius,
+            ior: 1.5,
+            lens: None,
+        };
         let d = DisplaySettings::default();
         scene.set_scatter(d.scatter_color, d.scatter_radius);
         scene
@@ -97,7 +119,29 @@ impl TraceScene {
         let mut scene = TraceScene::new(mesh, bvh, sets, Arc::new(env), display.env_rotation.to_radians());
         scene.spec_gloss = display.spec_gloss;
         scene.set_scatter(display.scatter_color, display.scatter_radius);
+        scene.ior = display.ior;
+        scene.lens = display.dof.enabled.then_some([display.dof.focus_distance, display.dof.aperture]);
         scene
+    }
+
+    /// The camera ray through `ndc`, through a point of the lens when the scene has one.
+    fn camera_ray(&self, cam: &OrbitCamera, ndc: Vec2, aspect: f32, rng: &mut Rng) -> texturecraft_geom::Ray {
+        let ray = cam.ray(ndc, aspect);
+        let Some([focus, aperture]) = self.lens else { return ray };
+        let lens = aperture.max(0.0) * self.radius;
+        let fwd = cam.forward();
+        let along = ray.dir.dot(fwd);
+        if lens <= 0.0 || along <= 1e-6 {
+            return ray;
+        }
+        // The point this pixel sees on the focus plane, viewed from a random point of the lens.
+        let depth = if focus > 0.0 { focus } else { cam.distance };
+        let focal = ray.origin + ray.dir * ((depth - (ray.origin - cam.eye()).dot(fwd)) / along);
+        let right = fwd.cross(Vec3::Y).normalize_or(Vec3::X);
+        let up = right.cross(fwd);
+        let (r, phi) = (lens * rng.next().sqrt(), TAU * rng.next());
+        let origin = ray.origin + (right * phi.cos() + up * phi.sin()) * r;
+        texturecraft_geom::Ray { origin, dir: (focal - origin).normalize_or(ray.dir) }
     }
 
     /// World direction to environment space.
@@ -124,15 +168,15 @@ impl TraceScene {
 }
 
 /// Piecewise-constant importance sampling of an equirect environment by luminance and sin(theta).
-struct EnvSampler {
-    width: usize,
-    height: usize,
+pub(crate) struct EnvSampler {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
     /// Cumulative row probabilities (last = 1).
-    rows: Vec<f32>,
+    pub(crate) rows: Vec<f32>,
     /// Cumulative probabilities within each row (last of each row = 1).
-    cols: Vec<f32>,
+    pub(crate) cols: Vec<f32>,
     /// Probability of each pixel.
-    prob: Vec<f32>,
+    pub(crate) prob: Vec<f32>,
 }
 
 impl EnvSampler {
@@ -276,7 +320,7 @@ impl Tracer {
             for (x, px) in row.iter_mut().enumerate() {
                 let mut rng = Rng::new(x as u32, y as u32, pass);
                 let ndc = Vec2::new((x as f32 + rng.next()) / w as f32 * 2.0 - 1.0, 1.0 - (y as f32 + rng.next()) / h as f32 * 2.0);
-                let ray = cam.ray(ndc, aspect);
+                let ray = scene.camera_ray(cam, ndc, aspect, &mut rng);
                 match trace(scene, ray.origin, ray.dir, settings, &mut rng) {
                     Some(s) => {
                         px.hit += s.radiance;
@@ -452,6 +496,11 @@ struct Surface {
     sheen: Vec3,
     sheen_roughness: f32,
     scatter: f32,
+    /// Transmissive part of the base, its tint (the base color), and whether the ray enters the
+    /// mesh here (it hit the outside of the triangle).
+    transmission: f32,
+    base: Vec3,
+    front: bool,
 }
 
 fn lerp3(a: Vec3, b: Vec3, c: Vec3, u: f32, v: f32) -> Vec3 {
@@ -473,7 +522,8 @@ fn surface(scene: &TraceScene, tri: u32, u: f32, v: f32, o: Vec3, d: Vec3, t: f3
     let mut geo = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or(Vec3::Y);
     let nrm = idx.map(|k| m.normals.get(k).copied().unwrap_or(geo));
     let mut n_geo = lerp3(nrm[0], nrm[1], nrm[2], u, v).normalize_or(geo);
-    if geo.dot(d) > 0.0 {
+    let front = geo.dot(d) <= 0.0;
+    if !front {
         geo = -geo;
     }
     if n_geo.dot(geo) < 0.0 {
@@ -518,13 +568,22 @@ fn surface(scene: &TraceScene, tri: u32, u: f32, v: f32, o: Vec3, d: Vec3, t: f3
         Some(s) if s.composite.channels.contains_key(&Channel::Glossiness) => 1.0 - ch(Channel::Glossiness, 0, 0)[0],
         _ => ch(Channel::Roughness, 0, 0)[0],
     };
-    let (diffuse, f0) = if scene.spec_gloss {
+    let (diffuse, f0, metallic) = if scene.spec_gloss {
         let f0 = Vec3::from(ch(Channel::Specular, 0, 0)).clamp(Vec3::ZERO, Vec3::ONE);
-        (base * (1.0 - f0.max_element()), f0)
+        (base * (1.0 - f0.max_element()), f0, 0.0)
     } else {
         let metallic = ch(Channel::Metallic, 0, 0)[0].clamp(0.0, 1.0);
         let level = ch(Channel::SpecularLevel, 0, 0)[0].clamp(0.0, 1.0);
-        (base * (1.0 - metallic), Vec3::splat(0.08 * level).lerp(base, metallic))
+        (base * (1.0 - metallic), Vec3::splat(0.08 * level).lerp(base, metallic), metallic)
+    };
+    let coat_base = if n_geo.dot(-d) > 0.0 { n_geo } else { geo };
+    let coat_n = match set {
+        Some(s) if s.composite.channels.contains_key(&Channel::CoatNormal) => {
+            let c = (Vec3::from(ch(Channel::CoatNormal, 0, 0)) * 2.0 - Vec3::ONE).normalize_or(Vec3::Z);
+            let turned = (tt * c.x + b * c.y + coat_base * c.z).normalize_or(coat_base);
+            if turned.dot(-d) > 0.0 { turned } else { coat_base }
+        }
+        _ => coat_base,
     };
     Some(Surface {
         pos: o + d * t,
@@ -539,10 +598,13 @@ fn surface(scene: &TraceScene, tri: u32, u: f32, v: f32, o: Vec3, d: Vec3, t: f3
         anisotropy: scalar(Channel::AnisotropyLevel),
         coat: scalar(Channel::CoatWeight),
         coat_roughness: scalar(Channel::CoatRoughness).max(0.045),
-        coat_n: if n_geo.dot(-d) > 0.0 { n_geo } else { geo },
+        coat_n,
         sheen: Vec3::from(ch(Channel::SheenColor, 0, 0)).clamp(Vec3::ZERO, Vec3::ONE) * scalar(Channel::SheenWeight),
         sheen_roughness: scalar(Channel::SheenRoughness).max(0.07),
         scatter: scalar(Channel::ScatterWeight),
+        transmission: scalar(Channel::Transmission) * (1.0 - metallic),
+        base: base.clamp(Vec3::ZERO, Vec3::ONE),
+        front,
     })
 }
 
@@ -783,6 +845,46 @@ impl Bsdf {
     }
 }
 
+/// Unpolarized Fresnel reflectance of a dielectric interface; `eta` = n(incident) / n(other side).
+fn fresnel_dielectric(cos_i: f32, eta: f32) -> f32 {
+    let sin2_t = eta * eta * (1.0 - cos_i * cos_i).max(0.0);
+    if sin2_t >= 1.0 {
+        return 1.0;
+    }
+    let cos_t = (1.0 - sin2_t).sqrt();
+    let rs = (eta * cos_i - cos_t) / (eta * cos_i + cos_t);
+    let rp = (cos_i - eta * cos_t) / (cos_i + eta * cos_t);
+    0.5 * (rs * rs + rp * rp)
+}
+
+/// Sampling density standing in for a lobe that next-event estimation never samples (its
+/// environment hits take the full MIS weight).
+const UNSAMPLED_PDF: f32 = 1e15;
+
+/// The transmissive base as a rough dielectric interface (GGX, visible normals): reflect with
+/// the Fresnel at `ior`, else refract into (or out of) the mesh. Returns the new direction and the
+/// path weight (G1 of the new direction; the base color tints light entering the mesh).
+/// shortcut: radiance is not scaled by the squared IOR ratio at each crossing (the factors cancel
+/// for paths that leave the mesh again).
+fn dielectric(s: &Surface, v: Vec3, ior: f32, rng: &mut Rng) -> Option<(Vec3, Vec3)> {
+    let a = (s.roughness * s.roughness).max(1e-3);
+    let lobe = Ggx::new(s.tangent, s.n, v, a, a);
+    let hl = sample_vndf(lobe.v, a, a, rng.next(), rng.next());
+    let h = lobe.t * hl.x + lobe.b * hl.y + lobe.n * hl.z;
+    let cos_i = v.dot(h).max(1e-6);
+    let eta = if s.front { 1.0 / ior.max(1.0) } else { ior.max(1.0) };
+    if rng.next() < fresnel_dielectric(cos_i, eta) {
+        let l = h * 2.0 * cos_i - v;
+        let ll = lobe.local(l);
+        return (l.dot(s.geo) > 0.0 && ll.z > 0.0).then(|| (l, Vec3::splat(smith_g1(ll, a, a))));
+    }
+    let cos_t = (1.0 - eta * eta * (1.0 - cos_i * cos_i)).max(0.0).sqrt();
+    let l = (h * (eta * cos_i - cos_t) - v * eta).normalize_or(-v);
+    let ll = lobe.local(l);
+    let tint = if s.front { s.base } else { Vec3::ONE };
+    (l.dot(s.geo) < 0.0 && ll.z < 0.0).then(|| (l, tint * smith_g1(-ll, a, a)))
+}
+
 /// Most scattering events a subsurface random walk takes before giving up.
 const WALK_STEPS: usize = 48;
 
@@ -876,14 +978,25 @@ fn trace(scene: &TraceScene, mut o: Vec3, mut d: Vec3, settings: &TraceSettings,
         if bounce >= settings.bounces {
             break;
         }
+        // Transmission is picked by its weight (a glass event, without next-event estimation);
+        // otherwise the surface shades as if it had none.
+        let glass = s.transmission > 0.0 && rng.next() < s.transmission;
         let bsdf = Bsdf::new(&s, -d);
         // The BRDF is sampled with probability 1 − p_walk (densities below include that).
         let keep = 1.0 - bsdf.p_walk;
-        l += next_event(scene, s.pos, s.geo, thr, rng, |wl| {
-            let (f, pdf) = bsdf.eval(wl);
-            (f, pdf * keep)
-        });
-        let (wi, geo) = if bsdf.p_walk > 0.0 && rng.next() < bsdf.p_walk {
+        if !glass {
+            l += next_event(scene, s.pos, s.geo, thr, rng, |wl| {
+                let (f, pdf) = bsdf.eval(wl);
+                (f, pdf * keep)
+            });
+        }
+        let (wi, geo) = if glass {
+            let Some((wi, w)) = dielectric(&s, -d, scene.ior, rng) else { break };
+            thr *= w;
+            brdf_pdf = Some(UNSAMPLED_PDF);
+            o = s.pos;
+            (wi, s.geo)
+        } else if bsdf.p_walk > 0.0 && rng.next() < bsdf.p_walk {
             let Some((exit, out, w)) = random_walk(scene, &s, rng) else { break };
             thr *= bsdf.walk_albedo * w / bsdf.p_walk;
             // The light leaves the exit point like a Lambertian emitter.
@@ -1162,5 +1275,54 @@ mod tests {
         }
         let avg = sum / n as f32;
         assert!(avg.max_element() <= 1.05 && avg.min_element() > 0.3, "{avg}");
+    }
+
+    #[test]
+    fn glass_white_furnace_stays_bounded() {
+        for rough in [0.0, 0.3, 0.7] {
+            let avg = furnace(&[(Channel::BaseColor, [1.0; 3]), (Channel::Roughness, [rough; 3]), (Channel::Transmission, [1.0; 3])]);
+            assert!(avg.max_element() <= 1.05 && avg.min_element() > 0.5, "roughness {rough}: {avg}");
+        }
+    }
+
+    /// Mean radiance of the center ray from +z at the unit sphere, with an environment that is
+    /// bright only behind the sphere (toward -z).
+    fn behind_mean(values: &[(Channel, [f32; 3])]) -> Vec3 {
+        let (w, h) = (64u32, 32u32);
+        let data = (0..w * h)
+            .map(|i| if crate::ibl::dir_of(((i % w) as f32 + 0.5) / w as f32, ((i / w) as f32 + 0.5) / h as f32).z < -0.7 { [5.0; 3] } else { [0.01; 3] })
+            .collect();
+        let s = material_scene(Arc::new(EnvImage { width: w, height: h, data }), values);
+        let mut rng = Rng::new(3, 1, 4);
+        let n = 2000;
+        (0..n).map(|_| trace(&s, Vec3::new(0.0, 0.0, 4.0), Vec3::NEG_Z, &TraceSettings::default(), &mut rng).map_or(Vec3::ZERO, |s| s.radiance)).sum::<Vec3>()
+            / n as f32
+    }
+
+    #[test]
+    fn transmission_shows_the_environment_behind_the_mesh() {
+        let white = [(Channel::BaseColor, [1.0; 3]), (Channel::Roughness, [0.05; 3])];
+        let opaque = behind_mean(&white);
+        let glass = behind_mean(&[white[0], white[1], (Channel::Transmission, [1.0; 3])]);
+        assert!(glass.x > 2.0 && glass.x > 10.0 * opaque.x, "through the glass {glass}, opaque {opaque}");
+        // The base color tints the light going through.
+        let tinted = behind_mean(&[(Channel::BaseColor, [1.0, 0.2, 0.2]), white[1], (Channel::Transmission, [1.0; 3])]);
+        assert!(tinted.x > 3.0 * tinted.y, "{tinted}");
+    }
+
+    #[test]
+    fn thin_lens_blurs_away_from_the_focus_plane() {
+        // Pixels between the sphere and the backdrop: how soft the silhouette is.
+        let soft_edge = |lens: Option<[f32; 2]>| {
+            let s = TraceScene { lens, ..scene("Studio Soft") };
+            let mut tr = Tracer::new(64, 48);
+            for _ in 0..24 {
+                tr.pass(&s, &camera(), &TraceSettings { bounces: 1 });
+            }
+            tr.acc.iter().filter(|p| p.hits > 2.0 && p.hits < tr.samples as f32 - 2.0).count()
+        };
+        let (pinhole, focused, blurred) = (soft_edge(None), soft_edge(Some([4.0 - 0.25, 0.1])), soft_edge(Some([20.0, 0.1])));
+        assert!(blurred > 3 * pinhole.max(10), "out of focus: {pinhole} -> {blurred} edge pixels");
+        assert!(focused < pinhole + pinhole / 2 + 10, "the silhouette (about the focus depth) stays sharp: {pinhole} -> {focused}");
     }
 }

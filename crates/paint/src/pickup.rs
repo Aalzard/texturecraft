@@ -6,9 +6,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use texturecraft_compose::Composite;
+use texturecraft_compose::eval::FlatTile;
 use texturecraft_core::Channel;
 use texturecraft_geom::{NO_TRI, UvGBuffer};
-use texturecraft_texel::{TileImage, from_u16, to_u16};
+use texturecraft_texel::{TILE_AREA, TileImage, from_u16, to_u16};
 
 use crate::commit::{dec, enc};
 
@@ -28,6 +29,9 @@ pub struct Pickup {
     pub mode: PickupMode,
     /// The composite when the stroke began (what the stroke reads).
     source: Composite,
+    /// How much of `source` there is to read per texel (a single layer's coverage); None reads
+    /// everywhere.
+    coverage: Option<TileImage>,
     /// Texels outside the texture set's UV islands are never read.
     gbuf: Arc<UvGBuffer>,
     /// Straight values per painted channel; the stroke alpha lives in the stroke canvas.
@@ -52,7 +56,41 @@ impl Pickup {
     /// A pickup reading `source` (whose resolution is the stroke's) for `channels`.
     pub fn new(mode: PickupMode, source: Composite, gbuf: Arc<UvGBuffer>, channels: impl IntoIterator<Item = Channel>) -> Pickup {
         let values = channels.into_iter().map(|c| (c, TileImage::new(source.resolution, source.height, c.components()))).collect();
-        Pickup { mode, source, gbuf, values, prev: None, reads: Vec::new(), read_values: Vec::new() }
+        Pickup { mode, source, coverage: None, gbuf, values, prev: None, reads: Vec::new(), read_values: Vec::new() }
+    }
+
+    /// A pickup reading one layer alone, from its flattened tiles (premultiplied values plus
+    /// coverage per channel, see `texturecraft_compose::flatten_layer`) at `size`: where the
+    /// layer is empty the stroke deposits nothing.
+    pub fn from_layer(mode: PickupMode, flat: &[FlatTile], size: (u32, u32), gbuf: Arc<UvGBuffer>, channels: impl IntoIterator<Item = Channel>) -> Pickup {
+        let channels: Vec<Channel> = channels.into_iter().collect();
+        let mut source = Composite::with_size(&channels, size.0, size.1);
+        let mut coverage = TileImage::new(size.0, size.1, 1);
+        for (c, (tx, ty), data) in flat {
+            let Some(img) = source.channels.get_mut(c) else { continue };
+            let (n, kind) = (c.components(), c.kind());
+            let mut straight = vec![0u16; TILE_AREA * n];
+            let Some(cov) = coverage.tile_mut(*tx, *ty, &[0]) else { continue };
+            for (o, px) in data.chunks_exact(n + 1).enumerate() {
+                let a = px.get(n).copied().unwrap_or(0);
+                if a == 0 {
+                    continue;
+                }
+                let inv = 1.0 / from_u16(a);
+                for (k, v) in px.iter().take(n).enumerate() {
+                    if let Some(slot) = straight.get_mut(o * n + k) {
+                        *slot = enc(kind, dec(kind, *v) * inv);
+                    }
+                }
+                if let Some(slot) = cov.get_mut(o) {
+                    *slot = (*slot).max(a);
+                }
+            }
+            img.set_tile(*tx, *ty, Some(Arc::new(straight)));
+        }
+        let mut p = Pickup::new(mode, source, gbuf, channels);
+        p.coverage = Some(coverage);
+        p
     }
 
     fn covered(&self, x: u32, y: u32) -> bool {
@@ -84,12 +122,15 @@ impl Pickup {
         self.reads.clear();
         self.read_values.clear();
         for &(x, y, a) in texels {
-            let a = a * strength;
             let (sx, sy) = (i64::from(x) + shift[0], i64::from(y) + shift[1]);
             if !(a > 0.0 && (0..w).contains(&sx) && (0..h).contains(&sy) && self.covered(sx as u32, sy as u32)) {
                 continue;
             }
             let (sx, sy) = (sx as u32, sy as u32);
+            let a = a * strength * self.coverage.as_ref().map_or(1.0, |c| from_u16(c.get(sx, sy)[0]));
+            if a <= 0.0 {
+                continue;
+            }
             // Smudge reads what the stroke shows so far: carried values over the source.
             let m = if smudge { from_u16(alpha.get(sx, sy)[0]) } else { 0.0 };
             for (c, img) in &self.values {
@@ -173,6 +214,30 @@ mod tests {
         assert!(from_u16(alpha.get(45, 32)[0]) > 0.99);
         // Sources outside the image are skipped.
         assert!(!p.stamp(&mut alpha, &disc(5, 5, 2), [5.0, 5.0]));
+    }
+
+    #[test]
+    fn layer_clones_copy_only_where_the_layer_has_paint() {
+        let (_, g) = setup(|_| 0.0);
+        // The layer: roughness 0.8 at half coverage on the left half (premultiplied).
+        let mut data = vec![0u16; TILE_AREA * 2];
+        for y in 0..TILE {
+            for x in 0..TILE / 2 {
+                let o = (y * TILE + x) as usize * 2;
+                data[o] = to_u16(0.4);
+                data[o + 1] = to_u16(0.5);
+            }
+        }
+        let flat = vec![(Channel::Roughness, (0, 0), data)];
+        let mut p = Pickup::from_layer(PickupMode::Clone { offset: [-30, 0] }, &flat, (TILE, TILE), g.clone(), [Channel::Roughness]);
+        let mut alpha = TileImage::new(TILE, TILE, 1);
+        assert!(p.stamp(&mut alpha, &disc(45, 32, 3), [45.0, 32.0]));
+        let v = get(&p.values[&Channel::Roughness], Channel::Roughness, 45, 32)[0];
+        assert!((v - 0.8).abs() < 1e-3, "straight value: {v}");
+        assert!((from_u16(alpha.get(45, 32)[0]) - 0.5).abs() < 1e-3, "the layer's coverage scales the stroke");
+        // Reading the layer's empty right half deposits nothing.
+        let mut q = Pickup::from_layer(PickupMode::Clone { offset: [30, 0] }, &flat, (TILE, TILE), g, [Channel::Roughness]);
+        assert!(!q.stamp(&mut TileImage::new(TILE, TILE, 1), &disc(20, 32, 3), [20.0, 32.0]), "the source is the empty half");
     }
 
     #[test]

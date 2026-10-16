@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use egui::{Color32, PointerButton, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
+use texturecraft_engine::camera_cmds::DEFAULT_CAMERA;
 use texturecraft_engine::core::{BakedMap, Channel};
 use texturecraft_engine::geom::glam::{Vec2, Vec3};
 use texturecraft_engine::{Tool, ViewMode};
@@ -17,6 +18,20 @@ use crate::theme::TOKENS;
 
 pub const VIEW_3D: u64 = 1;
 pub const VIEW_2D: u64 = 2;
+
+/// While on, a click in the 3D view focuses the depth of field there (a transient UI mode kept in
+/// egui's memory).
+fn focus_pick_id() -> egui::Id {
+    egui::Id::new("tc_focus_pick")
+}
+
+pub fn focus_picking(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(focus_pick_id())).unwrap_or(false)
+}
+
+pub fn set_focus_picking(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(focus_pick_id(), on));
+}
 
 pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
     let aux = match app.session.view {
@@ -49,7 +64,10 @@ pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
     }
     // Keep drawing while the 3D view accumulates anti-aliasing samples (it stops on its own).
     let accumulating = layout != ViewLayout::Only2D
-        && app.render_state.as_ref().is_some_and(|rs| rs.renderer.read().callback_resources.get::<crate::gpu::GpuState>().is_some_and(|g| g.renderer.accumulating(VIEW_3D)));
+        && app
+            .render_state
+            .as_ref()
+            .is_some_and(|rs| rs.renderer.read().callback_resources.get::<crate::gpu::GpuState>().is_some_and(|g| g.renderer.accumulating(VIEW_3D)));
     if app.session.stroke_active() || accumulating {
         ui.ctx().request_repaint();
     }
@@ -71,7 +89,7 @@ fn shade(app: &TextureCraftApp) -> Shade {
         channel,
         wireframe: app.ui.uv_wireframe,
         wireframe_3d: app.ui.wireframe_3d,
-        ..Shade::from_display(&app.session.doc.project.display)
+        ..Shade::from_project(&app.session.doc.project)
     }
 }
 
@@ -101,9 +119,21 @@ fn add_callback(app: &mut TextureCraftApp, ui: &Ui, rect: Rect, frame: Frame, sy
 fn view_header(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, id: &str) {
     let header = Rect::from_min_size(rect.min + vec2(rect.width() * 0.5 - 150.0, 8.0), vec2(300.0, 22.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(header).layout(egui::Layout::left_to_right(egui::Align::Center)));
-    egui::ComboBox::from_id_salt(format!("{id}_cam")).width(130.0).selected_text("Default camera").show_ui(&mut child, |ui| {
-        if ui.selectable_label(true, "Default camera").clicked() {
-            app.run("viewport.frame", json!({}));
+    let current = texturecraft_engine::camera_cmds::current(&app.session);
+    let names: Vec<String> = app.session.doc.project.cameras.iter().map(|c| c.name.clone()).collect();
+    let shown = current.and_then(|i| names.get(i)).map_or(DEFAULT_CAMERA, String::as_str);
+    egui::ComboBox::from_id_salt(format!("{id}_cam")).width(130.0).selected_text(shown).show_ui(&mut child, |ui| {
+        if ui.selectable_label(current.is_none(), DEFAULT_CAMERA).clicked() {
+            app.run("camera.select", json!({}));
+        }
+        for (i, name) in names.iter().enumerate() {
+            if ui.selectable_label(current == Some(i), name).clicked() {
+                app.run("camera.select", json!({"index": i}));
+            }
+        }
+        ui.separator();
+        if ui.selectable_label(false, "Save view as camera").clicked() {
+            app.run("camera.add", json!({}));
         }
     });
     let label = app.session.view.label();
@@ -197,9 +227,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     }
 
     // Stencil: S + left drag rotates, S + right drag scales, S + middle drag moves.
-    if s_held
-        && let Some(st) = app.session.tool.stencil.as_mut()
-    {
+    if s_held && let Some(st) = app.session.tool.stencil.as_mut() {
         if resp.dragged_by(PointerButton::Primary) {
             st.rotation = (st.rotation + delta.x * 0.4).rem_euclid(360.0);
         } else if resp.dragged_by(PointerButton::Secondary) {
@@ -219,8 +247,34 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         let (q, vp) = (local(p), app.session.viewport);
         app.run("tool.cloneSource", json!({"x": q.x, "y": q.y, "viewport": [vp.x, vp.y]}));
     }
+    // Depth of field focus pick: a click focuses there instead of painting.
+    let focus_pick = focus_picking(ui.ctx());
+    if focus_pick {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        if !alt
+            && resp.clicked_by(PointerButton::Primary)
+            && let Some(p) = resp.interact_pointer_pos()
+        {
+            let (q, vp) = (local(p), app.session.viewport);
+            app.run("viewport.focusAt", json!({"x": q.x, "y": q.y, "viewport": [vp.x, vp.y]}));
+            set_focus_picking(ui.ctx(), false);
+        }
+    }
+    // Decal placement: a click moves the decal being placed there.
+    let placing = app.placing_decal.filter(|_| app.ui.mode == crate::state::Mode::Painting);
+    if let Some(layer) = placing {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        if !alt
+            && resp.clicked_by(PointerButton::Primary)
+            && let Some(p) = resp.interact_pointer_pos()
+        {
+            let (q, vp) = (local(p), app.session.viewport);
+            app.run("layer.decal.set", json!({"layer": layer.0, "x": q.x, "y": q.y, "viewport": [vp.x, vp.y]}));
+            app.placing_decal = None;
+        }
+    }
     // Painting.
-    let painting = app.ui.mode == crate::state::Mode::Painting && !alt && !s_held && !v_held;
+    let painting = app.ui.mode == crate::state::Mode::Painting && !alt && !s_held && !v_held && !focus_pick && placing.is_none();
     let path_tool = app.session.tool.tool == Tool::Path;
     let vp = app.session.viewport;
     let show = |app: &TextureCraftApp, p: Vec3| project(app, rect, p);
@@ -279,7 +333,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     };
     add_callback(app, ui, rect, frame, sync);
     // Shelf drops: a material goes above the selection (as in Painter), an alpha on the brush.
-    crate::shelf::drop_target(app, ui, &resp, true);
+    crate::shelf::drop_target(app, ui, &resp, crate::shelf::DropZone::View3d);
 
     // Brush cursor.
     if app.ui.mode == crate::state::Mode::Painting
@@ -308,6 +362,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         path_overlay(app, ui, rect, &resp, false, show);
     }
     stencil_overlay(app, ui, rect);
+    decal_overlay(app, ui, rect);
     if app.session.quick_mask.editing {
         ui.painter_at(rect).text(
             rect.left_top() + vec2(12.0, 40.0),
@@ -319,6 +374,48 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     }
     view_header(app, ui, rect, "v3d");
     axis_gizmo(ui, rect, app, false);
+}
+
+/// The frame of the selected decal layer over the 3D view (a hint while placing it): outline,
+/// a tick on its top edge and its projection direction.
+fn decal_overlay(app: &mut TextureCraftApp, ui: &Ui, rect: Rect) {
+    use texturecraft_engine::core::{Fill, LayerKind, Projection};
+    let p = &app.session.doc.project;
+    let sel = app.session.selected_layer().and_then(|id| p.content_layer(id));
+    let decal = match sel.map(|l| &l.kind) {
+        Some(LayerKind::Fill(Fill { projection: Projection::Decal(d), .. })) => Some(*d),
+        _ => None,
+    };
+    // Placing follows the selection: another layer selected stops it.
+    if app.placing_decal.is_some() && app.placing_decal != sel.map(|l| l.id).filter(|_| decal.is_some()) {
+        app.placing_decal = None;
+    }
+    let painter = ui.painter_at(rect);
+    if app.placing_decal.is_some() {
+        let hint = "Click the mesh to place the decal";
+        painter.text(rect.left_top() + vec2(12.0, 40.0), egui::Align2::LEFT_TOP, hint, egui::FontId::proportional(12.0), TOKENS.accent);
+    }
+    let Some((d, corners)) = decal.and_then(|d| Some((d, texturecraft_engine::compose::pattern::decal_corners(&d)?))) else { return };
+    let pts: Vec<Pos2> = corners.iter().filter_map(|c| project(app, rect, *c)).collect();
+    let (Some(axes), true) = (texturecraft_engine::compose::pattern::decal_axes(&d), pts.len() == 4) else { return };
+    let mut outline = pts.clone();
+    outline.extend(pts.first().copied());
+    for (w, color) in [(3.0, Color32::from_black_alpha(140)), (1.2, Color32::from_white_alpha(220))] {
+        painter.add(egui::Shape::dashed_line(&outline, Stroke::new(w, color), 6.0, 4.0));
+    }
+    // Top edge tick and the projection direction from the center.
+    let (o, _, up, n) = axes;
+    let top = (corners[0] + corners[1]) * 0.5;
+    let reach = d.size[0].max(d.size[1]) * 0.25;
+    for (a, b) in [(top, top + up * reach * 0.4), (o, o + n * reach)] {
+        if let (Some(a), Some(b)) = (project(app, rect, a), project(app, rect, b)) {
+            painter.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(140)));
+            painter.line_segment([a, b], Stroke::new(1.4, TOKENS.accent));
+        }
+    }
+    if let Some(c) = project(app, rect, o) {
+        painter.circle(c, 3.5, TOKENS.accent, Stroke::new(1.0, Color32::from_black_alpha(180)));
+    }
 }
 
 /// Draw the projection stencil over the 3D view.
@@ -600,7 +697,7 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         visible: app.session.doc.project.texture_sets.iter().map(|t| t.visible).collect(),
     };
     add_callback(app, ui, rect, frame, sync);
-    crate::shelf::drop_target(app, ui, &resp, true);
+    crate::shelf::drop_target(app, ui, &resp, crate::shelf::DropZone::View2d);
     // The UV tile outlines (numbered for UDIM sets) and the path being edited.
     let painter = ui.painter_at(rect);
     let set = app.session.doc.project.texture_sets.get(ts);

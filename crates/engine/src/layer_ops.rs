@@ -14,7 +14,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("layer.copy", "Copy layer(s)", ["Layers"], Some("Ctrl+C"), "{layer?}", has_layer, copy),
         cmd!("layer.cut", "Cut layer(s)", ["Layers"], Some("Ctrl+X"), "{layer?}", has_layer, cut),
         cmd!("layer.paste", "Paste layer(s)", ["Layers"], Some("Ctrl+V"), "{} — above the selection, in the active texture set", can_paste, paste),
-        cmd!("layer.flatten", "Flatten layer", ["Layers"], Some("Ctrl+M"), "{layer?} — a fill or masked paint layer becomes a plain paint layer", has_layer, flatten),
+        cmd!(
+            "layer.flatten",
+            "Flatten layer",
+            ["Layers"],
+            Some("Ctrl+M"),
+            "{layer?} — a fill or masked paint layer becomes a plain paint layer",
+            has_layer,
+            flatten
+        ),
         cmd!(
             "layer.instantiateAll",
             "Instantiate across texture sets",
@@ -156,22 +164,8 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Other("flattening a folder is not supported yet; flatten its layers".into()));
     }
     s.update();
-    let cache = s.caches.get(ts).ok_or_else(|| EngineError::Other("texture set not ready".into()))?;
-    let size = cache.size;
-    let tiles: Vec<(u32, u32)> = cache.covered_tiles.iter().copied().collect();
-    let empty = Default::default();
-    let inputs = texturecraft_compose::Inputs {
-        project: &s.doc.project,
-        ts,
-        mesh: &s.mesh,
-        gbuf: &cache.gbuf,
-        pixels: &s.doc.pixels,
-        baked: s.doc.baked.get(&ts).unwrap_or(&empty),
-        preview: None,
-        images: &s.images,
-        bounds: s.mesh.bounds(),
-    };
-    let flat = texturecraft_compose::flatten_layer(&inputs, id, &tiles).ok_or_else(|| EngineError::Other("nothing to flatten".into()))?;
+    let size = s.caches.get(ts).ok_or_else(|| EngineError::Other("texture set not ready".into()))?.size;
+    let flat = s.flatten(ts, id).ok_or_else(|| EngineError::Other("nothing to flatten".into()))?;
     s.edit("Flatten layer", |s| {
         for c in Channel::ALL {
             s.doc.pixels.layers.remove(&(id, c));
@@ -194,6 +188,28 @@ fn flatten(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({ "layer": id.0 }))
+}
+
+impl Session {
+    /// Layer `id` of texture set `ts` alone (content times mask) as premultiplied tiles per
+    /// channel over the set's covered tiles. None for folders or a set not ready.
+    pub(crate) fn flatten(&self, ts: usize, id: LayerId) -> Option<Vec<texturecraft_compose::eval::FlatTile>> {
+        let cache = self.caches.get(ts)?;
+        let tiles: Vec<(u32, u32)> = cache.covered_tiles.iter().copied().collect();
+        let empty = Default::default();
+        let inputs = texturecraft_compose::Inputs {
+            project: &self.doc.project,
+            ts,
+            mesh: &self.mesh,
+            gbuf: &cache.gbuf,
+            pixels: &self.doc.pixels,
+            baked: self.doc.baked.get(&ts).unwrap_or(&empty),
+            preview: None,
+            images: &self.images,
+            bounds: self.mesh.bounds(),
+        };
+        texturecraft_compose::flatten_layer(&inputs, id, &tiles)
+    }
 }
 
 /// Resample every painted image of texture set `ts` to `size` (after a size change).

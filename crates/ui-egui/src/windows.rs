@@ -63,10 +63,27 @@ pub(crate) fn display(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.add_space(6.0);
     ui.label(caption("Camera settings"));
     slider(ui, "Field of view (deg)", &mut d.fov, 5.0..=120.0, 0);
+    let mut ortho = app.session.camera.ortho;
+    if ui.checkbox(&mut ortho, "Orthographic").changed() {
+        app.run("camera.set", json!({"ortho": ortho}));
+    }
     ui.horizontal(|ui| {
         ui.label("Tone mapping");
         ui.selectable_value(&mut d.tone_mapping, ToneMapping::Linear, "Linear");
         ui.selectable_value(&mut d.tone_mapping, ToneMapping::AcesFilmic, "ACES filmic");
+    });
+    cameras(app, ui);
+    ui.add_space(6.0);
+    ui.label(caption("Depth of field"));
+    ui.checkbox(&mut d.dof.enabled, "Depth of field (viewport and Rendering mode)");
+    ui.add_enabled_ui(d.dof.enabled, |ui| {
+        let far = (app.session.camera.distance * 4.0).max(d.dof.focus_distance);
+        slider(ui, "Focus distance", &mut d.dof.focus_distance, 0.0..=far, 2).on_hover_text("Depth of the sharp plane along the view (0: the orbit center)");
+        slider(ui, "Aperture", &mut d.dof.aperture, 0.0..=1.0, 3).on_hover_text("Lens size: how quickly things blur away from the focus distance");
+        let picking = crate::viewport::focus_picking(ui.ctx());
+        if ui.selectable_label(picking, format!("{}  Pick focus in the viewport", ic::CROSSHAIR_SIMPLE)).clicked() {
+            crate::viewport::set_focus_picking(ui.ctx(), !picking);
+        }
     });
     ui.add_space(6.0);
     ui.label(caption("Viewer settings"));
@@ -75,11 +92,46 @@ pub(crate) fn display(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.checkbox(&mut app.ui.uv_wireframe, "Show UV wireframe in the 2D view");
     ui.checkbox(&mut d.taa, "Temporal anti-aliasing (refines the 3D view while it is still)");
     if d != before {
-        app.session.camera.fov = d.fov;
+        if d.fov != before.fov {
+            app.session.camera.fov = d.fov;
+        }
         app.session.doc.project.display = d;
     }
     if import_hdr {
         crate::web_files::import_environment(app, &ctx);
+    }
+}
+
+/// The camera list: rename (edit the name), view or delete saved and imported cameras, save the
+/// current view.
+fn cameras(app: &mut TextureCraftApp, ui: &mut Ui) {
+    let current = texturecraft_engine::camera_cmds::current(&app.session);
+    let names: Vec<String> = app.session.doc.project.cameras.iter().map(|c| c.name.clone()).collect();
+    for (i, name) in names.iter().enumerate() {
+        ui.horizontal(|ui| {
+            if icon_button(ui, ic::VIDEO_CAMERA, "View through this camera", current == Some(i), 20.0).clicked() {
+                app.run("camera.select", json!({"index": i}));
+            }
+            // The name being typed lives in egui's memory until the field loses focus.
+            let id = ui.id().with(("camera_name", i));
+            let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| name.clone());
+            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 26.0));
+            if r.changed() {
+                ui.data_mut(|d| d.insert_temp(id, text.clone()));
+            }
+            if r.lost_focus() {
+                ui.data_mut(|d| d.remove::<String>(id));
+                if text.trim() != name && !text.trim().is_empty() {
+                    app.run("camera.rename", json!({"index": i, "to": text.trim()}));
+                }
+            }
+            if icon_button(ui, ic::TRASH, "Delete this camera", false, 20.0).clicked() {
+                app.run("camera.remove", json!({"index": i}));
+            }
+        });
+    }
+    if ui.button(format!("{}  Save view as camera", ic::PLUS)).clicked() {
+        app.run("camera.add", json!({}));
     }
 }
 
@@ -98,7 +150,7 @@ pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
     } else {
         "Base color, Metallic, Roughness and Specular level."
     };
-    ui.label(RichText::new(format!("GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading. {channels} Optional channels add a clear coat (Coat weight, Coat roughness), sheen (Sheen weight, color, roughness), anisotropy (Anisotropy level, angle) and subsurface scattering (Scattering weight).")).color(TOKENS.text_dim));
+    ui.label(RichText::new(format!("GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading. {channels} Optional channels add a clear coat (Coat weight, Coat roughness, Coat normal), sheen (Sheen weight, color, roughness), anisotropy (Anisotropy level, angle), subsurface scattering (Scattering weight) and transmission (Transmission).")).color(TOKENS.text_dim));
     ui.add_space(6.0);
     ui.checkbox(&mut d.parallax, "Parallax occlusion (height channel)")
         .on_hover_text("Offsets the textures by the height channel, at the height to normal strength");
@@ -112,6 +164,10 @@ pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
     .on_hover_text("Color of the light that travels under the surface (each channel goes as far as its value)");
     slider(ui, "Scatter radius", &mut d.scatter_radius, 0.0..=1.0, 3)
         .on_hover_text("How far light travels under the surface, as a fraction of the mesh size (where the Scattering weight channel is painted)");
+    ui.add_space(6.0);
+    ui.label(caption("Transmission"));
+    slider(ui, "Index of refraction", &mut d.ior, 1.0..=3.0, 2)
+        .on_hover_text("How strongly transmissive surfaces bend light (where the Transmission channel is painted): water 1.33, glass 1.5, diamond 2.42");
     if d != before {
         app.session.doc.project.display = d;
     }

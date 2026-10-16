@@ -11,6 +11,10 @@
 //! | Emissive  | sRGB8    | emissive          |                |                   | scattering weight |
 //! | Lobes     | RGBA8    | coat weight       | coat roughness | anisotropy level  | anisotropy angle  |
 //! | Sheen     | sRGB8    | sheen color       |                |                   | sheen weight      |
+//! | Extra     | RGBA8    | coat normal x     | coat normal y  | transmission      |                   |
+//!
+//! Extra packs the coat normal's x and y as `128 + 127 × n` (the default normal is exactly 0;
+//! z is rebuilt in the shader).
 //!
 //! Alpha of sRGB formats is linear. Channels a set lacks pack their default values, which switch
 //! the extra lobes off, so the renderer can keep Lobes and Sheen as 1×1 placeholders until a
@@ -40,11 +44,21 @@ pub enum DisplayKind {
     Lobes,
     /// sRGB8: sheen color, alpha = sheen weight.
     Sheen,
+    /// RGBA8 linear: coat normal x and y, transmission.
+    Extra,
 }
 
 impl DisplayKind {
-    pub const ALL: [DisplayKind; 7] =
-        [DisplayKind::BaseColor, DisplayKind::Orm, DisplayKind::Normal, DisplayKind::Height, DisplayKind::Emissive, DisplayKind::Lobes, DisplayKind::Sheen];
+    pub const ALL: [DisplayKind; 8] = [
+        DisplayKind::BaseColor,
+        DisplayKind::Orm,
+        DisplayKind::Normal,
+        DisplayKind::Height,
+        DisplayKind::Emissive,
+        DisplayKind::Lobes,
+        DisplayKind::Sheen,
+        DisplayKind::Extra,
+    ];
 
     /// Bytes per texel of the upload format.
     pub fn bytes_per_texel(self) -> usize {
@@ -60,6 +74,7 @@ impl DisplayKind {
             Channel::Emissive | Channel::ScatterWeight => DisplayKind::Emissive,
             Channel::CoatWeight | Channel::CoatRoughness | Channel::AnisotropyLevel | Channel::AnisotropyAngle => DisplayKind::Lobes,
             Channel::SheenColor | Channel::SheenWeight => DisplayKind::Sheen,
+            Channel::CoatNormal | Channel::Transmission => DisplayKind::Extra,
             _ => DisplayKind::Orm,
         }
     }
@@ -118,6 +133,18 @@ pub fn tile_bytes(comp: &Composite, baked: &BakedMaps, kind: DisplayKind, tx: u3
                 for (d, lane) in px.iter_mut().zip(&lanes) {
                     *d = lane(i);
                 }
+            }
+        }
+        DisplayKind::Extra => {
+            let (n, transmission) = (get(Channel::CoatNormal), scalar8(Channel::Transmission));
+            // Signed 8-bit around 128 so the flat normal packs exactly.
+            let snorm = |v: u16| (128.0 + 127.0 * (v as f32 / 65535.0 * 2.0 - 1.0)).round().clamp(0.0, 255.0) as u8;
+            for (i, px) in out.chunks_exact_mut(4).enumerate() {
+                for (k, d) in px.iter_mut().take(2).enumerate() {
+                    *d = n.and_then(|t| t.get(i * 3 + k)).map_or(128, |v| snorm(*v));
+                }
+                px[2] = transmission(i);
+                px[3] = 0;
             }
         }
         DisplayKind::Orm => {
@@ -194,6 +221,7 @@ mod tests {
         assert_eq!(&tile_bytes(&comp, &BakedMaps::default(), DisplayKind::Emissive, 0, 0)[..4], &[0, 0, 0, 0]);
         assert_eq!(&tile_bytes(&comp, &BakedMaps::default(), DisplayKind::Lobes, 0, 0)[..4], &[0, 25, 0, 0], "lobes off, coat roughness 0.1");
         assert_eq!(&tile_bytes(&comp, &BakedMaps::default(), DisplayKind::Sheen, 0, 0)[..4], &[255, 255, 255, 0]);
+        assert_eq!(&tile_bytes(&comp, &BakedMaps::default(), DisplayKind::Extra, 0, 0)[..4], &[128, 128, 0, 0], "flat coat normal, no transmission");
         for k in DisplayKind::ALL {
             assert_eq!(k.default_texel(), tile_bytes(&comp, &BakedMaps::default(), k, 3, 5)[..k.bytes_per_texel()]);
         }
@@ -229,11 +257,14 @@ mod tests {
         set(Channel::SheenWeight, &[to_u16(0.8)]);
         set(Channel::SheenRoughness, &[to_u16(0.3)]);
         set(Channel::ScatterWeight, &[to_u16(0.4)]);
+        set(Channel::Transmission, &[to_u16(0.6)]);
+        set(Channel::CoatNormal, &[to_u16(1.0), to_u16(0.5), to_u16(1.0)]);
         let px = |k: DisplayKind| tile_bytes(&comp, &BakedMaps::default(), k, 0, 0)[4..8].to_vec();
         let near = |a: &[u8], b: &[u8]| a.iter().zip(b).all(|(x, y)| x.abs_diff(*y) <= 1);
         assert!(near(&px(DisplayKind::Lobes), &[255, 51, 153, 64]), "{:?}", px(DisplayKind::Lobes));
         assert!(near(&px(DisplayKind::Sheen), &[255, 0, 188, 204]), "{:?}", px(DisplayKind::Sheen));
         assert!(near(&px(DisplayKind::Normal)[3..], &[77]) && near(&px(DisplayKind::Emissive)[3..], &[102]));
+        assert!(near(&px(DisplayKind::Extra), &[255, 128, 153, 0]), "{:?}", px(DisplayKind::Extra));
         for c in Channel::LOBES {
             assert_ne!(DisplayKind::of_channel(c), DisplayKind::Orm, "{c:?}");
         }

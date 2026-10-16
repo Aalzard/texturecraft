@@ -30,9 +30,10 @@ USAGE:
   texturecraft-cli export <input> <dir> [--preset <name>] [--format <ext>] [--padding <mode>] [--size <px>]
       Export textures (default preset: Document channels + Normal + AO).
   texturecraft-cli render <input> <out.png> [--size <W>x<H>] [--view 3d|2d] [--yaw <deg>] [--pitch <deg>]
-                   [--samples <n>] [--bounces <n>]
-      Render the viewport to PNG (needs a GPU or software adapter); --samples path traces it on
-      the CPU instead (Rendering mode).
+                   [--samples <n>] [--bounces <n>] [--cpu]
+      Render the viewport to PNG (needs a GPU or software adapter); --samples path traces it
+      instead (Rendering mode), on the GPU when it has compute shaders, else (or with --cpu) on
+      the CPU.
   texturecraft-cli new <mesh file | builtin:<id>> <out.tcraft> [--resolution <px>] [--sample]
       New project; --sample bakes and applies a smart material to every texture set.
   texturecraft-cli mcp [--bridge <port>] [--token <token>] [--read-root <dir>] [--write-root <dir>]
@@ -54,7 +55,7 @@ const SUBCOMMANDS: &[(&str, &[&str], &[&str])] = &[
     ("batch", &[], &[]),
     ("bake", &["-o", "--resolution", "--maps"], &[]),
     ("export", &["--preset", "--format", "--padding", "--size"], &[]),
-    ("render", &["--size", "--view", "--yaw", "--pitch", "--samples", "--bounces"], &[]),
+    ("render", &["--size", "--view", "--yaw", "--pitch", "--samples", "--bounces"], &["--cpu"]),
     ("new", &["--resolution"], &["--sample"]),
     ("mcp", &["--bridge", "--token", "--read-root", "--write-root"], &[]),
     ("serve", &["--port", "--read-root", "--write-root"], &[]),
@@ -333,12 +334,14 @@ fn render(a: &Args) -> R {
         pitch: a.num("--pitch")?,
         samples: a.num("--samples")?,
         bounces: a.num("--bounces")?,
+        cpu: a.has("--cpu"),
     };
     let mut h = open(input, None)?;
-    let (w, ht, png) = h.render_png(&o).map_err(s)?;
-    std::fs::write(out, png).map_err(|e| format!("cannot write {out}: {e}"))?;
-    let by = if o.samples.is_some() { "path traced" } else { h.adapter().unwrap_or("GPU") };
-    eprintln!("wrote {out} ({w}x{ht}, {by})");
+    let t0 = std::time::Instant::now();
+    let r = h.render_png(&o).map_err(s)?;
+    let secs = t0.elapsed().as_secs_f64();
+    std::fs::write(out, &r.png).map_err(|e| format!("cannot write {out}: {e}"))?;
+    eprintln!("wrote {out} ({}x{}, {}, {secs:.2} s)", r.width, r.height, r.by);
     Ok(())
 }
 

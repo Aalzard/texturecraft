@@ -93,9 +93,13 @@ impl Headless {
                     pitch: f32_of(p, "pitch")?,
                     samples: u32_of(p, "samples")?,
                     bounces: u32_of(p, "bounces")?,
+                    cpu: match p.get("cpu") {
+                        None | Some(Value::Null) => false,
+                        Some(v) => v.as_bool().ok_or_else(|| bad("`cpu` must be true or false"))?,
+                    },
                 };
-                let (w, h, png) = self.render_png(&o)?;
-                Ok(json!({ "width": w, "height": h, "png": base64::engine::general_purpose::STANDARD.encode(png) }))
+                let r = self.render_png(&o)?;
+                Ok(json!({ "width": r.width, "height": r.height, "by": r.by, "png": base64::engine::general_purpose::STANDARD.encode(r.png) }))
             }
             m if m.starts_with("ui.") || m == "viewport.screenshot" => {
                 Err(bad(format!("`{m}` needs the running app (texturecraft --control <port>); headless renders use `render`")))

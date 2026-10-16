@@ -48,12 +48,7 @@ fn new(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn material(s: &mut Session, p: &Value) -> Result<Value> {
     let id = strp(p, "material").ok_or_else(|| bad("material.apply", "`material` is required"))?;
-    let place = match (u64p(p, "above"), u64p(p, "index")) {
-        (Some(above), _) => Place::Above(texturecraft_core::LayerId(above), boolp(p, "inside").unwrap_or(false)),
-        (None, Some(i)) => Place::Index(usize::try_from(i).unwrap_or(usize::MAX)),
-        (None, None) => Place::Selection,
-    };
-    let l = crate::materials::apply_at(s, id, place)?;
+    let l = crate::materials::apply_at(s, id, Place::from_params(p))?;
     Ok(json!({ "layer": l.0 }))
 }
 

@@ -74,6 +74,8 @@ pub struct TextureCraftApp {
     pub profiler: profile::Profiler,
     /// Where the last 3D stroke ended (viewport pixels), for Shift+click straight lines.
     pub last_paint_point: Option<texturecraft_engine::geom::glam::Vec2>,
+    /// The decal layer the next click in the 3D view places.
+    pub placing_decal: Option<texturecraft_engine::core::LayerId>,
     /// The wgpu state (screenshots read the renderer's targets).
     pub render_state: Option<eframe::egui_wgpu::RenderState>,
     last_time: f64,
@@ -105,6 +107,7 @@ impl TextureCraftApp {
             library: None,
             render: render_mode::RenderView::default(),
             last_paint_point: None,
+            placing_decal: None,
             render_state: cc.wgpu_render_state.clone(),
             last_time: 0.0,
             next_autosave,

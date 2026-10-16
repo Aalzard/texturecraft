@@ -142,7 +142,8 @@
   rotation, blur, ACES or linear tone mapping, key-light shadows, bloom, vignette, sharpen and
   grain, parallax occlusion, and temporal anti-aliasing that refines the image while you look.
 - **Rendering mode** (F10): a progressive, path-traced view of your textures with multi-bounce
-  light, environment importance sampling and one-click PNG save.
+  light, environment importance sampling and one-click PNG save, traced on the GPU (compute
+  shaders, desktop and WebGPU) or on the CPU.
 
 <p align="center">
   <img src="docs/images/texturecraft-render.png" alt="A path-traced render of the material ball in worn red paint over bare steel, made with texturecraft-cli render --samples 256" width="80%">

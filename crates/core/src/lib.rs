@@ -15,10 +15,10 @@ pub mod project;
 pub use blend::{BlendMode, blend1, blend3, lum, mix3};
 pub use channel::{Channel, ChannelFormat, ChannelKind};
 pub use layer::{
-    ChannelBlend, CompareOp, Effect, EffectKind, Fill, Filter, Generator, GeneratorKind, HeightMask, Layer, LayerId, LayerKind, Levels, Mask, MaskBackground, Procedural,
-    ProceduralKind, Projection, Source, hsl_adjust,
+    ChannelBlend, CompareOp, Decal, Effect, EffectKind, Fill, Filter, Generator, GeneratorKind, HeightMask, Layer, LayerId, LayerKind, Levels, Mask, MaskBackground,
+    Procedural, ProceduralKind, Projection, Source, gradient, hsl_adjust, per_unit,
 };
-pub use project::{AoMixing, BakeMatch, BakeSettings, BakedMap, DisplaySettings, FORMAT_VERSION, NormalFormat, NormalMixing, Project, TextureSet, TileGrid, ToneMapping, UDIM_RANGE};
+pub use project::{AoMixing, BakeMatch, BakeSettings, BakedMap, Camera, DepthOfField, DisplaySettings, FORMAT_VERSION, NormalFormat, NormalMixing, Project, TextureSet, TileGrid, ToneMapping, UDIM_RANGE};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum CoreError {

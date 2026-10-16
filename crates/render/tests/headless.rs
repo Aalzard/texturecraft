@@ -248,6 +248,13 @@ fn bench_1080p() {
     });
     println!("everything: {:.3} ms/frame", run(&mut h, &all));
     println!("parallax occlusion: {:.3} ms/frame", run(&mut h, &shaded(&frame, |s| s.parallax = true)));
+    println!("depth of field: {:.3} ms/frame", run(&mut h, &shaded(&frame, |s| s.dof = Some([0.0, 0.1]))));
+    println!("subsurface blur: {:.3} ms/frame", run(&mut h, &shaded(&frame, |s| s.sss_blur = Some([0.1, 0.04, 0.025]))));
+    let both = shaded(&frame, |s| {
+        s.dof = Some([0.0, 0.1]);
+        s.sss_blur = Some([0.1, 0.04, 0.025]);
+    });
+    println!("depth of field + subsurface blur: {:.3} ms/frame", run(&mut h, &both));
     // Every extra lobe painted (full-size lobe textures), with the key light.
     fill_res(&mut h, 2048, &[0, 1], DisplayKind::Lobes, &[255, 25, 200, 60]);
     fill_res(&mut h, 2048, &[0, 1], DisplayKind::Sheen, &[200, 150, 255, 200]);
@@ -426,8 +433,9 @@ fn lobe_channels_at_their_defaults_change_nothing() {
     fill(&mut h, &[0, 1], DisplayKind::Lobes, &[255, 200, 255, 90]);
     fill(&mut h, &[0, 1], DisplayKind::Sheen, &[255, 0, 0, 255]);
     fill(&mut h, &[0, 1], DisplayKind::Emissive, &[0, 0, 0, 255]);
+    fill(&mut h, &[0, 1], DisplayKind::Extra, &[255, 0, 255, 0]);
     assert_ne!(render(&mut h, &lit, "lobes_painted").px, base.px);
-    for k in [DisplayKind::Lobes, DisplayKind::Sheen, DisplayKind::Emissive] {
+    for k in [DisplayKind::Lobes, DisplayKind::Sheen, DisplayKind::Emissive, DisplayKind::Extra] {
         fill(&mut h, &[0, 1], k, &k.default_texel());
     }
     assert_eq!(render(&mut h, &lit, "lobes_defaults").px, base.px);
@@ -501,4 +509,137 @@ fn subsurface_scattering_softens_the_terminator() {
     assert!(luma(&skin, &dark) > luma(&lambert, &dark) + 3.0, "shadow side {} -> {}", luma(&lambert, &dark), luma(&skin, &dark));
     assert!(luma(&skin, &bright) - luma(&skin, &dark) < luma(&lambert, &bright) - luma(&lambert, &dark), "contrast drops");
     assert!(warm(&skin) > warm(&lambert) + 2.0, "the scatter color tints the falloff ({} -> {})", warm(&lambert), warm(&skin));
+}
+
+// ---- Transmission, coat normal, depth of field, subsurface blur --------------------------------
+
+/// A base color checker (8-texel squares) on both sets, for detail to blur.
+fn checker(h: &mut Headless) {
+    for ts in 0..2 {
+        for (tx, ty) in (0..16).map(|i| (i % 4, i / 4)) {
+            let bytes: Vec<u8> =
+                (0..64 * 64).flat_map(|i| if ((i % 64) / 8 + (i / 64) / 8) % 2 == 0 { [230, 230, 230, 255] } else { [20, 20, 20, 255] }).collect();
+            h.renderer.upload_tile(&h.device, &h.queue, ts, DisplayKind::BaseColor, tx, ty, &bytes);
+        }
+    }
+}
+
+/// Σ|∂luma/∂x| over `mask`: how much detail the image shows there.
+fn detail(img: &Img, mask: &[bool]) -> f32 {
+    (0..mask.len())
+        .filter(|i| mask[*i] && i % 480 < 479 && mask[i + 1])
+        .map(|i| (img.luma(i as u32 % 480 + 1, i as u32 / 480) - img.luma(i as u32 % 480, i as u32 / 480)).abs())
+        .sum()
+}
+
+/// Mean |luma difference| over a square of side 2r around (x, y).
+fn patch_diff(a: &Img, b: &Img, (x, y): (u32, u32), r: u32) -> f32 {
+    let mut sum = 0.0;
+    for yy in y - r..y + r {
+        for xx in x - r..x + r {
+            sum += (a.luma(xx, yy) - b.luma(xx, yy)).abs();
+        }
+    }
+    sum / (4 * r * r) as f32
+}
+
+/// View depth of the mesh under the view's center pixel.
+fn center_depth(frame: &Frame) -> f32 {
+    let mesh = primitives::material_ball();
+    let bvh = texturecraft_geom::Bvh::new(&mesh);
+    let cam = frame.camera;
+    let ray = cam.ray(texturecraft_geom::glam::Vec2::ZERO, frame.size[0] as f32 / frame.size[1] as f32);
+    let hit = bvh.closest(ray.origin, ray.dir, f32::MAX).expect("the ball is in the middle");
+    (ray.origin + ray.dir * hit.t - cam.eye()).dot(cam.forward())
+}
+
+#[test]
+fn depth_of_field_blurs_away_from_the_focus_plane() {
+    let Some((mut h, frame)) = setup() else { return };
+    let mask = mesh_mask(&mut h, &frame, &[0, 1]);
+    checker(&mut h);
+    let sharp = render(&mut h, &frame, "dof_off");
+    let dof = |focus: f32, aperture: f32| shaded(&frame, |s| s.dof = Some([focus, aperture]));
+    assert_eq!(render(&mut h, &dof(0.0, 0.0), "dof_pinhole").px, sharp.px, "a pinhole lens changes nothing");
+    let z = center_depth(&frame);
+    let focused = render(&mut h, &dof(z, 0.15), "dof_focused");
+    let center = (frame.size[0] / 2, frame.size[1] / 2);
+    assert!(patch_diff(&focused, &sharp, center, 5) < 3.0, "the focus plane stays sharp: {}", patch_diff(&focused, &sharp, center, 5));
+    let far = render(&mut h, &dof(z * 10.0, 0.3), "dof_far_focus");
+    let (d_sharp, d_far) = (detail(&sharp, &mask), detail(&far, &mask));
+    assert!(d_far < 0.5 * d_sharp, "out of focus, the checker blurs: detail {d_sharp} -> {d_far}");
+    assert!(patch_diff(&far, &sharp, center, 5) > 5.0);
+    // Focused on the ball, it keeps more of its detail than focused far behind it.
+    assert!(detail(&focused, &mask) > d_far);
+    // Idle accumulation averages frames with the sampling spiral turned each time.
+    let taa = shaded(&dof(z * 10.0, 0.3), |s| s.taa = true);
+    assert_eq!(render(&mut h, &taa, "dof_taa_first").px, far.px, "the first sample is the plain frame");
+    for _ in 1..TAA_SAMPLES {
+        render(&mut h, &taa, "dof_taa_sample");
+    }
+    assert!(!h.renderer.accumulating(1));
+    assert_ne!(render(&mut h, &taa, "dof_taa_converged").px, far.px);
+}
+
+#[test]
+fn subsurface_blur_spreads_only_scattering_light() {
+    let Some((mut h, frame)) = setup() else { return };
+    let lit = shaded(&frame, |s| s.light = LIGHT);
+    let mask = mesh_mask(&mut h, &lit, &[0, 1]);
+    checker(&mut h);
+    let plain = render(&mut h, &lit, "sss_blur_off");
+    let blur = shaded(&lit, |s| s.sss_blur = Some([0.06, 0.024, 0.015]));
+    assert_eq!(render(&mut h, &blur, "sss_blur_no_weight").px, plain.px, "nothing scatters without the scattering weight");
+    fill(&mut h, &[0, 1], DisplayKind::Emissive, &[0, 0, 0, 255]);
+    let wrap = render(&mut h, &lit, "sss_wrap_only");
+    let blurred = render(&mut h, &blur, "sss_blur_on");
+    let (d0, d1) = (detail(&wrap, &mask), detail(&blurred, &mask));
+    assert!(d1 < 0.85 * d0, "the scattering light blurs the checker: detail {d0} -> {d1}");
+    // On a plain color the blur only moves light around the smooth shading (the checker's mean
+    // display value rises: averaging happens before the sRGB curve).
+    fill(&mut h, &[0, 1], DisplayKind::BaseColor, &[150, 150, 150, 255]);
+    let mean = |img: &Img| region_mean(&mask, |x, y| img.luma(x, y));
+    let (m0, m1) = (mean(&render(&mut h, &lit, "sss_plain_wrap")), mean(&render(&mut h, &blur, "sss_plain_blur")));
+    assert!((m1 - m0).abs() < 2.0, "the blur moves light, it adds none: {m0} -> {m1}");
+}
+
+/// An environment that is bright only around `dir` (world space, rotation 0).
+fn spot_environment(dir: texturecraft_geom::glam::Vec3) -> ImageRes {
+    let (w, hh) = (256u32, 128u32);
+    let rgba = (0..w * hh)
+        .map(|i| {
+            let d = texturecraft_render::ibl::dir_of(((i % w) as f32 + 0.5) / w as f32, ((i / w) as f32 + 0.5) / hh as f32);
+            if d.dot(dir) > 0.5 { [6.0, 6.0, 6.0, 1.0] } else { [0.02, 0.02, 0.02, 1.0] }
+        })
+        .collect();
+    ImageRes { width: w, height: hh, rgba, srgb: false }
+}
+
+#[test]
+fn transmission_shows_the_environment_behind_the_surface() {
+    let Some((mut h, frame)) = setup() else { return };
+    h.renderer.set_environment(&h.device, &h.queue, "resource:behind.hdr", Some(&spot_environment(frame.camera.forward())));
+    fill(&mut h, &[0, 1], DisplayKind::BaseColor, &[255, 255, 255, 255]);
+    fill(&mut h, &[0, 1], DisplayKind::Orm, &[255, 10, 0, 128]);
+    let center = (frame.size[0] / 2, frame.size[1] / 2);
+    let opaque = render(&mut h, &frame, "glass_off");
+    fill(&mut h, &[0, 1], DisplayKind::Extra, &[128, 128, 255, 0]);
+    let glass = render(&mut h, &frame, "glass_on");
+    let luma = |img: &Img| img.mean(center.0 - 4, center.1 - 4, center.0 + 4, center.1 + 4);
+    assert!(luma(&glass) > luma(&opaque) + 60.0, "the bright environment behind shows through: {} -> {}", luma(&opaque), luma(&glass));
+}
+
+#[test]
+fn coat_normal_turns_the_coat_reflection() {
+    let Some((mut h, frame)) = setup() else { return };
+    let lit = shaded(&frame, |s| s.light = LIGHT);
+    let mask = mesh_mask(&mut h, &lit, &[0, 1]);
+    fill(&mut h, &[0, 1], DisplayKind::Lobes, &[255, 13, 0, 0]);
+    let flat = render(&mut h, &lit, "coat_normal_flat");
+    fill(&mut h, &[0, 1], DisplayKind::Extra, &[128, 128, 0, 0]);
+    assert_eq!(render(&mut h, &lit, "coat_normal_default").px, flat.px, "the flat coat normal is exact");
+    fill(&mut h, &[0, 1], DisplayKind::Extra, &[230, 128, 0, 0]);
+    let tilted = render(&mut h, &lit, "coat_normal_tilted");
+    let diff = region_mean(&mask, |x, y| (tilted.luma(x, y) - flat.luma(x, y)).abs());
+    assert!(diff > 2.0, "a tilted coat normal moves the coat highlight: {diff}");
 }

@@ -10,6 +10,7 @@ use texturecraft_compose::PixelStore;
 use texturecraft_core::{EffectKind, LayerId, LayerKind, Project, Source, TextureSet};
 
 use crate::commands::{CommandSpec, always, has_layer};
+use crate::materials::Place;
 use crate::session::{Document, StackTarget};
 use crate::{EngineError, Result, Session, cmd};
 
@@ -19,7 +20,15 @@ pub const SMART_MATERIAL_EXT: &str = "tcmat";
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!("material.save", "Create smart material", ["Layers"], None, "{layer?, path: .tcmat file, name?}", has_layer, save),
-        cmd!("material.load", "Add smart material from file", [], None, "{path: .tcmat file}", always, load),
+        cmd!(
+            "material.load",
+            "Add smart material from file",
+            [],
+            None,
+            "{path: .tcmat file, above?: layer id, inside?: bool, index?: n} — above the selection by default, or placed like material.apply",
+            always,
+            load
+        ),
     ]
 }
 
@@ -83,8 +92,18 @@ impl Session {
 
     /// Add a smart material file above the selection (one undo step). Returns the new layer.
     pub fn add_smart_material_bytes(&mut self, bytes: &[u8]) -> Result<LayerId> {
+        self.add_smart_material_bytes_at(bytes, Place::Selection)
+    }
+
+    /// [`Session::add_smart_material_bytes`] at `place` (shelf drag and drop).
+    pub fn add_smart_material_bytes_at(&mut self, bytes: &[u8], place: Place) -> Result<LayerId> {
         let pf = texturecraft_formats::load_project_bytes(bytes).map_err(fe)?;
-        let root = pf.project.texture_sets.first().and_then(|t| t.stack.last().copied()).ok_or_else(|| EngineError::Other("the smart material file has no layer".into()))?;
+        let root = pf
+            .project
+            .texture_sets
+            .first()
+            .and_then(|t| t.stack.last().copied())
+            .ok_or_else(|| EngineError::Other("the smart material file has no layer".into()))?;
         let resources: BTreeMap<String, Arc<Vec<u8>>> = pf.resources.into_iter().map(|(k, v)| (k, Arc::new(v))).collect();
         let src = Document { project: pf.project, pixels: pf.pixels, baked: BTreeMap::new(), resources: resources.clone() };
         let id = self.edit("Add smart material", |s| {
@@ -95,6 +114,7 @@ impl Session {
             let sel = s.selected_layer();
             let inside = sel.and_then(|l| s.doc.project.layer(l).ok()).is_some_and(|l| l.is_group());
             let id = crate::layer_ops::copy_tree(&src, root, &mut s.doc, ts, sel, inside, 0)?;
+            place.apply(s, id)?;
             s.selected.insert(ts, id);
             s.target = StackTarget::Content;
             Ok(id)
@@ -128,7 +148,7 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
 fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let path = strp(p, "path").ok_or_else(|| bad("material.load", "`path` is required"))?;
     let bytes = std::fs::read(path).map_err(|e| bad("material.load", format!("cannot read {path}: {e}")))?;
-    let id = s.add_smart_material_bytes(&bytes)?;
+    let id = s.add_smart_material_bytes_at(&bytes, Place::from_params(p))?;
     Ok(json!({ "layer": id.0 }))
 }
 

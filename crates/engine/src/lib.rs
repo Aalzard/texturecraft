@@ -9,8 +9,11 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod bake_cmds;
+pub mod camera_cmds;
 pub mod commands;
+pub mod decal_cmds;
 pub mod file_cmds;
+pub mod filter_lib;
 pub mod inspect;
 pub mod instance_cmds;
 pub mod layer_cmds;
@@ -35,7 +38,7 @@ pub use bake_cmds::{BakeMesh, BakeMeshes, BakeTask};
 pub use commands::{CommandSpec, command_specs, execute, find};
 pub use path_tool::PathState;
 pub use project_cmds::sample_session;
-pub use session::{CloneSource, Document, FillMode, Session, SetCache, StackTarget, StencilState, Tool, ToolState, ViewMode};
+pub use session::{CloneFrom, CloneSource, Document, FillMode, Session, SetCache, StackTarget, StencilState, Tool, ToolState, ViewMode};
 
 pub use texturecraft_bake as bake;
 pub use texturecraft_compose as compose;

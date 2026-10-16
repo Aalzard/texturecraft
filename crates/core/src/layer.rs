@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{BlendMode, Channel};
+use crate::{BlendMode, Channel, ChannelKind, lum};
 
 /// Id of a layer or effect (one id space per project).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -152,6 +152,28 @@ pub enum Projection {
     Spherical { scale: f32 },
     /// Cylindrical projection around an axis.
     Cylindrical { scale: f32, axis: u8 },
+    /// A geometry decal: the image projected from a frame placed on the surface (outside the
+    /// frame, behind it or beyond its depth the fill does not cover).
+    Decal(Decal),
+}
+
+/// The frame a decal projects from (world space).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Decal {
+    /// The surface point the decal was placed on.
+    pub center: [f32; 3],
+    /// The surface normal there: the decal projects along it.
+    pub normal: [f32; 3],
+    /// Up direction of the unrotated frame.
+    pub up: [f32; 3],
+    /// Width and height (world units).
+    pub size: [f32; 2],
+    /// Rotation around the normal (degrees).
+    pub rotation: f32,
+    /// Shift of the frame from `center` along the unrotated right and up directions (world units).
+    pub offset: [f32; 2],
+    /// How far in front of and behind the frame the decal reaches (world units).
+    pub depth: f32,
 }
 
 impl Default for Projection {
@@ -168,6 +190,7 @@ impl Projection {
             Projection::Planar { .. } => "Planar projection",
             Projection::Spherical { .. } => "Spherical projection",
             Projection::Cylindrical { .. } => "Cylindrical projection",
+            Projection::Decal(_) => "Decal projection",
         }
     }
 }
@@ -480,6 +503,49 @@ pub enum Filter {
         saturation: f32,
         lightness: f32,
     },
+    /// Contrast around mid gray and a luminosity shift, both −1..1 (0 = unchanged).
+    ContrastLuminosity {
+        contrast: f32,
+        luminosity: f32,
+    },
+    /// Color offsets (−1..1 per component) weighted towards the shadows, midtones and highlights.
+    ColorBalance {
+        shadows: [f32; 3],
+        midtones: [f32; 3],
+        highlights: [f32; 3],
+    },
+    /// Luminance mapped through evenly spaced colors (linear RGB; scalars read their gray).
+    GradientMap {
+        colors: Vec<[f32; 3]>,
+    },
+    /// Quantize to `levels` steps (2..64).
+    Posterize {
+        levels: f32,
+    },
+    /// Keep values within `min..max`.
+    Clamp {
+        min: f32,
+        max: f32,
+    },
+    /// Shift each texel's lookup along a noise vector field: `intensity` in texels at 2K,
+    /// `scale` noise features per UV unit.
+    Warp {
+        intensity: f32,
+        scale: f32,
+        seed: u32,
+    },
+    /// Blur along one direction: `radius` in texels at 2K, `angle` in degrees.
+    DirectionalBlur {
+        radius: f32,
+        angle: f32,
+    },
+    /// Smear values downhill along a noise height field ("slope blur"): `radius` in texels at
+    /// 2K, `scale` noise features per UV unit.
+    SlopeBlur {
+        radius: f32,
+        scale: f32,
+        seed: u32,
+    },
 }
 
 /// Push `x` (0..1) towards 1 (`amount` > 0) or 0 (`amount` < 0); `amount` in −1..1.
@@ -530,7 +596,83 @@ pub fn hsl_adjust(rgb: [f32; 3], hue: f32, saturation: f32, lightness: f32) -> [
     [hue_to_rgb(p, q, h + 1.0 / 3.0), hue_to_rgb(p, q, h), hue_to_rgb(p, q, h - 1.0 / 3.0)]
 }
 
+/// Apply a 0..1 function to each component of a channel value: signed values map through
+/// 0..1, normals are left alone.
+pub fn per_unit(kind: ChannelKind, v: [f32; 3], f: impl Fn(f32) -> f32) -> [f32; 3] {
+    match kind {
+        ChannelKind::NormalMap => v,
+        // One-component channels hold their value in the first slot (read as gray).
+        ChannelKind::Signed => [f(v[0] * 0.5 + 0.5) * 2.0 - 1.0; 3],
+        ChannelKind::Scalar => [f(v[0]); 3],
+        ChannelKind::Color => v.map(f),
+    }
+}
+
+/// The color at `t` (0..1) of a gradient through evenly spaced `colors` (None when empty).
+pub fn gradient(colors: &[[f32; 3]], t: f32) -> Option<[f32; 3]> {
+    let last = colors.len().checked_sub(1)?;
+    let pos = if t.is_finite() { t.clamp(0.0, 1.0) * last as f32 } else { 0.0 };
+    let i = (pos.floor() as usize).min(last);
+    let (a, b) = (colors.get(i)?, colors.get((i + 1).min(last))?);
+    let f = pos - i as f32;
+    Some(std::array::from_fn(|k| a[k] + (b[k] - a[k]) * f))
+}
+
 impl Filter {
+    /// Whether the filter reads neighbouring texels (the compositor runs it over a region).
+    pub fn is_neighbourhood(&self) -> bool {
+        matches!(self, Filter::Blur { .. } | Filter::Sharpen { .. } | Filter::Warp { .. } | Filter::DirectionalBlur { .. } | Filter::SlopeBlur { .. })
+    }
+
+    /// The filter applied to one value of a channel of `kind` (masks are scalars). None for
+    /// neighbourhood filters and where it changes nothing (an empty gradient).
+    pub fn point(&self, kind: ChannelKind, v: [f32; 3]) -> Option<[f32; 3]> {
+        let unit = |x: f32| if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.0 };
+        Some(match self {
+            Filter::Invert => per_unit(kind, v, |x| 1.0 - x),
+            Filter::Threshold { level } => per_unit(kind, v, |x| if x >= *level { 1.0 } else { 0.0 }),
+            Filter::Hsl { hue, saturation, lightness } => match kind {
+                ChannelKind::Color => hsl_adjust(v, *hue, *saturation, *lightness),
+                _ => per_unit(kind, v, |x| hsl_adjust([x; 3], 0.0, 0.0, *lightness)[0]),
+            },
+            Filter::ContrastLuminosity { contrast, luminosity } => {
+                let k = 1.0 + contrast.clamp(-1.0, 1.0);
+                per_unit(kind, v, |x| unit((x - 0.5) * k + 0.5 + luminosity))
+            }
+            Filter::ColorBalance { shadows, midtones, highlights } => {
+                // Smooth weights summing to 1: shadows fade out and highlights in with lightness.
+                let weights = |l: f32| {
+                    let l = unit(l);
+                    ((1.0 - l) * (1.0 - l), 2.0 * l * (1.0 - l), l * l)
+                };
+                let shift = |k: usize, l: f32| {
+                    let (s, m, h) = weights(l);
+                    shadows.get(k).copied().unwrap_or(0.0) * s + midtones.get(k).copied().unwrap_or(0.0) * m + highlights.get(k).copied().unwrap_or(0.0) * h
+                };
+                match kind {
+                    ChannelKind::Color => {
+                        let l = lum(v);
+                        std::array::from_fn(|k| unit(v[k] + shift(k, l)))
+                    }
+                    _ => per_unit(kind, v, |x| unit(x + (shift(0, x) + shift(1, x) + shift(2, x)) / 3.0)),
+                }
+            }
+            Filter::GradientMap { colors } => match kind {
+                ChannelKind::Color => gradient(colors, lum(v))?,
+                _ => per_unit(kind, v, |x| gradient(colors, x).map_or(x, lum)),
+            },
+            Filter::Posterize { levels } => {
+                let steps = (levels.clamp(2.0, 64.0).round() - 1.0).max(1.0);
+                per_unit(kind, v, |x| (unit(x) * steps).round() / steps)
+            }
+            Filter::Clamp { min, max } => {
+                let (lo, hi) = (min.min(*max), min.max(*max));
+                per_unit(kind, v, |x| x.max(lo).min(hi))
+            }
+            Filter::Blur { .. } | Filter::Sharpen { .. } | Filter::Warp { .. } | Filter::DirectionalBlur { .. } | Filter::SlopeBlur { .. } => return None,
+        })
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Filter::Blur { .. } => "Blur",
@@ -538,6 +680,14 @@ impl Filter {
             Filter::Invert => "Invert",
             Filter::Threshold { .. } => "Threshold",
             Filter::Hsl { .. } => "HSL Perceptive",
+            Filter::ContrastLuminosity { .. } => "Contrast/Luminosity",
+            Filter::ColorBalance { .. } => "Color Balance",
+            Filter::GradientMap { .. } => "Gradient Map",
+            Filter::Posterize { .. } => "Posterize",
+            Filter::Clamp { .. } => "Clamp",
+            Filter::Warp { .. } => "Warp",
+            Filter::DirectionalBlur { .. } => "Blur Directional",
+            Filter::SlopeBlur { .. } => "Slope Blur",
         }
     }
 }
@@ -676,6 +826,30 @@ mod tests {
     }
 
     #[test]
+    fn point_filters_map_values_and_skip_neighbourhood_filters() {
+        let c = ChannelKind::Color;
+        let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-4);
+        let cl = Filter::ContrastLuminosity { contrast: 1.0, luminosity: 0.0 };
+        assert!(close(cl.point(c, [0.25, 0.5, 0.75]).unwrap(), [0.0, 0.5, 1.0]));
+        assert!(close(Filter::ContrastLuminosity { contrast: 0.0, luminosity: 0.2 }.point(ChannelKind::Scalar, [0.5; 3]).unwrap(), [0.7; 3]));
+        let gm = Filter::GradientMap { colors: vec![[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]] };
+        assert!(close(gm.point(c, [0.0; 3]).unwrap(), [1.0, 0.0, 0.0]));
+        assert!(close(gm.point(c, [1.0; 3]).unwrap(), [0.0, 0.0, 1.0]));
+        assert_eq!(Filter::GradientMap { colors: vec![] }.point(c, [0.3; 3]), None, "an empty gradient changes nothing");
+        assert!(close(Filter::Posterize { levels: 2.0 }.point(c, [0.2, 0.6, 0.9]).unwrap(), [0.0, 1.0, 1.0]));
+        assert!(close(Filter::Clamp { min: 0.8, max: 0.3 }.point(c, [0.1, 0.5, 0.9]).unwrap(), [0.3, 0.5, 0.8]), "swapped bounds never panic");
+        let cb = Filter::ColorBalance { shadows: [0.2, 0.0, 0.0], midtones: [0.0; 3], highlights: [0.0, 0.0, 0.2] };
+        assert!(cb.point(c, [0.05; 3]).unwrap()[0] > 0.2 && cb.point(c, [0.95; 3]).unwrap()[2] > 0.99);
+        assert!(close(Filter::Invert.point(ChannelKind::Signed, [0.5; 3]).unwrap(), [-0.5; 3]));
+        assert_eq!(Filter::Invert.point(ChannelKind::NormalMap, [0.5, 0.5, 1.0]), Some([0.5, 0.5, 1.0]));
+        for f in [Filter::Blur { radius: 1.0 }, Filter::Warp { intensity: 1.0, scale: 1.0, seed: 0 }, Filter::DirectionalBlur { radius: 1.0, angle: 0.0 }] {
+            assert!(f.is_neighbourhood() && f.point(c, [0.5; 3]).is_none());
+        }
+        let nan = Filter::ContrastLuminosity { contrast: f32::NAN, luminosity: f32::NAN };
+        assert!(nan.point(c, [0.5; 3]).unwrap().iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
     fn effect_targets_and_anchor_reads() {
         assert_eq!(EffectKind::Anchor.content_only(), Some(true));
         assert_eq!(EffectKind::Generator(Generator::new(GeneratorKind::Dirt)).content_only(), Some(false));
@@ -683,7 +857,10 @@ mod tests {
         let mut l = Layer::new(LayerId(1), "l", LayerKind::Paint, &[Channel::BaseColor]);
         assert!(!l.reads_anchor());
         let source = Source::Anchor { anchor: LayerId(9), channel: Channel::Height };
-        l.mask = Some(Mask { effects: vec![Effect::new(LayerId(2), EffectKind::Fill { source, projection: Projection::default() })], ..Mask::new(MaskBackground::Black) });
+        l.mask = Some(Mask {
+            effects: vec![Effect::new(LayerId(2), EffectKind::Fill { source, projection: Projection::default() })],
+            ..Mask::new(MaskBackground::Black)
+        });
         assert!(l.reads_anchor());
     }
 

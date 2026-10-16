@@ -236,61 +236,70 @@ impl TileImage {
         if self.allocated_count() == 0 {
             return out;
         }
-        let (sw, sh) = (self.width as f32, self.height as f32);
-        let (dw, dh) = (out.width, out.height);
-        let comps = self.comps;
         for ty in 0..out.tiles_y {
             for tx in 0..out.tiles_x {
-                // Skip destination tiles whose source footprint has no allocated tile.
-                let (x0, y0) = ((tx * TILE) as f32 * sw / dw as f32, (ty * TILE) as f32 * sh / dh as f32);
-                let (x1, y1) = (((tx + 1) * TILE) as f32 * sw / dw as f32, ((ty + 1) * TILE) as f32 * sh / dh as f32);
-                let any = ((y0 as u32).saturating_sub(1) / TILE..=((y1 as u32 + 1) / TILE).min(self.tiles_y.saturating_sub(1)))
-                    .any(|sy| ((x0 as u32).saturating_sub(1) / TILE..=((x1 as u32 + 1) / TILE).min(self.tiles_x.saturating_sub(1))).any(|sx| self.is_allocated(sx, sy)));
-                if !any {
-                    continue;
+                if let Some(data) = self.resampled_tile(width, height, tx, ty, empty) {
+                    out.set_tile(tx, ty, Some(Arc::new(data)));
                 }
-                let mut data = vec![0u16; TILE_AREA * comps];
-                for ly in 0..TILE {
-                    let y = ty * TILE + ly;
-                    if y >= dh {
-                        break;
-                    }
-                    let fy = ((y as f32 + 0.5) * sh / dh as f32 - 0.5).max(0.0);
-                    let (iy, wy) = (fy.floor() as u32, fy.fract());
-                    for lx in 0..TILE {
-                        let x = tx * TILE + lx;
-                        if x >= dw {
-                            break;
-                        }
-                        let fx = ((x as f32 + 0.5) * sw / dw as f32 - 0.5).max(0.0);
-                        let (ix, wx) = (fx.floor() as u32, fx.fract());
-                        let get = |x: u32, y: u32| {
-                            let (x, y) = (x.min(self.width - 1), y.min(self.height - 1));
-                            if self.is_allocated(x / TILE, y / TILE) {
-                                self.get(x, y)
-                            } else {
-                                let mut e = [0u16; 4];
-                                for (d, s) in e.iter_mut().zip(empty) {
-                                    *d = *s;
-                                }
-                                e
-                            }
-                        };
-                        let (a, b, c, d) = (get(ix, iy), get(ix + 1, iy), get(ix, iy + 1), get(ix + 1, iy + 1));
-                        let o = ((ly * TILE + lx) as usize) * comps;
-                        for k in 0..comps {
-                            let top = a[k] as f32 * (1.0 - wx) + b[k] as f32 * wx;
-                            let bot = c[k] as f32 * (1.0 - wx) + d[k] as f32 * wx;
-                            if let Some(slot) = data.get_mut(o + k) {
-                                *slot = (top * (1.0 - wy) + bot * wy + 0.5) as u16;
-                            }
-                        }
-                    }
-                }
-                out.set_tile(tx, ty, Some(Arc::new(data)));
             }
         }
         out
+    }
+
+    /// Tile (tx, ty) of [`TileImage::resampled`] alone (None when its source footprint is
+    /// entirely unallocated).
+    pub fn resampled_tile(&self, width: u32, height: u32, tx: u32, ty: u32, empty: &[u16]) -> Option<Vec<u16>> {
+        let (sw, sh) = (self.width as f32, self.height as f32);
+        let (dw, dh) = (width.max(1), height.max(1));
+        let comps = self.comps;
+        // Skip destination tiles whose source footprint has no allocated tile.
+        let (x0, y0) = ((tx * TILE) as f32 * sw / dw as f32, (ty * TILE) as f32 * sh / dh as f32);
+        let (x1, y1) = (((tx + 1) * TILE) as f32 * sw / dw as f32, ((ty + 1) * TILE) as f32 * sh / dh as f32);
+        let any = ((y0 as u32).saturating_sub(1) / TILE..=((y1 as u32 + 1) / TILE).min(self.tiles_y.saturating_sub(1))).any(|sy| {
+            ((x0 as u32).saturating_sub(1) / TILE..=((x1 as u32 + 1) / TILE).min(self.tiles_x.saturating_sub(1))).any(|sx| self.is_allocated(sx, sy))
+        });
+        if !any || self.width == 0 || self.height == 0 {
+            return None;
+        }
+        let get = |x: u32, y: u32| {
+            let (x, y) = (x.min(self.width - 1), y.min(self.height - 1));
+            if self.is_allocated(x / TILE, y / TILE) {
+                self.get(x, y)
+            } else {
+                let mut e = [0u16; 4];
+                for (d, s) in e.iter_mut().zip(empty) {
+                    *d = *s;
+                }
+                e
+            }
+        };
+        let mut data = vec![0u16; TILE_AREA * comps];
+        for ly in 0..TILE {
+            let y = ty * TILE + ly;
+            if y >= dh {
+                break;
+            }
+            let fy = ((y as f32 + 0.5) * sh / dh as f32 - 0.5).max(0.0);
+            let (iy, wy) = (fy.floor() as u32, fy.fract());
+            for lx in 0..TILE {
+                let x = tx * TILE + lx;
+                if x >= dw {
+                    break;
+                }
+                let fx = ((x as f32 + 0.5) * sw / dw as f32 - 0.5).max(0.0);
+                let (ix, wx) = (fx.floor() as u32, fx.fract());
+                let (a, b, c, d) = (get(ix, iy), get(ix + 1, iy), get(ix, iy + 1), get(ix + 1, iy + 1));
+                let o = ((ly * TILE + lx) as usize) * comps;
+                for k in 0..comps {
+                    let top = a[k] as f32 * (1.0 - wx) + b[k] as f32 * wx;
+                    let bot = c[k] as f32 * (1.0 - wx) + d[k] as f32 * wx;
+                    if let Some(slot) = data.get_mut(o + k) {
+                        *slot = (top * (1.0 - wy) + bot * wy + 0.5) as u16;
+                    }
+                }
+            }
+        }
+        Some(data)
     }
 }
 

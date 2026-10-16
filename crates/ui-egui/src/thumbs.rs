@@ -17,7 +17,7 @@ const SPHERE_PX: usize = 72;
 
 #[derive(Default)]
 pub struct Thumbs {
-    /// Shelf thumbnails by key (`mat:<id>`, `mask:<id>`, `proc:<kind>`, `alpha:<id>`).
+    /// Shelf thumbnails by key (`mat:<id>`, `mask:<id>`, `filter:<id>`, `proc:<kind>`, `alpha:<id>`).
     shelf: HashMap<String, TextureHandle>,
     images: HashMap<String, TextureHandle>,
     /// (frame, thumbnails rendered in it).
@@ -160,6 +160,11 @@ impl Thumbs {
                 px.iter().map(|m| m.map(|m| Sample { base: [0.04 + 0.76 * m; 3], metallic: 0.0, roughness: 0.6, height: 0.0 })).collect();
             sphere_image(SPHERE_PX, &samples)
         })
+    }
+
+    /// Sphere thumbnail of library filter `id` applied to a sample material.
+    pub fn filter(&mut self, ctx: &egui::Context, id: &str) -> Option<TextureHandle> {
+        self.shelf(ctx, format!("filter:{id}"), || sphere_image(SPHERE_PX, &preview::filter(id, SPHERE_PX).unwrap_or_default()))
     }
 
     /// Grayscale swatch of procedural `k`.

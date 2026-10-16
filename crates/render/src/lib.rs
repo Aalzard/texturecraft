@@ -8,14 +8,17 @@
 //! overlay, and a [`headless`] device for renders
 //! without a window. No UI toolkit dependency; the egui shell drives it through
 //! [`Renderer::prepare`] and [`Renderer::blit`]. Fragment passes only, so it runs on WebGPU and
-//! WebGL2 too.
+//! WebGL2 too. Rendering mode's path tracer runs on the CPU ([`trace`]) or, where compute shaders
+//! exist (not WebGL2), on the GPU ([`gpu_trace`]).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod gpu_trace;
 pub mod mesh_maps;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod headless;
 pub mod ibl;
+pub mod readback;
 pub mod renderer;
 pub mod trace;
 

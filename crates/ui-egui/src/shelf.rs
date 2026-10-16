@@ -1,12 +1,14 @@
 //! The asset shelf (the Assets dock tab): Painter-style tabs (materials, smart materials, smart
-//! masks, alphas, procedurals, environments, textures), all built in and procedural. Search
-//! filters across every tab. Materials, smart masks and alphas drag onto the layer stack, a
-//! layer row, the viewport or the brush properties ([`ShelfDrag`]).
+//! masks, filters, alphas, procedurals, environments, textures), all built in and procedural.
+//! Search filters across every tab. Materials (built in and saved), smart masks, filters, alphas
+//! and textures drag onto the layer stack, a layer row, the viewport or the brush properties
+//! ([`ShelfDrag`]); a texture dropped on the 3D view becomes a decal there.
 
 use egui::{Color32, RichText, Sense, Stroke, Ui, vec2};
 use egui_phosphor::regular as ic;
 use serde_json::json;
 use texturecraft_engine::core::ProceduralKind;
+use texturecraft_engine::filter_lib::FILTERS;
 use texturecraft_engine::materials::MATERIALS;
 use texturecraft_engine::paint::alphas;
 use texturecraft_engine::smart_masks::SMART_MASKS;
@@ -21,67 +23,105 @@ enum Tab {
     Materials,
     Smart,
     Masks,
+    Filters,
     Alphas,
     Procedurals,
     Environments,
     Textures,
 }
 
-const TABS: [(Tab, &str, &str); 7] = [
+const TABS: [(Tab, &str, &str); 8] = [
     (Tab::Materials, ic::SPHERE, "Materials"),
     (Tab::Smart, ic::STACK, "Smart materials"),
     (Tab::Masks, ic::CIRCLE_HALF, "Smart masks"),
+    (Tab::Filters, ic::FUNNEL, "Filters"),
     (Tab::Alphas, ic::SHAPES, "Alphas"),
     (Tab::Procedurals, ic::CHECKERBOARD, "Procedurals"),
     (Tab::Environments, ic::SUN_HORIZON, "Environments"),
     (Tab::Textures, ic::IMAGE, "Textures"),
 ];
 
-/// A built-in asset (by id).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A shelf asset: built in (by id), a saved smart material (file path) or an image resource.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Asset {
     Material(&'static str),
     SmartMask(&'static str),
+    Filter(&'static str),
     Alpha(&'static str),
+    Library(String),
+    Texture(String),
+}
+
+impl Asset {
+    /// Assets that add layers (built-in and saved smart materials).
+    pub fn is_material(&self) -> bool {
+        matches!(self, Asset::Material(_) | Asset::Library(_))
+    }
 }
 
 /// The drag-and-drop payload of a shelf tile.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ShelfDrag {
     pub asset: Asset,
-    pub label: &'static str,
+    pub label: String,
 }
 
 /// Apply `asset` the way a shelf click does: a material above the selection, a smart mask on
-/// the selected layer, an alpha on the brush.
-pub fn apply(app: &mut TextureCraftApp, asset: Asset) {
+/// the selected layer, a filter on the selection (its mask when the mask is selected), an alpha
+/// on the brush, a texture as an image fill.
+pub fn apply(app: &mut TextureCraftApp, asset: &Asset) {
     let (cmd, params) = match asset {
         Asset::Material(id) => ("material.apply", json!({"material": id})),
         Asset::SmartMask(id) => ("mask.smart.apply", json!({"name": id})),
+        Asset::Filter(id) => ("effect.add.filter", json!({"filter": id, "target": if crate::dock::targets_content(app) { "content" } else { "mask" }})),
         Asset::Alpha(id) => ("tool.brush", json!({"alpha": {"library": id}})),
+        Asset::Library(path) => ("material.load", json!({"path": path})),
+        Asset::Texture(name) => ("layer.add.image", json!({"name": name})),
     };
     app.run(cmd, params);
 }
 
-/// Make `resp` (the viewport, or the brush properties when `materials` is false) a drop target
-/// for shelf alphas and materials: outline it while one hovers, apply it on release.
-pub fn drop_target(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, materials: bool) {
-    let accepts = |d: &ShelfDrag| matches!(d.asset, Asset::Alpha(_)) || (materials && matches!(d.asset, Asset::Material(_)));
+/// What a view accepts from the shelf.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DropZone {
+    /// The brush properties: alphas.
+    Brush,
+    /// The 2D view: alphas and materials.
+    View2d,
+    /// The 3D view: alphas, materials and textures (placed as decals where they drop).
+    View3d,
+}
+
+/// Make `resp` a drop target for shelf assets `zone` accepts: outline it while one hovers,
+/// apply it on release.
+pub fn drop_target(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, zone: DropZone) {
+    let accepts = |d: &ShelfDrag| match d.asset {
+        Asset::Alpha(_) => true,
+        Asset::Material(_) | Asset::Library(_) => zone != DropZone::Brush,
+        Asset::Texture(_) => zone == DropZone::View3d,
+        Asset::SmartMask(_) | Asset::Filter(_) => false,
+    };
     if resp.dnd_hover_payload::<ShelfDrag>().is_some_and(|d| accepts(&d)) {
         ui.painter().rect_stroke(resp.rect.shrink(1.0), 3.0, Stroke::new(2.0, TOKENS.accent), egui::StrokeKind::Inside);
     }
+    let pointer = ui.input(|i| i.pointer.interact_pos());
     if let Some(d) = dnd_release::<ShelfDrag>(resp)
         && accepts(&d)
     {
-        apply(app, d.asset);
+        match (&d.asset, pointer) {
+            (Asset::Texture(name), Some(p)) => {
+                let (q, vp) = (p - resp.rect.min, resp.rect.size());
+                app.run("layer.add.decal", json!({"image": name, "x": q.x, "y": q.y, "viewport": [vp.x, vp.y]}));
+            }
+            (asset, _) => apply(app, asset),
+        }
     }
 }
 
 /// The Assets panel body (a dock tab).
 pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
-    let tab_id = egui::Id::new("shelf_tab");
-    let mut tab = ctx.data_mut(|d| *d.get_persisted_mut_or(tab_id, 0usize)).min(TABS.len() - 1);
+    let mut tab = app.ui.shelf_tab.min(TABS.len() - 1);
     let searching = !app.ui.shelf_filter.is_empty();
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
@@ -92,7 +132,7 @@ pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
             }
         }
     });
-    ctx.data_mut(|d| d.insert_persisted(tab_id, tab));
+    app.ui.shelf_tab = tab;
     ui.horizontal(|ui| {
         ui.label(RichText::new(ic::MAGNIFYING_GLASS).color(TOKENS.text_dim));
         ui.add(egui::TextEdit::singleline(&mut app.ui.shelf_filter).hint_text("Search all assets").desired_width(f32::INFINITY));
@@ -112,6 +152,7 @@ pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
                     library(app, ui, &filter);
                 }
                 Tab::Masks => smart_masks(app, ui, &ctx, &filter, title),
+                Tab::Filters => filters(app, ui, &ctx, &filter, title),
                 Tab::Alphas => alpha_library(app, ui, &ctx, &filter, title),
                 Tab::Procedurals => procedurals(app, ui, &ctx, &filter, title),
                 Tab::Environments => environments(app, ui, &filter, title),
@@ -126,7 +167,7 @@ pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
 fn drag_preview(ctx: &egui::Context) {
     let (Some(d), Some(pos)) = (egui::DragAndDrop::payload::<ShelfDrag>(ctx), ctx.input(|i| i.pointer.hover_pos())) else { return };
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("shelf_drag")));
-    let galley = p.layout_no_wrap(d.label.to_string(), egui::FontId::proportional(11.0), TOKENS.text_strong);
+    let galley = p.layout_no_wrap(d.label.clone(), egui::FontId::proportional(11.0), TOKENS.text_strong);
     let rect = egui::Rect::from_min_size(pos + vec2(14.0, 12.0), galley.size() + vec2(12.0, 6.0));
     p.rect_filled(rect, 3.0, TOKENS.row_selected);
     p.rect_stroke(rect, 3.0, Stroke::new(1.0, TOKENS.accent), egui::StrokeKind::Inside);
@@ -182,9 +223,9 @@ fn materials(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter
                 } else {
                     "Add a fill layer with this material above the selected layer (or drag it into the layer stack)"
                 };
-                let drag = ShelfDrag { asset: Asset::Material(m.id), label: m.label };
-                if tile(ui, tex.as_ref(), m.label, hint, Some(drag)).clicked() {
-                    apply(app, drag.asset);
+                let asset = Asset::Material(m.id);
+                if tile(ui, tex.as_ref(), m.label, hint, Some(&asset)).clicked() {
+                    apply(app, &asset);
                 }
             }
         });
@@ -217,8 +258,15 @@ fn library(app: &mut TextureCraftApp, ui: &mut Ui, filter: &str) {
         ui.label(RichText::new("Right-click a layer > Create smart material").size(10.0).color(TOKENS.text_dim));
     }
     for f in shown {
-        if ui.selectable_label(false, format!("{}  {}", ic::SPHERE, name(f))).on_hover_text(f.display().to_string()).clicked() {
-            app.run("material.load", json!({"path": f.display().to_string()}));
+        let (label, asset) = (name(f), Asset::Library(f.display().to_string()));
+        let r = ui
+            .add(egui::Button::selectable(false, format!("{}  {label}", ic::SPHERE)).sense(Sense::click_and_drag()))
+            .on_hover_text(format!("{}: add above the selected layer (or drag it into the layer stack or onto the viewport)", f.display()));
+        if r.drag_started() {
+            r.dnd_set_drag_payload(ShelfDrag { asset: asset.clone(), label });
+        }
+        if r.clicked() {
+            apply(app, &asset);
         }
     }
     ui.add_space(6.0);
@@ -236,13 +284,40 @@ fn smart_masks(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filt
     tiles(ui, |ui| {
         for m in shown {
             let tex = app.thumbs.smart_mask(ctx, m.id);
-            let drag = ShelfDrag { asset: Asset::SmartMask(m.id), label: m.label };
+            let asset = Asset::SmartMask(m.id);
             let hint = "Replace the selected layer's mask with this smart mask (or drag it onto a layer)";
-            if tile(ui, tex.as_ref(), m.label, hint, Some(drag)).clicked() {
-                apply(app, drag.asset);
+            if tile(ui, tex.as_ref(), m.label, hint, Some(&asset)).clicked() {
+                apply(app, &asset);
             }
         }
     });
+}
+
+/// The filter library, grouped: a click adds the filter to the selected layer's content (or its
+/// mask when the mask is selected), a drop onto a layer to that layer's content.
+fn filters(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter: &str, name: &str) {
+    let shown: Vec<_> = FILTERS.iter().filter(|f| matches(filter, &[f.label, f.group, f.id])).collect();
+    if shown.is_empty() {
+        return;
+    }
+    title(ui, name);
+    for group in categories(&shown, |f| f.group) {
+        header(ui, group);
+        tiles(ui, |ui| {
+            for f in shown.iter().filter(|f| f.group == group) {
+                let tex = app.thumbs.filter(ctx, f.id);
+                let hint = if f.mask {
+                    "Add to the selected layer's content, or its mask when the mask is selected (or drag it onto a layer)"
+                } else {
+                    "Add this finish to the selected layer's roughness and height (or drag it onto a layer)"
+                };
+                let asset = Asset::Filter(f.id);
+                if tile(ui, tex.as_ref(), f.label, hint, Some(&asset)).clicked() {
+                    apply(app, &asset);
+                }
+            }
+        });
+    }
 }
 
 /// The built-in alpha library, grouped by category; the brush's alpha is outlined.
@@ -259,13 +334,13 @@ fn alpha_library(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, fi
         tiles(ui, |ui| {
             for &a in shown.iter().filter(|a| a.category == cat) {
                 let tex = app.thumbs.alpha(ctx, a);
-                let drag = ShelfDrag { asset: Asset::Alpha(&a.id), label: &a.label };
-                let r = tile(ui, tex.as_ref(), &a.label, "Use as the brush alpha (or drag it onto the viewport or brush properties)", Some(drag));
+                let asset = Asset::Alpha(&a.id);
+                let r = tile(ui, tex.as_ref(), &a.label, "Use as the brush alpha (or drag it onto the viewport or brush properties)", Some(&asset));
                 if current.as_deref() == Some(a.id.as_str()) {
                     ui.painter().rect_stroke(r.rect, 3.0, Stroke::new(1.0, TOKENS.accent), egui::StrokeKind::Inside);
                 }
                 if r.clicked() {
-                    apply(app, drag.asset);
+                    apply(app, &asset);
                 }
             }
         });
@@ -322,11 +397,16 @@ fn textures(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter:
         for name in names {
             let Some(img) = app.session.images.get(&name).cloned() else { continue };
             let tex = app.thumbs.image(ctx, &name, &img);
-            let r = tile(ui, Some(&tex), &name, "Add a fill layer using this image", None);
+            let asset = Asset::Texture(name.clone());
+            let r = tile(ui, Some(&tex), &name, "Add a fill layer using this image (or drag it onto the 3D view to place it as a decal)", Some(&asset));
             if r.clicked() {
-                app.run("layer.add.image", json!({"name": name}));
+                apply(app, &asset);
             }
             r.context_menu(|ui| {
+                if ui.button("Add as decal (view center)").clicked() {
+                    app.run("layer.add.decal", json!({"image": name}));
+                    ui.close();
+                }
                 if ui.button("Remove resource").clicked() {
                     app.run("resource.remove", json!({"name": name}));
                     ui.close();
@@ -337,12 +417,14 @@ fn textures(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter:
 }
 
 /// A shelf tile: thumbnail (a placeholder disc while it renders) and a wrapped label; tiles with
-/// a `drag` payload can be dragged.
-fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, hint: &str, drag: Option<ShelfDrag>) -> egui::Response {
+/// a `drag` asset can be dragged.
+fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, hint: &str, drag: Option<&Asset>) -> egui::Response {
     let sense = if drag.is_some() { Sense::click_and_drag() } else { Sense::click() };
     let (rect, resp) = ui.allocate_exact_size(vec2(72.0, 86.0), sense);
-    if let Some(d) = drag {
-        resp.dnd_set_drag_payload(d);
+    if let Some(asset) = drag
+        && resp.drag_started()
+    {
+        resp.dnd_set_drag_payload(ShelfDrag { asset: asset.clone(), label: label.to_string() });
     }
     let p = ui.painter();
     if resp.hovered() || resp.dragged() {

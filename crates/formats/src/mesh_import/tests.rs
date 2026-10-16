@@ -413,3 +413,32 @@ fn high_poly_import_skips_unwrap_and_rejects_garbage() {
     assert!(import_high_poly_bytes("x.ply", b"ply\nformat ascii 1.0\nelement vertex 99999999\n").is_err());
     assert!(import_high_poly_bytes("x.txt", b"").is_err());
 }
+
+/// The embedded scene plus a perspective camera looking at the triangle along -Z and an unnamed
+/// orthographic one looking straight down.
+fn gltf_with_cameras() -> Vec<u8> {
+    let mut json: serde_json::Value = serde_json::from_slice(&embedded_gltf()).unwrap();
+    json["cameras"] = serde_json::json!([
+        { "name": "Shot", "type": "perspective", "perspective": { "yfov": 0.8, "znear": 0.1 } },
+        { "type": "orthographic", "orthographic": { "xmag": 1.0, "ymag": 0.5, "znear": 0.1, "zfar": 10.0 } }
+    ]);
+    let nodes = json["nodes"].as_array_mut().unwrap();
+    nodes.push(serde_json::json!({ "camera": 0, "translation": [-1.5, 0.5, 4.0] }));
+    nodes.push(serde_json::json!({ "camera": 1, "translation": [-1.5, 5.5, 0.0], "rotation": [-std::f32::consts::FRAC_1_SQRT_2, 0.0, 0.0, std::f32::consts::FRAC_1_SQRT_2] }));
+    json["scenes"][0]["nodes"] = serde_json::json!([0, 2, 3]);
+    serde_json::to_vec(&json).unwrap()
+}
+
+#[test]
+fn gltf_cameras_become_orbit_cameras() {
+    let im = import_mesh_bytes("scene.gltf", &gltf_with_cameras()).unwrap();
+    let [shot, top] = im.cameras.as_slice() else { panic!("{:?}", im.cameras) };
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    assert_eq!(shot.name, "Shot");
+    assert!(!shot.ortho && near(shot.fov, 0.8f32.to_degrees()) && near(shot.distance, 4.0), "{shot:?}");
+    assert!(near(shot.yaw, 0.0) && near(shot.pitch, 0.0) && shot.target.iter().zip([-1.5, 0.5, 0.0]).all(|(a, b)| near(*a, b)), "{shot:?}");
+    assert_eq!(top.name, "Camera 2");
+    assert!(top.ortho && near(top.distance, 5.0) && near(top.fov, 2.0 * 0.1f32.atan().to_degrees()), "{top:?}");
+    assert!(near(top.pitch, 89f32.to_radians()), "looking down, pitch clamped: {top:?}");
+    assert!(import_mesh_bytes("scene.gltf", &embedded_gltf()).unwrap().cameras.is_empty());
+}

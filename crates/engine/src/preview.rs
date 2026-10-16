@@ -3,7 +3,10 @@
 //! noise). Cheap enough for lazily rendered thumbnails.
 
 use texturecraft_compose::pattern::{Coords, procedural, world_noise};
-use texturecraft_core::{Channel, EffectKind, Filter, Generator, GeneratorKind, LayerKind, Mask, MaskBackground, Project, Projection, Source, blend1};
+use texturecraft_core::{
+    Channel, Effect, EffectKind, Fill, Filter, Generator, GeneratorKind, Layer, LayerKind, Mask, MaskBackground, Procedural, ProceduralKind, Project,
+    Projection, Source, TextureSet, blend1,
+};
 use texturecraft_geom::glam::{Vec2, Vec3};
 
 use crate::materials::{Builder, build};
@@ -115,6 +118,65 @@ pub fn material(id: &str, size: usize) -> Option<Vec<Option<Sample>>> {
     )
 }
 
+/// `f` with its reach in texels multiplied by `k` (previews show at a fraction of 2K).
+fn magnified(f: Filter, k: f32) -> Filter {
+    match f {
+        Filter::Blur { radius } => Filter::Blur { radius: radius * k },
+        Filter::DirectionalBlur { radius, angle } => Filter::DirectionalBlur { radius: radius * k, angle },
+        Filter::SlopeBlur { radius, scale, seed } => Filter::SlopeBlur { radius: radius * k, scale, seed },
+        Filter::Warp { intensity, scale, seed } => Filter::Warp { intensity: intensity * k, scale, seed },
+        f => f,
+    }
+}
+
+/// Preview of library filter `id` (see [`crate::filter_lib`]): a sample material (colorful
+/// clouds, checker roughness, cell bumps) with the filter on its content, composited by the
+/// compositor on a plane and laid over the sphere (None for an unknown id).
+pub fn filter(id: &str, size: usize) -> Option<Vec<Option<Sample>>> {
+    let res = u32::try_from(size).ok()?.max(1);
+    let kind = match crate::filter_lib::build(id, &serde_json::Value::Null).ok()? {
+        EffectKind::Filter(f) => EffectKind::Filter(magnified(f, 2048.0 / res as f32)),
+        k => k,
+    };
+    let mesh = texturecraft_geom::primitives::plane(2.0, 2);
+    let gbuf = texturecraft_geom::UvGBuffer::new(&mesh, 0, res, res);
+    let mut p = Project::new("preview", "");
+    p.texture_sets.push(TextureSet::new("preview", 0, res));
+    let procedural = |kind, scale, low: [f32; 3], high: [f32; 3]| Source::Procedural { pattern: Procedural { scale, ..Procedural::new(kind) }, low, high };
+    let mut fill = Fill::default();
+    fill.sources.insert(Channel::BaseColor, procedural(ProceduralKind::Clouds, 2.0, [0.05, 0.2, 0.55], [0.95, 0.55, 0.1]));
+    fill.sources.insert(Channel::Roughness, procedural(ProceduralKind::Checker, 4.0, [0.25; 3], [0.7; 3]));
+    fill.sources.insert(Channel::Height, procedural(ProceduralKind::Cells, 3.0, [-0.12; 3], [0.12; 3]));
+    let mut layer = Layer::new(p.alloc_id(), "sample", LayerKind::Fill(fill), &CHANNELS);
+    layer.content_effects.push(Effect::new(p.alloc_id(), kind));
+    p.insert_layer(0, layer, None, false).ok()?;
+    let (pixels, baked, images) = (Default::default(), Default::default(), Default::default());
+    let inp = texturecraft_compose::Inputs {
+        project: &p,
+        ts: 0,
+        mesh: &mesh,
+        gbuf: &gbuf,
+        pixels: &pixels,
+        baked: &baked,
+        preview: None,
+        images: &images,
+        bounds: mesh.bounds(),
+    };
+    let mut out = texturecraft_compose::Composite::new(&CHANNELS, res);
+    texturecraft_compose::composite_tiles(&inp, &mut out, &texturecraft_compose::all_tiles(res, res));
+    Some(
+        sphere_normals(size)
+            .enumerate()
+            .map(|(i, n)| {
+                n?;
+                let (x, y) = ((i % size) as u32, (i / size) as u32);
+                let [base, metal, rough, height] = CHANNELS.map(|c| out.value(c, x, y));
+                Some(Sample { base, metallic: metal[0], roughness: rough[0], height: height[0] })
+            })
+            .collect(),
+    )
+}
+
 /// Preview of smart mask `id`: the mask value per pixel (None for an unknown id).
 pub fn smart_mask(id: &str, size: usize) -> Option<Vec<Option<f32>>> {
     let (bg, fx) = crate::smart_masks::preset(id)?;
@@ -138,6 +200,13 @@ mod tests {
             let px = smart_mask(sm.id, 16).unwrap_or_else(|| panic!("{}", sm.id));
             assert!(px.iter().flatten().all(|v| (0.0..=1.0).contains(v)), "{}", sm.id);
         }
-        assert!(material("nope", 8).is_none() && smart_mask("nope", 8).is_none());
+        assert!(material("nope", 8).is_none() && smart_mask("nope", 8).is_none() && filter("nope", 8).is_none());
+        for f in crate::filter_lib::FILTERS {
+            let px = filter(f.id, 24).unwrap_or_else(|| panic!("{}", f.id));
+            let center = px[12 * 24 + 12].unwrap_or_else(|| panic!("{}", f.id));
+            assert!(center.base.iter().chain([&center.roughness, &center.height]).all(|v| v.is_finite()), "{}", f.id);
+        }
+        let (plain, warped) = (filter("levels", 24).unwrap(), filter("warp", 24).unwrap());
+        assert!(plain != warped, "the warp shows in its preview");
     }
 }

@@ -34,6 +34,11 @@ pub enum Channel {
     AnisotropyAngle,
     /// Subsurface scattering weight (scatter color and radius are project shader settings).
     ScatterWeight,
+    /// Transmission: how much of the dielectric base lets light through (refraction at the
+    /// project's IOR, tinted by the base color) instead of reflecting it diffusely.
+    Transmission,
+    /// Tangent-space normal of the clear coat (relative to the mesh normal).
+    CoatNormal,
 }
 
 /// How a channel's values are stored and interpreted.
@@ -50,7 +55,7 @@ pub enum ChannelKind {
 }
 
 impl Channel {
-    pub const ALL: [Channel; 19] = [
+    pub const ALL: [Channel; 21] = [
         Channel::BaseColor,
         Channel::Metallic,
         Channel::Roughness,
@@ -70,11 +75,14 @@ impl Channel {
         Channel::AnisotropyLevel,
         Channel::AnisotropyAngle,
         Channel::ScatterWeight,
+        Channel::Transmission,
+        Channel::CoatNormal,
     ];
 
-    /// The extra shading lobes (clear coat, sheen, anisotropy, subsurface scattering). Their
-    /// defaults switch the lobes off, so a set without them shades exactly as before.
-    pub const LOBES: [Channel; 8] = [
+    /// The extra shading lobes (clear coat, sheen, anisotropy, subsurface scattering,
+    /// transmission). Their defaults switch the lobes off, so a set without them shades exactly
+    /// as before.
+    pub const LOBES: [Channel; 10] = [
         Channel::CoatWeight,
         Channel::CoatRoughness,
         Channel::SheenWeight,
@@ -83,6 +91,8 @@ impl Channel {
         Channel::AnisotropyLevel,
         Channel::AnisotropyAngle,
         Channel::ScatterWeight,
+        Channel::Transmission,
+        Channel::CoatNormal,
     ];
 
     /// The channels of the default "PBR - Metallic Roughness" template.
@@ -91,7 +101,7 @@ impl Channel {
     pub fn kind(self) -> ChannelKind {
         match self {
             Channel::BaseColor | Channel::Emissive | Channel::Specular | Channel::SheenColor => ChannelKind::Color,
-            Channel::Normal => ChannelKind::NormalMap,
+            Channel::Normal | Channel::CoatNormal => ChannelKind::NormalMap,
             Channel::Height => ChannelKind::Signed,
             _ => ChannelKind::Scalar,
         }
@@ -110,12 +120,17 @@ impl Channel {
         match self {
             Channel::BaseColor => [0.5, 0.5, 0.5],
             Channel::Metallic | Channel::Height | Channel::Emissive => [0.0; 3],
-            Channel::CoatWeight | Channel::SheenWeight | Channel::AnisotropyLevel | Channel::AnisotropyAngle | Channel::ScatterWeight => [0.0; 3],
+            Channel::CoatWeight
+            | Channel::SheenWeight
+            | Channel::AnisotropyLevel
+            | Channel::AnisotropyAngle
+            | Channel::ScatterWeight
+            | Channel::Transmission => [0.0; 3],
             Channel::CoatRoughness => [0.1; 3],
             Channel::SheenColor => [1.0; 3],
             Channel::SheenRoughness => [0.5; 3],
             Channel::Roughness => [0.5; 3],
-            Channel::Normal => [0.5, 0.5, 1.0],
+            Channel::Normal | Channel::CoatNormal => [0.5, 0.5, 1.0],
             Channel::Opacity | Channel::AmbientOcclusion => [1.0; 3],
             Channel::SpecularLevel | Channel::Glossiness => [0.5; 3],
             // F0 of a common dielectric (4 %).
@@ -144,6 +159,8 @@ impl Channel {
             Channel::AnisotropyLevel => "Anisotropy level",
             Channel::AnisotropyAngle => "Anisotropy angle",
             Channel::ScatterWeight => "Scattering weight",
+            Channel::Transmission => "Transmission",
+            Channel::CoatNormal => "Coat normal",
         }
     }
 
@@ -169,6 +186,8 @@ impl Channel {
             Channel::AnisotropyLevel => "aniso",
             Channel::AnisotropyAngle => "aniso angle",
             Channel::ScatterWeight => "scatter",
+            Channel::Transmission => "transm",
+            Channel::CoatNormal => "coat nrm",
         }
     }
 
@@ -194,6 +213,8 @@ impl Channel {
             Channel::AnisotropyLevel => "anisotropyLevel",
             Channel::AnisotropyAngle => "anisotropyAngle",
             Channel::ScatterWeight => "scatterWeight",
+            Channel::Transmission => "transmission",
+            Channel::CoatNormal => "coatNormal",
         }
     }
 
@@ -274,7 +295,9 @@ mod tests {
         }
         for c in Channel::LOBES {
             assert!(Channel::ALL.contains(&c));
-            let off = matches!(c, Channel::CoatRoughness | Channel::SheenColor | Channel::SheenRoughness) || c.default_value() == [0.0; 3];
+            // Tints, roughnesses and the flat coat normal only matter once their lobe has weight.
+            let off =
+                matches!(c, Channel::CoatRoughness | Channel::SheenColor | Channel::SheenRoughness | Channel::CoatNormal) || c.default_value() == [0.0; 3];
             assert!(off, "{c:?} must default to an inactive lobe");
         }
         assert_eq!(Channel::parse("sheen color"), Some(Channel::SheenColor));

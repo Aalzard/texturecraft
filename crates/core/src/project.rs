@@ -379,6 +379,52 @@ pub struct DisplaySettings {
     pub scatter_color: [f32; 3],
     /// Subsurface scattering mean free path as a fraction of the mesh's bounding radius.
     pub scatter_radius: f32,
+    /// Index of refraction of transmissive surfaces (where the Transmission channel is painted).
+    pub ior: f32,
+    /// Depth of field of the viewport and the path tracer (thin lens).
+    pub dof: DepthOfField,
+}
+
+/// A thin-lens camera's depth of field (Painter's Display settings: focus distance and aperture).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DepthOfField {
+    pub enabled: bool,
+    /// Distance of the plane in focus along the view axis (world units); 0 focuses on the
+    /// camera's orbit target.
+    pub focus_distance: f32,
+    /// Lens radius as a fraction of the mesh's bounding radius: how fast the blur grows away
+    /// from the focus plane.
+    pub aperture: f32,
+}
+
+impl Default for DepthOfField {
+    fn default() -> Self {
+        DepthOfField { enabled: false, focus_distance: 0.0, aperture: 0.05 }
+    }
+}
+
+/// A saved viewpoint of the camera list (the default camera's orbit parameters, as in
+/// `geom::OrbitCamera`): saved views and cameras imported with the mesh.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Camera {
+    pub name: String,
+    pub target: [f32; 3],
+    /// Radians around +Y.
+    pub yaw: f32,
+    /// Radians above the horizon.
+    pub pitch: f32,
+    pub distance: f32,
+    /// Vertical field of view, degrees (orthographic: the view height at `distance`).
+    pub fov: f32,
+    pub ortho: bool,
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Camera { name: "Camera".into(), target: [0.0; 3], yaw: 0.0, pitch: 0.0, distance: 5.0, fov: 40.0, ortho: false }
+    }
 }
 
 /// Prefix of [`DisplaySettings::environment`] naming an image resource.
@@ -413,6 +459,8 @@ impl Default for DisplaySettings {
             parallax: false,
             scatter_color: [1.0, 0.4, 0.25],
             scatter_radius: 0.1,
+            ior: 1.5,
+            dof: DepthOfField::default(),
         }
     }
 }
@@ -428,6 +476,9 @@ pub struct Project {
     pub layers: BTreeMap<LayerId, Layer>,
     pub next_id: u64,
     pub display: DisplaySettings,
+    /// Saved and imported cameras (the viewport's default camera is not in the list).
+    #[serde(default)]
+    pub cameras: Vec<Camera>,
 }
 
 impl Project {
@@ -441,6 +492,7 @@ impl Project {
             layers: BTreeMap::new(),
             next_id: 1,
             display: DisplaySettings::default(),
+            cameras: Vec::new(),
         }
     }
 

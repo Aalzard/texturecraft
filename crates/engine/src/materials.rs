@@ -96,8 +96,8 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("velvet", "Velvet", FABRIC, [0.12, 0.015, 0.09], 0.0, 0.9),
     // Ceramic and glass.
     m("ceramic", "Ceramic White", GLASS, [0.8, 0.8, 0.78], 0.0, 0.08),
-    m("glass", "Glass Clear", GLASS, [0.02, 0.022, 0.022], 0.0, 0.03),
-    m("glass_frosted", "Glass Frosted", GLASS, [0.6, 0.64, 0.64], 0.0, 0.45),
+    m("glass", "Glass Clear", GLASS, [0.88, 0.9, 0.9], 0.0, 0.03),
+    m("glass_frosted", "Glass Frosted", GLASS, [0.84, 0.88, 0.88], 0.0, 0.45),
     m("car_paint", "Car Paint", PLASTIC, [0.45, 0.025, 0.03], 0.0, 0.4),
     // Organic.
     m("skin", "Skin", ORGANIC, [0.56, 0.35, 0.27], 0.0, 0.5),
@@ -367,9 +367,9 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
             ),
         ),
         "wax" => one(b, plus(dielectric(pat(P::Clouds, 2.0, 11, 1.0, [0.74, 0.66, 0.5], m.base), clouds_rough(11)), [(ScatterWeight, u(1.0))])),
-        // ---- Glass (opaque approximation; uses Opacity when the texture set has it) ------------
-        "glass" => one(b, plus(dielectric(rgb(m.base), u(r)), [(Opacity, u(0.2))])),
-        "glass_frosted" => one(b, plus(dielectric(rgb(m.base), gray(P::Noise, 1.0, 2, 0.4, 0.5)), [(Opacity, u(0.6))])),
+        // ---- Glass (the Transmission channel; the base color tints the light going through) ----
+        "glass" => one(b, plus(dielectric(rgb(m.base), u(r)), [(Transmission, u(1.0))])),
+        "glass_frosted" => one(b, plus(dielectric(rgb(m.base), gray(P::Noise, 1.0, 2, 0.4, 0.5)), [(Transmission, u(1.0))])),
         // ---- Smart materials ----------------------------------------------------------------
         "steel_painted_worn" => {
             let mut v = build(b, "steel")?;
@@ -568,7 +568,24 @@ pub fn apply_at(s: &mut Session, id: &str, place: Place) -> Result<LayerId> {
             s.selected.insert(ts, gid);
             gid
         };
-        match place {
+        place.apply(s, top)?;
+        Ok(top)
+    })
+}
+
+impl Place {
+    /// From `above` (+ `inside`) or `index` params; the selection by default.
+    pub(crate) fn from_params(p: &serde_json::Value) -> Place {
+        match (crate::commands::u64p(p, "above"), crate::commands::u64p(p, "index")) {
+            (Some(above), _) => Place::Above(LayerId(above), crate::commands::boolp(p, "inside").unwrap_or(false)),
+            (None, Some(i)) => Place::Index(usize::try_from(i).unwrap_or(usize::MAX)),
+            (None, None) => Place::Selection,
+        }
+    }
+
+    /// Move `top` (just added above the selection) to this place.
+    pub(crate) fn apply(self, s: &mut Session, top: LayerId) -> Result<()> {
+        match self {
             Place::Selection => {}
             Place::Above(target, inside) => s.doc.project.move_above(top, Some(target), inside)?,
             Place::Index(i) => {
@@ -576,8 +593,8 @@ pub fn apply_at(s: &mut Session, id: &str, place: Place) -> Result<LayerId> {
                 s.doc.project.move_layer(top, i)?;
             }
         }
-        Ok(top)
-    })
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -638,7 +655,8 @@ mod tests {
         let mut s = Session::new_project("t", texturecraft_geom::primitives::sphere(1.0, 16, 8), "builtin:sphere", None, 128).unwrap();
         let chans = |s: &Session| s.doc.project.texture_sets[0].channel_list();
         let before = chans(&s);
-        let cases: [(&str, &[Channel]); 5] = [
+        let cases: [(&str, &[Channel]); 6] = [
+            ("glass", &[Transmission]),
             ("car_paint", &[CoatWeight, CoatRoughness]),
             ("velvet", &[SheenWeight, SheenColor, SheenRoughness]),
             ("steel_brushed_aniso", &[AnisotropyLevel, AnisotropyAngle]),
@@ -652,9 +670,6 @@ mod tests {
             s.undo().unwrap();
             assert_eq!(chans(&s), before, "{id}: one undo step");
         }
-        // Classic channels a set lacks stay out (glass uses Opacity).
-        apply(&mut s, "glass").unwrap();
-        assert_eq!(chans(&s), before);
         apply(&mut s, "car_paint").unwrap();
         s.update();
         let coat = |s: &Session| s.caches[0].composite.value(CoatWeight, 64, 64)[0];

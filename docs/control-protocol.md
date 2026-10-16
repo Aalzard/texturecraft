@@ -115,7 +115,7 @@ a `path`) is refused, and so is any command given a `path` or `dir` (`resource.i
 | `textures_export` | `{dir, preset?, ts?, format?, padding?, size?}` | Writes files below the write root |
 | `bake` | `{ts?, resolution?, maps?}` | Mesh maps for generators and smart materials |
 | `paint_stroke` | `{points, viewport?, color?, roughness?, metallic?, height?, size?, hardness?}` | Paint tool + brush material + `tool.stroke`; points in viewport pixels |
-| `viewport_render` | `{view?: "3d" \| "2d", width?, height?, yaw?, pitch?, samples?, bounces?}` | Headless: PNG image (≤ 2048 px a side); yaw/pitch in degrees for this render only; `samples` (1–4096) path traces the 3D view on the CPU instead (no GPU needed) |
+| `viewport_render` | `{view?: "3d" \| "2d", width?, height?, yaw?, pitch?, samples?, bounces?, cpu?}` | Headless: PNG image (≤ 2048 px a side); yaw/pitch in degrees for this render only; `samples` (1–4096) path traces the 3D view instead, on the GPU when it has compute shaders, else (or with `cpu: true`) on the CPU (no GPU needed) |
 | `viewport_screenshot` | `{view?}` | Bridge: the app's 3D or 2D view |
 | `ui_screenshot` | | Bridge: the whole window (downscaled to 2048 px) |
 | `ui_inspect` | | Bridge: UI state |

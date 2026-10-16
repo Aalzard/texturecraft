@@ -3,7 +3,7 @@
 //! model, COLLADA node, USD Mesh prim; unnamed parts take the file stem), materials contiguous,
 //! glTF UV convention (origin top-left, v down),
 //! normals (computed when missing), vertex colors (glTF, OBJ, PLY), UVs (auto-unwrapped when
-//! missing) and MikkTSpace tangents.
+//! missing) and MikkTSpace tangents. glTF cameras come along as the project's camera list.
 
 mod dae;
 mod fbx;
@@ -43,6 +43,21 @@ pub const MESH_EXTENSIONS: [&str; 11] = ["gltf", "glb", "fbx", "dae", "usd", "us
 pub struct ImportedMesh {
     pub mesh: Mesh,
     pub report: MeshReport,
+    /// Cameras of the file (glTF), as orbit cameras around the mesh.
+    pub cameras: Vec<texturecraft_core::Camera>,
+}
+
+/// Cameras read from a file (at most [`MAX_CAMERAS`]).
+pub(crate) const MAX_CAMERAS: usize = 64;
+
+/// A camera as a file places it: world position, view direction, vertical field of view
+/// (degrees, perspective) or half view height (orthographic).
+pub(crate) struct RawCamera {
+    pub name: String,
+    pub eye: Vec3,
+    pub forward: Vec3,
+    pub fov: f32,
+    pub ortho_half_height: Option<f32>,
 }
 
 /// What the importer found and fixed, for the import dialog.
@@ -74,6 +89,7 @@ pub(crate) struct RawMesh {
     /// Triangles (vertex indices) per (material, part name); an empty part is unnamed.
     pub groups: Vec<(String, String, Vec<u32>)>,
     pub warnings: Vec<String>,
+    pub cameras: Vec<RawCamera>,
 }
 
 impl RawMesh {
@@ -238,7 +254,7 @@ fn read(file_name: &str, bytes: &[u8], base: Option<&std::path::Path>) -> Result
 /// Positions, submeshes (materials contiguous), normals and colors of a raw mesh, validated;
 /// plus its warnings and UVs (the mesh's UVs and tangents are left empty).
 fn geometry(raw: RawMesh) -> Result<(Mesh, Vec<String>, Option<Vec<Vec2>>)> {
-    let RawMesh { positions, normals, uvs, colors, groups, warnings } = raw;
+    let RawMesh { positions, normals, uvs, colors, groups, warnings, .. } = raw;
     check_vertices(positions.len())?;
     check_triangles(0, groups.iter().map(|(_, _, g)| g.len() / 3).sum())?;
     let mut mesh = Mesh { positions, ..Mesh::default() };
@@ -283,7 +299,8 @@ fn geometry(raw: RawMesh) -> Result<(Mesh, Vec<String>, Option<Vec<Vec2>>)> {
 }
 
 /// Complete a raw mesh: submeshes, normals, UVs, tangents, validation and the report.
-pub(crate) fn finish(raw: RawMesh) -> Result<ImportedMesh> {
+pub(crate) fn finish(mut raw: RawMesh) -> Result<ImportedMesh> {
+    let raw_cameras = std::mem::take(&mut raw.cameras);
     let (mut mesh, mut warnings, uvs) = geometry(raw)?;
     let uvs_generated = match uvs {
         Some(uv) if uv.len() == mesh.positions.len() => {
@@ -302,7 +319,38 @@ pub(crate) fn finish(raw: RawMesh) -> Result<ImportedMesh> {
     };
     mesh.validate()?;
     let report = report(&mesh, uvs_generated, warnings);
-    Ok(ImportedMesh { mesh, report })
+    let cameras = orbit_cameras(&raw_cameras, &mesh);
+    Ok(ImportedMesh { mesh, report, cameras })
+}
+
+/// File cameras as orbit cameras: the target is where the view axis passes the mesh center
+/// (at least a tenth of the mesh size ahead). shortcut: camera roll is dropped (orbit cameras
+/// keep +Y up); keep a free camera transform if imported rolls matter.
+fn orbit_cameras(raw: &[RawCamera], mesh: &Mesh) -> Vec<texturecraft_core::Camera> {
+    let (lo, hi) = mesh.bounds();
+    let (center, radius) = ((lo + hi) * 0.5, ((hi - lo).length() * 0.5).max(1e-3));
+    raw.iter()
+        .filter(|c| c.eye.is_finite() && c.forward.is_finite())
+        .filter_map(|c| {
+            let f = c.forward.try_normalize()?;
+            let distance = (center - c.eye).dot(f).max(radius * 0.1);
+            let target = c.eye + f * distance;
+            let fov = match c.ortho_half_height {
+                Some(h) => 2.0 * (h.abs() / distance).atan().to_degrees(),
+                None => c.fov,
+            };
+            let fov = if fov.is_finite() { fov.clamp(5.0, 150.0) } else { 40.0 };
+            Some(texturecraft_core::Camera {
+                name: c.name.clone(),
+                target: target.to_array(),
+                yaw: (-f.x).atan2(-f.z),
+                pitch: (-f.y).clamp(-1.0, 1.0).asin().clamp(-89f32.to_radians(), 89f32.to_radians()),
+                distance,
+                fov,
+                ortho: c.ortho_half_height.is_some(),
+            })
+        })
+        .collect()
 }
 
 /// Area-weighted smooth normals over welded positions (UV seams do not split shading).

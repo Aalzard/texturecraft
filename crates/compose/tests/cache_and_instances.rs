@@ -275,7 +275,8 @@ fn nested_stack(f: &mut Fixture) -> Nested {
     );
     let mask = generator_mask(f, GeneratorKind::Position, None);
     let g1 = group(f, None, BlendMode::Normal, 0.8, Some(mask));
-    let inner = put(f, 0, Some(g1), fill(&[(Channel::Roughness, procedural(ProceduralKind::Grunge, 0.0, 1.0)), (Channel::Metallic, Source::Uniform([0.3; 3]))]), None);
+    let inner =
+        put(f, 0, Some(g1), fill(&[(Channel::Roughness, procedural(ProceduralKind::Grunge, 0.0, 1.0)), (Channel::Metallic, Source::Uniform([0.3; 3]))]), None);
     let mut checker = Mask::new(MaskBackground::Black);
     checker.effects.push(effect(f, EffectKind::Fill { source: procedural(ProceduralKind::Checker, 0.2, 1.0), projection: Projection::default() }));
     let g2 = group(f, Some(g1), BlendMode::Passthrough, 1.0, Some(checker));
@@ -438,4 +439,126 @@ fn edits_off_the_hot_layer_invalidate_and_edits_to_it_do_not() {
     assert!(emptied(&f), "a folder holding the hot layer");
     paint_rect(&mut f, n.top, (0, 0), (30, 30), 0.9);
     assert!(emptied(&f), "pixels above");
+}
+
+/// Paint a half-covered rectangle (base color and roughness `v`) into a paint layer stored at
+/// `size` texels.
+fn paint_rect_at(f: &mut Fixture, id: LayerId, size: u32, (x0, y0): (u32, u32), (w, h): (u32, u32), v: f32) {
+    for (ch, px) in [(Channel::BaseColor, vec![to_u16(v * 0.5), to_u16(0.1), 0, to_u16(0.5)]), (Channel::Roughness, vec![to_u16(v * 0.5), to_u16(0.5)])] {
+        let img = f.pixels.layer_mut(id, ch, (size, size));
+        for y in y0..y0 + h {
+            for x in x0..x0 + w {
+                img.set(x, y, &px);
+            }
+        }
+    }
+}
+
+#[test]
+fn instances_resample_sources_painted_at_another_resolution() {
+    let mut f = fixture();
+    let half = RES / 2;
+    f.project.texture_sets[1].resolution = half;
+    // The source lives in set B at half resolution, masked by half-resolution mask pixels.
+    let src = add(&mut f, 1, LayerKind::Paint, None);
+    paint_rect_at(&mut f, src, half, (20, 30), (60, 50), 0.9);
+    let paint = effect(&mut f, EffectKind::Paint);
+    let mask_id = paint.id;
+    f.project.layer_mut(src).unwrap().mask = Some(Mask { effects: vec![paint], ..Mask::new(MaskBackground::Black) });
+    let m = f.pixels.mask_mut(mask_id, (half, half));
+    for y in 0..half {
+        for x in 0..50 {
+            m.set(x, y, &[to_u16(1.0), to_u16(1.0)]);
+        }
+    }
+    add(&mut f, 0, fill(&[(Channel::Metallic, procedural(ProceduralKind::Clouds, 0.0, 1.0))]), None);
+    let inst = add(&mut f, 0, LayerKind::Instance { source: src }, None);
+    let top = add(&mut f, 0, LayerKind::Paint, None);
+    paint_rect(&mut f, top, (0, 0), (40, 40), 0.2);
+    let out = reference(&f, 0);
+    let rough = |x, y| out.value(Channel::Roughness, x, y)[0];
+    // Painted roughness 0.9 at half coverage over the default 0.5, where the mask lets it through.
+    assert!((rough(70, 120) - 0.7).abs() < 2e-3, "inside: {}", rough(70, 120));
+    assert!((rough(180, 120) - 0.5).abs() < 2e-3, "masked out: {}", rough(180, 120));
+    assert!((rough(70, 200) - 0.5).abs() < 2e-3, "not painted: {}", rough(70, 200));
+    for hot in [top, inst] {
+        check_cached(&f, 0, hot);
+    }
+    assert!(!check_cached(&f, 0, top).is_empty());
+}
+
+#[test]
+fn anchors_inside_a_content_stack_record_the_content_up_to_them() {
+    let mut f = fixture();
+    let low = add(&mut f, 0, fill(&[(Channel::Height, Source::Uniform([0.4; 3]))]), None);
+    f.project.layer_mut(low).unwrap().channels.retain(|c, _| *c == Channel::Height);
+    blend(&mut f, low, BlendMode::Normal, 0.5);
+    let (mid, end) = (effect(&mut f, EffectKind::Anchor), effect(&mut f, EffectKind::Anchor));
+    let (mid_id, end_id) = (mid.id, end.id);
+    let mut raise = Fill::default();
+    raise.sources.insert(Channel::Height, Source::Uniform([0.8; 3]));
+    let raise = effect(&mut f, EffectKind::Material(raise));
+    f.project.layer_mut(low).unwrap().content_effects.extend([mid, raise, end]);
+    let top = add(&mut f, 0, LayerKind::Paint, None);
+    paint_rect(&mut f, top, (0, 0), (60, 60), 0.3);
+    // Without readers the stack is cached (anchors are still recorded) and exact.
+    assert!(!check_cached(&f, 0, top).is_empty());
+    // Readers: roughness reads the anchor inside the stack, metallic the one at its end.
+    for (c, anchor) in [(Channel::Roughness, mid_id), (Channel::Metallic, end_id)] {
+        let reader = add(&mut f, 0, fill(&[(c, Source::Anchor { anchor, channel: Channel::Height })]), None);
+        f.project.layer_mut(reader).unwrap().channels.retain(|x, _| *x == c);
+    }
+    let out = reference(&f, 0);
+    let at = |c| out.value(c, 128, 128)[0];
+    // Half opacity over the default height 0: 0.4 before the raise, 0.8 after it.
+    assert!((at(Channel::Roughness) - 0.2).abs() < 2e-3, "inside the stack: {}", at(Channel::Roughness));
+    assert!((at(Channel::Metallic) - 0.4).abs() < 2e-3, "at the end: {}", at(Channel::Metallic));
+    assert!((at(Channel::Height) - 0.4).abs() < 2e-3);
+    assert!(check_cached(&f, 0, top).is_empty(), "anchor readers evaluate everything");
+    // Behind a blur the cut reads the filtered field; before it, the unfiltered content.
+    let blur = effect(&mut f, EffectKind::Filter(Filter::Blur { radius: 30.0 }));
+    f.project.layer_mut(low).unwrap().content_effects.insert(0, blur);
+    let blurred = reference(&f, 0);
+    assert!((blurred.value(Channel::Roughness, 128, 128)[0] - 0.2).abs() < 2e-3, "a flat height stays flat");
+    let mut one_by_one = Composite::new(&f.project.texture_sets[0].channel_list(), RES);
+    let (images, baked) = (Default::default(), Default::default());
+    for t in all_tiles(RES, RES) {
+        composite_tiles(&inputs(&f, 0, &images, &baked), &mut one_by_one, &[t]);
+    }
+    assert!(one_by_one == blurred);
+}
+
+#[test]
+fn gathering_filters_composite_identically_in_any_grouping_and_cached() {
+    let mut f = fixture();
+    let base = add(
+        &mut f,
+        0,
+        fill(&[(Channel::BaseColor, procedural(ProceduralKind::Clouds, 0.1, 0.9)), (Channel::Roughness, procedural(ProceduralKind::Checker, 0.0, 1.0))]),
+        None,
+    );
+    let mut slope = Mask::new(MaskBackground::Black);
+    slope.effects.push(effect(&mut f, EffectKind::Fill { source: procedural(ProceduralKind::Checker, 0.0, 1.0), projection: Projection::default() }));
+    slope.effects.push(effect(&mut f, EffectKind::Filter(Filter::SlopeBlur { radius: 24.0, scale: 3.0, seed: 1 })));
+    let streaks = add(&mut f, 0, fill(&[(Channel::Metallic, procedural(ProceduralKind::Stripes, 0.0, 1.0))]), Some(slope));
+    let top = add(&mut f, 0, LayerKind::Paint, None);
+    paint_rect(&mut f, top, (30, 40), (150, 100), 0.4);
+    let plain = reference(&f, 0);
+    let warp = effect(&mut f, EffectKind::Filter(Filter::Warp { intensity: 30.0, scale: 4.0, seed: 3 }));
+    f.project.layer_mut(base).unwrap().content_effects.push(warp);
+    let line = effect(&mut f, EffectKind::Filter(Filter::DirectionalBlur { radius: 40.0, angle: 30.0 }));
+    f.project.layer_mut(streaks).unwrap().content_effects.push(line);
+    let want = reference(&f, 0);
+    for c in [Channel::BaseColor, Channel::Roughness, Channel::Metallic] {
+        assert!(want.channels[&c] != plain.channels[&c], "{c:?} changed by its filter");
+    }
+    let mut one_by_one = Composite::new(&f.project.texture_sets[0].channel_list(), RES);
+    let (images, baked) = (Default::default(), Default::default());
+    for t in all_tiles(RES, RES) {
+        composite_tiles(&inputs(&f, 0, &images, &baked), &mut one_by_one, &[t]);
+    }
+    assert!(one_by_one == want, "per-tile composites differ from one pass");
+    for hot in [top, streaks] {
+        assert!(!check_cached(&f, 0, hot).is_empty());
+    }
 }

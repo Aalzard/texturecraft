@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Display settings",
             [],
             None,
-            "{environment?: <built-in>|resource:<image resource>, exposure?, blur?, rotation?, opacity?, toneMapping?: linear|aces, fov?, shadows?, aoIntensity?, bloom?, vignette?, sharpen?, grain?, postEffects?, taa?, specGloss?, parallax?, scatterColor?: [r,g,b] (linear) | \"#rrggbb\", scatterRadius? (0..1 of the mesh radius)}",
+            "{environment?: <built-in>|resource:<image resource>, exposure?, blur?, rotation?, opacity?, toneMapping?: linear|aces, fov?, shadows?, aoIntensity?, bloom?, vignette?, sharpen?, grain?, postEffects?, taa?, specGloss?, parallax?, scatterColor?: [r,g,b] (linear) | \"#rrggbb\", scatterRadius? (0..1 of the mesh radius), ior? (1..3, transmission), dof?: {enabled?, focusDistance? (view depth, world units; 0 = the orbit target), aperture? (lens radius, 0..1 of the mesh radius)}}",
             always,
             display
         ),
@@ -180,6 +180,7 @@ fn display(s: &mut Session, p: &Value) -> Result<Value> {
         ("sharpen", &mut d.sharpen, 0.0, 1.0),
         ("grain", &mut d.grain, 0.0, 1.0),
         ("scatterRadius", &mut d.scatter_radius, 0.0, 1.0),
+        ("ior", &mut d.ior, 1.0, 3.0),
     ] {
         if let Some(v) = f32p(p, k) {
             *slot = v.clamp(lo, hi);
@@ -194,12 +195,26 @@ fn display(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(b) = boolp(p, "shadows") {
         d.shadows = b;
     }
+    if let Some(dof) = p.get("dof") {
+        if let Some(b) = boolp(dof, "enabled") {
+            d.dof.enabled = b;
+        }
+        if let Some(v) = f32p(dof, "focusDistance") {
+            d.dof.focus_distance = v.clamp(0.0, 1e6);
+        }
+        if let Some(v) = f32p(dof, "aperture") {
+            d.dof.aperture = v.clamp(0.0, 1.0);
+        }
+    }
     for (k, slot) in [("postEffects", &mut d.post_effects), ("taa", &mut d.taa), ("specGloss", &mut d.spec_gloss), ("parallax", &mut d.parallax)] {
         if let Some(b) = boolp(p, k) {
             *slot = b;
         }
     }
-    s.camera.fov = s.doc.project.display.fov;
+    // The field of view applies to the view only when set (a saved camera keeps its own).
+    if f32p(p, "fov").is_some() {
+        s.camera.fov = s.doc.project.display.fov;
+    }
     s.revision = s.revision.wrapping_add(1);
     Ok(serde_json::to_value(&s.doc.project.display).unwrap_or(Value::Null))
 }

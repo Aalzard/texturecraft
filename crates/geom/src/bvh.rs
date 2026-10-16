@@ -175,6 +175,18 @@ impl Bvh {
         self.tris.is_empty()
     }
 
+    /// The flattened tree (for GPU traversal), root first: bounds, then for a leaf the range
+    /// `first..first + count` of [`Bvh::triangles`], for an inner node (`count` 0) the children
+    /// `first` and `first + 1`.
+    pub fn nodes(&self) -> impl ExactSizeIterator<Item = (Vec3, Vec3, u32, u32)> + '_ {
+        self.nodes.iter().map(|n| (n.lo.into(), n.hi.into(), n.first, n.count))
+    }
+
+    /// Triangle vertices in BVH order, and the original triangle index of each.
+    pub fn triangles(&self) -> (&[[Vec3; 3]], &[u32]) {
+        (&self.tris, &self.order)
+    }
+
     fn slab(lo: Vec3A, hi: Vec3A, o: Vec3A, inv: Vec3A, tmax: f32) -> Option<f32> {
         let t0 = (lo - o) * inv;
         let t1 = (hi - o) * inv;

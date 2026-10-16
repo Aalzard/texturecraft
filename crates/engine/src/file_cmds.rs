@@ -114,6 +114,7 @@ impl Session {
         let imported = texturecraft_formats::import_mesh_bytes(file_name, bytes).map_err(fe)?;
         let ext = ext_of(file_name);
         let mut s = Session::new_project_tiled(name, imported.mesh, &format!("mesh.{ext}"), Some((ext, bytes.to_vec())), resolution, uv_tiles)?;
+        s.doc.project.cameras = imported.cameras;
         s.log.extend(imported.report.warnings.iter().cloned());
         s.log.push(format!(
             "Imported {} ({} triangles, {} materials{})",

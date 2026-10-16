@@ -59,6 +59,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(crate::tool_cmds::specs());
         v.extend(crate::path_tool::specs());
         v.extend(crate::view_cmds::specs());
+        v.extend(crate::camera_cmds::specs());
         v.extend(crate::quick_mask::specs());
         v.extend(crate::set_cmds::specs());
         v.extend(crate::project_cmds::specs());
@@ -68,6 +69,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(crate::resource_cmds::specs());
         v.extend(crate::material_lib::specs());
         v.extend(crate::smart_masks::specs());
+        v.extend(crate::filter_lib::specs());
+        v.extend(crate::decal_cmds::specs());
         v
     })
 }
@@ -159,7 +162,12 @@ pub(crate) fn blend_param(cmd: &str, p: &Value, key: &str) -> Result<Option<Blen
 
 /// A color: `[r, g, b]` (linear 0..1) or `"#rrggbb"` (sRGB hex, converted to linear).
 pub(crate) fn color_param(p: &Value, key: &str) -> Option<[f32; 3]> {
-    match p.get(key)? {
+    color_of(p.get(key)?)
+}
+
+/// A color value (see [`color_param`]).
+pub(crate) fn color_of(v: &Value) -> Option<[f32; 3]> {
+    match v {
         Value::Array(a) if a.len() >= 3 => {
             let v: Vec<f32> = a.iter().take(3).map(|x| x.as_f64().unwrap_or(0.0) as f32).collect();
             if v.iter().all(|x| x.is_finite()) { Some([v[0], v[1], v[2]]) } else { None }

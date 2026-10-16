@@ -2,7 +2,7 @@
 //! without a screenshot.
 
 use serde_json::{Value, json};
-use texturecraft_core::{Effect, EffectKind, Fill, Filter, Layer, LayerKind, Source};
+use texturecraft_core::{Effect, EffectKind, Fill, Filter, Layer, LayerKind, Projection, Source};
 
 use crate::Session;
 use crate::session::StackTarget;
@@ -19,17 +19,23 @@ fn source_json(s: &Source) -> Value {
 }
 
 fn fill_json(f: &Fill) -> Value {
-    json!({
+    let mut v = json!({
         "projection": f.projection.label(),
         "sources": f.sources.iter().map(|(c, s)| (c.id().to_string(), source_json(s))).collect::<serde_json::Map<_, _>>(),
-    })
+    });
+    if let Projection::Decal(d) = &f.projection {
+        v["decal"] = json!(d);
+    }
+    v
 }
 
 /// A mask or content (`content`) effect.
 fn effect_json(s: &Session, e: &Effect, content: bool) -> Value {
     let mut ej = json!({ "id": e.id.0, "name": e.name, "kind": e.kind.name(), "visible": e.visible, "blend": e.blend.label(), "opacity": e.opacity });
     match &e.kind {
-        EffectKind::Generator(g) => ej["generator"] = json!({ "type": format!("{:?}", g.kind), "level": g.level, "softness": g.softness, "noise": g.noise_amount, "invert": g.invert }),
+        EffectKind::Generator(g) => {
+            ej["generator"] = json!({ "type": format!("{:?}", g.kind), "level": g.level, "softness": g.softness, "noise": g.noise_amount, "invert": g.invert })
+        }
         EffectKind::Levels(lv) => ej["levels"] = json!([lv.in_low, lv.in_high, lv.gamma, lv.out_low, lv.out_high]),
         EffectKind::Paint if content => {
             ej["tiles"] = json!(s.doc.pixels.layers.iter().filter(|((id, _), _)| *id == e.id).map(|(_, img)| img.allocated_count()).sum::<usize>())
@@ -37,8 +43,14 @@ fn effect_json(s: &Session, e: &Effect, content: bool) -> Value {
         EffectKind::Paint => ej["tiles"] = json!(s.doc.pixels.masks.get(&e.id).map(|i| i.allocated_count()).unwrap_or(0)),
         EffectKind::Fill { source, .. } => ej["source"] = source_json(source),
         EffectKind::Material(f) => ej["fill"] = fill_json(f),
-        EffectKind::Filter(Filter::Hsl { hue, saturation, lightness }) => ej["hsl"] = json!([hue, saturation, lightness]),
-        EffectKind::Filter(Filter::Blur { radius }) => ej["radius"] = json!(radius),
+        EffectKind::Filter(f) => {
+            ej["filter"] = json!(f);
+            match f {
+                Filter::Hsl { hue, saturation, lightness } => ej["hsl"] = json!([hue, saturation, lightness]),
+                Filter::Blur { radius } => ej["radius"] = json!(radius),
+                _ => {}
+            }
+        }
         _ => {}
     }
     ej
@@ -68,7 +80,8 @@ fn layer_json(s: &Session, l: &Layer, depth: usize) -> Value {
     }
     if matches!(l.kind, LayerKind::Paint) {
         // Sorted: the store is a hash map, and inspect output must be stable.
-        let mut painted: Vec<(&str, usize)> = s.doc.pixels.layers.iter().filter(|((id, _), _)| *id == l.id).map(|((_, c), img)| (c.id(), img.allocated_count())).collect();
+        let mut painted: Vec<(&str, usize)> =
+            s.doc.pixels.layers.iter().filter(|((id, _), _)| *id == l.id).map(|((_, c), img)| (c.id(), img.allocated_count())).collect();
         painted.sort_unstable();
         v["painted"] = json!(painted.iter().map(|(c, n)| json!({ "channel": c, "tiles": n })).collect::<Vec<_>>());
     }

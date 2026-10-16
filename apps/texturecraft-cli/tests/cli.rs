@@ -117,12 +117,17 @@ fn render_writes_a_png() {
 fn path_traced_render_needs_no_gpu() {
     let d = tmp("trace");
     let out = d.join("ball.png");
-    ok(&["render", "builtin:material_ball", p(&out), "--size", "96x64", "--samples", "4"]);
-    let img = image::open(&out).unwrap().to_rgb8();
-    assert_eq!(img.dimensions(), (96, 64));
-    // The lit ball in the middle is brighter than the dark backdrop corner.
-    let lum = |x, y| img.get_pixel(x, y).0.iter().map(|v| *v as u32).sum::<u32>();
-    assert!(lum(48, 28) > lum(1, 1) + 60);
+    // On the GPU where it has compute shaders, then forced onto the CPU.
+    for extra in [None, Some("--cpu")] {
+        let mut args = vec!["render", "builtin:material_ball", p(&out), "--size", "96x64", "--samples", "4"];
+        args.extend(extra);
+        ok(&args);
+        let img = image::open(&out).unwrap().to_rgb8();
+        assert_eq!(img.dimensions(), (96, 64));
+        // The lit ball in the middle is brighter than the dark backdrop corner.
+        let lum = |x, y| img.get_pixel(x, y).0.iter().map(|v| *v as u32).sum::<u32>();
+        assert!(lum(48, 28) > lum(1, 1) + 60);
+    }
     assert_eq!(cli(&["render", "builtin:cube", p(&out), "--samples", "0"]).status.code(), Some(1));
     assert_eq!(cli(&["render", "builtin:cube", p(&out), "--samples", "4", "--view", "2d"]).status.code(), Some(1));
     let _ = std::fs::remove_dir_all(&d);

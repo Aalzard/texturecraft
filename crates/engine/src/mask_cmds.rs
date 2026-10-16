@@ -29,15 +29,12 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("mask.invert", "Invert mask", ["Layers", "Mask"], None, "{layer?}", has_layer, invert),
         cmd!("mask.clear", "Clear mask", ["Layers", "Mask"], None, "{layer?}", has_layer, clear),
         cmd!("mask.remove", "Remove mask", ["Layers", "Mask"], None, "{layer?}", has_layer, remove),
-        cmd!(
-            "effect.add.paint",
-            "Add paint",
-            ["Layers", "Effects"],
-            None,
-            "{layer?, target?: mask|content, name?}",
-            has_layer,
-            |s, p| push_effect(s, p, EffectKind::Paint, BlendMode::Normal)
-        ),
+        cmd!("effect.add.paint", "Add paint", ["Layers", "Effects"], None, "{layer?, target?: mask|content, name?}", has_layer, |s, p| push_effect(
+            s,
+            p,
+            EffectKind::Paint,
+            BlendMode::Normal
+        )),
         cmd!(
             "effect.add.fill",
             "Add fill",
@@ -70,7 +67,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add filter",
             ["Layers", "Effects"],
             None,
-            "{layer?, target?: mask|content, name?, filter?: invert|threshold|blur|sharpen|hsl, level?, radius?, amount?, hue?: turns -1..1, saturation?: -1..1, lightness?: -1..1}",
+            "{layer?, target?: mask|content, name?, filter?: id from filter.list (invert, threshold, blur, sharpen, hsl, levels, contrastLuminosity, colorBalance, gradientMap, posterize, clamp, warp, blurDirectional, slopeBlur, matFinishGrind|Raw|Sanded|Hammered), level?, radius?, amount?, hue?: turns -1..1, saturation?, lightness?, contrast?, luminosity?, shadows?|midtones?|highlights?: [r,g,b] -1..1, colors?: [[r,g,b]|\"#rrggbb\", ...], levels?, min?, max?, intensity?, scale?, seed?, angle?} — material finishes go on the content",
             has_layer,
             add_filter
         ),
@@ -97,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit effect",
             [],
             None,
-            "{effect, visible?, blend?, opacity?, name?, level?, softness?, noise?, noiseScale?, invert?, value?, anchor?, anchorChannel?, inLow?, inHigh?, gamma?, outLow?, outHigh?, radius?, amount?, hue?, saturation?, lightness?, tolerance?}",
+            "{effect, visible?, blend?, opacity?, name?, level?, softness?, noise?, noiseScale?, invert?, value?, anchor?, anchorChannel?, inLow?, inHigh?, gamma?, outLow?, outHigh?, tolerance?, filter parameters (see effect.add.filter)}",
             has_layer,
             set
         ),
@@ -333,7 +330,7 @@ fn add_generator(s: &mut Session, p: &Value) -> Result<Value> {
     push_effect(s, p, EffectKind::Generator(g), blend)
 }
 
-fn levels_from(p: &Value, l: &mut Levels) {
+pub(crate) fn levels_from(p: &Value, l: &mut Levels) {
     for (k, slot) in [("inLow", &mut l.in_low), ("inHigh", &mut l.in_high), ("gamma", &mut l.gamma), ("outLow", &mut l.out_low), ("outHigh", &mut l.out_high)] {
         if let Some(v) = f32p(p, k) {
             *slot = if k == "gamma" { v.clamp(0.01, 10.0) } else { v.clamp(0.0, 1.0) };
@@ -348,29 +345,16 @@ fn add_levels(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn add_filter(s: &mut Session, p: &Value) -> Result<Value> {
-    let f = match strp(p, "filter").unwrap_or("invert") {
-        "invert" => Filter::Invert,
-        "threshold" => Filter::Threshold { level: f32p(p, "level").unwrap_or(0.5).clamp(0.0, 1.0) },
-        "blur" => Filter::Blur { radius: f32p(p, "radius").unwrap_or(2.0).clamp(0.0, 64.0) },
-        "sharpen" => Filter::Sharpen { amount: f32p(p, "amount").unwrap_or(1.0).clamp(0.0, 10.0) },
-        "hsl" => {
-            let mut f = Filter::Hsl { hue: 0.0, saturation: 0.0, lightness: 0.0 };
-            hsl_from(p, &mut f);
-            f
-        }
-        other => return Err(bad("effect.add.filter", format!("unknown filter `{other}`"))),
-    };
-    push_effect(s, p, EffectKind::Filter(f), BlendMode::Normal)
-}
-
-fn hsl_from(p: &Value, f: &mut Filter) {
-    if let Filter::Hsl { hue, saturation, lightness } = f {
-        for (k, slot) in [("hue", hue), ("saturation", saturation), ("lightness", lightness)] {
-            if let Some(v) = f32p(p, k) {
-                *slot = v.clamp(-1.0, 1.0);
-            }
-        }
+    let id = strp(p, "filter").unwrap_or("invert");
+    let kind = crate::filter_lib::build(id, p)?;
+    // Library filters are named after their shelf entry (material finishes are fill effects).
+    let mut p = p.clone();
+    if name_param(&p).is_none()
+        && let (Some(d), Some(o)) = (crate::filter_lib::find(id), p.as_object_mut())
+    {
+        o.insert("name".into(), json!(d.label));
     }
+    push_effect(s, &p, kind, BlendMode::Normal)
 }
 
 fn add_compare(s: &mut Session, p: &Value) -> Result<Value> {
@@ -425,7 +409,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         match &mut e.kind {
             EffectKind::Generator(g) => generator_from(p, g),
             EffectKind::Levels(l) => levels_from(p, l),
-            EffectKind::Filter(f @ Filter::Hsl { .. }) => hsl_from(p, f),
+            EffectKind::Filter(f) => crate::filter_lib::apply(p, f, "effect.set")?,
             EffectKind::Fill { source, .. } => {
                 if let Some(a) = anchor {
                     *source = a;
@@ -433,21 +417,6 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
                     && matches!(source, Source::Uniform(_) | Source::Anchor { .. })
                 {
                     *source = Source::Uniform([x.clamp(0.0, 1.0); 3]);
-                }
-            }
-            EffectKind::Filter(Filter::Threshold { level }) => {
-                if let Some(x) = f32p(p, "level") {
-                    *level = x.clamp(0.0, 1.0);
-                }
-            }
-            EffectKind::Filter(Filter::Blur { radius }) => {
-                if let Some(x) = f32p(p, "radius") {
-                    *radius = x.clamp(0.0, 256.0);
-                }
-            }
-            EffectKind::Filter(Filter::Sharpen { amount }) => {
-                if let Some(x) = f32p(p, "amount") {
-                    *amount = x.clamp(0.0, 10.0);
                 }
             }
             EffectKind::ColorSelection { tolerance, .. } | EffectKind::Compare { tolerance, .. } => {

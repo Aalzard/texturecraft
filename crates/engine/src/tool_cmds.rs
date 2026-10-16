@@ -7,7 +7,7 @@ use texturecraft_geom::glam::Vec2;
 use texturecraft_paint::{Alignment, BrushAlpha, alphas};
 
 use crate::commands::{CommandSpec, always, bad, boolp, channel_param, color_param, f32p, strp};
-use crate::session::{CloneSource, FillMode, Tool};
+use crate::session::{CloneFrom, CloneSource, FillMode, Tool};
 use crate::{Result, Session, cmd};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Brush settings",
             [],
             None,
-            "{size?: 0..100, flow?: 0..100, opacity?: 0..100, spacing?: 1..1000, hardness?: 0..100, angle?, followPath?, alignment?: tangent|camera, lazy?, jitterSize?, jitterAngle?, jitterFlow?, jitterPosition?, alpha?: procedural name | {image: resource name} | {library: id (alpha.list)}, backfaceCulling?, symmetryX?, symmetryY?, symmetryZ?, minSize?, smudgeStrength?: 0..100, particles?: {enabled?, count?: 1..16, lifetime?: 1..128 steps, gravity?: 0..2}}",
+            "{size?: 0..100, flow?: 0..100, opacity?: 0..100, spacing?: 1..1000, hardness?: 0..100, angle?, followPath?, alignment?: tangent|camera, lazy?, jitterSize?, jitterAngle?, jitterFlow?, jitterPosition?, alpha?: procedural name | {image: resource name} | {library: id (alpha.list)}, backfaceCulling?, symmetryX?, symmetryY?, symmetryZ?, minSize?, smudgeStrength?: 0..100, cloneSource?: composite|layer (what the Clone tool copies), particles?: {enabled?, count?: 1..16, lifetime?: 1..128 steps, gravity?: 0..2}}",
             always,
             brush
         ),
@@ -164,6 +164,13 @@ fn brush(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(v) = f32p(p, "smudgeStrength") {
         s.tool.smudge_strength = (v / 100.0).clamp(0.0, 1.0);
     }
+    if let Some(v) = strp(p, "cloneSource") {
+        s.tool.clone_from = match v {
+            "composite" => CloneFrom::Composite,
+            "layer" => CloneFrom::Layer,
+            other => return Err(bad("tool.brush", format!("unknown clone source `{other}`: use composite or layer"))),
+        };
+    }
     s.revision = s.revision.wrapping_add(1);
     Ok(brush_json(s))
 }
@@ -181,6 +188,7 @@ pub(crate) fn brush_json(s: &Session) -> Value {
         },
         "backfaceCulling": b.backface_culling, "symmetry": [b.symmetry.x, b.symmetry.y, b.symmetry.z],
         "smudgeStrength": s.tool.smudge_strength * 100.0, "particles": b.particles,
+        "cloneSource": if s.tool.clone_from == CloneFrom::Layer { "layer" } else { "composite" },
     })
 }
 
