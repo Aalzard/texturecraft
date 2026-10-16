@@ -22,6 +22,14 @@ fn fs_mip(i: FsOut) -> @location(0) vec4<f32> {
     return textureSample(src, src_samp, i.uv);
 }
 
+// A same-size copy: the texel under the pixel. Exact on every adapter, where a filtered read at
+// the interpolated UV can blend neighbours when the UV lands a hair off the texel center.
+@fragment
+fn fs_copy(i: FsOut) -> @location(0) vec4<f32> {
+    let d = vec2<i32>(textureDimensions(src));
+    return textureLoad(src, clamp(vec2<i32>(floor(i.pos.xy)), vec2<i32>(0), d - 1), 0);
+}
+
 struct Blit {
     rect: vec4<f32>,   // destination x, y, w, h in target pixels
     dst: vec4<f32>,    // target w, h, decode sRGB (1 when the target format is sRGB), -

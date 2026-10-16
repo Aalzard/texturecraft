@@ -859,7 +859,7 @@ impl Renderer {
         };
         let accum_layout = pl("tc_accum", &[Some(&mip_bgl)]);
         let accum_blend = Some(wgpu::BlendState { color: average, alpha: average });
-        let accum_pipeline = pipeline(device, "tc_accum", &accum_layout, &util_module, "vs_full", &[], hdr("fs_mip", accum_blend), 1, None);
+        let accum_pipeline = pipeline(device, "tc_accum", &accum_layout, &util_module, "vs_full", &[], hdr("fs_copy", accum_blend), 1, None);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("tc_tex"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
