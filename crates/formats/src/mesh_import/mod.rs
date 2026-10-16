@@ -14,9 +14,9 @@ mod ply;
 #[cfg(test)]
 mod scene_tests;
 mod stl;
-pub(crate) mod usd;
 #[cfg(test)]
 pub(crate) mod tests;
+pub(crate) mod usd;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;

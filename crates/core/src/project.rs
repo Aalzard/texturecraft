@@ -1008,7 +1008,10 @@ mod tests {
         let id = p.insert_layer(0, l, None, false).unwrap();
         let mut top = paint(&mut p, "y");
         let source = Source::Anchor { anchor, channel: Channel::Height };
-        top.mask = Some(Mask { effects: vec![Effect::new(p.alloc_id(), EffectKind::Fill { source, projection: Projection::default() })], ..Mask::new(MaskBackground::Black) });
+        top.mask = Some(Mask {
+            effects: vec![Effect::new(p.alloc_id(), EffectKind::Fill { source, projection: Projection::default() })],
+            ..Mask::new(MaskBackground::Black)
+        });
         p.insert_layer(0, top, Some(id), false).unwrap();
         let json = serde_json::to_string(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();

@@ -15,5 +15,8 @@ pub mod store;
 
 pub use below::{BelowCache, StackKey};
 pub use display::{DisplayKind, tile_bytes};
-pub use eval::{Composite, Inputs, PaintTarget, Stencil, StrokePreview, all_tiles, composite_tiles, composite_tiles_cached, covered_tiles, flatten_layer, mask_image, pad_tiles};
+pub use eval::{
+    Composite, Inputs, PaintTarget, Stencil, StrokePreview, all_tiles, composite_tiles, composite_tiles_cached, covered_tiles, flatten_layer, mask_image,
+    pad_tiles,
+};
 pub use store::{BakedMaps, ImageRes, ImageStore, PixelStore};

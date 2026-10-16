@@ -254,8 +254,18 @@ fn bench_single_layers() {
     let cases: &[(&str, &[(&str, Value)])] = &[
         ("uniform fill", &[("layer.add.fill", json!({"color": [0.5, 0.5, 0.5], "roughness": 0.4}))]),
         ("fill + clouds", &[("layer.add.fill", json!({})), ("layer.fill.set", json!({"channel": "baseColor", "procedural": "clouds"}))]),
-        ("fill + triplanar clouds", &[("layer.add.fill", json!({})), ("layer.fill.set", json!({"channel": "baseColor", "procedural": "clouds"})), ("layer.fill.projection", json!({"projection": "triplanar"}))]),
-        ("fill + black mask + edge wear", &[("layer.add.fill", json!({})), ("mask.add.black", Value::Null), ("effect.add.generator", json!({"generator": "edgeWear"}))]),
+        (
+            "fill + triplanar clouds",
+            &[
+                ("layer.add.fill", json!({})),
+                ("layer.fill.set", json!({"channel": "baseColor", "procedural": "clouds"})),
+                ("layer.fill.projection", json!({"projection": "triplanar"})),
+            ],
+        ),
+        (
+            "fill + black mask + edge wear",
+            &[("layer.add.fill", json!({})), ("mask.add.black", Value::Null), ("effect.add.generator", json!({"generator": "edgeWear"}))],
+        ),
         ("fill + black mask + dirt", &[("layer.add.fill", json!({})), ("mask.add.black", Value::Null), ("effect.add.generator", json!({"generator": "dirt"}))]),
     ];
     for (label, cmds) in cases {

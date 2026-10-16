@@ -34,9 +34,9 @@ pub use export::{
 pub use image_res::{DecodedImage, decode_image};
 pub use mesh_export::{GlbTextures, UsdExport, UsdFormat, glb_bytes, glb_export_options, obj_bytes, usd_bytes, usd_export_options};
 pub use mesh_import::{HighPolyMesh, ImportedMesh, MeshReport, import_high_poly_bytes, import_mesh_bytes};
-pub use presets::{builtin_preset, builtin_presets, preset_from_json, preset_to_json};
 #[cfg(not(target_arch = "wasm32"))]
 pub use presets::load_preset;
+pub use presets::{builtin_preset, builtin_presets, preset_from_json, preset_to_json};
 pub use project_file::{ProjectFile, load_project_bytes, sanitize_resource_name, save_project_bytes};
 
 #[cfg(not(target_arch = "wasm32"))]

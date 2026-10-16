@@ -151,7 +151,8 @@ pub fn tile_bytes(comp: &Composite, baked: &BakedMaps, kind: DisplayKind, tx: u3
             let (ao, m, s) = (get(Channel::AmbientOcclusion), get(Channel::Metallic), get(Channel::SpecularLevel));
             // Specular/glossiness sets: the viewport shades roughness = 1 − glossiness.
             let gloss = comp.channels.contains_key(&Channel::Glossiness);
-            let (r, r_default) = if gloss { (get(Channel::Glossiness), default16(Channel::Glossiness)) } else { (get(Channel::Roughness), default16(Channel::Roughness)) };
+            let (r, r_default) =
+                if gloss { (get(Channel::Glossiness), default16(Channel::Glossiness)) } else { (get(Channel::Roughness), default16(Channel::Roughness)) };
             for i in 0..TILE_AREA {
                 let (x, y) = (tx * TILE + (i as u32 % TILE), ty * TILE + (i as u32 / TILE));
                 let baked_ao = baked.scalar(BakedMap::AmbientOcclusion, x, y, res).unwrap_or(1.0);

@@ -16,7 +16,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("resource.list", "List resources", [], None, "{}", always, |s, _| Ok(list(s))),
         cmd!("resource.remove", "Remove resource", [], None, "{name}", always, remove),
         cmd!("file.removeUnused", "Remove unused resources...", ["File"], None, "{}", always, remove_unused),
-        cmd!("layer.add.image", "Add fill layer from image", [], None, "{name, channel?: baseColor, projection?: uv|triplanar|planar, scale?}", always, add_image_fill),
+        cmd!(
+            "layer.add.image",
+            "Add fill layer from image",
+            [],
+            None,
+            "{name, channel?: baseColor, projection?: uv|triplanar|planar, scale?}",
+            always,
+            add_image_fill
+        ),
     ]
 }
 
@@ -55,7 +63,8 @@ impl Session {
     pub fn sync_images(&mut self) {
         let keep: Vec<String> = self.doc.resources.keys().cloned().collect();
         self.images.retain(|k, _| keep.contains(k));
-        let missing: Vec<(String, Arc<Vec<u8>>)> = self.doc.resources.iter().filter(|(k, _)| !self.images.contains_key(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        let missing: Vec<(String, Arc<Vec<u8>>)> =
+            self.doc.resources.iter().filter(|(k, _)| !self.images.contains_key(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
         for (k, bytes) in missing {
             match texturecraft_formats::decode_image(&bytes) {
                 Ok(d) => {

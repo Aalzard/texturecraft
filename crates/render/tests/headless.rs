@@ -176,10 +176,14 @@ fn shadows_darken_the_key_light() {
     top.camera.pitch = 0.9;
     render(&mut h, &top, "shadows_on_top");
     // Rotating the environment turns the key light and its shadow.
-    let turned = render(&mut h, &shaded(&lit, |s| {
-        s.shadows = true;
-        s.env_rotation_deg = 120.0;
-    }), "shadows_env_rotated");
+    let turned = render(
+        &mut h,
+        &shaded(&lit, |s| {
+            s.shadows = true;
+            s.env_rotation_deg = 120.0;
+        }),
+        "shadows_env_rotated",
+    );
     assert_ne!(turned.px, b.px);
 }
 

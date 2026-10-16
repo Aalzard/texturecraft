@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 use texturecraft_compose::{Composite, ImageRes};
-use texturecraft_core::project::{DisplaySettings, ToneMapping};
 use texturecraft_core::Channel;
+use texturecraft_core::project::{DisplaySettings, ToneMapping};
 use texturecraft_geom::glam::{Vec2, Vec3};
 use texturecraft_geom::{Bvh, Mesh, OrbitCamera};
 
@@ -1091,7 +1091,8 @@ mod tests {
             let n = 40_000;
             let mut sum = Vec3::ZERO;
             for _ in 0..n {
-                sum += trace(s, Vec3::new(0.3, 0.4, 4.0), Vec3::new(-0.07, -0.1, -1.0).normalize(), &TraceSettings { bounces: 3 }, &mut rng).map_or(Vec3::ZERO, |s| s.radiance);
+                sum += trace(s, Vec3::new(0.3, 0.4, 4.0), Vec3::new(-0.07, -0.1, -1.0).normalize(), &TraceSettings { bounces: 3 }, &mut rng)
+                    .map_or(Vec3::ZERO, |s| s.radiance);
             }
             sum / n as f32
         };

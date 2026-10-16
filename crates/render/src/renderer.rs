@@ -525,7 +525,8 @@ fn set_bind_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler
 /// points draw line lists.
 type ColorOut<'a> = (&'a str, wgpu::TextureFormat, Option<wgpu::BlendState>);
 
-const ADD: wgpu::BlendComponent = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
+const ADD: wgpu::BlendComponent =
+    wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
 const ADDITIVE: wgpu::BlendState = wgpu::BlendState { color: ADD, alpha: ADD };
 
 #[allow(clippy::too_many_arguments)]
@@ -607,16 +608,32 @@ fn target_view(device: &wgpu::Device, label: &str, size: [u32; 2], format: wgpu:
 }
 
 fn shadow_view(device: &wgpu::Device, size: u32) -> wgpu::TextureView {
-    texture(device, "tc_shadow", [size, size], DEPTH_FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING).create_view(&Default::default())
+    texture(device, "tc_shadow", [size, size], DEPTH_FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING)
+        .create_view(&Default::default())
 }
 
 /// One fullscreen-triangle pass into `target`.
-fn fullscreen(encoder: &mut wgpu::CommandEncoder, label: &str, target: &wgpu::TextureView, load: wgpu::LoadOp<wgpu::Color>, pipe: &wgpu::RenderPipeline, bg: &wgpu::BindGroup) {
+fn fullscreen(
+    encoder: &mut wgpu::CommandEncoder,
+    label: &str,
+    target: &wgpu::TextureView,
+    load: wgpu::LoadOp<wgpu::Color>,
+    pipe: &wgpu::RenderPipeline,
+    bg: &wgpu::BindGroup,
+) {
     fullscreen_blend(encoder, label, target, load, pipe, bg, 1.0);
 }
 
 /// [`fullscreen`] with a blend constant (for pipelines that blend by it).
-fn fullscreen_blend(encoder: &mut wgpu::CommandEncoder, label: &str, target: &wgpu::TextureView, load: wgpu::LoadOp<wgpu::Color>, pipe: &wgpu::RenderPipeline, bg: &wgpu::BindGroup, constant: f64) {
+fn fullscreen_blend(
+    encoder: &mut wgpu::CommandEncoder,
+    label: &str,
+    target: &wgpu::TextureView,
+    load: wgpu::LoadOp<wgpu::Color>,
+    pipe: &wgpu::RenderPipeline,
+    bg: &wgpu::BindGroup,
+    constant: f64,
+) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -652,19 +669,30 @@ const CLEAR: wgpu::LoadOp<wgpu::Color> = wgpu::LoadOp::Clear(wgpu::Color::TRANSP
 impl Renderer {
     /// `target_format`: the format of the pass [`Renderer::blit`] draws into.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Renderer {
-        let shader = |label: &str, source: &str| device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) });
+        let shader = |label: &str, source: &str| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) })
+        };
         let module = shader("tc_mesh", include_str!("shaders/mesh.wgsl"));
         let util_module = shader("tc_util", include_str!("shaders/util.wgsl"));
         let post_module = shader("tc_post", concat!(include_str!("shaders/util.wgsl"), include_str!("shaders/post.wgsl"), include_str!("shaders/fx.wgsl")));
         let shadow_module = shader("tc_shadow", include_str!("shaders/shadow.wgsl"));
-        let bgl = |label: &str, entries: &[wgpu::BindGroupLayoutEntry]| device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(label), entries });
+        let bgl = |label: &str, entries: &[wgpu::BindGroupLayoutEntry]| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(label), entries })
+        };
         let globals_bgl = bgl(
             "tc_globals",
             &[
                 uniform_entry(0),
                 tex_entry(1),
                 sampler_entry(2),
-                fragment_entry(3, wgpu::BindingType::Texture { multisampled: false, sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2 }),
+                fragment_entry(
+                    3,
+                    wgpu::BindingType::Texture {
+                        multisampled: false,
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                ),
                 fragment_entry(4, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison)),
             ],
         );
@@ -694,7 +722,8 @@ impl Renderer {
         let hdr_format = if hdr_renderable(device) { HDR_FORMAT } else { COLOR_FORMAT };
         let hdr = |fs, blend| Some((fs, hdr_format, blend));
         let always = || Some(depth_state(false, wgpu::CompareFunction::Always));
-        let mesh_pipeline = pipeline(device, "tc_mesh", &layout, &module, "vs_mesh", &vb, hdr("fs_mesh", None), MSAA, Some(depth_state(true, wgpu::CompareFunction::Less)));
+        let mesh_pipeline =
+            pipeline(device, "tc_mesh", &layout, &module, "vs_mesh", &vb, hdr("fs_mesh", None), MSAA, Some(depth_state(true, wgpu::CompareFunction::Less)));
         let uv_pipeline = pipeline(device, "tc_uv", &layout, &module, "vs_uv", &vb, hdr("fs_uv", None), MSAA, always());
         let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
         let wire_pipeline = pipeline(device, "tc_wire", &layout, &module, "vs_uv", &vb, hdr("fs_wire", blend), MSAA, always());
@@ -705,7 +734,8 @@ impl Renderer {
         let post_pipeline = pipeline(device, "tc_post", &fx_layout, &post_module, "vs_full", &[], Some(("fs_post", COLOR_FORMAT, None)), 1, None);
         let bloom_pipelines = [("fs_bloom_pre", None), ("fs_bloom_down", None), ("fs_bloom_up", Some(ADDITIVE))]
             .map(|(fs, blend)| pipeline(device, "tc_bloom", &fx_layout, &post_module, "vs_full", &[], hdr(fs, blend), 1, None));
-        let gbuf_pipeline = pipeline(device, "tc_gbuf", &layout, &module, "vs_mesh", &vb, hdr("fs_gbuf", None), 1, Some(depth_state(true, wgpu::CompareFunction::Less)));
+        let gbuf_pipeline =
+            pipeline(device, "tc_gbuf", &layout, &module, "vs_mesh", &vb, hdr("fs_gbuf", None), 1, Some(depth_state(true, wgpu::CompareFunction::Less)));
         let sss_pipelines = ["fs_sss_h", "fs_sss_v"].map(|fs| pipeline(device, "tc_sss", &fx_layout, &post_module, "vs_full", &[], hdr(fs, None), 1, None));
         let dof_pipeline = pipeline(device, "tc_dof", &fx_layout, &post_module, "vs_full", &[], hdr("fs_dof", None), 1, None);
         let dof_target = Some(wgpu::ColorTargetState { format: hdr_format, blend: None, write_mask: wgpu::ColorWrites::ALL });
@@ -731,7 +761,11 @@ impl Renderer {
         };
         let shadow_pipeline = pipeline(device, "tc_shadow", &shadow_layout, &shadow_module, "vs_shadow", &vb, None, 1, Some(shadow_depth));
         // accum = hdr * k + accum * (1 - k) with k = 1 / (sample + 1): a running average.
-        let average = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Constant, dst_factor: wgpu::BlendFactor::OneMinusConstant, operation: wgpu::BlendOperation::Add };
+        let average = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Constant,
+            dst_factor: wgpu::BlendFactor::OneMinusConstant,
+            operation: wgpu::BlendOperation::Add,
+        };
         let accum_layout = pl("tc_accum", &[Some(&mip_bgl)]);
         let accum_blend = Some(wgpu::BlendState { color: average, alpha: average });
         let accum_pipeline = pipeline(device, "tc_accum", &accum_layout, &util_module, "vs_full", &[], hdr("fs_mip", accum_blend), 1, None);
@@ -1227,7 +1261,12 @@ impl Renderer {
 
     /// Index ranges of `ranges` (first, count, material) whose texture set is visible (and is
     /// `only`, when given), with that set.
-    fn drawable<'a>(&'a self, ranges: &'a [(u32, u32, usize)], visible: &'a [bool], only: Option<usize>) -> impl Iterator<Item = (std::ops::Range<u32>, &'a SetGpu)> + 'a {
+    fn drawable<'a>(
+        &'a self,
+        ranges: &'a [(u32, u32, usize)],
+        visible: &'a [bool],
+        only: Option<usize>,
+    ) -> impl Iterator<Item = (std::ops::Range<u32>, &'a SetGpu)> + 'a {
         ranges.iter().filter_map(move |&(start, count, material)| {
             let ts = self.material_sets.get(material).copied().flatten()?;
             if only.is_some_and(|o| o != ts) || !visible.get(ts).copied().unwrap_or(true) {

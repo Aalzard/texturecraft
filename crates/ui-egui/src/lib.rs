@@ -264,10 +264,16 @@ impl TextureCraftApp {
         }
         self.next_autosave = now + period;
         let dir = user_dir("autosave");
-        let path = dir.join(format!("{}.{}", texturecraft_engine::formats::export::sanitize_file_stem(&self.session.doc.project.name), texturecraft_engine::core::PROJECT_EXT));
+        let path = dir.join(format!(
+            "{}.{}",
+            texturecraft_engine::formats::export::sanitize_file_stem(&self.session.doc.project.name),
+            texturecraft_engine::core::PROJECT_EXT
+        ));
         let pf = self.session.project_file();
         let spawned = std::thread::Builder::new().name("texturecraft-autosave".into()).spawn(move || {
-            let result = std::fs::create_dir_all(&dir).map_err(|e| e.to_string()).and_then(|_| texturecraft_engine::formats::save_project(&path, &pf).map_err(|e| e.to_string()));
+            let result = std::fs::create_dir_all(&dir)
+                .map_err(|e| e.to_string())
+                .and_then(|_| texturecraft_engine::formats::save_project(&path, &pf).map_err(|e| e.to_string()));
             match result {
                 Ok(()) => log::info!("autosaved {}", path.display()),
                 Err(e) => log::warn!("autosave to {} failed: {e}", path.display()),
@@ -341,9 +347,9 @@ impl eframe::App for TextureCraftApp {
             toolbar::rail(self, ui);
         }
         let hide = self.ui.hide_ui;
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(if hide { theme::TOKENS.viewport } else { theme::TOKENS.separator })).show(ui, |ui| {
-            if hide { viewport::central(self, ui) } else { docking::show(self, ui) }
-        });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(if hide { theme::TOKENS.viewport } else { theme::TOKENS.separator }))
+            .show(ui, |ui| if hide { viewport::central(self, ui) } else { docking::show(self, ui) });
         windows::show(self, &ctx);
         toasts(self, &ctx);
         let end = now_ms();
