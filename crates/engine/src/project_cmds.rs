@@ -71,6 +71,13 @@ pub fn sample_session(resolution: u32, bake_resolution: u32) -> Result<Session> 
     crate::materials::apply(&mut s, "iron_rusted")?;
     s.active_set = 0;
     crate::materials::apply(&mut s, "steel_painted_worn")?;
+    // Ready to paint: an empty paint layer on top of each stack, selected (the smart material
+    // fully covers the bottom layer, so strokes there would stay hidden).
+    for ts in (0..s.set_count()).rev() {
+        s.active_set = ts;
+        s.selected.remove(&ts);
+        crate::execute(&mut s, "layer.add.paint", &Value::Null)?;
+    }
     s.undo.clear();
     s.modified = false;
     Ok(s)

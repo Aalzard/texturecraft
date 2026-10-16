@@ -12,6 +12,14 @@ fn texel(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
     return textureLoad(t, clamp(vec2<i32>(uv * vec2<f32>(d)), vec2<i32>(0), d - 1), 0);
 }
 
+// The texel at pixel `p` of a target the same size as the one being drawn (`p` is the fragment
+// position): exact on every adapter, where a filtered read at the interpolated UV can blend
+// neighbours wherever the UV lands a hair off the texel center.
+fn texel_at(t: texture_2d<f32>, p: vec2<f32>) -> vec4<f32> {
+    let d = vec2<i32>(textureDimensions(t));
+    return textureLoad(t, clamp(vec2<i32>(floor(p)), vec2<i32>(0), d - 1), 0);
+}
+
 // ---- Subsurface scattering: a separable bilateral blur (Jimenez et al., "Separable Subsurface
 // Scattering", 2015) of the scattering diffuse light, a Gaussian per color channel as wide as
 // its mean free path, cut off across depth discontinuities.
@@ -22,15 +30,15 @@ fn px_per_world(z: f32) -> f32 {
     return select(post.d.w / max(z, 1e-4), post.d.w, post.e.x > 0.5);
 }
 
-// One direction of the blur over `src` (rgb light, a depth).
-fn sss_blur(uv: vec2<f32>, dir: vec2<f32>) -> vec4<f32> {
-    let c = texel(src, uv);
+// One direction of the blur over `src` (rgb light, a depth) at pixel `p` (same-size target).
+fn sss_blur(p: vec2<f32>, dir: vec2<f32>) -> vec4<f32> {
+    let c = texel_at(src, p);
     let sigma = post.d.xyz * px_per_world(c.a);
     let smax = max(sigma.r, max(sigma.g, sigma.b));
     if (c.a <= 0.0 || smax < 0.5) {
         return c;
     }
-    let stride = dir / vec2<f32>(textureDimensions(src)) * (smax * 3.0 / f32(SSS_TAPS));
+    let stride = dir * (smax * 3.0 / f32(SSS_TAPS));
     let depth_range = 3.0 * max(post.d.x, max(post.d.y, post.d.z));
     let inv = 1.0 / (2.0 * sigma * sigma + vec3<f32>(1e-4));
     var sum = c.rgb;
@@ -39,7 +47,7 @@ fn sss_blur(uv: vec2<f32>, dir: vec2<f32>) -> vec4<f32> {
         if (k == 0) {
             continue;
         }
-        let t = texel(src, uv + stride * f32(k));
+        let t = texel_at(src, p + stride * f32(k));
         let x = f32(k) * smax * 3.0 / f32(SSS_TAPS);
         let wd = select(0.0, max(1.0 - abs(t.a - c.a) / depth_range, 0.0), t.a > 0.0);
         let w = exp(-x * x * inv) * wd;
@@ -52,15 +60,15 @@ fn sss_blur(uv: vec2<f32>, dir: vec2<f32>) -> vec4<f32> {
 // src: the G-buffer.
 @fragment
 fn fs_sss_h(i: FsOut) -> @location(0) vec4<f32> {
-    return sss_blur(i.uv, vec2<f32>(1.0, 0.0));
+    return sss_blur(i.pos.xy, vec2<f32>(1.0, 0.0));
 }
 
 // src: the horizontal pass, fx_a: the scene (without its scattering light, see `fs_mesh`). Adds
 // the blurred scattering light.
 @fragment
 fn fs_sss_v(i: FsOut) -> @location(0) vec4<f32> {
-    let blurred = sss_blur(i.uv, vec2<f32>(0.0, 1.0)).rgb;
-    let scene = textureSampleLevel(fx_a, src_samp, i.uv, 0.0);
+    let blurred = sss_blur(i.pos.xy, vec2<f32>(0.0, 1.0)).rgb;
+    let scene = texel_at(fx_a, i.pos.xy);
     return scene + vec4<f32>(blurred * clamp(scene.a, 0.0, 1.0), 0.0);
 }
 
@@ -130,8 +138,12 @@ const PI_FX: f32 = 3.14159265;
 // src: the sharp scene, fx_a: the gathered blur, fx_b: the G-buffer, fx_c: the near coverage.
 @fragment
 fn fs_dof(i: FsOut) -> @location(0) vec4<f32> {
-    let sharp = textureSampleLevel(src, src_samp, i.uv, 0.0);
-    let blur = textureSampleLevel(fx_a, src_samp, i.uv, 0.0);
-    let f = max(smoothstep(0.5, 1.5, abs(coc(texel(fx_b, i.uv).a))), textureSampleLevel(fx_c, src_samp, i.uv, 0.0).r);
-    return mix(sharp, blur, f);
+    let sharp = texel_at(src, i.pos.xy);
+    let f = max(smoothstep(0.5, 1.5, abs(coc(texel_at(fx_b, i.pos.xy).a))), textureSampleLevel(fx_c, src_samp, i.uv, 0.0).r);
+    // In focus with nothing blurred in front: the sharp pixel itself (no blend through the
+    // half-resolution blur at all).
+    if (f <= 0.0) {
+        return sharp;
+    }
+    return mix(sharp, textureSampleLevel(fx_a, src_samp, i.uv, 0.0), f);
 }
