@@ -666,7 +666,9 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
             let (x0, y0, w, h) = match (p.tile, grid) {
                 (Some(t), Some(g)) => {
                     let (bx, by) = g.block(t).ok_or_else(|| FormatError::Invalid(format!("UV tile {t} is not in the set's grid")))?;
-                    (bx * tile_res, by * tile_res, tile_res, tile_res)
+                    // A tile smaller than its block fills the block's top-left corner.
+                    let side = ((tile_res as f32 * set.tile_scale(t)).round() as u32).clamp(1, tile_res);
+                    (bx * tile_res, by * tile_res, side, side)
                 }
                 _ => (0, 0, res, height),
             };

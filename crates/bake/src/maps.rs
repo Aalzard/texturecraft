@@ -1,17 +1,16 @@
 //! Per-sample evaluation of every baked map.
 
 use std::collections::HashMap;
-use std::f32::consts::TAU;
 use std::ops::{Add, Mul};
+use std::sync::Arc;
 
-use texturecraft_core::{BakeMatch, BakeSettings, BakedMap};
-use texturecraft_geom::glam::{Vec3, Vec4};
-use texturecraft_geom::{Bvh, Mesh, Surface, surface_at};
+use texturecraft_core::{BakeMatch, BakeSettings, BakedMap, DirectionMode, PositionMode, RayDistribution, RaySettings, SelfOcclusion};
+use texturecraft_geom::glam::{Vec2, Vec3, Vec4};
+use texturecraft_geom::{BaseColor, Bvh, Hit, Mesh, Surface, surface_at};
+use texturecraft_texel::{linear_to_srgb, srgb_to_linear};
 
+use crate::rays::{ANY, Hemisphere, Query, Ray, RayKind, TraceMesh};
 use crate::{BakeError, BakeRequest};
-
-/// Triangles that belong to no submesh (never matched by name).
-const NO_KEY: u32 = u32::MAX;
 
 /// A mesh the bakers sample: the low poly, or the high poly detail is transferred from.
 struct Source<'a> {
@@ -19,38 +18,77 @@ struct Source<'a> {
     bvh: &'a Bvh,
     /// Per-vertex curvature offset from 0.5 (empty unless mesh curvature is baked).
     curvature: Vec<f32>,
-    /// Submesh (part) index of each triangle.
+    /// Submesh (part) index of each triangle ([`ANY`] outside every part).
     part: Vec<u32>,
-    /// Match key of each triangle ([`BakeMatch::ByMeshName`] only, else empty).
+    /// Match key of each triangle: its part name without the low / high suffix.
     key: Vec<u32>,
+    /// Base color per material (empty: vertex colors only).
+    base_color: &'a [Option<Arc<BaseColor>>],
 }
 
 impl<'a> Source<'a> {
-    fn new(mesh: &'a Mesh, bvh: &'a Bvh, s: &BakeSettings, diag: f32, suffix: &str, keys: &mut HashMap<String, u32>) -> Source<'a> {
+    fn new(
+        mesh: &'a Mesh,
+        bvh: &'a Bvh,
+        base_color: &'a [Option<Arc<BaseColor>>],
+        s: &BakeSettings,
+        diag: f32,
+        suffix: &str,
+        keys: &mut HashMap<String, u32>,
+    ) -> Source<'a> {
         let mesh_curvature = s.maps.contains(&BakedMap::Curvature) && !s.curvature_from_normal;
         let tris = mesh.triangle_count();
-        let mut part = vec![NO_KEY; tris];
+        let mut part = vec![ANY; tris];
         for (i, sm) in mesh.submeshes.iter().enumerate() {
             let (a, b) = ((sm.start / 3) as usize, (sm.start.saturating_add(sm.count) / 3) as usize);
             part.get_mut(a.min(b)..b.min(tris)).unwrap_or_default().fill(i as u32);
         }
-        let key = match s.matching {
-            BakeMatch::Always => Vec::new(),
-            BakeMatch::ByMeshName => {
-                let ids: Vec<u32> = mesh.submeshes.iter().map(|sm| match_key(&sm.name, suffix, keys)).collect();
-                part.iter().map(|p| ids.get(*p as usize).copied().unwrap_or(NO_KEY)).collect()
-            }
-        };
-        Source { mesh, bvh, curvature: if mesh_curvature { vertex_curvature(mesh, diag, s.curvature_strength) } else { Vec::new() }, part, key }
+        let ids: Vec<u32> = mesh.submeshes.iter().map(|sm| match_key(&sm.name, suffix, keys)).collect();
+        let key = part.iter().map(|p| ids.get(*p as usize).copied().unwrap_or(ANY)).collect();
+        let curvature = if mesh_curvature { vertex_curvature(mesh, diag, s.curvature_strength) } else { Vec::new() };
+        Source { mesh, bvh, curvature, part, key, base_color }
+    }
+
+    fn trace(&self) -> TraceMesh<'_> {
+        TraceMesh { mesh: self.mesh, bvh: self.bvh, keys: &self.key }
     }
 
     fn curvature(&self, s: &Surface, bary: [f32; 2]) -> f32 {
         (0.5 + interpolate(self.mesh, &self.curvature, s.tri, bary).unwrap_or(0.0)).clamp(0.0, 1.0)
     }
 
+    /// Vertex color times the material's base color (color sRGB-encoded like a base color
+    /// texture, alpha linear).
     fn color(&self, s: &Surface, bary: [f32; 2]) -> Vec4 {
-        interpolate(self.mesh, &self.mesh.colors, s.tri, bary).unwrap_or(Vec4::ONE)
+        let vertex = interpolate(self.mesh, &self.mesh.colors, s.tri, bary).unwrap_or(Vec4::ONE);
+        let material = self.part.get(s.tri as usize).and_then(|p| self.mesh.submeshes.get(*p as usize)).map(|sm| sm.material);
+        match material.and_then(|m| self.base_color.get(m)?.as_deref()) {
+            Some(b) => vertex * base_color(b, s.uv),
+            None => vertex,
+        }
     }
+}
+
+/// `b` at `uv` (bilinear in linear light, wrapped) times its factor: color sRGB-encoded,
+/// alpha linear.
+fn base_color(b: &BaseColor, uv: Vec2) -> Vec4 {
+    let tex = if b.texels.is_empty() || !uv.is_finite() {
+        Vec4::ONE
+    } else {
+        let (w, h) = (i64::from(b.width.max(1)), i64::from(b.height.max(1)));
+        let texel = |x: i64, y: i64| {
+            let t = b.texels.get((y.rem_euclid(h) * w + x.rem_euclid(w)) as usize).copied().unwrap_or([255; 4]);
+            let c = |k: usize| f32::from(t[k]) / 255.0;
+            Vec4::new(srgb_to_linear(c(0)), srgb_to_linear(c(1)), srgb_to_linear(c(2)), c(3))
+        };
+        let (fx, fy) = (uv.x * w as f32 - 0.5, uv.y * h as f32 - 0.5);
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - x0, fy - y0);
+        let (x, y) = (x0 as i64, y0 as i64);
+        texel(x, y).lerp(texel(x + 1, y), tx).lerp(texel(x, y + 1).lerp(texel(x + 1, y + 1), tx), ty)
+    };
+    let c = tex * b.factor;
+    Vec4::new(linear_to_srgb(c.x), linear_to_srgb(c.y), linear_to_srgb(c.z), c.w)
 }
 
 /// The part name without its low / high suffix (case-insensitive), as a shared id.
@@ -68,13 +106,30 @@ fn interpolate<T: Copy + Mul<f32, Output = T> + Add<Output = T>>(mesh: &Mesh, v:
     Some(*v.get(a)? * (1.0 - b1 - b2) + *v.get(b)? * b1 + *v.get(c)? * b2)
 }
 
+/// A covered low-poly supersample of a batch.
+pub(crate) struct Sample {
+    /// Output column.
+    pub x: usize,
+    pub surf: Surface,
+    pub bary: [f32; 2],
+    pub seed: u64,
+}
+
 /// The high-poly surface found for a low-poly sample, and where along the ray.
-struct Transfer {
+pub(crate) struct Transfer {
     surf: Surface,
     bary: [f32; 2],
     /// Hit distance from the ray origin, and the origin's distance in front of the low poly.
     t: f32,
     front: f32,
+}
+
+/// A sample's secondary-ray results.
+pub(crate) struct Traced {
+    pub ao: f32,
+    /// None when bent normals are not baked.
+    pub bent: Option<Vec3>,
+    pub thickness: f32,
 }
 
 /// Everything a sample needs, computed once per bake.
@@ -88,14 +143,17 @@ pub(crate) struct Ctx<'a> {
     extent: Vec3,
     /// Ray offset off the surface.
     eps: f32,
-    /// AO / thickness ray length.
-    dmax: f32,
     frontal: f32,
     rear: f32,
-    rays: u32,
+    by_name: bool,
     direction: Vec3,
+    direction_mode: DirectionMode,
+    position_mode: PositionMode,
     curvature_from_normal: bool,
-    occlusion: bool,
+    /// Secondary-ray passes of the requested maps.
+    pub ao: Option<Hemisphere>,
+    pub bent: Option<Hemisphere>,
+    pub thickness: Option<Hemisphere>,
 }
 
 impl<'a> Ctx<'a> {
@@ -107,14 +165,30 @@ impl<'a> Ctx<'a> {
             return Err(BakeError::Invalid("mesh bounds are too large".into()));
         }
         let mut keys = HashMap::new();
-        let low = Source::new(req.mesh, req.bvh, s, diag, &s.low_suffix, &mut keys);
-        let high = req.high.map(|h| Source::new(h.mesh, h.bvh, s, diag, &s.high_suffix, &mut keys));
+        let low = Source::new(req.mesh, req.bvh, &[], s, diag, &s.low_suffix, &mut keys);
+        let high = req.high.map(|h| Source::new(h.mesh, h.bvh, h.base_color, s, diag, &s.high_suffix, &mut keys));
         let ray_normals = match s.average_normals && high.is_some() {
             true => {
                 let (weld, _, nrm) = welded(req.mesh, diag);
                 weld.iter().map(|w| nrm.get(*w as usize).copied().unwrap_or(Vec3::Y)).collect()
             }
             false => Vec::new(),
+        };
+        let eps = 1e-4 * diag;
+        let pass = |map: BakedMap, r: &RaySettings, kind: RayKind| {
+            let half = (r.spread.clamp(0.0, 180.0) * 0.5).to_radians();
+            let occlusion = kind == RayKind::Occlusion;
+            s.maps.contains(&map).then_some(Hemisphere {
+                kind,
+                rays: r.rays,
+                dmax: r.max_distance * diag,
+                eps,
+                cos_max: half.cos(),
+                sin_max: half.sin(),
+                uniform: r.distribution == RayDistribution::Uniform,
+                ignore_backface: occlusion && s.ao_ignore_backface,
+                same_key: occlusion && s.ao_self_occlusion == SelfOcclusion::SameMeshName,
+            })
         };
         Ok(Ctx {
             low,
@@ -123,114 +197,112 @@ impl<'a> Ctx<'a> {
             ray_normals,
             lo,
             extent: hi - lo,
-            eps: 1e-4 * diag,
-            dmax: s.max_distance * diag,
+            eps,
             frontal: s.max_frontal * diag,
             rear: s.max_rear * diag,
-            rays: s.rays,
+            by_name: s.matching == BakeMatch::ByMeshName,
             direction: Vec3::from(s.direction).try_normalize().unwrap_or(Vec3::Y),
+            direction_mode: s.direction_mode,
+            position_mode: s.position_mode,
             curvature_from_normal: s.curvature_from_normal,
-            occlusion: s.maps.contains(&BakedMap::AmbientOcclusion) || s.maps.contains(&BakedMap::BentNormal),
+            ao: pass(BakedMap::AmbientOcclusion, &s.ao, RayKind::Occlusion),
+            bent: pass(BakedMap::BentNormal, &s.bent_normal, RayKind::Occlusion),
+            thickness: pass(BakedMap::Thickness, &s.thickness, RayKind::Thickness),
         })
     }
 
-    /// Every map of `maps` at one low-poly surface sample, into `out` (scalars fill all three).
-    pub(crate) fn evaluate(&self, maps: &[BakedMap], s: &Surface, bary: [f32; 2], seed: u64, out: &mut [[f32; 3]]) {
-        let transfer = self.high.as_ref().and_then(|h| self.transfer(h, s, bary));
-        // The surface the bakers read: the high poly where a ray found it, else the low poly.
-        let (src, surf, sb) = match (&self.high, &transfer) {
-            (Some(h), Some(tr)) => (h, &tr.surf, tr.bary),
-            _ => (&self.low, s, bary),
-        };
-        let missed = self.high.is_some() && transfer.is_none();
-        let (ao, bent) = if self.occlusion { self.occlusion(src, surf, seed) } else { (1.0, surf.nrm) };
-        for (&map, o) in maps.iter().zip(out.iter_mut()) {
-            *o = match map {
-                BakedMap::AmbientOcclusion => [ao; 3],
-                BakedMap::BentNormal => pack(bent),
-                BakedMap::Thickness => [self.thickness(src, surf, seed); 3],
-                BakedMap::Curvature if self.curvature_from_normal => [0.5; 3],
-                BakedMap::Curvature => [src.curvature(surf, sb); 3],
-                BakedMap::WorldNormal => pack(surf.nrm),
-                BakedMap::Position => ((surf.pos - self.lo) / self.extent.max(Vec3::splat(1e-20))).clamp(Vec3::ZERO, Vec3::ONE).to_array(),
-                BakedMap::Id => material_color(src.part.get(surf.tri as usize).copied().unwrap_or(0) as usize),
-                BakedMap::Normal => transfer.as_ref().map_or(map.neutral(), |tr| tangent_normal(s, tr.surf.nrm)),
-                BakedMap::Height => [transfer.as_ref().map_or(0.5, |tr| (0.5 + (tr.front - tr.t) / (tr.front + self.rear)).clamp(0.0, 1.0)); 3],
-                BakedMap::Opacity if missed => [0.0; 3],
-                BakedMap::Opacity => [src.color(surf, sb).w; 3],
-                BakedMap::ColorMap if missed => map.neutral(),
-                BakedMap::ColorMap => src.color(surf, sb).truncate().to_array(),
-                BakedMap::WorldDirection => [surf.nrm.dot(self.direction) * 0.5 + 0.5; 3],
-            };
-        }
+    pub(crate) fn has_high(&self) -> bool {
+        self.high.is_some()
     }
 
-    /// Cast from the cage (or `frontal` in front of the low poly) back through it to `rear`
-    /// behind, and take the closest high-poly surface (of the matching part).
-    fn transfer(&self, high: &Source, s: &Surface, bary: [f32; 2]) -> Option<Transfer> {
+    /// Whether the bake casts any ray.
+    pub(crate) fn casts_rays(&self) -> bool {
+        self.has_high() || self.ao.is_some() || self.bent.is_some() || self.thickness.is_some()
+    }
+
+    /// The meshes rays are cast against: the low poly, then the high poly.
+    pub(crate) fn trace_meshes(&self) -> Vec<TraceMesh<'_>> {
+        std::iter::once(&self.low).chain(&self.high).map(Source::trace).collect()
+    }
+
+    /// The transfer ray of a low-poly sample: from the cage (or `frontal` in front of the low
+    /// poly) back through it to `rear` behind, onto the matching high-poly part; and the
+    /// origin's distance in front of the low poly. Parts without a key cast nothing when
+    /// matched by name.
+    pub(crate) fn transfer_ray(&self, s: &Surface, bary: [f32; 2]) -> (Ray, f32) {
         let n = interpolate(self.low.mesh, &self.ray_normals, s.tri, bary).and_then(Vec3::try_normalize).unwrap_or(s.nrm);
         let cage = self.cage.and_then(|c| interpolate(c, &c.positions, s.tri, bary)).map(|c| s.pos - c).filter(|v| v.length() > self.eps);
-        let (o, d, front) = match cage {
+        let (origin, dir, front) = match cage {
             Some(v) => (s.pos - v, v.normalize(), v.length()),
             None => (s.pos + n * self.frontal, -n, self.frontal),
         };
-        let tmax = front + self.rear;
-        let hit = match self.low.key.get(s.tri as usize) {
-            Some(&k) => high.bvh.closest_filtered(o, d, tmax, &|t| k != NO_KEY && high.key.get(t as usize) == Some(&k))?,
-            None => high.bvh.closest(o, d, tmax)?,
-        };
+        let key = if self.by_name { self.low.key.get(s.tri as usize).copied().unwrap_or(ANY) } else { ANY };
+        let tmax = if self.by_name && key == ANY { 0.0 } else { front + self.rear };
+        (Ray { origin, dir, tmax, key }, front)
+    }
+
+    /// The high-poly surface a transfer ray hit.
+    pub(crate) fn transfer(&self, hit: Option<Hit>, front: f32) -> Option<Transfer> {
+        let (high, hit) = (self.high.as_ref()?, hit?);
         let surf = surface_at(high.mesh, hit.tri, hit.u, hit.v)?;
         Some(Transfer { surf, bary: [hit.u, hit.v], t: hit.t, front })
     }
 
-    /// Geometric normal flipped to the side of the shading normal.
-    fn geo(s: &Surface) -> Vec3 {
-        if s.geo_nrm.dot(s.nrm) < 0.0 { -s.geo_nrm } else { s.geo_nrm }
+    /// The secondary-ray query of a sample: on the high poly where the transfer found it.
+    pub(crate) fn query(&self, transfer: Option<&Transfer>, s: &Surface, seed: u64) -> Query {
+        let (src, surf, mesh) = match (&self.high, transfer) {
+            (Some(h), Some(tr)) => (h, &tr.surf, 1),
+            _ => (&self.low, s, 0),
+        };
+        let h = splitmix64(seed);
+        let rot = [(h >> 40) as f32 / (1u64 << 24) as f32, ((h >> 16) & 0xff_ffff) as f32 / (1u64 << 24) as f32];
+        // The geometric normal on the side of the shading normal.
+        let geo = if surf.geo_nrm.dot(surf.nrm) < 0.0 { -surf.geo_nrm } else { surf.geo_nrm };
+        Query { pos: surf.pos, nrm: surf.nrm, geo, rot, key: src.key.get(surf.tri as usize).copied().unwrap_or(ANY), mesh }
     }
 
-    /// Call `f` with cosine-weighted directions around `axis` (Hammersley points with a
-    /// per-sample Cranley–Patterson rotation), skipping those below the plane of `geo`.
-    fn directions(&self, axis: Vec3, geo: Vec3, seed: u64, mut f: impl FnMut(Vec3)) {
-        let h = splitmix64(seed);
-        let (r1, r2) = ((h >> 40) as f32 / (1u64 << 24) as f32, ((h >> 16) & 0xff_ffff) as f32 / (1u64 << 24) as f32);
-        let (t, b) = axis.any_orthonormal_pair();
-        for i in 0..self.rays {
-            let u1 = (i as f32 / self.rays as f32 + r1).fract();
-            let u2 = (i.reverse_bits() as f32 / 4_294_967_296.0 + r2).fract();
-            let (phi, r) = (TAU * u1, u2.sqrt());
-            let d = t * (r * phi.cos()) + b * (r * phi.sin()) + axis * (1.0 - u2).max(0.0).sqrt();
-            if d.dot(geo) > 0.0 {
-                f(d);
-            }
+    /// Every map of `maps` at one low-poly sample, into `out` (scalars fill all three).
+    pub(crate) fn evaluate(&self, maps: &[BakedMap], s: &Surface, bary: [f32; 2], transfer: Option<&Transfer>, traced: &Traced, out: &mut [[f32; 3]]) {
+        // The surface the bakers read: the high poly where a ray found it, else the low poly.
+        let (src, surf, sb) = match (&self.high, transfer) {
+            (Some(h), Some(tr)) => (h, &tr.surf, tr.bary),
+            _ => (&self.low, s, bary),
+        };
+        let missed = self.high.is_some() && transfer.is_none();
+        for (&map, o) in maps.iter().zip(out.iter_mut()) {
+            *o = match map {
+                BakedMap::AmbientOcclusion => [traced.ao; 3],
+                BakedMap::BentNormal => pack(traced.bent.unwrap_or(surf.nrm)),
+                BakedMap::Thickness => [traced.thickness; 3],
+                BakedMap::Curvature if self.curvature_from_normal => [0.5; 3],
+                BakedMap::Curvature => [src.curvature(surf, sb); 3],
+                BakedMap::WorldNormal => pack(surf.nrm),
+                BakedMap::Position => self.position(surf.pos),
+                BakedMap::Id => material_color(src.part.get(surf.tri as usize).copied().unwrap_or(0) as usize),
+                BakedMap::Normal => transfer.map_or(map.neutral(), |tr| tangent_normal(s, tr.surf.nrm)),
+                BakedMap::Height => [transfer.map_or(0.5, |tr| (0.5 + (tr.front - tr.t) / (tr.front + self.rear)).clamp(0.0, 1.0)); 3],
+                BakedMap::Opacity if missed => [0.0; 3],
+                BakedMap::Opacity => [src.color(surf, sb).w; 3],
+                BakedMap::ColorMap if missed => map.neutral(),
+                BakedMap::ColorMap => src.color(surf, sb).truncate().to_array(),
+                BakedMap::WorldDirection => {
+                    let f = surf.nrm.dot(self.direction);
+                    [match self.direction_mode {
+                        DirectionMode::Signed => f * 0.5 + 0.5,
+                        DirectionMode::Positive => f.clamp(0.0, 1.0),
+                    }; 3]
+                }
+            };
         }
     }
 
-    /// Ambient occlusion (1 = open, 0 = fully occluded) and the bent normal (mean unoccluded
-    /// direction), from one set of rays.
-    fn occlusion(&self, src: &Source, s: &Surface, seed: u64) -> (f32, Vec3) {
-        let geo = Self::geo(s);
-        let o = s.pos + geo * self.eps;
-        let (mut occ, mut bent, mut n) = (0.0f32, Vec3::ZERO, 0u32);
-        self.directions(s.nrm, geo, seed, |d| {
-            let v = src.bvh.closest(o, d, self.dmax).map_or(0.0, |h| 1.0 - (h.t / self.dmax).powi(2));
-            occ += v;
-            bent += d * (1.0 - v);
-            n += 1;
-        });
-        let ao = if n == 0 { 1.0 } else { (1.0 - occ / n as f32).clamp(0.0, 1.0) };
-        (ao, bent.try_normalize().unwrap_or(s.nrm))
-    }
-
-    /// Mean distance through the mesh along inward rays, relative to the max distance (1 = thick).
-    fn thickness(&self, src: &Source, s: &Surface, seed: u64) -> f32 {
-        let geo = Self::geo(s);
-        let o = s.pos - geo * self.eps;
-        let (mut sum, mut n) = (0.0f32, 0u32);
-        self.directions(-s.nrm, -geo, seed, |d| {
-            sum += src.bvh.closest(o, d, self.dmax).map_or(self.dmax, |h| h.t);
-            n += 1;
-        });
-        if n == 0 { 1.0 } else { (sum / n as f32 / self.dmax).clamp(0.0, 1.0) }
+    /// `p` normalized to 0..1 over the low poly's bounding box or bounding sphere.
+    fn position(&self, p: Vec3) -> [f32; 3] {
+        let v = match self.position_mode {
+            PositionMode::BoundingBox => (p - self.lo) / self.extent.max(Vec3::splat(1e-20)),
+            PositionMode::BoundingSphere => (p - (self.lo + self.extent * 0.5)) / self.extent.length().max(1e-20) + 0.5,
+        };
+        v.clamp(Vec3::ZERO, Vec3::ONE).to_array()
     }
 }
 
@@ -248,11 +320,11 @@ fn tangent_normal(s: &Surface, n: Vec3) -> [f32; 3] {
 }
 
 /// Curvature from a baked tangent-space normal map: the divergence of its XY over `radius`
-/// texels (convex = above 0.5). Writes covered texels of `out` (one float per texel).
-/// `res` is the image width; the sampling step follows the resolution of one UV tile.
-pub(crate) fn curvature_from_normal(normal: &[f32], covered: &[bool], res: usize, tile_res: usize, strength: f32, out: &mut [f32]) {
+/// texels (convex = above 0.5; 0: one texel per 512 of a UV tile's resolution). Writes covered
+/// texels of `out` (one float per texel). `res` is the image width.
+pub(crate) fn curvature_from_normal(normal: &[f32], covered: &[bool], res: usize, tile_res: usize, radius: u32, strength: f32, out: &mut [f32]) {
     use rayon::prelude::*;
-    let r = (tile_res / 512).max(1);
+    let r = if radius > 0 { radius as usize } else { (tile_res / 512).max(1) };
     let n = |x: usize, y: usize, c: usize, fallback: f32| match covered.get(y * res + x) {
         Some(true) => normal.get((y * res + x) * 3 + c).copied().unwrap_or(fallback),
         _ => fallback,

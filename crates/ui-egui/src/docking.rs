@@ -7,7 +7,8 @@
 //! crate's internal arrays, so a hand-edited or stale layout can never break the dock.
 
 use egui::{CornerRadius, Id, Margin, Rect, RichText, Stroke, Ui, WidgetText, pos2, vec2};
-use egui_dock::{DockArea, DockState, LeafNode, NodeIndex, Split, Style, TabIndex, TabStyle, TabViewer, Tree};
+use egui_dock::tab_viewer::OnCloseResponse;
+use egui_dock::{DockArea, DockState, LeafNode, NodeIndex, Split, Style, TabIndex, TabPath, TabStyle, TabViewer, Tree};
 use serde::{Deserialize, Serialize};
 
 use crate::TextureCraftApp;
@@ -128,6 +129,37 @@ pub struct Layout {
     pub main: Node,
     #[serde(default)]
     pub windows: Vec<Floating>,
+    /// Where each closed panel was, so reopening it puts it back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub closed: Vec<(Panel, Place)>,
+}
+
+/// Where a panel was when it was closed. Reopening tries, in order: the tab group of a former
+/// neighbour, a split beside the panels it was split off from, its floating window; then its
+/// default home.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Place {
+    /// The panels it shared a tab group with.
+    pub with: Vec<Panel>,
+    /// Its tab position in that group.
+    pub index: usize,
+    /// Alone in its group: the panels on the other side of its split.
+    pub beside: Vec<Panel>,
+    /// The split was vertical (one above the other).
+    pub vertical: bool,
+    /// It was the left (or top) side.
+    pub first: bool,
+    /// The share of the split's left (or top) side.
+    pub fraction: f32,
+    /// The floating window it was in: `[x, y, width, height]`.
+    pub window: Option<[f32; 4]>,
+}
+
+impl Default for Place {
+    fn default() -> Self {
+        Place { with: Vec::new(), index: 0, beside: Vec::new(), vertical: false, first: false, fraction: 0.5, window: None }
+    }
 }
 
 fn tabs(tabs: &[Panel]) -> Node {
@@ -144,7 +176,7 @@ impl Default for Layout {
     fn default() -> Self {
         use Panel::*;
         let column = split(true, 0.125, tabs(&[TextureSetList]), split(true, 0.57, tabs(&[Layers, TextureSetSettings]), tabs(&[Properties])));
-        Layout { main: split(false, 0.115, tabs(&[Assets]), split(false, 0.78, tabs(&[Viewport]), column)), windows: Vec::new() }
+        Layout { main: split(false, 0.115, tabs(&[Assets]), split(false, 0.78, tabs(&[Viewport]), column)), windows: Vec::new(), closed: Vec::new() }
     }
 }
 
@@ -243,12 +275,8 @@ impl Layout {
             if let Some(tree) = state.get_surface_mut(s).and_then(|x| x.node_tree_mut()) {
                 root.place(tree, NodeIndex::root());
             }
-            if let (Some([x, y, width, height]), Some(ws)) = (w.rect, state.get_window_state_mut(s))
-                && [x, y, width, height].iter().all(|v| v.is_finite())
-                && width > 0.0
-                && height > 0.0
-            {
-                ws.set_position(pos2(x, y)).set_size(vec2(width, height));
+            if let (Some(rect), Some(ws)) = (w.rect, state.get_window_state_mut(s)) {
+                place_window(ws, rect);
             }
         }
         Some(state)
@@ -267,21 +295,116 @@ impl Layout {
                 _ => None,
             })
             .collect();
-        Layout { main, windows }
+        Layout { main, windows, closed: Vec::new() }
     }
+}
+
+/// Move a floating window to `[x, y, width, height]` (ignored unless finite and non-empty).
+fn place_window(ws: &mut egui_dock::WindowState, [x, y, width, height]: [f32; 4]) {
+    if [x, y, width, height].iter().all(|v| v.is_finite()) && width > 0.0 && height > 0.0 {
+        ws.set_position(pos2(x, y)).set_size(vec2(width, height));
+    }
+}
+
+/// The panels in the subtree at `at`.
+fn panels_under(nodes: &[&egui_dock::Node<Panel>], at: usize, out: &mut Vec<Panel>) {
+    match nodes.get(at) {
+        Some(egui_dock::Node::Leaf(l)) => out.extend(l.tabs.iter().copied()),
+        Some(egui_dock::Node::Vertical(_) | egui_dock::Node::Horizontal(_)) => {
+            panels_under(nodes, at.saturating_mul(2).saturating_add(1), out);
+            panels_under(nodes, at.saturating_mul(2).saturating_add(2), out);
+        }
+        _ => {}
+    }
+}
+
+/// Where the tab at `path` is, for [`restore`].
+fn place_of(state: &DockState<Panel>, path: TabPath) -> Place {
+    let mut place = Place { index: path.tab.0, ..Place::default() };
+    let Some(surface) = state.get_surface(path.surface) else { return place };
+    if let egui_dock::Surface::Window(_, ws) = surface {
+        let r = ws.rect();
+        place.window = (r.is_finite() && r.is_positive()).then(|| [r.min.x, r.min.y, r.width(), r.height()]);
+    }
+    let Some(tree) = surface.node_tree() else { return place };
+    let nodes: Vec<&egui_dock::Node<Panel>> = tree.iter().collect();
+    if let Some(egui_dock::Node::Leaf(leaf)) = nodes.get(path.node.0) {
+        place.with = leaf.tabs.iter().enumerate().filter(|(i, _)| *i != path.tab.0).map(|(_, t)| *t).collect();
+    }
+    if place.with.is_empty()
+        && let Some(parent) = path.node.parent()
+    {
+        let sibling = if path.node.is_left() { parent.right() } else { parent.left() };
+        panels_under(&nodes, sibling.0, &mut place.beside);
+        place.first = path.node.is_left();
+        if let Some(egui_dock::Node::Vertical(s) | egui_dock::Node::Horizontal(s)) = nodes.get(parent.0) {
+            place.vertical = matches!(nodes.get(parent.0), Some(egui_dock::Node::Vertical(_)));
+            place.fraction = s.fraction;
+        }
+    }
+    place
+}
+
+/// The lowest node holding both `a` and `b` (heap-ordered node indices).
+fn common_ancestor(mut a: NodeIndex, mut b: NodeIndex) -> NodeIndex {
+    while a != b {
+        let next = if a.0 > b.0 { a.parent() } else { b.parent() };
+        let Some(next) = next else { return NodeIndex::root() };
+        if a.0 > b.0 { a = next } else { b = next }
+    }
+    a
+}
+
+/// Reopen `p` where `place` says it was; false when none of its references is left.
+fn restore(state: &mut DockState<Panel>, p: Panel, place: &Place) -> bool {
+    for q in &place.with {
+        if let Some(path) = state.find_tab(q)
+            && let Ok(leaf) = state.leaf_mut(path.node_path())
+        {
+            leaf.insert_tab(TabIndex(place.index.min(leaf.tabs.len())), p);
+            return true;
+        }
+    }
+    let open: Vec<TabPath> = place.beside.iter().filter_map(|q| state.find_tab(q)).collect();
+    if let Some(first) = open.first() {
+        let node = open.iter().filter(|t| t.surface == first.surface).fold(first.node, |n, t| common_ancestor(n, t.node));
+        let side = match (place.vertical, place.first) {
+            (false, true) => Split::Left,
+            (false, false) => Split::Right,
+            (true, true) => Split::Above,
+            (true, false) => Split::Below,
+        };
+        let fraction = if place.fraction.is_finite() { place.fraction.clamp(0.05, 0.95) } else { 0.5 };
+        if let Some(tree) = state.get_surface_mut(first.surface).and_then(|s| s.node_tree_mut()) {
+            tree.split(node, side, fraction, egui_dock::Node::leaf(p));
+            return true;
+        }
+    }
+    if let Some(rect) = place.window {
+        let s = state.add_window(vec![p]);
+        if let Some(ws) = state.get_window_state_mut(s) {
+            place_window(ws, rect);
+        }
+        return true;
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------------------------
 // The live dock
 
-/// The dock layout (part of `UiState`; serialized as a `Layout`). Empty only while the dock is
-/// being drawn.
+/// The dock layout (part of `UiState`; serialized as a `Layout`). The state is empty only while
+/// the dock is being drawn.
 #[derive(Clone, Debug)]
-pub struct Dock(Option<DockState<Panel>>);
+pub struct Dock {
+    state: Option<DockState<Panel>>,
+    /// Where each closed panel was.
+    closed: Vec<(Panel, Place)>,
+}
 
 impl Default for Dock {
     fn default() -> Self {
-        Dock(Layout::default().build())
+        Dock { state: Layout::default().build(), closed: Vec::new() }
     }
 }
 
@@ -299,22 +422,27 @@ impl Serialize for Dock {
 
 impl<'de> Deserialize<'de> for Dock {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        Ok(Layout::deserialize(d)?.build().map_or_else(Dock::default, |s| Dock(Some(s))))
+        let mut layout = Layout::deserialize(d)?;
+        let mut closed = std::mem::take(&mut layout.closed);
+        closed.retain(|(p, _)| !matches!(p, Panel::Viewport | Panel::Unknown));
+        Ok(layout.build().map_or_else(Dock::default, |s| Dock { state: Some(s), closed }))
     }
 }
 
 impl Dock {
     pub fn layout(&self) -> Layout {
-        self.0.as_ref().map(Layout::of).unwrap_or_default()
+        let mut layout = self.state.as_ref().map(Layout::of).unwrap_or_default();
+        layout.closed = self.closed.clone();
+        layout
     }
 
     pub fn is_open(&self, p: Panel) -> bool {
-        self.0.as_ref().is_some_and(|s| s.find_tab(&p).is_some())
+        self.state.as_ref().is_some_and(|s| s.find_tab(&p).is_some())
     }
 
     /// Open and the front tab of its group.
     pub fn is_visible(&self, p: Panel) -> bool {
-        let Some(s) = &self.0 else { return false };
+        let Some(s) = &self.state else { return false };
         s.find_tab(&p).is_some_and(|path| s.leaf(path.node_path()).is_ok_and(|l| l.active == path.tab))
     }
 
@@ -324,21 +452,32 @@ impl Dock {
     }
 
     pub fn close(&mut self, p: Panel) {
-        if p == Panel::Viewport {
-            return;
-        }
-        if let Some(s) = &mut self.0
-            && let Some(path) = s.find_tab(&p)
-        {
-            s.remove_tab(path);
+        self.close_all(&[p]);
+    }
+
+    /// Close `panels` together (a floating window's tabs), remembering where each was.
+    pub fn close_all(&mut self, panels: &[Panel]) {
+        let Some(s) = &mut self.state else { return };
+        let places: Vec<(Panel, Place)> =
+            panels.iter().filter(|p| **p != Panel::Viewport).filter_map(|p| s.find_tab(p).map(|path| (*p, place_of(s, path)))).collect();
+        for (p, place) in places {
+            if let Some(path) = s.find_tab(&p) {
+                s.remove_tab(path);
+            }
+            self.closed.retain(|(q, _)| *q != p);
+            self.closed.push((p, place));
         }
     }
 
-    /// Open `p` where it lives by default (if closed) and bring it to the front.
+    /// Open `p` (where it was when closed, else where it lives by default) and bring it to the
+    /// front.
     pub fn focus(&mut self, p: Panel, screen: Rect) {
-        let Some(s) = &mut self.0 else { return };
+        let Some(s) = &mut self.state else { return };
         if s.find_tab(&p).is_none() {
-            insert(s, p, screen);
+            let place = self.closed.iter().position(|(q, _)| *q == p).map(|i| self.closed.remove(i).1);
+            if !place.is_some_and(|place| restore(s, p, &place)) {
+                insert(s, p, screen);
+            }
         }
         if let Some(path) = s.find_tab(&p) {
             let _ = s.set_active_tab(path);
@@ -407,6 +546,9 @@ fn beside_viewport(tree: &mut Tree<Panel>, side: Split, fraction: f32, p: Panel)
 
 struct Host<'a> {
     app: &'a mut TextureCraftApp,
+    /// Panels closed by their tab or window button this frame (closed after drawing, so their
+    /// places are remembered).
+    closing: Vec<Panel>,
 }
 
 impl TabViewer for Host<'_> {
@@ -446,6 +588,11 @@ impl TabViewer for Host<'_> {
 
     fn is_closeable(&self, tab: &Panel) -> bool {
         *tab != Panel::Viewport
+    }
+
+    fn on_close(&mut self, tab: &mut Panel) -> OnCloseResponse {
+        self.closing.push(*tab);
+        OnCloseResponse::Ignore
     }
 
     fn allowed_in_windows(&self, tab: &mut Panel) -> bool {
@@ -512,7 +659,7 @@ fn style(egui_style: &egui::Style) -> Style {
 
 /// Draw the dock (viewport and panels) into `ui`.
 pub fn show(app: &mut TextureCraftApp, ui: &mut Ui) {
-    let Some(mut state) = app.ui.dock.0.take() else {
+    let Some(mut state) = app.ui.dock.state.take() else {
         app.ui.dock = Dock::default();
         return;
     };
@@ -520,6 +667,7 @@ pub fn show(app: &mut TextureCraftApp, ui: &mut Ui) {
     for (_, leaf) in state.iter_leaves_mut() {
         leaf.tab_bar_hidden = leaf.tabs == [Panel::Viewport];
     }
+    let mut host = Host { app, closing: Vec::new() };
     DockArea::new(&mut state)
         .id(Id::new("dock_area"))
         .style(style(ui.style()))
@@ -528,10 +676,12 @@ pub fn show(app: &mut TextureCraftApp, ui: &mut Ui) {
         .show_leaf_close_all_buttons(false)
         .show_leaf_collapse_buttons(false)
         .show_secondary_button_hint(false)
-        .show_inside(ui, &mut Host { app });
+        .show_inside(ui, &mut host);
+    let Host { app, closing } = host;
     // A layout adopted while drawing (Window ▸ Load UI Layout) wins over the drawn one.
-    if app.ui.dock.0.is_none() {
-        app.ui.dock.0 = Some(state);
+    if app.ui.dock.state.is_none() {
+        app.ui.dock.state = Some(state);
+        app.ui.dock.close_all(&closing);
     }
 }
 
@@ -580,10 +730,50 @@ mod tests {
         ] {
             node = split(true, 0.5, tabs(&[p]), node);
         }
-        let dock = Dock(Layout { main: node, windows: Vec::new() }.build());
+        let dock = Dock { state: Layout { main: node, windows: Vec::new(), closed: Vec::new() }.build(), closed: Vec::new() };
         let mut all = Vec::new();
         dock.layout().main.collect(&mut all);
         assert_eq!(all.len(), 10);
+    }
+
+    #[test]
+    fn closed_panels_come_back_where_they_were() {
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 960.0));
+        // Moved: properties left of the viewport, layers tabbed after the texture set settings.
+        let layout = Layout {
+            main: split(
+                false,
+                0.3,
+                tabs(&[Panel::Properties]),
+                split(false, 0.7, tabs(&[Panel::Viewport]), Node::Tabs { tabs: vec![Panel::TextureSetSettings, Panel::Layers, Panel::Log], active: 1 }),
+            ),
+            windows: Vec::new(),
+            closed: Vec::new(),
+        };
+        let mut dock = Dock { state: layout.clone().build(), closed: Vec::new() };
+        let before = dock.layout();
+        for p in [Panel::Properties, Panel::Layers] {
+            dock.close(p);
+            assert!(!dock.is_open(p));
+            // The places persist with the layout.
+            let json = serde_json::to_string(&dock).unwrap();
+            dock = serde_json::from_str(&json).unwrap();
+            dock.focus(p, screen);
+            assert_eq!(dock.layout(), before, "{p:?} came back elsewhere");
+        }
+        // Closed together (a floating window's tabs) and reopened in any order.
+        dock.close_all(&[Panel::Layers, Panel::Log]);
+        dock.focus(Panel::Log, screen);
+        dock.focus(Panel::Layers, screen);
+        let mut order = Vec::new();
+        dock.layout().main.collect(&mut order);
+        assert_eq!(order, [Panel::Properties, Panel::Viewport, Panel::TextureSetSettings, Panel::Layers, Panel::Log]);
+        // Hostile places are dropped or ignored.
+        let json = r#"{"main":{"tabs":{"tabs":["Viewport"]}},"closed":[["Viewport",{}],["Log",{"beside":["Bogus"],"fraction":7,"window":[0,0,-1,5]}]]}"#;
+        let mut d: Dock = serde_json::from_str(json).unwrap();
+        assert_eq!(d.closed.len(), 1);
+        d.focus(Panel::Log, screen);
+        assert!(d.is_open(Panel::Log));
     }
 
     #[test]

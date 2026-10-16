@@ -13,11 +13,13 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod gpu_bake;
 pub mod gpu_trace;
-pub mod mesh_maps;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod headless;
 pub mod ibl;
+pub mod mesh_maps;
 pub mod readback;
 pub mod renderer;
 pub mod trace;

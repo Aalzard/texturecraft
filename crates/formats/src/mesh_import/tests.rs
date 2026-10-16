@@ -404,7 +404,7 @@ fn obj_and_ply_vertex_colors_and_objects() {
 
 #[test]
 fn high_poly_import_skips_unwrap_and_rejects_garbage() {
-    let m = import_high_poly_bytes("x.glb", &glb(false, false)).unwrap();
+    let m = import_high_poly_bytes("x.glb", &glb(false, false)).unwrap().mesh;
     m.validate().unwrap();
     assert!(m.uvs.iter().all(|uv| *uv == Vec2::ZERO), "no automatic unwrap");
     assert_eq!(m.tangents.len(), m.vertex_count());

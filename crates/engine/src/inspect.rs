@@ -118,12 +118,14 @@ pub fn texture_sets(s: &Session) -> Value {
 pub fn texture_set(s: &Session, i: usize) -> Value {
     let Some(t) = s.doc.project.texture_sets.get(i) else { return Value::Null };
     let grid = t.tile_grid();
-    let tiles: Vec<Value> = t.uv_tiles.iter().filter_map(|u| grid?.block(*u).map(|(x, y)| json!({ "udim": u, "block": [x, y] }))).collect();
+    let tiles: Vec<Value> =
+        t.uv_tiles.iter().filter_map(|u| grid?.block(*u).map(|(x, y)| json!({ "udim": u, "block": [x, y], "resolution": t.tile_resolution(*u) }))).collect();
     json!({
         "index": i,
         "name": t.name,
         "resolution": t.resolution,
         "size": t.size(),
+        "blockResolution": t.block_resolution(),
         "uvTiles": t.uv_tiles,
         "tiles": tiles,
         "channels": t.channels.iter().map(|(c, f)| json!({ "channel": c.id(), "format": f.label() })).collect::<Vec<_>>(),

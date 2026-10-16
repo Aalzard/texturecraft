@@ -1,26 +1,36 @@
 //! Mesh-map baking commands (Painter's "Bake Mesh Maps" window): bake settings, the
-//! high-definition mesh list, the cage, and running a bake.
+//! high-definition mesh list, the cage, and running a bake. Bakes cast their rays on the GPU
+//! tracer the app installs ([`install_gpu_tracer`]) and on the CPU otherwise.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use serde_json::{Value, json};
-use texturecraft_bake::{BakeOutput, BakeRequest, HighPoly, MAX_RAYS, Progress, bake};
-use texturecraft_core::{BakeMatch, BakeSettings, BakedMap};
-use texturecraft_geom::{Bvh, Mesh};
+use texturecraft_bake::rays::Tracer;
+use texturecraft_bake::{BakeOutput, BakeRequest, HighPoly, MAX_RAYS, Progress, bake, bake_on};
+use texturecraft_core::{BakeMatch, BakeSettings, BakedMap, DirectionMode, PositionMode, RayDistribution, RaySettings, SelfOcclusion};
+use texturecraft_geom::{BaseColor, Bvh, Mesh};
 
 use crate::commands::{CommandSpec, always, bad, boolp, f32p, strp, u64p};
 use crate::{EngineError, Result, Session, cmd};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!("bake.run", "Bake mesh maps", ["Mode"], None, "{ts?: index|[indices]|\"all\"|\"selected\", ...any bake.settings parameter}", always, bake_run),
+        cmd!(
+            "bake.run",
+            "Bake mesh maps",
+            ["Mode"],
+            None,
+            "{ts?: index|[indices]|\"all\"|\"selected\", cpu?: true (skip the GPU), ...any bake.settings parameter} → {baked, tracer: [where each set's rays ran]}",
+            always,
+            bake_run
+        ),
         cmd!(
             "bake.settings",
             "Bake settings",
             [],
             None,
-            "{ts?: index|[indices]|\"all\"|\"selected\" (default: the active set), resolution?, antialiasing?: 1|2|4|8, dilation?, rays?, maxDistance?, curvatureStrength?, curvatureFromNormal?, direction?: [x,y,z], maps?: [ids], enabled?, useLowAsHigh?, maxFrontal?, maxRear?, averageNormals?, matching?: always|byMeshName, lowSuffix?, highSuffix?}",
+            "{ts?: index|[indices]|\"all\"|\"selected\" (default: the active set), resolution?, antialiasing?: 1|2|4|8, dilation?, ao?: {rays?, maxDistance?, spread?: degrees (180 = hemisphere), distribution?: cosine|uniform, ignoreBackface?, selfOcclusion?: always|sameMeshName}, thickness?: {rays?, maxDistance?, spread?, distribution?}, bentNormal?: {rays?, maxDistance?, spread?, distribution?}, rays?, maxDistance? (all three ray maps), curvatureStrength?, curvatureFromNormal?, curvatureRadius?: texels (0 = auto), positionMode?: boundingBox|boundingSphere, direction?: [x,y,z], directionMode?: signed|positive, maps?: [ids], enabled?, useLowAsHigh?, maxFrontal?, maxRear?, averageNormals?, matching?: always|byMeshName, lowSuffix?, highSuffix?}",
             always,
             settings
         ),
@@ -40,12 +50,29 @@ pub fn specs() -> Vec<CommandSpec> {
 type MeshFile = (String, Vec<u8>);
 
 /// A mesh file the baker reads (high poly or cage): its name, original bytes (saved in the
-/// project) and parsed mesh.
+/// project), parsed mesh and its materials' base colors (high polys).
 #[derive(Clone, Debug)]
 pub struct BakeMesh {
     pub name: String,
     pub bytes: Arc<Vec<u8>>,
     pub mesh: Arc<Mesh>,
+    pub base_color: Vec<Option<Arc<BaseColor>>>,
+}
+
+/// Every high poly appended into one mesh, its BVH and per-material base colors.
+#[derive(Clone, Debug)]
+pub struct MergedHigh {
+    pub mesh: Arc<Mesh>,
+    pub bvh: Arc<Bvh>,
+    pub base_color: Arc<Vec<Option<Arc<BaseColor>>>>,
+}
+
+static GPU_TRACER: OnceLock<Arc<dyn Tracer>> = OnceLock::new();
+
+/// Cast bake rays with `tracer` (the apps install the render crate's GPU baker at start-up);
+/// the first call wins.
+pub fn install_gpu_tracer(tracer: Arc<dyn Tracer>) {
+    let _ = GPU_TRACER.set(tracer);
 }
 
 /// The high-definition meshes and the cage. Like the low-poly mesh they are not part of the
@@ -54,8 +81,8 @@ pub struct BakeMesh {
 pub struct BakeMeshes {
     pub high: Vec<BakeMesh>,
     pub cage: Option<BakeMesh>,
-    /// Every high poly appended into one mesh, with its BVH (rebuilt when the list changes).
-    merged: Option<(Arc<Mesh>, Arc<Bvh>)>,
+    /// Every high poly appended into one mesh (rebuilt when the list changes).
+    merged: Option<MergedHigh>,
 }
 
 impl BakeMeshes {
@@ -63,12 +90,13 @@ impl BakeMeshes {
     // multi-million-triangle sets run out of memory.
     fn rebuild(&mut self) {
         self.merged = (!self.high.is_empty()).then(|| {
-            let mut all = Mesh::default();
+            let (mut all, mut base_color) = (Mesh::default(), Vec::new());
             for h in &self.high {
                 all.append(&h.mesh);
+                base_color.extend(h.base_color.iter().cloned().chain(std::iter::repeat(None)).take(h.mesh.materials.len()));
             }
             let bvh = Bvh::new(&all);
-            (Arc::new(all), Arc::new(bvh))
+            MergedHigh { mesh: Arc::new(all), bvh: Arc::new(bvh), base_color: Arc::new(base_color) }
         });
     }
 }
@@ -81,15 +109,17 @@ pub struct BakeTask {
     pub material: usize,
     pub settings: BakeSettings,
     /// The merged high polys, unless the set bakes from the low poly.
-    pub high: Option<(Arc<Mesh>, Arc<Bvh>)>,
+    pub high: Option<MergedHigh>,
     pub cage: Option<Arc<Mesh>>,
     /// UV tile grid (columns, rows) of the set; (1, 1) without UV tiles.
     pub tiles: (u32, u32),
+    /// The GPU ray tracer, if installed and not turned off (`bake.run {cpu: true}`).
+    pub tracer: Option<Arc<dyn Tracer>>,
 }
 
 impl BakeTask {
     pub fn run(&self, progress: &Progress) -> Result<BakeOutput> {
-        let high = self.high.as_ref().map(|(mesh, bvh)| HighPoly { mesh, bvh });
+        let high = self.high.as_ref().map(|h| HighPoly { mesh: &h.mesh, bvh: &h.bvh, base_color: &h.base_color });
         let req = BakeRequest {
             mesh: &self.mesh,
             bvh: &self.bvh,
@@ -99,7 +129,11 @@ impl BakeTask {
             cage: self.cage.as_deref(),
             tiles: self.tiles,
         };
-        bake(&req, progress).map_err(|e| EngineError::Other(format!("bake failed: {e}")))
+        match &self.tracer {
+            Some(t) => bake_on(&req, progress, t.as_ref()),
+            None => bake(&req, progress),
+        }
+        .map_err(|e| EngineError::Other(format!("bake failed: {e}")))
     }
 }
 
@@ -116,9 +150,10 @@ fn unique_name(file_name: &str, taken: &[&str]) -> String {
     name
 }
 
-fn parse_mesh(file_name: &str, bytes: Vec<u8>) -> Result<(Arc<Vec<u8>>, Arc<Mesh>)> {
-    let mesh = texturecraft_formats::import_high_poly_bytes(file_name, &bytes).map_err(|e| EngineError::Other(format!("{file_name}: {e}")))?;
-    Ok((Arc::new(bytes), Arc::new(mesh)))
+fn parse_mesh(file_name: &str, bytes: Vec<u8>) -> Result<BakeMesh> {
+    let h = texturecraft_formats::import_high_poly_bytes(file_name, &bytes).map_err(|e| EngineError::Other(format!("{file_name}: {e}")))?;
+    let base_color = h.base_color.into_iter().map(|c| c.map(Arc::new)).collect();
+    Ok(BakeMesh { name: file_name.to_string(), bytes: Arc::new(bytes), mesh: Arc::new(h.mesh), base_color })
 }
 
 impl Session {
@@ -127,11 +162,13 @@ impl Session {
         let high = if set.bake.use_low_as_high { None } else { self.bake_meshes.merged.clone() };
         let cage = high.as_ref().and(self.bake_meshes.cage.as_ref()).map(|c| c.mesh.clone());
         let tiles = set.tile_grid().map_or((1, 1), |g| (g.cols, g.rows));
-        Ok(BakeTask { ts, mesh: self.mesh.clone(), bvh: self.bvh.clone(), material: set.material, settings: set.bake.clone(), high, cage, tiles })
+        let tracer = GPU_TRACER.get().cloned();
+        Ok(BakeTask { ts, mesh: self.mesh.clone(), bvh: self.bvh.clone(), material: set.material, settings: set.bake.clone(), high, cage, tiles, tracer })
     }
 
     /// Store a finished bake (one undo step).
     pub fn apply_bake(&mut self, ts: usize, out: BakeOutput) -> Result<()> {
+        self.log.push(format!("Baked texture set {ts} ({})", out.tracer));
         self.edit("Bake mesh maps", |s| {
             let maps: BTreeSet<BakedMap> = out.maps.keys().copied().collect();
             let entry = s.doc.baked.entry(ts).or_default();
@@ -144,21 +181,28 @@ impl Session {
         })
     }
 
-    /// Bake texture set `ts` now (blocking).
-    pub fn bake_now(&mut self, ts: usize) -> Result<()> {
-        let task = self.bake_task(ts)?;
+    /// Bake texture set `ts` now (blocking), on the CPU when `cpu`; returns where the rays ran.
+    pub fn bake_now(&mut self, ts: usize, cpu: bool) -> Result<String> {
+        let mut task = self.bake_task(ts)?;
+        if cpu {
+            task.tracer = None;
+        }
         let out = task.run(&Progress::new())?;
-        self.apply_bake(ts, out)
+        let tracer = out.tracer.clone();
+        self.apply_bake(ts, out)?;
+        Ok(tracer)
     }
 
     /// Add a high-definition mesh from file bytes (the web picker, the desktop dialog and
     /// `bake.highPoly.add`); every texture set then bakes from the high polys. Returns its name.
     pub fn add_high_poly_bytes(&mut self, file_name: &str, bytes: Vec<u8>) -> Result<String> {
-        let (bytes, mesh) = parse_mesh(file_name, bytes)?;
+        let mut m = parse_mesh(file_name, bytes)?;
         let taken: Vec<&str> = self.bake_meshes.high.iter().map(|h| h.name.as_str()).collect();
-        let name = unique_name(file_name, &taken);
-        self.log.push(format!("High poly {name}: {} triangles", mesh.triangle_count()));
-        self.bake_meshes.high.push(BakeMesh { name: name.clone(), bytes, mesh });
+        m.name = unique_name(file_name, &taken);
+        let textures = m.base_color.iter().flatten().filter(|c| !c.texels.is_empty()).count();
+        self.log.push(format!("High poly {}: {} triangles, {textures} base color textures", m.name, m.mesh.triangle_count()));
+        let name = m.name.clone();
+        self.bake_meshes.high.push(m);
         self.bake_meshes.rebuild();
         for set in &mut self.doc.project.texture_sets {
             set.bake.use_low_as_high = false;
@@ -180,16 +224,18 @@ impl Session {
 
     /// Use a cage mesh (same triangles as the low poly) from file bytes.
     pub fn set_cage_bytes(&mut self, file_name: &str, bytes: Vec<u8>) -> Result<String> {
-        let (bytes, mesh) = parse_mesh(file_name, bytes)?;
-        if mesh.triangle_count() != self.mesh.triangle_count() {
+        let mut m = parse_mesh(file_name, bytes)?;
+        if m.mesh.triangle_count() != self.mesh.triangle_count() {
             return Err(EngineError::Other(format!(
                 "the cage has {} triangles but the low poly has {}; export the cage from the low poly",
-                mesh.triangle_count(),
+                m.mesh.triangle_count(),
                 self.mesh.triangle_count()
             )));
         }
-        let name = unique_name(file_name, &[]);
-        self.bake_meshes.cage = Some(BakeMesh { name: name.clone(), bytes, mesh });
+        m.name = unique_name(file_name, &[]);
+        m.base_color.clear();
+        let name = m.name.clone();
+        self.bake_meshes.cage = Some(m);
         self.modified = true;
         Ok(name)
     }
@@ -198,7 +244,7 @@ impl Session {
     pub(crate) fn load_bake_meshes(&mut self, high: Vec<MeshFile>, cage: Option<MeshFile>) {
         for (name, bytes) in high {
             match parse_mesh(&name, bytes) {
-                Ok((bytes, mesh)) => self.bake_meshes.high.push(BakeMesh { name, bytes, mesh }),
+                Ok(m) => self.bake_meshes.high.push(m),
                 Err(e) => self.log.push(format!("skipped high poly mesh: {e}")),
             }
         }
@@ -282,15 +328,22 @@ fn sets_param(s: &Session, cmd: &str, p: &Value) -> Result<Vec<usize>> {
 
 /// `b` as `bake.settings` parameters (what the command returns and the UI sends back).
 pub fn settings_params(b: &BakeSettings) -> Value {
+    let mut ao = rays_params(&b.ao);
+    ao["ignoreBackface"] = b.ao_ignore_backface.into();
+    ao["selfOcclusion"] = SELF_OCCLUSION.name(b.ao_self_occlusion).into();
     json!({
         "resolution": b.resolution,
         "antialiasing": b.antialiasing,
         "dilation": b.dilation,
-        "rays": b.rays,
-        "maxDistance": b.max_distance,
+        "ao": ao,
+        "thickness": rays_params(&b.thickness),
+        "bentNormal": rays_params(&b.bent_normal),
         "curvatureStrength": b.curvature_strength,
         "curvatureFromNormal": b.curvature_from_normal,
+        "curvatureRadius": b.curvature_radius,
+        "positionMode": POSITION_MODE.name(b.position_mode),
         "direction": b.direction,
+        "directionMode": DIRECTION_MODE.name(b.direction_mode),
         "maps": b.maps.iter().map(|m| m.id()).collect::<Vec<_>>(),
         "enabled": b.enabled,
         "useLowAsHigh": b.use_low_as_high,
@@ -317,15 +370,35 @@ fn apply_settings(b: &mut BakeSettings, p: &Value, cmd: &str) -> Result<()> {
     if let Some(d) = u64p(p, "dilation") {
         b.dilation = d.min(256) as u32;
     }
-    if let Some(r) = u64p(p, "rays") {
-        b.rays = r.clamp(1, u64::from(MAX_RAYS)) as u32;
+    // `rays` / `maxDistance` set every ray map; the per-map objects override.
+    for r in [&mut b.ao, &mut b.thickness, &mut b.bent_normal] {
+        apply_rays(r, p, cmd)?;
     }
-    for (k, slot, lo, hi) in [
-        ("maxDistance", &mut b.max_distance, 0.001, 10.0),
-        ("curvatureStrength", &mut b.curvature_strength, 0.0, 16.0),
-        ("maxFrontal", &mut b.max_frontal, 0.0, 1.0),
-        ("maxRear", &mut b.max_rear, 0.0, 1.0),
-    ] {
+    for (k, r) in [("ao", &mut b.ao), ("thickness", &mut b.thickness), ("bentNormal", &mut b.bent_normal)] {
+        if let Some(o) = p.get(k) {
+            apply_rays(r, o, cmd)?;
+        }
+    }
+    if let Some(ao) = p.get("ao") {
+        if let Some(v) = boolp(ao, "ignoreBackface") {
+            b.ao_ignore_backface = v;
+        }
+        if let Some(v) = strp(ao, "selfOcclusion") {
+            b.ao_self_occlusion = SELF_OCCLUSION.parse(cmd, "selfOcclusion", v)?;
+        }
+    }
+    if let Some(v) = strp(p, "positionMode") {
+        b.position_mode = POSITION_MODE.parse(cmd, "positionMode", v)?;
+    }
+    if let Some(v) = strp(p, "directionMode") {
+        b.direction_mode = DIRECTION_MODE.parse(cmd, "directionMode", v)?;
+    }
+    if let Some(r) = u64p(p, "curvatureRadius") {
+        b.curvature_radius = r.min(64) as u32;
+    }
+    for (k, slot, lo, hi) in
+        [("curvatureStrength", &mut b.curvature_strength, 0.0, 16.0), ("maxFrontal", &mut b.max_frontal, 0.0, 1.0), ("maxRear", &mut b.max_rear, 0.0, 1.0)]
+    {
         if let Some(v) = f32p(p, k).filter(|v| v.is_finite()) {
             *slot = v.clamp(lo, hi);
         }
@@ -364,6 +437,46 @@ fn apply_settings(b: &mut BakeSettings, p: &Value, cmd: &str) -> Result<()> {
     Ok(())
 }
 
+/// Parameter names of a settings enum.
+struct Names<T: 'static>(&'static [(&'static str, T)]);
+
+impl<T: Copy + PartialEq> Names<T> {
+    fn name(&self, v: T) -> &'static str {
+        self.0.iter().find(|(_, x)| *x == v).map_or("", |(n, _)| n)
+    }
+
+    fn parse(&self, cmd: &str, key: &str, s: &str) -> Result<T> {
+        let all = || self.0.iter().map(|(n, _)| *n).collect::<Vec<_>>().join("|");
+        self.0.iter().find(|(n, _)| *n == s).map(|(_, v)| *v).ok_or_else(|| bad(cmd, format!("unknown {key} `{s}` ({})", all())))
+    }
+}
+
+const SELF_OCCLUSION: Names<SelfOcclusion> = Names(&[("always", SelfOcclusion::Always), ("sameMeshName", SelfOcclusion::SameMeshName)]);
+const DISTRIBUTION: Names<RayDistribution> = Names(&[("cosine", RayDistribution::Cosine), ("uniform", RayDistribution::Uniform)]);
+const POSITION_MODE: Names<PositionMode> = Names(&[("boundingBox", PositionMode::BoundingBox), ("boundingSphere", PositionMode::BoundingSphere)]);
+const DIRECTION_MODE: Names<DirectionMode> = Names(&[("signed", DirectionMode::Signed), ("positive", DirectionMode::Positive)]);
+
+/// `r` as `bake.settings` parameters.
+fn rays_params(r: &RaySettings) -> Value {
+    json!({ "rays": r.rays, "maxDistance": r.max_distance, "spread": r.spread, "distribution": DISTRIBUTION.name(r.distribution) })
+}
+
+/// Apply the ray parameters present in `p` (`rays`, `maxDistance`, `spread`, `distribution`).
+fn apply_rays(r: &mut RaySettings, p: &Value, cmd: &str) -> Result<()> {
+    if let Some(n) = u64p(p, "rays") {
+        r.rays = n.clamp(1, u64::from(MAX_RAYS)) as u32;
+    }
+    for (k, slot, lo, hi) in [("maxDistance", &mut r.max_distance, 0.001, 10.0), ("spread", &mut r.spread, 0.0, 180.0)] {
+        if let Some(v) = f32p(p, k).filter(|v| v.is_finite()) {
+            *slot = v.clamp(lo, hi);
+        }
+    }
+    if let Some(v) = strp(p, "distribution") {
+        r.distribution = DISTRIBUTION.parse(cmd, "distribution", v)?;
+    }
+    Ok(())
+}
+
 /// Validate and apply the settings parameters to every set first, so a bad parameter changes
 /// nothing.
 fn set_settings(s: &mut Session, p: &Value, cmd: &str) -> Result<Vec<usize>> {
@@ -393,9 +506,8 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn bake_run(s: &mut Session, p: &Value) -> Result<Value> {
     let sets = set_settings(s, p, "bake.run")?;
-    for &ts in &sets {
-        s.bake_now(ts)?;
-    }
+    let cpu = boolp(p, "cpu") == Some(true);
+    let tracer = sets.iter().map(|&ts| s.bake_now(ts, cpu)).collect::<Result<Vec<_>>>()?;
     s.update();
-    Ok(json!({ "baked": sets }))
+    Ok(json!({ "baked": sets, "tracer": tracer }))
 }

@@ -29,7 +29,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-fn ts_param(s: &Session, p: &Value, cmd: &str) -> Result<usize> {
+pub(crate) fn ts_param(s: &Session, p: &Value, cmd: &str) -> Result<usize> {
     match u64p(p, "ts") {
         Some(t) if (t as usize) < s.set_count() => Ok(t as usize),
         Some(t) => Err(bad(cmd, format!("no texture set {t}"))),
@@ -52,12 +52,18 @@ fn resolution(s: &mut Session, p: &Value) -> Result<Value> {
     let r = check_resolution(u32::try_from(r).unwrap_or(0))?;
     s.edit("Texture set size", |s| {
         let set = s.doc.project.texture_set_mut(ts)?;
+        let old = set.clone();
         set.resolution = r;
         crate::session::check_size(set)?;
         let size = set.size();
-        // Painted pixels are resampled (bilinear); strokes are not replayed.
-        crate::layer_ops::resample_set(s, ts, size);
-        Ok(())
+        // Painted pixels are resampled (bilinear); strokes are not replayed. Tiles of their own
+        // resolution keep it, so the others move within their atlas blocks.
+        if old.tile_resolutions.is_empty() {
+            crate::layer_ops::resample_set(s, ts, size);
+            Ok(())
+        } else {
+            crate::uv_tile_cmds::relayout(s, ts, &old)
+        }
     })?;
     Ok(json!({ "ts": ts, "resolution": r }))
 }

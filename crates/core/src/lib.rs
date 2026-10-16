@@ -18,7 +18,10 @@ pub use layer::{
     ChannelBlend, CompareOp, Decal, Effect, EffectKind, Fill, Filter, Generator, GeneratorKind, HeightMask, Layer, LayerId, LayerKind, Levels, Mask, MaskBackground,
     Procedural, ProceduralKind, Projection, Source, gradient, hsl_adjust, per_unit,
 };
-pub use project::{AoMixing, BakeMatch, BakeSettings, BakedMap, Camera, DepthOfField, DisplaySettings, FORMAT_VERSION, NormalFormat, NormalMixing, Project, TextureSet, TileGrid, ToneMapping, UDIM_RANGE};
+pub use project::{
+    AoMixing, BakeMatch, BakeSettings, BakedMap, Camera, DepthOfField, DirectionMode, DisplaySettings, FORMAT_VERSION, MAX_RESOLUTION, MIN_RESOLUTION,
+    NormalFormat, NormalMixing, PositionMode, Project, RayDistribution, RaySettings, SelfOcclusion, TextureSet, TileGrid, ToneMapping, UDIM_RANGE, udim_at,
+};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum CoreError {

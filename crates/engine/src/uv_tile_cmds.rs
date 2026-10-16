@@ -1,0 +1,333 @@
+//! UV tile (UDIM) layout commands: per-tile resolution and switching a texture set between
+//! classic and UV tile mode after creation. Both change where texels sit in the set's atlas, so
+//! painted pixels and baked maps are resampled through mesh UV space into the new layout (the
+//! session then maps the mesh's UVs into the new atlas, see `Session::follow_uv_layouts`).
+
+use std::sync::Arc;
+
+use rayon::prelude::*;
+use serde_json::{Value, json};
+use texturecraft_compose::BakedMaps;
+use texturecraft_core::{TextureSet, udim_at};
+use texturecraft_texel::TileImage;
+
+use crate::commands::{CommandSpec, always, bad, boolp, u64p};
+use crate::session::{check_resolution, check_size, detect_uv_tiles};
+use crate::set_cmds::ts_param;
+use crate::{Result, Session, cmd};
+
+pub fn specs() -> Vec<CommandSpec> {
+    vec![
+        cmd!(
+            "textureSet.tile.resolution",
+            "UV tile resolution",
+            [],
+            None,
+            "{ts?, tile: UDIM number, resolution: 128..8192 (power of two; the set's resolution clears the override)} → {ts, tile, resolution, size: [w, h]}",
+            always,
+            tile_resolution
+        ),
+        cmd!(
+            "textureSet.uvTiles",
+            "UV tiles mode",
+            [],
+            None,
+            "{ts?, enabled: bool} → {ts, uvTiles, dropped: [UDIM numbers whose pixels were left out]} (painted pixels are resampled into the new layout)",
+            always,
+            uv_tiles
+        ),
+    ]
+}
+
+fn tile_resolution(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "textureSet.tile.resolution";
+    let ts = ts_param(s, p, CMD)?;
+    let tile = u64p(p, "tile").and_then(|t| u32::try_from(t).ok()).ok_or_else(|| bad(CMD, "`tile` (a UDIM number) is required"))?;
+    let r = u64p(p, "resolution").ok_or_else(|| bad(CMD, "`resolution` is required"))?;
+    let r = check_resolution(u32::try_from(r).unwrap_or(0))?;
+    let set = s.doc.project.texture_set(ts)?;
+    if !set.uv_tiles.contains(&tile) {
+        return Err(bad(CMD, format!("texture set \"{}\" has no UV tile {tile} (tiles: {:?})", set.name, set.uv_tiles)));
+    }
+    if set.tile_resolution(tile) == r {
+        return Ok(json!({ "ts": ts, "tile": tile, "resolution": r, "size": set.size() }));
+    }
+    s.cancel_stroke();
+    let size = s.edit("UV tile resolution", |s| {
+        let set = s.doc.project.texture_set_mut(ts)?;
+        let old = set.clone();
+        if r == set.resolution {
+            set.tile_resolutions.remove(&tile);
+        } else {
+            set.tile_resolutions.insert(tile, r);
+        }
+        check_size(set)?;
+        let size = set.size();
+        relayout(s, ts, &old)?;
+        Ok(size)
+    })?;
+    Ok(json!({ "ts": ts, "tile": tile, "resolution": r, "size": size }))
+}
+
+fn uv_tiles(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "textureSet.uvTiles";
+    let ts = ts_param(s, p, CMD)?;
+    let enabled = boolp(p, "enabled").ok_or_else(|| bad(CMD, "`enabled` (true or false) is required"))?;
+    let set = s.doc.project.texture_set(ts)?;
+    let tiles = if enabled {
+        detect_uv_tiles(&s.source, set.material, Some(true), &mut Vec::new()).map_err(|e| bad(CMD, format!("texture set \"{}\": {e}", set.name)))?
+    } else {
+        Vec::new()
+    };
+    if tiles == set.uv_tiles {
+        return Ok(json!({ "ts": ts, "uvTiles": tiles, "dropped": [] }));
+    }
+    // Leaving UV tile mode keeps tile 1001 (UV 0..1), the area a classic set paints.
+    let dropped: Vec<u32> = set.uv_tiles.iter().copied().filter(|t| !enabled && *t != 1001).collect();
+    s.cancel_stroke();
+    s.edit(if enabled { "Use UV tiles" } else { "Stop using UV tiles" }, |s| {
+        let set = s.doc.project.texture_set_mut(ts)?;
+        let old = set.clone();
+        set.tile_resolutions.retain(|u, _| tiles.contains(u));
+        set.uv_tiles = tiles.clone();
+        check_size(set)?;
+        relayout(s, ts, &old)
+    })?;
+    Ok(json!({ "ts": ts, "uvTiles": tiles, "dropped": dropped }))
+}
+
+/// Mesh UV → normalized atlas position of UV tile layout `set` (None where the layout holds
+/// no texel for it): classic sets cover UV 0..1.
+fn to_layout(set: &TextureSet, m: [f32; 2]) -> Option<[f32; 2]> {
+    match set.tile_grid() {
+        Some(g) => udim_at(m).filter(|u| set.uv_tiles.contains(u)).map(|_| set.to_atlas(&g, m, m)),
+        None => (m.iter().all(|v| (0.0..=1.0).contains(v))).then_some(m),
+    }
+}
+
+/// Normalized atlas position of layout `new` → the mesh UV it shows (None in the unused part of
+/// a block or a block without a tile).
+fn from_layout(set: &TextureSet, a: [f32; 2]) -> Option<[f32; 2]> {
+    let Some(g) = set.tile_grid() else { return Some(a) };
+    let (bx, by) = ((a[0] * g.cols as f32).floor(), (a[1] * g.rows as f32).floor());
+    if bx < 0.0 || by < 0.0 {
+        return None;
+    }
+    let udim = g.udim(bx as u32, by as u32);
+    let scale = set.tile_scale(udim);
+    let local = (a[0] * g.cols as f32 - bx, a[1] * g.rows as f32 - by);
+    (set.uv_tiles.contains(&udim) && local.0 <= scale && local.1 <= scale).then(|| set.from_atlas(&g, a))
+}
+
+/// Resample texture set `ts`'s painted images and baked maps from layout `old` into the set's
+/// current layout (call inside [`Session::edit`] after changing the set).
+pub(crate) fn relayout(s: &mut Session, ts: usize, old: &TextureSet) -> Result<()> {
+    let new = s.doc.project.texture_set(ts)?.clone();
+    let map = |a: [f32; 2]| from_layout(&new, a).and_then(|m| to_layout(old, m));
+    let ((ow, oh), (nw, nh)) = (old.size(), new.size());
+    let texel = |x: f32, y: f32| map([x / nw as f32, y / nh as f32]).map(|o| (o[0] * ow as f32, o[1] * oh as f32));
+    let all = TileImage::new(nw, nh, 1);
+    let tiles: Vec<(u32, u32)> = (0..all.tiles_y()).flat_map(|ty| (0..all.tiles_x()).map(move |tx| (tx, ty))).collect();
+    // Blocks and tiles are multiples of 64 texels (resolutions are powers of two ≥ 128), so the
+    // map is affine (or None) over each destination tile.
+    crate::layer_ops::map_set_images(s, ts, |img, empty| remap_image(img, (nw, nh), empty, &texel, &tiles, true));
+    if let Some(baked) = s.doc.baked.get(&ts) {
+        match remap_baked(baked, old, &new, &map) {
+            Some(b) => {
+                s.doc.baked.insert(ts, b);
+            }
+            None => {
+                s.doc.baked.remove(&ts);
+                s.doc.project.texture_set_mut(ts)?.baked.clear();
+                s.log.push(format!("Texture set \"{}\": the baked mesh maps no longer fit; bake them again", new.name));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `img` resampled to `size` over destination `tiles` (64-texel tiles; the others stay empty)
+/// through `map` (destination texel center → source position in texels), tiles in parallel.
+/// With `affine` (the map is affine or None over each tile) tiles whose corners read only
+/// unallocated texels are skipped unvisited.
+pub(crate) fn remap_image(
+    img: &TileImage,
+    size: (u32, u32),
+    empty: &[u16],
+    map: &(dyn Fn(f32, f32) -> Option<(f32, f32)> + Sync),
+    tiles: &[(u32, u32)],
+    affine: bool,
+) -> TileImage {
+    let mut out = TileImage::new(size.0, size.1, img.comps());
+    let skip = |tx: u32, ty: u32| {
+        let t = texturecraft_texel::TILE as f32;
+        let (x0, y0) = (tx as f32 * t + 0.5, ty as f32 * t + 0.5);
+        let (x1, y1) = (((tx as f32 + 1.0) * t).min(size.0 as f32) - 0.5, ((ty as f32 + 1.0) * t).min(size.1 as f32) - 0.5);
+        let corners: Option<Vec<(f32, f32)>> = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)].iter().map(|(x, y)| map(*x, *y)).collect();
+        match corners {
+            Some(c) => {
+                let (lo, hi) =
+                    c.iter().fold(((f32::MAX, f32::MAX), (f32::MIN, f32::MIN)), |(lo, hi), p| ((lo.0.min(p.0), lo.1.min(p.1)), (hi.0.max(p.0), hi.1.max(p.1))));
+                !img.any_allocated_in(lo.0, lo.1, hi.0, hi.1)
+            }
+            None => [(x0, y0), (x1, y1)].iter().all(|(x, y)| map(*x, *y).is_none()),
+        }
+    };
+    let data: Vec<_> = tiles
+        .par_iter()
+        .filter(|(tx, ty)| !(affine && skip(*tx, *ty)))
+        .filter_map(|&(tx, ty)| Some((tx, ty, img.remapped_tile(size.0, size.1, tx, ty, empty, map)?)))
+        .collect();
+    for (tx, ty, d) in data {
+        out.set_tile(tx, ty, Some(Arc::new(d)));
+    }
+    out
+}
+
+/// Baked maps of layout `old` resampled (nearest texel) into layout `new` at the same density
+/// per UV tile; None when that is beyond what bakes may hold.
+fn remap_baked(b: &BakedMaps, old: &TextureSet, new: &TextureSet, map: &(dyn Fn([f32; 2]) -> Option<[f32; 2]> + Sync)) -> Option<BakedMaps> {
+    let grid = |t: &TextureSet| t.tile_grid().map_or((1, 1), |g| (g.cols, g.rows));
+    let ((ocols, _), (ncols, nrows)) = (grid(old), grid(new));
+    let per_tile = b.resolution / ocols.max(1);
+    let (w, h) = (per_tile.checked_mul(ncols)?, per_tile.checked_mul(nrows)?);
+    if w == 0 || u64::from(w) * u64::from(h) > texturecraft_bake::MAX_TEXELS {
+        return None;
+    }
+    let mut out = BakedMaps { resolution: w, ..b.clone() };
+    for (m, data) in &b.maps {
+        let (comps, ow, oh) = (m.components(), b.resolution as usize, b.height(*m) as usize);
+        let neutral = m.neutral();
+        let mut texels = vec![0.0f32; w as usize * h as usize * comps];
+        texels.par_chunks_mut(w as usize * comps).enumerate().for_each(|(y, row)| {
+            for (x, px) in row.chunks_mut(comps).enumerate() {
+                let src = map([(x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32]).and_then(|o| {
+                    let (sx, sy) = (((o[0] * ow as f32) as usize).min(ow.saturating_sub(1)), ((o[1] * oh as f32) as usize).min(oh.saturating_sub(1)));
+                    let i = (sy * ow + sx) * comps;
+                    data.get(i..i + comps)
+                });
+                px.copy_from_slice(src.unwrap_or(&neutral[..comps]));
+            }
+        });
+        out.maps.insert(*m, Arc::new(texels));
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::execute;
+    use texturecraft_core::Channel;
+    use texturecraft_geom::primitives;
+
+    fn udim_session() -> Session {
+        let mut s = Session::new_project("u", primitives::builtin("udim_plane").unwrap(), "builtin:udim_plane", None, 256).unwrap();
+        assert_eq!(s.doc.project.texture_sets[0].uv_tiles, vec![1001, 1002]);
+        s.update();
+        s
+    }
+
+    /// Paint a constant value over every covered texel of layer `id` (base color).
+    fn paint_all(s: &mut Session, value: u16) {
+        let id = s.doc.project.texture_sets[0].stack[0];
+        let size = s.doc.project.texture_sets[0].size();
+        let gbuf = s.caches[0].gbuf.clone();
+        let img = s.doc.pixels.layer_mut(id, Channel::BaseColor, size);
+        for y in 0..size.1 {
+            for x in 0..size.0 {
+                if gbuf.covered((y * size.0 + x) as usize) {
+                    img.set(x, y, &[value, value, value, 65535]);
+                }
+            }
+        }
+    }
+
+    /// Mean painted alpha over the covered texels of the set's current layout.
+    fn painted_fraction(s: &Session) -> f64 {
+        let id = s.doc.project.texture_sets[0].stack[0];
+        let img = s.doc.pixels.layer(id, Channel::BaseColor).unwrap();
+        let gbuf = &s.caches[0].gbuf;
+        let (mut sum, mut n) = (0.0, 0.0);
+        for (i, t) in gbuf.tri.iter().enumerate() {
+            if *t != texturecraft_geom::NO_TRI {
+                let (x, y) = (i as u32 % gbuf.width, i as u32 / gbuf.width);
+                sum += img.get(x, y)[3] as f64 / 65535.0;
+                n += 1.0;
+            }
+        }
+        sum / n
+    }
+
+    #[test]
+    fn per_tile_resolution_moves_tiles_and_keeps_pixels() {
+        let mut s = udim_session();
+        paint_all(&mut s, 40000);
+        let out = execute(&mut s, "textureSet.tile.resolution", &json!({"tile": 1002, "resolution": 128})).unwrap();
+        // Tile 1001 keeps 256, so blocks stay 256 and tile 1002 fills a quarter of its block.
+        assert_eq!(out["size"], json!([512, 256]));
+        let set = &s.doc.project.texture_sets[0];
+        assert_eq!((set.tile_resolution(1001), set.tile_resolution(1002), set.block_resolution()), (256, 128, 256));
+        // Mesh UVs of tile 1002 now sit in the top-left quarter of block 1.
+        let uv_max = s.mesh.uvs.iter().filter(|u| u.x > 0.5).fold(0.0f32, |m, u| m.max(u.x));
+        assert!(uv_max <= 0.75 + 1e-4, "{uv_max}");
+        assert!(painted_fraction(&s) > 0.97, "painting survives the relayout");
+        let inspect = execute(&mut s, "textureSet.inspect", &json!({})).unwrap();
+        assert_eq!(inspect["tiles"][1]["resolution"], 128);
+        // Raising one tile above the rest grows every block.
+        execute(&mut s, "textureSet.tile.resolution", &json!({"tile": 1001, "resolution": 512})).unwrap();
+        assert_eq!(s.doc.project.texture_sets[0].size(), (1024, 512));
+        assert!(painted_fraction(&s) > 0.97);
+        // Undo restores the layout, the mesh UVs and the pixels.
+        s.undo().unwrap();
+        s.undo().unwrap();
+        assert!(s.doc.project.texture_sets[0].tile_resolutions.is_empty());
+        assert_eq!(s.mesh.uvs, Session::new_project("u", primitives::builtin("udim_plane").unwrap(), "x", None, 256).unwrap().mesh.uvs);
+        assert!(painted_fraction(&s) > 0.97);
+        // Errors: unknown tile, bad resolution, classic set.
+        assert!(execute(&mut s, "textureSet.tile.resolution", &json!({"tile": 1005, "resolution": 128})).is_err());
+        assert!(execute(&mut s, "textureSet.tile.resolution", &json!({"tile": 1001, "resolution": 100})).is_err());
+    }
+
+    #[test]
+    fn export_writes_each_tile_at_its_own_size() {
+        let mut s = udim_session();
+        paint_all(&mut s, 50000);
+        execute(&mut s, "textureSet.tile.resolution", &json!({"tile": 1002, "resolution": 128})).unwrap();
+        let opts = crate::file_cmds::export_options(&s, &json!({"preset": "Document channels + Normal + AO", "format": "png"}), "t").unwrap();
+        let files = s.export_files(&[0], &opts).unwrap();
+        // PNG: width and height are the big-endian words after the IHDR tag.
+        let png_size = |b: &[u8]| (u32::from_be_bytes(b[16..20].try_into().unwrap()), u32::from_be_bytes(b[20..24].try_into().unwrap()));
+        assert!(files.len() >= 4);
+        for f in &files {
+            let want = if f.name.contains("1002") { 128 } else { 256 };
+            assert_eq!(png_size(&f.bytes), (want, want), "{}", f.name);
+        }
+    }
+
+    #[test]
+    fn convert_to_uv_tiles_and_back() {
+        let mut s = Session::new_project("u", primitives::builtin("udim_plane").unwrap(), "builtin:udim_plane", None, 256).unwrap();
+        execute(&mut s, "textureSet.uvTiles", &json!({"enabled": false})).unwrap();
+        assert!(s.doc.project.texture_sets[0].uv_tiles.is_empty());
+        assert_eq!(s.doc.project.texture_sets[0].size(), (256, 256));
+        s.update();
+        paint_all(&mut s, 30000);
+        let out = execute(&mut s, "textureSet.uvTiles", &json!({"enabled": true})).unwrap();
+        assert_eq!(out["uvTiles"], json!([1001, 1002]));
+        assert_eq!(s.doc.project.texture_sets[0].size(), (512, 256));
+        // Tile 1001 keeps the classic set's painting; tile 1002 was never painted.
+        let id = s.doc.project.texture_sets[0].stack[0];
+        let img = s.doc.pixels.layer(id, Channel::BaseColor).unwrap();
+        let gbuf = s.caches[0].gbuf.clone();
+        let covered = |x: u32| (0..256).filter(|y| gbuf.covered((y * 512 + x) as usize)).collect::<Vec<_>>();
+        let x = (0..256).find(|x| !covered(*x).is_empty()).unwrap();
+        assert!(covered(x).iter().all(|y| img.get(x, *y)[3] > 60000));
+        let x2 = (256..512).find(|x| !covered(*x).is_empty()).unwrap();
+        assert!(covered(x2).iter().all(|y| img.get(x2, *y)[3] == 0));
+        let back = execute(&mut s, "textureSet.uvTiles", &json!({"enabled": false})).unwrap();
+        assert_eq!(back["dropped"], json!([1002]));
+        assert!(painted_fraction(&s) > 0.97);
+        assert!(execute(&mut s, "textureSet.uvTiles", &json!({})).is_err());
+    }
+}

@@ -21,6 +21,7 @@ use texturecraft_render::trace::{TraceDisplay, TraceScene, TraceSet, TraceSettin
 use texturecraft_render::{Renderer, wgpu};
 
 use crate::TextureCraftApp;
+use crate::i18n::{n_, tr, trf};
 use crate::theme::TOKENS;
 
 /// A finished pass, ready to show.
@@ -292,7 +293,7 @@ fn paint(ui: &Ui, rect: Rect, texture: Option<egui::TextureId>) {
         }
         None => {
             p.rect_filled(rect, 0.0, TOKENS.viewport);
-            p.text(rect.center(), egui::Align2::CENTER_CENTER, "Starting render...", egui::FontId::proportional(14.0), TOKENS.text_dim);
+            p.text(rect.center(), egui::Align2::CENTER_CENTER, tr("Starting render..."), egui::FontId::proportional(14.0), TOKENS.text_dim);
         }
     }
 }
@@ -425,7 +426,7 @@ fn poll_read(app: &mut TextureCraftApp, device: &wgpu::Device, g: &GpuView) -> b
             app.render.shown = Some(px);
             save(app);
         }
-        Some(None) => app.toast("Couldn't read the render back from the GPU", true),
+        Some(None) => app.toast(tr("Couldn't read the render back from the GPU"), true),
         None => {}
     }
     pending
@@ -537,38 +538,42 @@ fn overlay(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, on_gpu: bool) {
         ui.set_width(226.0);
         let max = app.ui.render.max_samples.max(1);
         let running = app.render.samples < max;
-        ui.label(RichText::new("RENDERING").size(11.0).strong());
-        let status = if running { "Rendering" } else { "Done" };
-        let device = if on_gpu { "GPU" } else { "CPU" };
+        ui.label(RichText::new(tr("RENDERING")).size(11.0).strong());
+        let template = match (running, on_gpu) {
+            (true, true) => n_("Rendering on GPU: {n} / {max} samples, {s} s"),
+            (true, false) => n_("Rendering on CPU: {n} / {max} samples, {s} s"),
+            (false, true) => n_("Done on GPU: {n} / {max} samples, {s} s"),
+            (false, false) => n_("Done on CPU: {n} / {max} samples, {s} s"),
+        };
         let line = ui.label(
-            RichText::new(format!("{status} on {device}: {} / {max} samples, {:.1} s", app.render.samples, app.render.elapsed))
+            RichText::new(trf(template, &[("n", &app.render.samples), ("max", &max), ("s", &format!("{:.1}", app.render.elapsed))]))
                 .size(11.0)
                 .color(TOKENS.text_dim),
         );
         if let Some((_, e)) = app.render.gpu_error.as_ref().filter(|_| !on_gpu && !app.ui.render.cpu) {
-            line.on_hover_text(format!("The GPU couldn't render this scene: {e}"));
+            line.on_hover_text(trf("The GPU couldn't render this scene: {error}", &[("error", e)]));
         }
         ui.add(egui::ProgressBar::new(app.render.samples as f32 / max as f32).desired_height(4.0));
         ui.horizontal(|ui| {
-            ui.label("Samples");
+            ui.label(tr("Samples"));
             ui.add(egui::DragValue::new(&mut app.ui.render.max_samples).range(1..=16384));
-            ui.label("Bounces");
+            ui.label(tr("Bounces"));
             ui.add(egui::DragValue::new(&mut app.ui.render.bounces).range(1..=32));
         });
-        ui.checkbox(&mut app.ui.render.denoise, "Denoise").on_hover_text("Filter the remaining noise while keeping edges and texture detail");
+        ui.checkbox(&mut app.ui.render.denoise, tr("Denoise")).on_hover_text(tr("Filter the remaining noise while keeping edges and texture detail"));
         if app.render_state.as_ref().is_some_and(|rs| GpuTracer::supported(&rs.device)) {
-            ui.checkbox(&mut app.ui.render.cpu, "Render on the CPU").on_hover_text("Path trace on the processor instead of the graphics card (slower)");
+            ui.checkbox(&mut app.ui.render.cpu, tr("Render on the CPU")).on_hover_text(tr("Path trace on the processor instead of the graphics card (slower)"));
         }
         ui.horizontal(|ui| {
             let saving = app.render.gpu.as_ref().is_some_and(|g| !matches!(*g.read.lock().unwrap_or_else(PoisonError::into_inner), Read::Idle));
             let ready = if on_gpu { app.render.samples > 0 && !saving } else { app.render.shown.is_some() };
-            if ui.add_enabled(ready, egui::Button::new("Save render...")).clicked() {
+            if ui.add_enabled(ready, egui::Button::new(tr("Save render..."))).clicked() {
                 match app.render.gpu.as_ref().filter(|_| on_gpu) {
                     Some(g) => *g.read.lock().unwrap_or_else(PoisonError::into_inner) = Read::Wanted,
                     None => save(app),
                 }
             }
-            if ui.button("Back to painting").clicked() {
+            if ui.button(tr("Back to painting")).clicked() {
                 app.ui.mode = crate::state::Mode::Painting;
             }
         });
@@ -579,22 +584,22 @@ fn overlay(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, on_gpu: bool) {
 fn save(app: &mut TextureCraftApp) {
     let Some((w, h, rgba)) = app.render.shown.clone() else { return };
     let Some(png) = crate::control::encode_png(w, h, rgba).map(|(_, _, png)| png) else {
-        app.toast("Couldn't encode the render", true);
+        app.toast(tr("Couldn't encode the render"), true);
         return;
     };
     let name = format!("{}_render.png", texturecraft_engine::formats::export::sanitize_file_stem(&app.session.doc.project.name));
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let Some(path) = rfd::FileDialog::new().add_filter("PNG image", &["png"]).set_file_name(name).save_file() else { return };
+        let Some(path) = rfd::FileDialog::new().add_filter(tr("PNG image"), &["png"]).set_file_name(name).save_file() else { return };
         match std::fs::write(&path, png) {
-            Ok(()) => app.toast(format!("Saved {}", path.display()), false),
-            Err(e) => app.toast(format!("Couldn't save the render: {e}"), true),
+            Ok(()) => app.toast(trf("Saved {path}", &[("path", &path.display())]), false),
+            Err(e) => app.toast(trf("Couldn't save the render: {error}", &[("error", &e)]), true),
         }
     }
     #[cfg(target_arch = "wasm32")]
     match crate::web_files::download(&name, &png) {
-        Ok(()) => app.toast(format!("Downloaded {name}"), false),
-        Err(e) => app.toast(format!("Couldn't save the render: {e}"), true),
+        Ok(()) => app.toast(trf("Downloaded {name}", &[("name", &name)]), false),
+        Err(e) => app.toast(trf("Couldn't save the render: {error}", &[("error", &e)]), true),
     }
 }
 

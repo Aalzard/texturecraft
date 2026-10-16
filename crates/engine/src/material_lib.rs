@@ -67,6 +67,7 @@ impl Session {
         let mut project = Project::new(name, "builtin:none");
         let mut set = TextureSet::new(name, 0, src_set.resolution);
         set.uv_tiles = src_set.uv_tiles.clone();
+        set.tile_resolutions = src_set.tile_resolutions.clone();
         set.channels = src_set.channels.clone();
         project.texture_sets.push(set);
         let mut mini = Document { project, pixels: PixelStore::default(), baked: BTreeMap::new(), resources: BTreeMap::new() };

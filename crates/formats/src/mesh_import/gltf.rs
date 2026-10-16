@@ -148,6 +148,9 @@ fn add_primitive(raw: &mut RawMesh, attrs: &mut Attrs, prim: &gltf::Primitive, m
         None => "Default".to_string(),
         Some(i) => prim.material().name().map(str::to_string).unwrap_or_else(|| format!("Material_{i}")),
     };
+    if !raw.base_colors.iter().any(|c| c.material == name) {
+        base_color(raw, &prim.material(), &name, buffers);
+    }
     let base = raw.positions.len() as u32;
     let tex_ok = texcoords.as_ref().is_some_and(|t| t.len() == n);
     if tex_ok {
@@ -188,6 +191,33 @@ fn add_primitive(raw: &mut RawMesh, attrs: &mut Attrs, prim: &gltf::Primitive, m
         }
     }
     Ok(())
+}
+
+/// Record `material`'s base color factor and embedded texture (GLB buffer view or data URI)
+/// unless it is plain white.
+fn base_color(raw: &mut RawMesh, material: &gltf::Material, name: &str, buffers: &[gltf::buffer::Data]) {
+    let pbr = material.pbr_metallic_roughness();
+    let factor = Vec4::from(pbr.base_color_factor());
+    let image = pbr.base_color_texture().and_then(|info| {
+        if info.tex_coord() != 0 {
+            raw.warnings.push(format!("the base color texture of {name} uses UV set {}; only the first is read", info.tex_coord()));
+            return None;
+        }
+        match info.texture().source().source() {
+            gltf::image::Source::View { view, .. } => {
+                let data = buffers.get(view.buffer().index())?;
+                data.0.get(view.offset()..view.offset().checked_add(view.length())?).map(<[u8]>::to_vec)
+            }
+            // Only data URIs: external files are not part of the mesh bytes.
+            gltf::image::Source::Uri { uri, .. } if uri.starts_with("data:") => {
+                gltf::buffer::Data::from_source(gltf::buffer::Source::Uri(uri), None).ok().map(|d| d.0)
+            }
+            gltf::image::Source::Uri { .. } => None,
+        }
+    });
+    if image.is_some() || factor != Vec4::ONE {
+        raw.base_colors.push(super::RawBaseColor { material: name.to_string(), factor, image });
+    }
 }
 
 /// Reject accessors the `gltf` reader would panic on or read out of bounds.

@@ -8,7 +8,7 @@ use egui::{Event, Id, Key, KeyboardShortcut, Modifiers, RichText, vec2};
 use egui_phosphor::regular as ic;
 
 use crate::TextureCraftApp;
-use crate::i18n::tr;
+use crate::i18n::{tr, trf};
 use crate::menus::{CATALOG, parse_shortcut};
 use crate::theme::TOKENS;
 use crate::widgets::{icon_button, section};
@@ -113,6 +113,36 @@ pub fn rebind(keymap: &mut Keymap, b: &Binding, value: &str) {
     }
 }
 
+/// The bound shortcuts the browser must not act on, for the web build's `keydown` listener:
+/// the keymap they were taken from and the shortcuts.
+static CAPTURED: std::sync::Mutex<Option<(Keymap, Vec<KeyboardShortcut>)>> = std::sync::Mutex::new(None);
+
+/// Refresh [`captured`] when the keymap changed (once per frame; cheap when it didn't).
+pub fn sync_captured(keymap: &Keymap) {
+    let mut c = CAPTURED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if c.as_ref().is_some_and(|(k, _)| k == keymap) {
+        return;
+    }
+    // Copy, cut and paste stay with the browser: egui reads them as clipboard events.
+    let clipboard = [Key::C, Key::V, Key::X];
+    let keys: Vec<KeyboardShortcut> = active(keymap)
+        .into_iter()
+        .map(|(_, sc)| sc)
+        .filter(|sc| {
+            let fkey = sc.logical_key.name().strip_prefix('F').is_some_and(|n| n.parse::<u8>().is_ok());
+            (sc.modifiers.command || sc.modifiers.alt || fkey) && !(sc.modifiers.command && !sc.modifiers.shift && clipboard.contains(&sc.logical_key))
+        })
+        .collect();
+    log::debug!("browser shortcuts taken over: {}", keys.len());
+    *c = Some((keymap.clone(), keys));
+}
+
+/// Whether a key press is one of the app's shortcuts the browser must leave alone.
+pub fn captured(mods: Modifiers, key: Key) -> bool {
+    let c = CAPTURED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    c.as_ref().is_some_and(|(_, keys)| keys.iter().any(|sc| sc.logical_key == key && mods.matches_logically(sc.modifiers)))
+}
+
 const CAPTURE: &str = "keymap_capture";
 
 /// Whether the editor is waiting for a key combination (global shortcuts pause meanwhile).
@@ -148,20 +178,23 @@ pub fn window(app: &mut TextureCraftApp, ctx: &egui::Context) {
     }
     let mut filter: String = ctx.data(|d| d.get_temp(filter_id)).unwrap_or_default();
     let mut open = true;
-    crate::windows::window("Keyboard shortcuts", &mut open).default_width(480.0).show(ctx, |ui| {
+    crate::windows::window("keyboard_shortcuts", tr("Keyboard shortcuts"), &mut open).default_width(480.0).show(ctx, |ui| {
         let resolved = resolve(&app.ui.keymap);
         ui.horizontal(|ui| {
             ui.label(RichText::new(ic::MAGNIFYING_GLASS).color(TOKENS.text_dim));
-            ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search commands or keys").desired_width(300.0));
+            ui.add(egui::TextEdit::singleline(&mut filter).hint_text(tr("Search commands or keys")).desired_width(300.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled(!app.ui.keymap.is_empty(), egui::Button::new("Reset all")).on_hover_text("Restore every default shortcut").clicked() {
+                if ui.add_enabled(!app.ui.keymap.is_empty(), egui::Button::new(tr("Reset all"))).on_hover_text(tr("Restore every default shortcut")).clicked() {
                     app.ui.keymap.clear();
                 }
             });
         });
         let clashes = (0..resolved.len()).filter(|i| conflict(&resolved, *i).is_some()).count();
         if clashes > 0 {
-            ui.label(RichText::new(format!("{} {clashes} items share a shortcut; the first one listed wins.", ic::WARNING)).color(TOKENS.danger));
+            ui.label(
+                RichText::new(format!("{} {}", ic::WARNING, trf("{n} items share a shortcut; the first one listed wins.", &[("n", &clashes)])))
+                    .color(TOKENS.danger),
+            );
         }
         ui.add_space(4.0);
         let needle = filter.to_lowercase();
@@ -169,7 +202,9 @@ pub fn window(app: &mut TextureCraftApp, ctx: &egui::Context) {
             egui::Grid::new("keymap_grid").num_columns(3).striped(true).spacing(vec2(10.0, 4.0)).show(ui, |ui| {
                 for (i, b) in bindings().iter().enumerate() {
                     let current = shortcut(&app.ui.keymap, b);
-                    if !needle.is_empty() && ![b.label, b.group, b.id, current.unwrap_or("")].iter().any(|t| t.to_lowercase().contains(&needle)) {
+                    if !needle.is_empty()
+                        && ![b.label, b.group, tr(b.label), tr(b.group), b.id, current.unwrap_or("")].iter().any(|t| t.to_lowercase().contains(&needle))
+                    {
                         continue;
                     }
                     ui.horizontal(|ui| {
@@ -177,25 +212,29 @@ pub fn window(app: &mut TextureCraftApp, ctx: &egui::Context) {
                         ui.label(RichText::new(tr(b.group)).size(10.5).color(TOKENS.text_dim));
                     });
                     let waiting = capture == Some(i);
-                    let text = if waiting { "Press a key..." } else { current.unwrap_or("-") };
+                    let text = if waiting { tr("Press a key...") } else { current.unwrap_or("-") };
                     let key = egui::Button::new(RichText::new(text).monospace()).selected(waiting).min_size(vec2(130.0, 0.0));
-                    if ui.add(key).on_hover_text("Click, then press the new shortcut (Esc cancels)").clicked() {
+                    if ui.add(key).on_hover_text(tr("Click, then press the new shortcut (Esc cancels)")).clicked() {
                         capture = if waiting { None } else { Some(i) };
                     }
                     let bound = current.is_some();
                     ui.horizontal(|ui| {
                         if let Some(other) = conflict(&resolved, i).and_then(|j| bindings().get(j)) {
-                            ui.label(RichText::new(ic::WARNING).color(TOKENS.danger)).on_hover_text(format!(
-                                "Also bound to {} ({})",
-                                tr(other.label),
-                                tr(other.group)
-                            ));
+                            ui.label(RichText::new(ic::WARNING).color(TOKENS.danger))
+                                .on_hover_text(trf("Also bound to {item} ({menu})", &[("item", &tr(other.label)), ("menu", &tr(other.group))]));
                         }
-                        if bound && icon_button(ui, ic::X, "Remove the shortcut", false, 18.0).clicked() {
+                        if bound && icon_button(ui, ic::X, tr("Remove the shortcut"), false, 18.0).clicked() {
                             rebind(&mut app.ui.keymap, b, "");
                         }
                         if app.ui.keymap.contains_key(b.id)
-                            && icon_button(ui, ic::ARROW_COUNTER_CLOCKWISE, &format!("Reset to {}", b.default.unwrap_or("none")), false, 18.0).clicked()
+                            && icon_button(
+                                ui,
+                                ic::ARROW_COUNTER_CLOCKWISE,
+                                &trf("Reset to {shortcut}", &[("shortcut", &b.default.unwrap_or(tr("none")))]),
+                                false,
+                                18.0,
+                            )
+                            .clicked()
                         {
                             app.ui.keymap.remove(b.id);
                         }
@@ -205,16 +244,16 @@ pub fn window(app: &mut TextureCraftApp, ctx: &egui::Context) {
             });
         });
         ui.add_space(4.0);
-        section(ui, "keymap_nav", "Viewport and brush (fixed)", false, |ui| {
+        section(ui, "keymap_nav", tr("Viewport and brush (fixed)"), false, |ui| {
             egui::Grid::new("keymap_fixed").striped(true).show(ui, |ui| {
                 for (k, v) in [
-                    ("Alt + LMB drag", "Orbit"),
-                    ("MMB drag / Alt + MMB", "Pan"),
-                    ("Wheel / Alt + RMB drag", "Zoom"),
-                    ("LMB", "Paint with the current tool"),
-                    ("[ / ]", "Brush size down / up"),
-                    ("Shift + wheel", "Brush size"),
-                    ("Esc", "Cancel the stroke"),
+                    (tr("Alt + LMB drag"), tr("Orbit")),
+                    (tr("MMB drag / Alt + MMB"), tr("Pan")),
+                    (tr("Wheel / Alt + RMB drag"), tr("Zoom")),
+                    (tr("LMB"), tr("Paint with the current tool")),
+                    ("[ / ]", tr("Brush size down / up")),
+                    (tr("Shift + wheel"), tr("Brush size")),
+                    ("Esc", tr("Cancel the stroke")),
                 ] {
                     ui.label(RichText::new(k).strong());
                     ui.label(v);
@@ -243,6 +282,18 @@ pub fn window(app: &mut TextureCraftApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_browser_leaves_app_shortcuts_alone_but_keeps_the_clipboard() {
+        let mut keymap = Keymap::new();
+        keymap.insert("file.close".into(), "Alt+W".into());
+        sync_captured(&keymap);
+        let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+        assert!(captured(ctrl, Key::S) && captured(ctrl, Key::O) && captured(ctrl, Key::D));
+        assert!(captured(Modifiers::NONE, Key::F8) && captured(Modifiers::ALT, Key::W));
+        assert!(!captured(ctrl, Key::C) && !captured(ctrl, Key::V) && !captured(ctrl, Key::X), "clipboard keys reach the browser");
+        assert!(!captured(Modifiers::NONE, Key::M) && !captured(Modifiers::NONE, Key::F), "plain keys need no capture");
+    }
 
     #[test]
     fn shortcuts_round_trip_through_parse_and_format() {

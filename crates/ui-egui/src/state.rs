@@ -1,7 +1,7 @@
 //! UI state (serde, so the control channel can read and drive it).
 
 use serde::{Deserialize, Serialize};
-use texturecraft_engine::core::Channel;
+use texturecraft_engine::core::{BakedMap, Channel};
 
 use crate::docking::Dock;
 use crate::keymap::Keymap;
@@ -73,11 +73,14 @@ pub struct Prefs {
     pub autosave_minutes: u32,
     /// UI language code (`i18n::LANGUAGES`).
     pub language: String,
+    /// Viewport texture resolution: 0 full, 1 half, 2 quarter of each texture set's size (lighter
+    /// on GPU memory and uploads for 4K and 8K sets; painting and export keep full resolution).
+    pub viewport_texture: u8,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { ui_scale: 1.0, autosave_minutes: 10, language: "en".into() }
+        Prefs { ui_scale: 1.0, autosave_minutes: 10, language: "en".into(), viewport_texture: 0 }
     }
 }
 
@@ -90,11 +93,29 @@ pub struct NewProject {
     pub file: Option<String>,
     /// UV tile (UDIM) workflow: on, off, or None for when the mesh's UVs leave tile 1001.
     pub uv_tiles: Option<bool>,
+    /// Project template name (built-in or the user's).
+    #[serde(default = "default_template")]
+    pub template: String,
+    /// Name typed to save the current project's settings as a template.
+    #[serde(skip)]
+    pub template_name: String,
+}
+
+fn default_template() -> String {
+    texturecraft_engine::template_cmds::DEFAULT_TEMPLATE.into()
 }
 
 impl Default for NewProject {
     fn default() -> Self {
-        NewProject { mesh: "material_ball".into(), resolution: 2048, name: "Untitled".into(), file: None, uv_tiles: None }
+        NewProject {
+            mesh: "material_ball".into(),
+            resolution: 2048,
+            name: "Untitled".into(),
+            file: None,
+            uv_tiles: None,
+            template: default_template(),
+            template_name: String::new(),
+        }
     }
 }
 
@@ -194,6 +215,9 @@ pub struct UiState {
     /// Custom keyboard shortcuts (item id → "Ctrl+Shift+E", "" = none) over the defaults.
     #[serde(default)]
     pub keymap: Keymap,
+    /// The baker whose parameters bake mode shows (None: the common parameters).
+    #[serde(default)]
+    pub bake_baker: Option<BakedMap>,
 }
 
 impl UiState {
@@ -234,6 +258,7 @@ impl Default for UiState {
             export: ExportUi::default(),
             recent: Vec::new(),
             keymap: Keymap::new(),
+            bake_baker: None,
         }
     }
 }

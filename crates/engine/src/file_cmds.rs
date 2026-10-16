@@ -19,7 +19,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New project from a mesh file",
             [],
             None,
-            "{mesh: path to .glb/.gltf/.fbx/.dae/.usd/.usda/.usdc/.usdz/.obj/.ply/.stl, resolution?: 2048, name?, uvTiles?: bool (UDIM; default: when the UVs leave tile 1001)}",
+            "{mesh: path to .glb/.gltf/.fbx/.dae/.usd/.usda/.usdc/.usdz/.abc/.obj/.ply/.stl, resolution?: 2048, name?, uvTiles?: bool (UDIM; default: when the UVs leave tile 1001), template?: project template name}",
             always,
             new_from_mesh
         ),
@@ -28,7 +28,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("file.saveAs", "Save as...", ["File"], Some("Ctrl+Shift+S"), "{path}", always, save_as),
         cmd!("file.saveCopy", "Save a copy...", ["File"], None, "{path}", always, save_copy),
         cmd!("file.close", "Close", ["File"], Some("Ctrl+F4"), "{}", always, close),
-        cmd!("file.reimportMesh", "Reimport mesh", ["Edit"], Some("Ctrl+Shift+R"), "{path?}", always, reimport),
+        cmd!(
+            "file.reimportMesh",
+            "Reimport mesh",
+            ["Edit"],
+            Some("Ctrl+Shift+R"),
+            "{path?, preserveStrokes?: bool (painted pixels follow the surface when the UVs changed; default false)} → {preserved?: texels re-projected}",
+            always,
+            reimport
+        ),
         cmd!(
             "file.exportTextures",
             "Export textures",
@@ -314,9 +322,13 @@ pub use native::open_path;
 fn new_from_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let path = native::path_param(p, "mesh", "file.new")?;
     let bytes = std::fs::read(path).map_err(|e| bad("file.new", format!("cannot read {path}: {e}")))?;
-    let res = u32::try_from(u64p(p, "resolution").unwrap_or(2048)).unwrap_or(0);
+    let template = crate::template_cmds::template_param(s, p, "file.new")?;
+    let res = u64p(p, "resolution").or(template.as_ref().map(|t| u64::from(t.resolution))).unwrap_or(2048);
     let name = strp(p, "name").map(str::to_string).unwrap_or_else(|| stem_of(path));
-    let next = Session::from_mesh_bytes_tiled(path, &bytes, res, &name, crate::commands::boolp(p, "uvTiles"))?;
+    let mut next = Session::from_mesh_bytes_tiled(path, &bytes, u32::try_from(res).unwrap_or(0), &name, crate::commands::boolp(p, "uvTiles"))?;
+    if let Some(t) = &template {
+        next.apply_template(t);
+    }
     s.switch_to(next);
     Ok(crate::inspect::session(s))
 }
@@ -371,8 +383,9 @@ fn reimport(s: &mut Session, p: &Value) -> Result<Value> {
     let source = s.mesh_source.clone();
     let mut next = Session::new(doc, mesh, source)?;
     next.path = s.path.clone();
+    let preserved = crate::commands::boolp(p, "preserveStrokes").unwrap_or(false).then(|| crate::preserve::preserve_strokes(s, &mut next));
     s.switch_to(next);
-    Ok(Value::Null)
+    Ok(preserved.map_or(Value::Null, |n| json!({ "preserved": n })))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

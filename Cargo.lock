@@ -3476,6 +3476,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sys-locale"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3647,6 +3656,7 @@ dependencies = [
  "image",
  "pollster 0.4.0",
  "rayon",
+ "texturecraft-bake",
  "texturecraft-compose",
  "texturecraft-core",
  "texturecraft-geom",
@@ -3674,6 +3684,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "sys-locale",
  "texturecraft-engine",
  "texturecraft-render",
  "wasm-bindgen",
@@ -3687,6 +3698,7 @@ name = "texturecraft-web"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "js-sys",
  "log",
  "texturecraft-engine",
  "texturecraft-ui-egui",

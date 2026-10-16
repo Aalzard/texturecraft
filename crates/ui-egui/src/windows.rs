@@ -6,11 +6,13 @@ use egui_phosphor::regular as ic;
 use serde_json::json;
 use texturecraft_engine::bake_cmds;
 use texturecraft_engine::core::project::ENV_RESOURCE_PREFIX;
-use texturecraft_engine::core::{BakeMatch, BakeSettings, BakedMap, ToneMapping};
+use texturecraft_engine::core::{BakeMatch, BakeSettings, BakedMap, DirectionMode, PositionMode, RayDistribution, RaySettings, SelfOcclusion, ToneMapping};
 use texturecraft_engine::geom::primitives::BUILTINS;
 use texturecraft_render::ibl::ENVIRONMENTS;
 
 use crate::TextureCraftApp;
+use crate::i18n::LANGUAGES;
+use crate::i18n::{tr, trf};
 use crate::state::Mode;
 use crate::theme::{TOKENS, caption};
 use crate::widgets::{color_swatch, icon_button, slider};
@@ -28,8 +30,19 @@ pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
     }
 }
 
-pub(crate) fn window<'a>(title: &'a str, open: &'a mut bool) -> egui::Window<'a> {
-    egui::Window::new(RichText::new(title.to_uppercase()).size(10.5).strong()).open(open).resizable(true).collapsible(false).default_width(300.0)
+/// A titled tool window; `id` keeps its place across UI languages.
+pub(crate) fn window<'a>(id: &str, title: &str, open: &'a mut bool) -> egui::Window<'a> {
+    egui::Window::new(RichText::new(title.to_uppercase()).size(10.5).strong())
+        .id(egui::Id::new(id))
+        .open(open)
+        .resizable(true)
+        .collapsible(false)
+        .default_width(300.0)
+}
+
+/// A centered dialog; `id` keeps its place across UI languages.
+fn dialog<'a>(id: &str, title: &str, open: &'a mut bool) -> egui::Window<'a> {
+    egui::Window::new(title.to_owned()).id(egui::Id::new(id)).open(open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
 }
 
 /// The Display Settings panel body (a dock tab).
@@ -37,12 +50,12 @@ pub(crate) fn display(app: &mut TextureCraftApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     let mut d = app.session.doc.project.display.clone();
     let before = d.clone();
-    ui.label(caption("Environment settings"));
+    ui.label(caption(tr("Environment settings")));
     let mut hdrs: Vec<&String> = app.session.images.iter().filter(|(_, i)| !i.srgb).map(|(k, _)| k).collect();
     hdrs.sort();
     let mut import_hdr = false;
     let shown = d.environment_resource().unwrap_or(&d.environment).to_string();
-    egui::ComboBox::from_label("Environment map").selected_text(shown).show_ui(ui, |ui| {
+    egui::ComboBox::from_label(tr("Environment map")).selected_text(shown).show_ui(ui, |ui| {
         for e in ENVIRONMENTS {
             ui.selectable_value(&mut d.environment, e.to_string(), e);
         }
@@ -51,46 +64,47 @@ pub(crate) fn display(app: &mut TextureCraftApp, ui: &mut Ui) {
             ui.selectable_value(&mut d.environment, format!("{ENV_RESOURCE_PREFIX}{name}"), name.as_str());
         }
         import_hdr = ui
-            .selectable_label(false, format!("{} Import HDR...", ic::FILE_ARROW_UP))
-            .on_hover_text("Use an equirectangular .hdr or .exr image as the environment")
+            .selectable_label(false, format!("{} {}", ic::FILE_ARROW_UP, tr("Import HDR...")))
+            .on_hover_text(tr("Use an equirectangular .hdr or .exr image as the environment"))
             .clicked();
     });
-    slider(ui, "Environment opacity", &mut d.env_opacity, 0.0..=1.0, 2);
-    slider(ui, "Environment exposure (EV)", &mut d.env_exposure, -5.0..=5.0, 2);
-    slider(ui, "Environment blur", &mut d.env_blur, 0.0..=1.0, 2);
-    slider(ui, "Environment rotation", &mut d.env_rotation, 0.0..=360.0, 0);
-    ui.checkbox(&mut d.shadows, "Key light (shadow-casting light, direct only)");
+    slider(ui, tr("Environment opacity"), &mut d.env_opacity, 0.0..=1.0, 2);
+    slider(ui, tr("Environment exposure (EV)"), &mut d.env_exposure, -5.0..=5.0, 2);
+    slider(ui, tr("Environment blur"), &mut d.env_blur, 0.0..=1.0, 2);
+    slider(ui, tr("Environment rotation"), &mut d.env_rotation, 0.0..=360.0, 0);
+    ui.checkbox(&mut d.shadows, tr("Key light (shadow-casting light, direct only)"));
     ui.add_space(6.0);
-    ui.label(caption("Camera settings"));
-    slider(ui, "Field of view (deg)", &mut d.fov, 5.0..=120.0, 0);
+    ui.label(caption(tr("Camera settings")));
+    slider(ui, tr("Field of view (deg)"), &mut d.fov, 5.0..=120.0, 0);
     let mut ortho = app.session.camera.ortho;
-    if ui.checkbox(&mut ortho, "Orthographic").changed() {
+    if ui.checkbox(&mut ortho, tr("Orthographic")).changed() {
         app.run("camera.set", json!({"ortho": ortho}));
     }
     ui.horizontal(|ui| {
-        ui.label("Tone mapping");
-        ui.selectable_value(&mut d.tone_mapping, ToneMapping::Linear, "Linear");
-        ui.selectable_value(&mut d.tone_mapping, ToneMapping::AcesFilmic, "ACES filmic");
+        ui.label(tr("Tone mapping"));
+        ui.selectable_value(&mut d.tone_mapping, ToneMapping::Linear, tr("Linear"));
+        ui.selectable_value(&mut d.tone_mapping, ToneMapping::AcesFilmic, tr("ACES filmic"));
     });
     cameras(app, ui);
     ui.add_space(6.0);
-    ui.label(caption("Depth of field"));
-    ui.checkbox(&mut d.dof.enabled, "Depth of field (viewport and Rendering mode)");
+    ui.label(caption(tr("Depth of field")));
+    ui.checkbox(&mut d.dof.enabled, tr("Depth of field (viewport and Rendering mode)"));
     ui.add_enabled_ui(d.dof.enabled, |ui| {
         let far = (app.session.camera.distance * 4.0).max(d.dof.focus_distance);
-        slider(ui, "Focus distance", &mut d.dof.focus_distance, 0.0..=far, 2).on_hover_text("Depth of the sharp plane along the view (0: the orbit center)");
-        slider(ui, "Aperture", &mut d.dof.aperture, 0.0..=1.0, 3).on_hover_text("Lens size: how quickly things blur away from the focus distance");
+        slider(ui, tr("Focus distance"), &mut d.dof.focus_distance, 0.0..=far, 2)
+            .on_hover_text(tr("Depth of the sharp plane along the view (0: the orbit center)"));
+        slider(ui, tr("Aperture"), &mut d.dof.aperture, 0.0..=1.0, 3).on_hover_text(tr("Lens size: how quickly things blur away from the focus distance"));
         let picking = crate::viewport::focus_picking(ui.ctx());
-        if ui.selectable_label(picking, format!("{}  Pick focus in the viewport", ic::CROSSHAIR_SIMPLE)).clicked() {
+        if ui.selectable_label(picking, format!("{}  {}", ic::CROSSHAIR_SIMPLE, tr("Pick focus in the viewport"))).clicked() {
             crate::viewport::set_focus_picking(ui.ctx(), !picking);
         }
     });
     ui.add_space(6.0);
-    ui.label(caption("Viewer settings"));
-    slider(ui, "Ambient occlusion intensity", &mut d.ao_intensity, 0.0..=1.0, 2);
-    ui.checkbox(&mut app.ui.wireframe_3d, "Show wireframe in the 3D view");
-    ui.checkbox(&mut app.ui.uv_wireframe, "Show UV wireframe in the 2D view");
-    ui.checkbox(&mut d.taa, "Temporal anti-aliasing (refines the 3D view while it is still)");
+    ui.label(caption(tr("Viewer settings")));
+    slider(ui, tr("Ambient occlusion intensity"), &mut d.ao_intensity, 0.0..=1.0, 2);
+    ui.checkbox(&mut app.ui.wireframe_3d, tr("Show wireframe in the 3D view"));
+    ui.checkbox(&mut app.ui.uv_wireframe, tr("Show UV wireframe in the 2D view"));
+    ui.checkbox(&mut d.taa, tr("Temporal anti-aliasing (refines the 3D view while it is still)"));
     if d != before {
         if d.fov != before.fov {
             app.session.camera.fov = d.fov;
@@ -109,7 +123,7 @@ fn cameras(app: &mut TextureCraftApp, ui: &mut Ui) {
     let names: Vec<String> = app.session.doc.project.cameras.iter().map(|c| c.name.clone()).collect();
     for (i, name) in names.iter().enumerate() {
         ui.horizontal(|ui| {
-            if icon_button(ui, ic::VIDEO_CAMERA, "View through this camera", current == Some(i), 20.0).clicked() {
+            if icon_button(ui, ic::VIDEO_CAMERA, tr("View through this camera"), current == Some(i), 20.0).clicked() {
                 app.run("camera.select", json!({"index": i}));
             }
             // The name being typed lives in egui's memory until the field loses focus.
@@ -125,12 +139,12 @@ fn cameras(app: &mut TextureCraftApp, ui: &mut Ui) {
                     app.run("camera.rename", json!({"index": i, "to": text.trim()}));
                 }
             }
-            if icon_button(ui, ic::TRASH, "Delete this camera", false, 20.0).clicked() {
+            if icon_button(ui, ic::TRASH, tr("Delete this camera"), false, 20.0).clicked() {
                 app.run("camera.remove", json!({"index": i}));
             }
         });
     }
-    if ui.button(format!("{}  Save view as camera", ic::PLUS)).clicked() {
+    if ui.button(format!("{}  {}", ic::PLUS, tr("Save view as camera"))).clicked() {
         app.run("camera.add", json!({}));
     }
 }
@@ -139,47 +153,53 @@ fn cameras(app: &mut TextureCraftApp, ui: &mut Ui) {
 pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
     let mut d = app.session.doc.project.display.clone();
     let before = d.clone();
-    let model = |sg: bool| if sg { "TextureCraft PBR - Specular Glossiness" } else { "TextureCraft PBR - Metallic Roughness" };
+    let model = |sg: bool| if sg { tr("TextureCraft PBR - Specular Glossiness") } else { tr("TextureCraft PBR - Metallic Roughness") };
     egui::ComboBox::from_id_salt("shader_model").width(260.0).selected_text(model(d.spec_gloss)).show_ui(ui, |ui| {
         for sg in [false, true] {
             ui.selectable_value(&mut d.spec_gloss, sg, model(sg));
         }
     });
     let channels = if d.spec_gloss {
-        "Base color is the diffuse color, Specular the F0 color and Glossiness 1 - roughness (add these channels in the texture set settings)."
+        tr("Base color is the diffuse color, Specular the F0 color and Glossiness 1 - roughness (add these channels in the texture set settings).")
     } else {
-        "Base color, Metallic, Roughness and Specular level."
+        tr("Base color, Metallic, Roughness and Specular level.")
     };
-    ui.label(RichText::new(format!("GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading. {channels} Optional channels add a clear coat (Coat weight, Coat roughness, Coat normal), sheen (Sheen weight, color, roughness), anisotropy (Anisotropy level, angle), subsurface scattering (Scattering weight) and transmission (Transmission).")).color(TOKENS.text_dim));
+    let model_text = tr(
+        "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
+    );
+    let optional = tr(
+        "Optional channels add a clear coat (Coat weight, Coat roughness, Coat normal), sheen (Sheen weight, color, roughness), anisotropy (Anisotropy level, angle), subsurface scattering (Scattering weight) and transmission (Transmission).",
+    );
+    ui.label(RichText::new(format!("{model_text} {channels} {optional}")).color(TOKENS.text_dim));
     ui.add_space(6.0);
-    ui.checkbox(&mut d.parallax, "Parallax occlusion (height channel)")
-        .on_hover_text("Offsets the textures by the height channel, at the height to normal strength");
+    ui.checkbox(&mut d.parallax, tr("Parallax occlusion (height channel)"))
+        .on_hover_text(tr("Offsets the textures by the height channel, at the height to normal strength"));
     ui.add_space(6.0);
-    ui.label(caption("Subsurface scattering"));
+    ui.label(caption(tr("Subsurface scattering")));
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Scatter color").color(TOKENS.text));
+        ui.label(RichText::new(tr("Scatter color")).color(TOKENS.text));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| color_swatch(ui, "shader_scatter_color", &mut d.scatter_color, 44.0))
     })
     .response
-    .on_hover_text("Color of the light that travels under the surface (each channel goes as far as its value)");
-    slider(ui, "Scatter radius", &mut d.scatter_radius, 0.0..=1.0, 3)
-        .on_hover_text("How far light travels under the surface, as a fraction of the mesh size (where the Scattering weight channel is painted)");
+    .on_hover_text(tr("Color of the light that travels under the surface (each channel goes as far as its value)"));
+    slider(ui, tr("Scatter radius"), &mut d.scatter_radius, 0.0..=1.0, 3)
+        .on_hover_text(tr("How far light travels under the surface, as a fraction of the mesh size (where the Scattering weight channel is painted)"));
     ui.add_space(6.0);
-    ui.label(caption("Transmission"));
-    slider(ui, "Index of refraction", &mut d.ior, 1.0..=3.0, 2)
-        .on_hover_text("How strongly transmissive surfaces bend light (where the Transmission channel is painted): water 1.33, glass 1.5, diamond 2.42");
+    ui.label(caption(tr("Transmission")));
+    slider(ui, tr("Index of refraction"), &mut d.ior, 1.0..=3.0, 2)
+        .on_hover_text(tr("How strongly transmissive surfaces bend light (where the Transmission channel is painted): water 1.33, glass 1.5, diamond 2.42"));
     if d != before {
         app.session.doc.project.display = d;
     }
     let ts = app.session.ts();
     if let Some(set) = app.session.doc.project.texture_sets.get(ts) {
         let mut hs = set.height_strength;
-        if slider(ui, "Height to normal strength", &mut hs, 0.0..=10.0, 2).drag_stopped() {
+        if slider(ui, tr("Height to normal strength"), &mut hs, 0.0..=10.0, 2).drag_stopped() {
             app.run("textureSet.settings", json!({"ts": ts, "heightStrength": hs}));
         }
     }
     let mut ao = app.session.doc.project.display.ao_intensity;
-    if slider(ui, "AO intensity", &mut ao, 0.0..=1.0, 2).changed() {
+    if slider(ui, tr("AO intensity"), &mut ao, 0.0..=1.0, 2).changed() {
         app.session.doc.project.display.ao_intensity = ao;
     }
 }
@@ -188,19 +208,19 @@ pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
 pub(crate) fn history(app: &mut TextureCraftApp, ui: &mut Ui) {
     let labels = app.session.history_labels();
     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-        ui.label(RichText::new("Project opened").color(TOKENS.text_dim));
+        ui.label(RichText::new(tr("Project opened")).color(TOKENS.text_dim));
         for l in &labels {
             ui.label(l);
         }
         if let Some(r) = app.session.redo_label() {
-            ui.label(RichText::new(format!("{r} (undone)")).color(TOKENS.text_dim));
+            ui.label(RichText::new(trf("{action} (undone)", &[("action", &r)])).color(TOKENS.text_dim));
         }
     });
     ui.horizontal(|ui| {
-        if ui.add_enabled(app.session.can_undo(), egui::Button::new(format!("{} Undo", ic::ARROW_COUNTER_CLOCKWISE))).clicked() {
+        if ui.add_enabled(app.session.can_undo(), egui::Button::new(format!("{} {}", ic::ARROW_COUNTER_CLOCKWISE, tr("Undo")))).clicked() {
             app.run("edit.undo", json!({}));
         }
-        if ui.add_enabled(app.session.can_redo(), egui::Button::new(format!("{} Redo", ic::ARROW_CLOCKWISE))).clicked() {
+        if ui.add_enabled(app.session.can_redo(), egui::Button::new(format!("{} {}", ic::ARROW_CLOCKWISE, tr("Redo")))).clicked() {
             app.run("edit.redo", json!({}));
         }
     });
@@ -212,43 +232,73 @@ fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
     }
     let mut open = true;
     let mut create = false;
-    egui::Window::new("New project").open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
-        ui.label(caption("Basic settings"));
+    dialog("new_project", tr("New project"), &mut open).show(ctx, |ui| {
+        ui.label(caption(tr("Basic settings")));
         egui::Grid::new("np").num_columns(2).spacing(vec2(12.0, 8.0)).show(ui, |ui| {
-            ui.label("3D mesh");
+            ui.label(tr("3D mesh"));
             ui.horizontal(|ui| {
                 let label = app.ui.new_project.file.clone().unwrap_or_else(|| {
-                    BUILTINS.iter().find(|(id, _)| *id == app.ui.new_project.mesh).map(|(_, l)| format!("Built-in: {l}")).unwrap_or_default()
+                    BUILTINS
+                        .iter()
+                        .find(|(id, _)| *id == app.ui.new_project.mesh)
+                        .map(|(_, l)| trf("Built-in: {mesh}", &[("mesh", &tr(l))]))
+                        .unwrap_or_default()
                 });
                 egui::ComboBox::from_id_salt("np_mesh").width(200.0).selected_text(label).show_ui(ui, |ui| {
                     for (id, l) in BUILTINS {
-                        if ui.selectable_label(app.ui.new_project.mesh == id && app.ui.new_project.file.is_none(), format!("Built-in: {l}")).clicked() {
+                        if ui
+                            .selectable_label(app.ui.new_project.mesh == id && app.ui.new_project.file.is_none(), trf("Built-in: {mesh}", &[("mesh", &tr(l))]))
+                            .clicked()
+                        {
                             app.ui.new_project.mesh = id.to_string();
                             app.ui.new_project.file = None;
                         }
                     }
                 });
-                if file_dialogs_available() && ui.button("Select...").clicked()
-                    && let Some(p) = pick_mesh_file() {
-                        app.ui.new_project.file = Some(p);
-                    }
+                if file_dialogs_available()
+                    && ui.button(tr("Select...")).clicked()
+                    && let Some(p) = pick_mesh_file()
+                {
+                    app.ui.new_project.file = Some(p);
+                }
             });
             ui.end_row();
-            ui.label("Project template");
-            ui.label("PBR - Metallic Roughness (TextureCraft)");
+            ui.label(tr("Project template"));
+            let np = &mut app.ui.new_project;
+            egui::ComboBox::from_id_salt("np_template").width(200.0).selected_text(np.template.clone()).show_ui(ui, |ui| {
+                let user = app.session.templates.list.iter();
+                for t in texturecraft_engine::template_cmds::builtin_templates().iter().chain(user) {
+                    if ui.selectable_label(t.name == np.template, &t.name).clicked() {
+                        np.template = t.name.clone();
+                        np.resolution = t.resolution;
+                    }
+                }
+            });
             ui.end_row();
-            ui.label("Document resolution");
+            ui.label("");
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut app.ui.new_project.template_name).hint_text(tr("Template name")).desired_width(120.0));
+                let name = app.ui.new_project.template_name.trim().to_string();
+                if ui.add_enabled(!name.is_empty(), egui::Button::new(tr("Save current project as template"))).clicked()
+                    && app.run("project.template.save", json!({"name": name})).is_some()
+                {
+                    app.ui.new_project.template = name;
+                    app.ui.new_project.template_name.clear();
+                }
+            });
+            ui.end_row();
+            ui.label(tr("Document resolution"));
             egui::ComboBox::from_id_salt("np_res").selected_text(format!("{0} x {0}", app.ui.new_project.resolution)).show_ui(ui, |ui| {
                 for r in [512u32, 1024, 2048, 4096] {
                     ui.selectable_value(&mut app.ui.new_project.resolution, r, format!("{r} x {r}"));
                 }
             });
             ui.end_row();
-            ui.label("UV tiles (UDIM)");
+            ui.label(tr("UV tiles (UDIM)"));
             let tiles_label = |m: Option<bool>| match m {
-                None => "Automatic (from the mesh UVs)",
-                Some(true) => "On",
-                Some(false) => "Off",
+                None => tr("Automatic (from the mesh UVs)"),
+                Some(true) => tr("On"),
+                Some(false) => tr("Off"),
             };
             egui::ComboBox::from_id_salt("np_tiles").selected_text(tiles_label(app.ui.new_project.uv_tiles)).show_ui(ui, |ui| {
                 for m in [None, Some(true), Some(false)] {
@@ -256,17 +306,17 @@ fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
                 }
             });
             ui.end_row();
-            ui.label("Name");
+            ui.label(tr("Name"));
             ui.text_edit_singleline(&mut app.ui.new_project.name);
             ui.end_row();
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::new(RichText::new("Create").color(Color32::WHITE)).fill(TOKENS.accent)).clicked() {
+                if ui.add(egui::Button::new(RichText::new(tr("Create")).color(Color32::WHITE)).fill(TOKENS.accent)).clicked() {
                     create = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(tr("Cancel")).clicked() {
                     app.ui.windows.new_project = false;
                 }
             });
@@ -274,10 +324,11 @@ fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
     });
     if create {
         let np = app.ui.new_project.clone();
-        let r = match &np.file {
-            Some(path) => app.run("file.new", json!({"mesh": path, "resolution": np.resolution, "name": np.name, "uvTiles": np.uv_tiles})).map(|_| ()),
-            None => app.run("project.new", json!({"mesh": np.mesh, "resolution": np.resolution, "name": np.name, "uvTiles": np.uv_tiles})).map(|_| ()),
+        let (cmd, mesh) = match &np.file {
+            Some(path) => ("file.new", path.clone()),
+            None => ("project.new", np.mesh.clone()),
         };
+        let r = app.run(cmd, json!({"mesh": mesh, "resolution": np.resolution, "name": np.name, "uvTiles": np.uv_tiles, "template": np.template})).map(|_| ());
         if r.is_some() {
             app.ui.windows.new_project = false;
             app.ui.mode = Mode::Painting;
@@ -290,22 +341,52 @@ fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
 
 fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
     let mut open = app.ui.windows.settings;
-    window("Settings", &mut open).default_width(360.0).show(ctx, |ui| {
+    // A language whose script no font draws is listed by its English name and disabled.
+    let drawable = LANGUAGES.each_ref().map(|l| crate::fonts::Script::of_language(l.code).is_none_or(|s| app.fonts.covers(s)));
+    window("settings", tr("Settings"), &mut open).default_width(360.0).show(ctx, |ui| {
         let p = &mut app.ui.prefs;
-        ui.label(caption("Interface"));
-        slider(ui, "Interface scale", &mut p.ui_scale, 0.75..=2.0, 2);
+        ui.label(caption(tr("Interface")));
+        ui.horizontal(|ui| {
+            ui.label(tr("Language"));
+            let current = crate::i18n::current();
+            egui::ComboBox::from_id_salt("language").width(180.0).height(320.0).selected_text(current.name).show_ui(ui, |ui| {
+                for (l, ok) in LANGUAGES.iter().zip(drawable) {
+                    let item = egui::Button::selectable(l.code == current.code, if ok { l.name } else { l.english });
+                    if ui.add_enabled(ok, item).on_disabled_hover_text(tr("No font on this system can show this language")).clicked() {
+                        p.language = l.code.to_owned();
+                    }
+                }
+            });
+        });
+        slider(ui, tr("Interface scale"), &mut p.ui_scale, 0.75..=2.0, 2);
+        ui.add_space(6.0);
+        ui.label(caption(tr("Viewport")));
+        ui.horizontal(|ui| {
+            ui.label(tr("Texture resolution"));
+            for (v, l) in [(0u8, tr("Full")), (1, tr("Half")), (2, tr("Quarter"))] {
+                ui.selectable_value(&mut p.viewport_texture, v, l);
+            }
+        })
+        .response
+        .on_hover_text(tr(
+            "Size of the textures the viewport shows: lower uses less GPU memory with large texture sets. Painting and export keep full resolution.",
+        ));
         ui.add_space(6.0);
         #[cfg(not(target_arch = "wasm32"))]
         {
-            ui.label(caption("Project"));
+            ui.label(caption(tr("Project")));
             ui.horizontal(|ui| {
-                ui.label("Autosave every");
-                ui.add(egui::DragValue::new(&mut p.autosave_minutes).range(0..=120).suffix(" min"));
+                ui.label(tr("Autosave every"));
+                ui.add(egui::DragValue::new(&mut p.autosave_minutes).range(0..=120).suffix(format!(" {}", tr("min"))));
             });
-            ui.label(RichText::new(format!("0 turns autosave off. Copies go to {}", crate::user_dir("autosave").display())).size(10.5).color(TOKENS.text_dim));
+            ui.label(
+                RichText::new(trf("0 turns autosave off. Copies go to {folder}", &[("folder", &crate::user_dir("autosave").display())]))
+                    .size(10.5)
+                    .color(TOKENS.text_dim),
+            );
             ui.add_space(6.0);
-            ui.label(caption("Folders"));
-            for (label, dir) in [("Smart materials", crate::library_dir()), ("UI layouts", crate::user_dir("layouts"))] {
+            ui.label(caption(tr("Folders")));
+            for (label, dir) in [(tr("Smart materials"), crate::library_dir()), (tr("UI layouts"), crate::user_dir("layouts"))] {
                 ui.horizontal(|ui| {
                     ui.label(label);
                     ui.label(RichText::new(dir.display().to_string()).size(10.5).color(TOKENS.text_dim));
@@ -313,8 +394,8 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
             }
             ui.add_space(6.0);
         }
-        ui.label(caption("Keyboard"));
-        if ui.button("Edit keyboard shortcuts...").on_hover_text("Rebind any menu item, tool or command").clicked() {
+        ui.label(caption(tr("Keyboard")));
+        if ui.button(tr("Edit keyboard shortcuts...")).on_hover_text(tr("Rebind any menu item, tool or command")).clicked() {
             app.ui.windows.shortcuts = true;
         }
     });
@@ -325,19 +406,19 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
 /// dialog).
 #[cfg(target_arch = "wasm32")]
 fn export_mesh(app: &mut TextureCraftApp, ctx: &egui::Context) {
-    const FORMATS: [(&str, &str, &str); 3] = [
-        ("glb", "glTF binary (.glb)", "Textures embedded; for game engines and most viewers"),
-        ("usdz", "USDZ (.usdz)", "Textures packaged; for USD tools and AR Quick Look"),
-        ("obj", "Wavefront OBJ (.obj)", "Geometry and UVs only"),
+    let formats = [
+        ("glb", "glTF binary (.glb)", tr("Textures embedded; for game engines and most viewers")),
+        ("usdz", "USDZ (.usdz)", tr("Textures packaged; for USD tools and AR Quick Look")),
+        ("obj", "Wavefront OBJ (.obj)", tr("Geometry and UVs only")),
     ];
     if !app.ui.windows.export_mesh {
         return;
     }
     let mut open = true;
     let mut picked = None;
-    egui::Window::new("Export mesh").open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
-        ui.label(caption("Download as"));
-        for (ext, label, hint) in FORMATS {
+    dialog("export_mesh", tr("Export mesh"), &mut open).show(ctx, |ui| {
+        ui.label(caption(tr("Download as")));
+        for (ext, label, hint) in formats {
             if ui.add_sized(vec2(220.0, 24.0), egui::Button::new(label)).on_hover_text(hint).clicked() {
                 picked = Some(ext);
             }
@@ -352,23 +433,20 @@ fn export_mesh(app: &mut TextureCraftApp, ctx: &egui::Context) {
 
 fn about(app: &mut TextureCraftApp, ctx: &egui::Context) {
     let mut open = app.ui.windows.about;
-    egui::Window::new("About TextureCraft").open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(
-        ctx,
-        |ui| {
-            ui.vertical_centered(|ui| {
-                ui.label(RichText::new("TextureCraft").size(22.0).strong().color(TOKENS.text_strong));
-                ui.label(format!("Version {}", texturecraft_engine::VERSION));
-                ui.add_space(6.0);
-                ui.label("3D texture painting: layers, masks, smart materials, mesh map baking and export.");
-                ui.label("Free and open source (MIT OR Apache-2.0), written in Rust.");
-                ui.add_space(6.0);
-                ui.hyperlink_to("Join the ArtCraft community on Discord", "https://discord.gg/artcraft");
-                ui.hyperlink_to("getartcraft.com/apps/texturecraft", "https://getartcraft.com/apps/texturecraft");
-                ui.add_space(6.0);
-                ui.label(RichText::new("Made by the ArtCraft team and community.").color(TOKENS.text_dim));
-            });
-        },
-    );
+    dialog("about", tr("About TextureCraft"), &mut open).show(ctx, |ui| {
+        ui.vertical_centered(|ui| {
+            ui.label(RichText::new("TextureCraft").size(22.0).strong().color(TOKENS.text_strong));
+            ui.label(trf("Version {version}", &[("version", &texturecraft_engine::VERSION)]));
+            ui.add_space(6.0);
+            ui.label(tr("3D texture painting: layers, masks, smart materials, mesh map baking and export."));
+            ui.label(tr("Free and open source (MIT OR Apache-2.0), written in Rust."));
+            ui.add_space(6.0);
+            ui.hyperlink_to(tr("Join the ArtCraft community on Discord"), "https://discord.gg/artcraft");
+            ui.hyperlink_to("getartcraft.com/apps/texturecraft", "https://getartcraft.com/apps/texturecraft");
+            ui.add_space(6.0);
+            ui.label(RichText::new(tr("Made by the ArtCraft team and community.")).color(TOKENS.text_dim));
+        });
+    });
     app.ui.windows.about = open;
 }
 
@@ -398,12 +476,12 @@ pub fn bake_body(app: &mut TextureCraftApp, ui: &mut Ui) {
 }
 
 fn bake_panel(app: &mut TextureCraftApp, ui: &mut Ui) {
-    ui.label(caption("Texture set list"));
+    ui.label(caption(tr("Texture set list")));
     for i in 0..app.session.set_count() {
         let Some(t) = app.session.doc.project.texture_sets.get(i) else { continue };
         let (name, res, mut on) = (t.name.clone(), t.bake.resolution, t.bake.enabled);
         ui.horizontal(|ui| {
-            if ui.checkbox(&mut on, "").on_hover_text("Bake with \"Bake selected textures\"").changed() {
+            if ui.checkbox(&mut on, "").on_hover_text(tr("Bake with \"Bake selected textures\"")).changed() {
                 app.run("bake.settings", json!({ "ts": i, "enabled": on }));
             }
             if ui.selectable_label(i == app.session.ts(), format!("{name}  ({res}x{res})")).clicked() {
@@ -415,11 +493,9 @@ fn bake_panel(app: &mut TextureCraftApp, ui: &mut Ui) {
     let ts = app.session.ts();
     let Some(before) = app.session.doc.project.texture_sets.get(ts).map(|t| t.bake.clone()) else { return };
     let mut b = before.clone();
-    // The selected baker entry: None = common parameters.
-    let sel_id = egui::Id::new("bake_selected_baker");
-    let mut selected: Option<BakedMap> = ui.data(|d| d.get_temp(sel_id)).flatten();
-    ui.label(caption("Mesh map bakers"));
-    if ui.selectable_label(selected.is_none(), format!("{}  Common parameters", ic::GEAR)).clicked() {
+    let mut selected = app.ui.bake_baker;
+    ui.label(caption(tr("Mesh map bakers")));
+    if ui.selectable_label(selected.is_none(), format!("{}  {}", ic::GEAR, tr("Common parameters"))).clicked() {
         selected = None;
     }
     for m in BakedMap::ALL {
@@ -432,12 +508,12 @@ fn bake_panel(app: &mut TextureCraftApp, ui: &mut Ui) {
                     b.maps.remove(&m);
                 }
             }
-            if ui.selectable_label(selected == Some(m), m.label()).clicked() {
+            if ui.selectable_label(selected == Some(m), tr(m.label())).clicked() {
                 selected = Some(m);
             }
         });
     }
-    ui.data_mut(|d| d.insert_temp(sel_id, selected));
+    app.ui.bake_baker = selected;
     ui.separator();
     match selected {
         None => common_params(app, ui, &mut b),
@@ -458,92 +534,84 @@ fn hint(ui: &mut Ui, text: &str) {
 }
 
 fn common_params(app: &mut TextureCraftApp, ui: &mut Ui, b: &mut BakeSettings) {
-    ui.label(caption("Common parameters"));
-    egui::ComboBox::from_label("Output size").selected_text(format!("{}", b.resolution)).show_ui(ui, |ui| {
+    ui.label(caption(tr("Common parameters")));
+    egui::ComboBox::from_label(tr("Output size")).selected_text(format!("{}", b.resolution)).show_ui(ui, |ui| {
         for r in [256u32, 512, 1024, 2048, 4096, 8192] {
             ui.selectable_value(&mut b.resolution, r, format!("{r}"));
         }
     });
-    egui::ComboBox::from_label("Antialiasing")
+    egui::ComboBox::from_label(tr("Antialiasing"))
         .selected_text(match b.antialiasing {
-            2 => "Subsampling 2x2",
-            4 => "Subsampling 4x4",
-            8 => "Subsampling 8x8",
-            _ => "None",
+            2 => tr("Subsampling 2x2"),
+            4 => tr("Subsampling 4x4"),
+            8 => tr("Subsampling 8x8"),
+            _ => tr("None"),
         })
         .show_ui(ui, |ui| {
-            for (v, l) in [(1u32, "None"), (2, "Subsampling 2x2"), (4, "Subsampling 4x4"), (8, "Subsampling 8x8")] {
+            for (v, l) in [(1u32, tr("None")), (2, tr("Subsampling 2x2")), (4, tr("Subsampling 4x4")), (8, tr("Subsampling 8x8"))] {
                 ui.selectable_value(&mut b.antialiasing, v, l);
             }
         });
     let mut dil = b.dilation as f32;
-    if slider(ui, "Dilation width", &mut dil, 0.0..=64.0, 0).changed() {
+    if slider(ui, tr("Dilation width"), &mut dil, 0.0..=64.0, 0).changed() {
         b.dilation = dil as u32;
     }
 
     ui.add_space(6.0);
-    ui.label(RichText::new("High definition meshes").strong().color(TOKENS.text_strong));
+    ui.label(RichText::new(tr("High definition meshes")).strong().color(TOKENS.text_strong));
     let ctx = ui.ctx().clone();
     let highs: Vec<(String, usize)> = app.session.bake_meshes.high.iter().map(|h| (h.name.clone(), h.mesh.triangle_count())).collect();
     let mut remove = None;
     for (i, (name, tris)) in highs.iter().enumerate() {
         ui.horizontal(|ui| {
-            ui.label(format!("{name}  ({tris} triangles)"));
+            ui.label(trf("{name}  ({n} triangles)", &[("name", name), ("n", tris)]));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if icon_button(ui, ic::TRASH, "Remove", false, 18.0).clicked() {
+                if icon_button(ui, ic::TRASH, tr("Remove"), false, 18.0).clicked() {
                     remove = Some(i);
                 }
             });
         });
     }
     if highs.is_empty() {
-        hint(ui, "None: the low poly is its own high poly.");
+        hint(ui, tr("None: the low poly is its own high poly."));
     }
     if let Some(i) = remove {
         app.run("bake.highPoly.remove", json!({ "index": i }));
     }
-    if ui.button(format!("{}  Add high definition meshes", ic::PLUS)).clicked() {
+    if ui.button(format!("{}  {}", ic::PLUS, tr("Add high definition meshes"))).clicked() {
         crate::web_files::import_bake_mesh(app, &ctx, false);
     }
-    ui.checkbox(&mut b.use_low_as_high, "Use low poly mesh as high poly mesh");
-    egui::ComboBox::from_label("Match")
-        .selected_text(match b.matching {
-            BakeMatch::Always => "Always",
-            BakeMatch::ByMeshName => "By mesh name",
-        })
-        .show_ui(ui, |ui| {
-            ui.selectable_value(&mut b.matching, BakeMatch::Always, "Always");
-            ui.selectable_value(&mut b.matching, BakeMatch::ByMeshName, "By mesh name");
-        });
+    ui.checkbox(&mut b.use_low_as_high, tr("Use low poly mesh as high poly mesh"));
+    choice(ui, tr("Match"), &mut b.matching, &[(BakeMatch::Always, tr("Always")), (BakeMatch::ByMeshName, tr("By mesh name"))]);
     if b.matching == BakeMatch::ByMeshName {
-        for (label, suffix) in [("Low poly mesh suffix", &mut b.low_suffix), ("High poly mesh suffix", &mut b.high_suffix)] {
+        for (label, suffix) in [(tr("Low poly mesh suffix"), &mut b.low_suffix), (tr("High poly mesh suffix"), &mut b.high_suffix)] {
             ui.horizontal(|ui| {
                 ui.label(label);
                 ui.add(egui::TextEdit::singleline(suffix).desired_width(80.0));
             });
         }
     }
-    slider(ui, "Max frontal distance", &mut b.max_frontal, 0.0..=0.2, 3);
-    slider(ui, "Max rear distance", &mut b.max_rear, 0.0..=0.2, 3);
-    hint(ui, "Relative to the bounding box diagonal.");
-    ui.checkbox(&mut b.average_normals, "Average normals");
+    slider(ui, tr("Max frontal distance"), &mut b.max_frontal, 0.0..=0.2, 3);
+    slider(ui, tr("Max rear distance"), &mut b.max_rear, 0.0..=0.2, 3);
+    hint(ui, tr("Relative to the bounding box diagonal."));
+    ui.checkbox(&mut b.average_normals, tr("Average normals"));
 
     ui.add_space(6.0);
     let cage = app.session.bake_meshes.cage.as_ref().map(|c| c.name.clone());
     ui.horizontal(|ui| {
-        ui.label(format!("Cage: {}", cage.as_deref().unwrap_or("none")));
+        ui.label(trf("Cage: {name}", &[("name", &cage.as_deref().unwrap_or(tr("none")))]));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if cage.is_some() && icon_button(ui, ic::TRASH, "Remove the cage", false, 18.0).clicked() {
+            if cage.is_some() && icon_button(ui, ic::TRASH, tr("Remove the cage"), false, 18.0).clicked() {
                 app.run("bake.cage.clear", json!({}));
             }
-            if icon_button(ui, ic::FOLDER_OPEN, "Load a cage (the low poly, inflated)", false, 18.0).clicked() {
+            if icon_button(ui, ic::FOLDER_OPEN, tr("Load a cage (the low poly, inflated)"), false, 18.0).clicked() {
                 crate::web_files::import_bake_mesh(app, &ctx, true);
             }
         });
     });
 
     ui.add_space(6.0);
-    if ui.button("Apply to all texture sets").on_hover_text("Copy these bake settings to every texture set").clicked() {
+    if ui.button(tr("Apply to all texture sets")).on_hover_text(tr("Copy these bake settings to every texture set")).clicked() {
         let mut p = bake_cmds::settings_params(b);
         p["ts"] = "all".into();
         if let Some(o) = p.as_object_mut() {
@@ -553,35 +621,86 @@ fn common_params(app: &mut TextureCraftApp, ui: &mut Ui, b: &mut BakeSettings) {
     }
 }
 
+/// A combo box picking one of `options` (value, label).
+fn choice<T: Copy + PartialEq>(ui: &mut Ui, label: &str, value: &mut T, options: &[(T, &str)]) {
+    let shown = options.iter().find(|(v, _)| v == value).map_or("", |(_, l)| *l);
+    egui::ComboBox::from_label(label).selected_text(shown).show_ui(ui, |ui| {
+        for (v, l) in options {
+            ui.selectable_value(value, *v, *l);
+        }
+    });
+}
+
+/// Ray count and length of a secondary-ray map; its cone too when `cone`.
+fn ray_params(ui: &mut Ui, r: &mut RaySettings, cone: bool) {
+    let mut rays = r.rays as f32;
+    if slider(ui, tr("Secondary rays"), &mut rays, 4.0..=256.0, 0).changed() {
+        r.rays = rays as u32;
+    }
+    slider(ui, tr("Max occluder distance"), &mut r.max_distance, 0.01..=1.0, 2);
+    if cone {
+        slider(ui, tr("Spread angle"), &mut r.spread, 0.0..=180.0, 0);
+    }
+}
+
 fn map_params(ui: &mut Ui, m: BakedMap, b: &mut BakeSettings) {
-    ui.label(caption(m.label()));
+    ui.label(caption(tr(m.label())));
     match m {
-        BakedMap::AmbientOcclusion | BakedMap::Thickness | BakedMap::BentNormal => {
-            let mut rays = b.rays as f32;
-            if slider(ui, "Secondary rays", &mut rays, 4.0..=256.0, 0).changed() {
-                b.rays = rays as u32;
-            }
-            slider(ui, "Max occluder distance", &mut b.max_distance, 0.01..=1.0, 2);
-            hint(ui, "Shared by ambient occlusion, thickness and bent normals.");
+        BakedMap::AmbientOcclusion => {
+            ray_params(ui, &mut b.ao, true);
+            choice(ui, tr("Distribution"), &mut b.ao.distribution, &[(RayDistribution::Cosine, tr("Cosine")), (RayDistribution::Uniform, tr("Uniform"))]);
+            ui.checkbox(&mut b.ao_ignore_backface, tr("Ignore backface"));
+            choice(
+                ui,
+                tr("Self occlusion"),
+                &mut b.ao_self_occlusion,
+                &[(SelfOcclusion::Always, tr("Always")), (SelfOcclusion::SameMeshName, tr("Only same mesh name"))],
+            );
+        }
+        BakedMap::Thickness => ray_params(ui, &mut b.thickness, true),
+        BakedMap::BentNormal => {
+            ray_params(ui, &mut b.bent_normal, false);
+            hint(ui, tr("Bent normal rays follow the ambient occlusion's occluder settings."));
         }
         BakedMap::Curvature => {
-            slider(ui, "Strength", &mut b.curvature_strength, 0.1..=4.0, 2);
-            ui.checkbox(&mut b.curvature_from_normal, "From normal map");
-            hint(ui, "From normal map: curvature of the baked normal map's detail instead of the mesh.");
+            slider(ui, tr("Strength"), &mut b.curvature_strength, 0.1..=4.0, 2);
+            ui.checkbox(&mut b.curvature_from_normal, tr("From normal map"));
+            if b.curvature_from_normal {
+                let mut radius = b.curvature_radius as f32;
+                if slider(ui, tr("Sampling radius"), &mut radius, 0.0..=16.0, 0).changed() {
+                    b.curvature_radius = radius as u32;
+                }
+                hint(ui, tr("0 picks a radius from the output size."));
+            }
+            hint(ui, tr("From normal map: curvature of the baked normal map's detail instead of the mesh."));
         }
         BakedMap::WorldDirection => {
             for (axis, v) in ["X", "Y", "Z"].iter().zip(b.direction.iter_mut()) {
-                slider(ui, &format!("Direction {axis}"), v, -1.0..=1.0, 2);
+                slider(ui, &trf("Direction {axis}", &[("axis", axis)]), v, -1.0..=1.0, 2);
             }
-            hint(ui, "White where the surface faces the direction, black where it faces away.");
+            choice(
+                ui,
+                tr("Encoding"),
+                &mut b.direction_mode,
+                &[(DirectionMode::Signed, tr("Signed (-1..1)")), (DirectionMode::Positive, tr("Positive (0..1)"))],
+            );
+            hint(ui, tr("White where the surface faces the direction, black where it faces away."));
         }
-        BakedMap::Normal => hint(ui, "Tangent-space normals of the high definition meshes."),
-        BakedMap::WorldNormal => hint(ui, "World-space normals of the high poly (or the low poly)."),
-        BakedMap::Id => hint(ui, "One color per mesh part."),
-        BakedMap::Position => hint(ui, "Position in the low poly's bounding box."),
-        BakedMap::Height => hint(ui, "High poly height between the max rear (black) and max frontal (white) distances."),
-        BakedMap::Opacity => hint(ui, "White where the high poly covers the low poly, times its vertex alpha."),
-        BakedMap::ColorMap => hint(ui, "Vertex colors of the high definition meshes."),
+        BakedMap::Position => {
+            choice(
+                ui,
+                tr("Normalization"),
+                &mut b.position_mode,
+                &[(PositionMode::BoundingBox, tr("Bounding box")), (PositionMode::BoundingSphere, tr("Bounding sphere"))],
+            );
+            hint(ui, tr("Position normalized to the low poly's bounding box or sphere."));
+        }
+        BakedMap::Normal => hint(ui, tr("Tangent-space normals of the high definition meshes.")),
+        BakedMap::WorldNormal => hint(ui, tr("World-space normals of the high poly (or the low poly).")),
+        BakedMap::Id => hint(ui, tr("One color per mesh part.")),
+        BakedMap::Height => hint(ui, tr("High poly height between the max rear (black) and max frontal (white) distances.")),
+        BakedMap::Opacity => hint(ui, tr("White where the high poly covers the low poly, times its alpha.")),
+        BakedMap::ColorMap => hint(ui, tr("Base colors (textures, factors) and vertex colors of the high definition meshes.")),
     }
 }
 
@@ -590,17 +709,17 @@ fn bake_bar(app: &mut TextureCraftApp, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             if let Some(p) = app.bake_progress() {
                 ui.add(egui::ProgressBar::new(p).desired_width(220.0).show_percentage());
-                if ui.button("Cancel").clicked() {
+                if ui.button(tr("Cancel")).clicked() {
                     app.cancel_bake();
                 }
             } else {
                 let sets: Vec<usize> = app.session.doc.project.texture_sets.iter().enumerate().filter(|(_, t)| t.bake.enabled).map(|(i, _)| i).collect();
-                let label = RichText::new(format!("Bake selected textures ({})", sets.len())).color(Color32::WHITE);
+                let label = RichText::new(trf("Bake selected textures ({n})", &[("n", &sets.len())])).color(Color32::WHITE);
                 if ui.add_enabled(!sets.is_empty(), egui::Button::new(label).fill(TOKENS.accent)).clicked() {
                     app.start_bake(sets);
                 }
             }
-            if ui.button("Return to painting mode").clicked() {
+            if ui.button(tr("Return to painting mode")).clicked() {
                 app.ui.mode = Mode::Painting;
             }
         });
@@ -616,7 +735,7 @@ pub fn file_dialogs_available() -> bool {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn pick_mesh_file() -> Option<String> {
-    rfd::FileDialog::new().add_filter("3D meshes", &texturecraft_engine::formats::mesh_import::MESH_EXTENSIONS).pick_file().map(|p| p.display().to_string())
+    rfd::FileDialog::new().add_filter(tr("3D meshes"), &texturecraft_engine::formats::mesh_import::MESH_EXTENSIONS).pick_file().map(|p| p.display().to_string())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -635,7 +754,7 @@ pub fn remember(app: &mut TextureCraftApp, path: &str) {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn layout_file(app: &mut TextureCraftApp, save: bool) {
     let dir = crate::user_dir("layouts");
-    let dialog = rfd::FileDialog::new().add_filter("UI layout", &["json"]).set_directory(&dir);
+    let dialog = rfd::FileDialog::new().add_filter(tr("UI layout"), &["json"]).set_directory(&dir);
     let result = if save {
         let Some(path) = dialog.set_file_name("layout.json").save_file() else { return };
         let layout = crate::UiState { recent: Vec::new(), ..app.ui.clone() };
@@ -643,27 +762,26 @@ pub fn layout_file(app: &mut TextureCraftApp, save: bool) {
             .map_err(|e| e.to_string())
             .and_then(|_| serde_json::to_vec_pretty(&layout).map_err(|e| e.to_string()))
             .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()))
-            .map(|_| format!("Saved UI layout {}", path.display()))
+            .map(|_| trf("Saved UI layout {path}", &[("path", &path.display())]))
     } else {
         let Some(path) = dialog.pick_file() else { return };
-        std::fs::read(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|bytes| serde_json::from_slice::<crate::UiState>(&bytes).map_err(|e| e.to_string()))
-            .map(|layout| {
+        std::fs::read(&path).map_err(|e| e.to_string()).and_then(|bytes| serde_json::from_slice::<crate::UiState>(&bytes).map_err(|e| e.to_string())).map(
+            |layout| {
                 app.ui.adopt_layout(layout);
-                format!("Loaded UI layout {}", path.display())
-            })
+                trf("Loaded UI layout {path}", &[("path", &path.display())])
+            },
+        )
     };
     match result {
         Ok(msg) => app.toast(msg, false),
-        Err(e) => app.toast(format!("UI layout: {e}"), true),
+        Err(e) => app.toast(trf("UI layout: {error}", &[("error", &e)]), true),
     }
 }
 
 /// The browser has no file paths; layouts persist with the rest of the UI state.
 #[cfg(target_arch = "wasm32")]
 pub fn layout_file(app: &mut TextureCraftApp, _save: bool) {
-    app.toast("Saving UI layouts to files is available in the desktop app", false);
+    app.toast(tr("Saving UI layouts to files is available in the desktop app"), false);
 }
 
 /// File menu actions that need dialogs. Returns true when handled.
@@ -671,7 +789,7 @@ pub fn layout_file(app: &mut TextureCraftApp, _save: bool) {
 pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) -> bool {
     match id {
         "file.open" => {
-            let pick = rfd::FileDialog::new().add_filter("TextureCraft project or mesh", crate::web_files::OPEN_EXTS).pick_file();
+            let pick = rfd::FileDialog::new().add_filter(tr("TextureCraft project or mesh"), crate::web_files::OPEN_EXTS).pick_file();
             if let Some(p) = pick {
                 open_path(app, &p.display().to_string());
             }
@@ -680,28 +798,30 @@ pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) ->
         "file.save" if app.session.path.is_some() => {
             if let Some(r) = app.run("file.save", json!({})) {
                 let p = r.get("path").and_then(|p| p.as_str()).unwrap_or_default().to_string();
-                app.toast(format!("Saved {p}"), false);
+                app.toast(trf("Saved {path}", &[("path", &p)]), false);
             }
             true
         }
         "file.save" | "file.saveAs" | "file.saveCopy" => {
             let name = crate::web_files::project_file_name(app);
-            if let Some(p) = rfd::FileDialog::new().add_filter("TextureCraft project", &[texturecraft_engine::core::PROJECT_EXT]).set_file_name(name).save_file() {
+            if let Some(p) =
+                rfd::FileDialog::new().add_filter(tr("TextureCraft project"), &[texturecraft_engine::core::PROJECT_EXT]).set_file_name(name).save_file()
+            {
                 let path = p.display().to_string();
                 let cmd = if id == "file.saveCopy" { "file.saveCopy" } else { "file.saveAs" };
                 if app.run(cmd, json!({"path": path})).is_some() {
                     remember(app, &path);
-                    app.toast(format!("Saved {path}"), false);
+                    app.toast(trf("Saved {path}", &[("path", &path)]), false);
                 }
             }
             true
         }
         "file.importResources" | "resource.import" => {
-            let picks = rfd::FileDialog::new().add_filter("Images", crate::web_files::IMAGE_EXTS).pick_files();
+            let picks = rfd::FileDialog::new().add_filter(tr("Images"), crate::web_files::IMAGE_EXTS).pick_files();
             for p in picks.unwrap_or_default() {
                 if let Some(r) = app.run("resource.import", json!({"path": p.display().to_string()})) {
                     let name = r.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
-                    app.toast(format!("Imported {name}"), false);
+                    app.toast(trf("Imported {name}", &[("name", &name)]), false);
                 }
             }
             app.ui.dock.focus(crate::docking::Panel::Assets, _ctx.content_rect());
@@ -711,23 +831,29 @@ pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) ->
             let name = format!("{}.obj", texturecraft_engine::formats::export::sanitize_file_stem(&app.session.doc.project.name));
             if let Some(p) = rfd::FileDialog::new()
                 .add_filter("Wavefront OBJ", &["obj"])
-                .add_filter("glTF binary with textures", &["glb"])
-                .add_filter("USDZ with textures", &["usdz"])
-                .add_filter("USD text, textures alongside", &["usda"])
-                .add_filter("USD binary, textures alongside", &["usdc"])
+                .add_filter(tr("glTF binary with textures"), &["glb"])
+                .add_filter(tr("USDZ with textures"), &["usdz"])
+                .add_filter(tr("USD text, textures alongside"), &["usda"])
+                .add_filter(tr("USD binary, textures alongside"), &["usdc"])
                 .set_file_name(name)
                 .save_file()
                 && let Some(r) = app.run("file.exportMesh", json!({"path": p.display().to_string()}))
             {
                 let p = r.get("path").and_then(|p| p.as_str()).unwrap_or_default().to_string();
-                app.toast(format!("Exported mesh to {p}"), false);
+                app.toast(trf("Exported mesh to {path}", &[("path", &p)]), false);
             }
             true
         }
-        "file.reimportMesh" if app.session.mesh_source.is_none() => {
-            if let Some(p) = rfd::FileDialog::new().add_filter("3D meshes", &texturecraft_engine::formats::mesh_import::MESH_EXTENSIONS).pick_file() {
-                app.run("file.reimportMesh", json!({"path": p.display().to_string()}));
-            }
+        "file.reimportMesh" => {
+            // Painted strokes follow the surface when the new mesh's UVs differ.
+            let path = match app.session.mesh_source {
+                Some(_) => None,
+                None => match rfd::FileDialog::new().add_filter(tr("3D meshes"), &texturecraft_engine::formats::mesh_import::MESH_EXTENSIONS).pick_file() {
+                    Some(p) => Some(p.display().to_string()),
+                    None => return true,
+                },
+            };
+            app.run("file.reimportMesh", json!({"path": path, "preserveStrokes": true}));
             true
         }
         _ => false,
@@ -774,7 +900,7 @@ fn export_sets(app: &mut TextureCraftApp) -> bool {
             None => return false,
         }
     }
-    app.toast(format!("Exported {written} textures to {}", app.ui.export.dir), false);
+    app.toast(trf("Exported {n} textures to {folder}", &[("n", &written), ("folder", &app.ui.export.dir)]), false);
     true
 }
 
@@ -805,12 +931,12 @@ pub(crate) fn export_params(app: &TextureCraftApp) -> serde_json::Value {
 }
 
 fn export_settings_tab(app: &mut TextureCraftApp, ui: &mut Ui, presets: &[texturecraft_engine::formats::ExportPreset]) {
-    ui.label(caption("General export parameters"));
+    ui.label(caption(tr("General export parameters")));
     egui::Grid::new("exp_grid").num_columns(2).spacing(vec2(12.0, 8.0)).show(ui, |ui| {
         // The browser downloads the files instead.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            ui.label("Output directory");
+            ui.label(tr("Output directory"));
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut app.ui.export.dir).desired_width(360.0));
                 if ui.button("...").clicked()
@@ -821,7 +947,7 @@ fn export_settings_tab(app: &mut TextureCraftApp, ui: &mut Ui, presets: &[textur
             });
             ui.end_row();
         }
-        ui.label("Output template");
+        ui.label(tr("Output template"));
         egui::ComboBox::from_id_salt("exp_preset").width(360.0).selected_text(app.ui.export.preset.clone()).show_ui(ui, |ui| {
             for p in presets {
                 ui.selectable_value(&mut app.ui.export.preset, p.name.clone(), &p.name);
@@ -834,42 +960,52 @@ fn export_settings_tab(app: &mut TextureCraftApp, ui: &mut Ui, presets: &[textur
             }
         });
         ui.end_row();
-        ui.label("File type");
+        ui.label(tr("File type"));
         ui.horizontal(|ui| {
-            let label = if app.ui.export.format.is_empty() { "From template".to_string() } else { app.ui.export.format.clone() };
+            let label = if app.ui.export.format.is_empty() { tr("From template").to_string() } else { app.ui.export.format.clone() };
             egui::ComboBox::from_id_salt("exp_fmt").selected_text(label).show_ui(ui, |ui| {
-                ui.selectable_value(&mut app.ui.export.format, String::new(), "From template");
+                ui.selectable_value(&mut app.ui.export.format, String::new(), tr("From template"));
                 for f in ["png", "jpeg", "tga", "tiff", "bmp", "webp", "exr", "hdr"] {
                     ui.selectable_value(&mut app.ui.export.format, f.to_string(), f);
                 }
             });
-            let bd = if app.ui.export.bit_depth == 0 { "Default".to_string() } else { format!("{} bits", app.ui.export.bit_depth) };
+            let bd = if app.ui.export.bit_depth == 0 { tr("Default").to_string() } else { trf("{n} bits", &[("n", &app.ui.export.bit_depth)]) };
             egui::ComboBox::from_id_salt("exp_bits").selected_text(bd).show_ui(ui, |ui| {
-                for (v, l) in [(0u8, "Default"), (8, "8 bits"), (16, "16 bits"), (32, "32 bits (float)")] {
+                for (v, l) in [
+                    (0u8, tr("Default").to_string()),
+                    (8, trf("{n} bits", &[("n", &8)])),
+                    (16, trf("{n} bits", &[("n", &16)])),
+                    (32, tr("32 bits (float)").to_string()),
+                ] {
                     ui.selectable_value(&mut app.ui.export.bit_depth, v, l);
                 }
             });
         });
         ui.end_row();
-        ui.label("Size");
-        let sz = if app.ui.export.size == 0 { "Based on each texture set's size".to_string() } else { format!("{0} x {0}", app.ui.export.size) };
+        ui.label(tr("Size"));
+        let sz = if app.ui.export.size == 0 { tr("Based on each texture set's size").to_string() } else { format!("{0} x {0}", app.ui.export.size) };
         egui::ComboBox::from_id_salt("exp_size").width(360.0).selected_text(sz).show_ui(ui, |ui| {
-            ui.selectable_value(&mut app.ui.export.size, 0, "Based on each texture set's size");
+            ui.selectable_value(&mut app.ui.export.size, 0, tr("Based on each texture set's size"));
             for r in [256u32, 512, 1024, 2048, 4096, 8192] {
                 ui.selectable_value(&mut app.ui.export.size, r, format!("{r} x {r}"));
             }
         });
         ui.end_row();
-        ui.label("Padding");
+        ui.label(tr("Padding"));
         ui.horizontal(|ui| {
             let label = match app.ui.export.padding.as_str() {
-                "none" => "No padding (passthrough)",
-                "dilation" => "Dilation + transparent",
-                "dilationDefault" => "Dilation + default background color",
-                _ => "Dilation infinite",
+                "none" => tr("No padding (passthrough)"),
+                "dilation" => tr("Dilation + transparent"),
+                "dilationDefault" => tr("Dilation + default background color"),
+                _ => tr("Dilation infinite"),
             };
             egui::ComboBox::from_id_salt("exp_pad").width(260.0).selected_text(label).show_ui(ui, |ui| {
-                for (v, l) in [("infinite", "Dilation infinite"), ("dilation", "Dilation + transparent"), ("dilationDefault", "Dilation + default background color"), ("none", "No padding (passthrough)")] {
+                for (v, l) in [
+                    ("infinite", tr("Dilation infinite")),
+                    ("dilation", tr("Dilation + transparent")),
+                    ("dilationDefault", tr("Dilation + default background color")),
+                    ("none", tr("No padding (passthrough)")),
+                ] {
                     ui.selectable_value(&mut app.ui.export.padding, v.to_string(), l);
                 }
             });
@@ -878,14 +1014,14 @@ fn export_settings_tab(app: &mut TextureCraftApp, ui: &mut Ui, presets: &[textur
             }
         });
         ui.end_row();
-        ui.label("Normal map format");
+        ui.label(tr("Normal map format"));
         let nf = match app.ui.export.normal_format.as_str() {
             "openGl" => "OpenGL",
             "directX" => "DirectX",
-            _ => "From template / project",
+            _ => tr("From template / project"),
         };
         egui::ComboBox::from_id_salt("exp_nf").selected_text(nf).show_ui(ui, |ui| {
-            for (v, l) in [("", "From template / project"), ("openGl", "OpenGL"), ("directX", "DirectX")] {
+            for (v, l) in [("", tr("From template / project")), ("openGl", "OpenGL"), ("directX", "DirectX")] {
                 ui.selectable_value(&mut app.ui.export.normal_format, v.to_string(), l);
             }
         });
@@ -900,9 +1036,9 @@ pub fn export(app: &mut TextureCraftApp, ctx: &egui::Context) {
     let mut open = true;
     let mut do_export = false;
     let presets = texturecraft_engine::formats::builtin_presets();
-    egui::Window::new("Export textures").open(&mut open).collapsible(false).resizable(false).fixed_size(vec2(820.0, 430.0)).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
+    dialog("export_textures", tr("Export textures"), &mut open).fixed_size(vec2(820.0, 430.0)).show(ctx, |ui| {
         ui.horizontal(|ui| {
-            for (i, t) in ["Settings", "Output templates", "List of exports"].iter().enumerate() {
+            for (i, t) in [tr("Settings"), tr("Output templates"), tr("List of exports")].iter().enumerate() {
                 if ui.selectable_label(app.ui.export.tab == i as u8, caption(t)).clicked() {
                     app.ui.export.tab = i as u8;
                 }
@@ -917,7 +1053,7 @@ pub fn export(app: &mut TextureCraftApp, ctx: &egui::Context) {
             }
             ui.vertical(|ui| {
                 ui.set_width(180.0);
-                ui.label(RichText::new("Texture sets").strong());
+                ui.label(RichText::new(tr("Texture sets")).strong());
                 for i in 0..app.session.set_count() {
                     let name = app.session.doc.project.texture_sets.get(i).map(|t| t.name.clone()).unwrap_or_default();
                     let mut on = !app.ui.export.skip.contains(&i);
@@ -957,14 +1093,14 @@ pub fn export(app: &mut TextureCraftApp, ctx: &egui::Context) {
         ui.add_space(8.0);
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button("Reset all").clicked() {
+            if ui.button(tr("Reset all")).clicked() {
                 app.ui.export = crate::state::ExportUi::default();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::new(RichText::new("Export").color(Color32::WHITE)).fill(TOKENS.accent)).clicked() {
+                if ui.add(egui::Button::new(RichText::new(tr("Export")).color(Color32::WHITE)).fill(TOKENS.accent)).clicked() {
                     do_export = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(tr("Cancel")).clicked() {
                     app.ui.windows.export = false;
                 }
             });

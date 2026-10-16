@@ -14,6 +14,18 @@ pub struct SubMesh {
     pub count: u32,
 }
 
+/// A material's base color (what a color-map bake transfers): `factor` (linear RGBA) times an
+/// optional texture sampled at the mesh UVs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BaseColor {
+    pub factor: Vec4,
+    pub width: u32,
+    pub height: u32,
+    /// `width × height` RGBA8 texels (color sRGB-encoded, alpha linear), rows top → bottom like
+    /// the UVs' v; empty without a texture.
+    pub texels: Vec<[u8; 4]>,
+}
+
 /// Triangle mesh in world space. UVs use the glTF convention (origin top-left, v down).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Mesh {
@@ -184,6 +196,13 @@ impl Mesh {
     /// Remap the UVs of material `m`'s triangles with `f`. Vertices they share with other
     /// materials are duplicated first, so the other triangles keep their UVs.
     pub fn map_material_uvs(&mut self, m: usize, f: impl Fn(Vec2) -> Vec2) {
+        self.map_material_uvs_with(m, |_, uv| f(uv));
+    }
+
+    /// [`Mesh::map_material_uvs`] where `f` also gets the UV centroid of the first of the
+    /// material's triangles using the vertex: piecewise maps (UV tiles of different sizes) then
+    /// place a vertex on a tile border with its own triangle's tile.
+    pub fn map_material_uvs_with(&mut self, m: usize, f: impl Fn(Vec2, Vec2) -> Vec2) {
         let mine: Vec<usize> = self.triangles_of(m).collect();
         let mut is_mine = vec![false; self.triangle_count()];
         for t in &mine {
@@ -200,20 +219,25 @@ impl Mesh {
             }
         }
         let mut copies = std::collections::HashMap::new();
-        let mut verts = Vec::with_capacity(mine.len() * 3);
         for k in mine.iter().flat_map(|t| t * 3..t * 3 + 3) {
             let Some(&v) = self.indices.get(k) else { continue };
             let v = if shared.get(v as usize).copied().unwrap_or(false) { *copies.entry(v).or_insert_with(|| self.duplicate_vertex(v as usize)) } else { v };
             if let Some(i) = self.indices.get_mut(k) {
                 *i = v;
             }
-            verts.push(v as usize);
         }
-        verts.sort_unstable();
-        verts.dedup();
-        for v in verts {
+        // (vertex, centroid of its first triangle), each vertex once.
+        let mut verts = Vec::with_capacity(mine.len() * 3);
+        for t in &mine {
+            let Some(tri) = self.tri(*t) else { continue };
+            let centroid = tri.iter().map(|v| self.uvs.get(*v).copied().unwrap_or_default()).sum::<Vec2>() / 3.0;
+            verts.extend(tri.map(|v| (v, centroid)));
+        }
+        verts.sort_by_key(|(v, _)| *v);
+        verts.dedup_by_key(|(v, _)| *v);
+        for (v, centroid) in verts {
             if let Some(uv) = self.uvs.get_mut(v) {
-                *uv = f(*uv);
+                *uv = f(centroid, *uv);
             }
         }
     }

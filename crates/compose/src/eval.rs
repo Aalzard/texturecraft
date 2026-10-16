@@ -107,6 +107,8 @@ impl Inputs<'_> {
     }
 
     /// Texels per UV tile across (the whole width for a classic set): filter radii scale with it.
+    /// shortcut: a tile smaller than its atlas block (per-tile resolution) uses the block's
+    /// radii; scale them by `TextureSet::tile_scale` if filters must match across tile sizes.
     fn tile_res(&self) -> u32 {
         self.gbuf.width / self.tile_grid().map_or(1, |g| g.cols.max(1))
     }
@@ -928,8 +930,10 @@ impl<'a, 'b> Texel<'a, 'b> {
             None => Coords { uv: Vec2::new((self.x as f32 + 0.5) / g.width as f32, (self.y as f32 + 0.5) / g.height as f32), pos: Vec3::ZERO, nrm: Vec3::Y },
         };
         // UV-tiled sets: projections see the mesh's own UVs (patterns repeat per tile).
-        if let Some(grid) = self.inp.tile_grid() {
-            c.uv = Vec2::from(grid.from_atlas(c.uv.to_array()));
+        if let Ok(set) = self.inp.project.texture_set(self.inp.ts)
+            && let Some(grid) = set.tile_grid()
+        {
+            c.uv = Vec2::from(set.from_atlas(&grid, c.uv.to_array()));
         }
         self.coords = Some(c);
         c

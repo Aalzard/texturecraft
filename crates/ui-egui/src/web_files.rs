@@ -14,9 +14,10 @@ use texturecraft_engine::formats::export::sanitize_file_stem;
 use texturecraft_engine::formats::mesh_import::MESH_EXTENSIONS;
 
 use crate::TextureCraftApp;
+use crate::i18n::{tr, trf};
 
 /// What File › Open accepts: projects and meshes.
-pub const OPEN_EXTS: &[&str] = &[PROJECT_EXT, "glb", "gltf", "fbx", "dae", "usd", "usda", "usdc", "usdz", "obj", "ply", "stl"];
+pub const OPEN_EXTS: &[&str] = &[PROJECT_EXT, "glb", "gltf", "fbx", "dae", "usd", "usda", "usdc", "usdz", "abc", "obj", "ply", "stl"];
 
 /// Images File › Import resources accepts.
 pub const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "tga", "tif", "tiff", "bmp", "webp", "exr", "hdr"];
@@ -56,18 +57,18 @@ pub fn poll(app: &mut TextureCraftApp) {
                 continue;
             }
             Pick::Environment => app.session.import_resource_bytes(&name, bytes).map(|res| use_environment(app, &res)),
-            Pick::HighPoly => app.session.add_high_poly_bytes(&name, bytes).map(|n| app.toast(format!("High poly: {n}"), false)),
-            Pick::Cage => app.session.set_cage_bytes(&name, bytes).map(|n| app.toast(format!("Cage: {n}"), false)),
+            Pick::HighPoly => app.session.add_high_poly_bytes(&name, bytes).map(|n| app.toast(trf("High poly: {name}", &[("name", &n)]), false)),
+            Pick::Cage => app.session.set_cage_bytes(&name, bytes).map(|n| app.toast(trf("Cage: {name}", &[("name", &n)]), false)),
             Pick::ExportPreset => {
                 match texturecraft_engine::formats::preset_from_json(&String::from_utf8_lossy(&bytes)) {
                     Ok(p) => crate::export_templates::import(app, &p),
-                    Err(e) => app.toast(format!("Couldn't import {name}: {e}"), true),
+                    Err(e) => app.toast(trf("Couldn't import {name}: {error}", &[("name", &name), ("error", &e)]), true),
                 }
                 continue;
             }
         };
         if let Err(e) = done {
-            app.toast(format!("Couldn't import {name}: {e}"), true);
+            app.toast(trf("Couldn't import {name}: {error}", &[("name", &name), ("error", &e)]), true);
         }
     }
 }
@@ -76,7 +77,7 @@ pub fn poll(app: &mut TextureCraftApp) {
 /// the browser they arrive on a later frame.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn import_bake_mesh(app: &mut TextureCraftApp, _ctx: &egui::Context, cage: bool) {
-    let dialog = rfd::FileDialog::new().add_filter("Meshes", &MESH_EXTENSIONS);
+    let dialog = rfd::FileDialog::new().add_filter(tr("Meshes"), &MESH_EXTENSIONS);
     let paths = if cage { dialog.pick_file().into_iter().collect() } else { dialog.pick_files().unwrap_or_default() };
     for p in paths {
         let cmd = if cage { "bake.cage.set" } else { "bake.highPoly.add" };
@@ -88,7 +89,7 @@ pub fn import_bake_mesh(app: &mut TextureCraftApp, _ctx: &egui::Context, cage: b
 /// light the scene with it (in the browser the file arrives on a later frame).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn import_environment(app: &mut TextureCraftApp, _ctx: &egui::Context) {
-    let Some(p) = rfd::FileDialog::new().add_filter("HDR environments", ENV_EXTS).pick_file() else { return };
+    let Some(p) = rfd::FileDialog::new().add_filter(tr("HDR environments"), ENV_EXTS).pick_file() else { return };
     if let Some(r) = app.run("resource.import", serde_json::json!({ "path": p.display().to_string() }))
         && let Some(name) = r.get("name").and_then(|n| n.as_str())
     {
@@ -100,7 +101,7 @@ pub fn import_environment(app: &mut TextureCraftApp, _ctx: &egui::Context) {
 fn use_environment(app: &mut TextureCraftApp, name: &str) {
     let env = format!("{}{name}", texturecraft_engine::core::project::ENV_RESOURCE_PREFIX);
     if app.run("display.set", serde_json::json!({ "environment": env })).is_some() {
-        app.toast(format!("Environment: {name}"), false);
+        app.toast(trf("Environment: {name}", &[("name", &name)]), false);
     }
 }
 
@@ -113,9 +114,9 @@ pub fn load(app: &mut TextureCraftApp, name: &str, bytes: &[u8]) {
         match app.session.import_resource_bytes(name, bytes.to_vec()) {
             Ok(res) => {
                 app.ui.dock.focus(crate::docking::Panel::Assets, egui::Rect::ZERO);
-                app.toast(format!("Imported {res}"), false);
+                app.toast(trf("Imported {name}", &[("name", &res)]), false);
             }
-            Err(e) => app.toast(format!("Couldn't import {name}: {e}"), true),
+            Err(e) => app.toast(trf("Couldn't import {name}: {error}", &[("name", &name), ("error", &e)]), true),
         }
         return;
     }
@@ -124,9 +125,9 @@ pub fn load(app: &mut TextureCraftApp, name: &str, bytes: &[u8]) {
     match next {
         Ok(next) => {
             app.session.switch_to(next);
-            app.toast(format!("Opened {name}"), false);
+            app.toast(trf("Opened {name}", &[("name", &name)]), false);
         }
-        Err(e) => app.toast(format!("Couldn't open {name}: {e}"), true),
+        Err(e) => app.toast(trf("Couldn't open {name}: {error}", &[("name", &name), ("error", &e)]), true),
     }
 }
 
@@ -142,7 +143,7 @@ pub fn dropped(app: &mut TextureCraftApp, ctx: &egui::Context, file: &egui::Drop
             if let Some(r) = app.run("resource.import", serde_json::json!({ "path": path })) {
                 let name = r.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
                 app.ui.dock.focus(crate::docking::Panel::Assets, egui::Rect::ZERO);
-                app.toast(format!("Imported {name}"), false);
+                app.toast(trf("Imported {name}", &[("name", &name)]), false);
             }
         } else {
             crate::windows::open_path(app, &path);
@@ -192,28 +193,28 @@ mod web {
 
     /// File › Open: the browser's file picker; the file loads on a later frame (see [`poll`]).
     pub fn open(ctx: &egui::Context) {
-        pick(ctx, "Projects and meshes", OPEN_EXTS, false, Pick::Open);
+        pick(ctx, tr("Projects and meshes"), OPEN_EXTS, false, Pick::Open);
     }
 
     /// File › Import resources: pick images; they import on a later frame.
     pub fn import_images(ctx: &egui::Context) {
-        pick(ctx, "Images", IMAGE_EXTS, true, Pick::Open);
+        pick(ctx, tr("Images"), IMAGE_EXTS, true, Pick::Open);
     }
 
     /// Display settings › Import HDR: pick an equirect image; it becomes the environment on a
     /// later frame.
     pub fn import_environment(_app: &mut TextureCraftApp, ctx: &egui::Context) {
-        pick(ctx, "HDR environments", ENV_EXTS, false, Pick::Environment);
+        pick(ctx, tr("HDR environments"), ENV_EXTS, false, Pick::Environment);
     }
 
     /// Bake mode: pick high-definition meshes (or the cage); they load on a later frame.
     pub fn import_bake_mesh(_app: &mut TextureCraftApp, ctx: &egui::Context, cage: bool) {
-        pick(ctx, "Meshes", &MESH_EXTENSIONS, !cage, if cage { Pick::Cage } else { Pick::HighPoly });
+        pick(ctx, tr("Meshes"), &MESH_EXTENSIONS, !cage, if cage { Pick::Cage } else { Pick::HighPoly });
     }
 
     /// Export dialog › Output templates › Import: pick a template; it is added on a later frame.
     pub fn import_preset(ctx: &egui::Context) {
-        pick(ctx, "Export templates", &["json"], false, Pick::ExportPreset);
+        pick(ctx, tr("Export templates"), &["json"], false, Pick::ExportPreset);
     }
 
     fn pick(ctx: &egui::Context, filter: &'static str, exts: &'static [&'static str], multiple: bool, kind: Pick) {
@@ -236,9 +237,9 @@ mod web {
             Ok(()) => {
                 app.session.modified = false;
                 app.session.log.push(format!("Saved {name}"));
-                app.toast(format!("Downloaded {name}"), false);
+                app.toast(trf("Downloaded {name}", &[("name", &name)]), false);
             }
-            Err(e) => app.toast(format!("Couldn't save {name}: {e}"), true),
+            Err(e) => app.toast(trf("Couldn't save {name}: {error}", &[("name", &name), ("error", &e)]), true),
         }
     }
 
@@ -252,8 +253,8 @@ mod web {
             _ => Ok(app.session.mesh_obj_bytes()),
         };
         match bytes.map_err(|e| e.to_string()).and_then(|b| download(&name, &b)) {
-            Ok(()) => app.toast(format!("Downloaded {name}"), false),
-            Err(e) => app.toast(format!("Couldn't export the mesh: {e}"), true),
+            Ok(()) => app.toast(trf("Downloaded {name}", &[("name", &name)]), false),
+            Err(e) => app.toast(trf("Couldn't export the mesh: {error}", &[("error", &e)]), true),
         }
     }
 
@@ -261,8 +262,8 @@ mod web {
     /// file downloads as is, several as `<project>_textures.zip`.
     pub fn export_textures(app: &mut TextureCraftApp, params: &Value, sets: &[usize]) {
         match export(app, params, sets) {
-            Ok(name) => app.toast(format!("Downloaded {name}"), false),
-            Err(e) => app.toast(format!("Couldn't export textures: {e}"), true),
+            Ok(name) => app.toast(trf("Downloaded {name}", &[("name", &name)]), false),
+            Err(e) => app.toast(trf("Couldn't export textures: {error}", &[("error", &e)]), true),
         }
     }
 

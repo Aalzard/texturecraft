@@ -29,8 +29,9 @@ pub type SetLayout = ((u32, u32), usize);
 #[derive(Default)]
 pub struct SceneSync {
     pub mesh: Option<(Arc<Mesh>, u64)>,
-    /// (texels across and down, material) per texture set, and the mesh material count.
-    pub sets: Option<(Vec<SetLayout>, usize)>,
+    /// (texels across and down, material) per texture set, the mesh material count and the
+    /// viewport texture resolution (display shift).
+    pub sets: Option<(Vec<SetLayout>, usize, u32)>,
     /// The environment name and, for `resource:<name>`, its decoded image.
     pub env: Option<(String, Option<Arc<ImageRes>>)>,
     pub tiles: Vec<(usize, DisplayKind, u32, u32, Vec<u8>)>,
@@ -52,6 +53,8 @@ pub struct GpuLink {
     pub lost: Arc<AtomicBool>,
     mesh_id: u64,
     sets: Vec<SetLayout>,
+    /// The display shift the GPU has (`Prefs::viewport_texture`).
+    shift: u32,
     /// The environment the GPU has: name and image identity (a re-imported resource differs).
     env: (String, usize),
     /// What each set's aux texture holds: (mesh map or mask key, revision).
@@ -63,6 +66,17 @@ pub struct GpuLink {
 
 /// Compositing time per frame: a full recomposite of a large texture set spreads over frames.
 const COMPOSITE_BUDGET_MS: f64 = 30.0;
+/// The most a frame spends on the scene (with the work already done this frame, such as a
+/// stroke's commit): compositing and display conversion leave the rest for the next frames, so
+/// a large (8K) texture set never stalls one frame.
+const FRAME_BUDGET_MS: f64 = 35.0;
+/// Each frame still makes this much progress.
+const MIN_SLICE_MS: f64 = 4.0;
+/// Display tiles converted between budget checks.
+const UPLOAD_CHUNK: usize = 64;
+/// Estimated GPU upload cost of one display tile (write_texture of one 64×64 tile of one
+/// display kind, measured at ~5.5 µs on a desktop GPU), counted against the frame budget.
+const UPLOAD_MS_PER_TILE: f64 = 0.006;
 
 pub fn init(rs: &egui_wgpu::RenderState) -> GpuLink {
     let reset = Arc::new(AtomicBool::new(false));
@@ -74,6 +88,7 @@ pub fn init(rs: &egui_wgpu::RenderState) -> GpuLink {
         lost: Arc::new(AtomicBool::new(false)),
         mesh_id: 0,
         sets: Vec::new(),
+        shift: 0,
         env: Default::default(),
         aux: BTreeMap::new(),
         adapter: format!("{} ({:?})", info.name, info.backend),
@@ -89,10 +104,14 @@ impl GpuLink {
         (pending > 0 && self.composite_total > 0).then(|| 1.0 - pending as f32 / self.composite_total as f32)
     }
 
-    pub fn sync(&mut self, s: &mut Session, aux_map: Option<AuxView>) -> SceneSync {
+    /// `spent_ms`: time this frame already took before the sync.
+    pub fn sync(&mut self, s: &mut Session, aux_map: Option<AuxView>, shift: u32, spent_ms: f64) -> SceneSync {
+        let start = crate::now_ms();
+        let mut queued = 0usize;
+        let left = |queued: usize| FRAME_BUDGET_MS - spent_ms - (crate::now_ms() - start) - queued as f64 * UPLOAD_MS_PER_TILE;
         let pending = s.pending_tiles();
         self.composite_total = if pending == 0 { 0 } else { self.composite_total.max(pending) };
-        s.update_for(COMPOSITE_BUDGET_MS, crate::now_ms);
+        s.update_for(COMPOSITE_BUDGET_MS.min(left(0)).max(MIN_SLICE_MS), crate::now_ms);
         let mut out = SceneSync::default();
         if self.lost.swap(false, Ordering::AcqRel) {
             self.mesh_id = 0;
@@ -106,9 +125,10 @@ impl GpuLink {
             self.aux.clear();
         }
         let sets: Vec<SetLayout> = s.doc.project.texture_sets.iter().map(|t| (t.size(), t.material)).collect();
-        if sets != self.sets || out.mesh.is_some() {
-            out.sets = Some((sets.clone(), s.mesh.materials.len().max(1)));
+        if sets != self.sets || shift != self.shift || out.mesh.is_some() {
+            out.sets = Some((sets.clone(), s.mesh.materials.len().max(1), shift));
             self.sets = sets;
+            self.shift = shift;
         }
         let d = &s.doc.project.display;
         let image = d.environment_resource().and_then(|n| s.images.get(n));
@@ -128,16 +148,29 @@ impl GpuLink {
             if tiles.is_empty() {
                 continue;
             }
-            let Some(cache) = s.caches.get(ts) else { continue };
-            let empty = Default::default();
-            let baked = s.doc.baked.get(&ts).unwrap_or(&empty);
-            let comp = &cache.composite;
-            let bytes: Vec<_> = tiles
-                .par_iter()
-                .flat_map_iter(|&(tx, ty)| DisplayKind::ALL.into_iter().map(move |k| (k, tx, ty)))
-                .map(|(k, tx, ty)| (ts, k, tx, ty, tile_bytes(comp, baked, k, tx, ty)))
-                .collect();
-            out.tiles.extend(bytes);
+            let mut done = 0;
+            if let Some(cache) = s.caches.get(ts) {
+                let empty = Default::default();
+                let baked = s.doc.baked.get(&ts).unwrap_or(&empty);
+                let comp = &cache.composite;
+                // In chunks while the frame has time (at least one chunk); the rest waits.
+                for chunk in tiles.chunks(UPLOAD_CHUNK) {
+                    let bytes: Vec<_> = chunk
+                        .par_iter()
+                        .flat_map_iter(|&(tx, ty)| DisplayKind::ALL.into_iter().map(move |k| (k, tx, ty)))
+                        .map(|(k, tx, ty)| (ts, k, tx, ty, tile_bytes(comp, baked, k, tx, ty)))
+                        .collect();
+                    queued += bytes.len();
+                    out.tiles.extend(bytes);
+                    done += chunk.len();
+                    if left(queued) < MIN_SLICE_MS {
+                        break;
+                    }
+                }
+            }
+            if let (Some(rest), Some(cache)) = (tiles.get(done..), s.caches.get_mut(ts)) {
+                cache.upload.extend(rest.iter().copied());
+            }
         }
         match aux_map {
             Some(AuxView::MeshMap(m)) => {
@@ -220,7 +253,8 @@ impl CallbackTrait for ViewCallback {
             if let Some((mesh, id)) = &sync.mesh {
                 gpu.renderer.set_mesh(device, queue, mesh, *id);
             }
-            if let Some((sets, mats)) = &sync.sets {
+            if let Some((sets, mats, shift)) = &sync.sets {
+                gpu.renderer.set_display_shift(*shift);
                 let reset = gpu.renderer.set_texture_sets(device, queue, sets, *mats);
                 if !reset.is_empty() {
                     gpu.reset.store(true, Ordering::Release);

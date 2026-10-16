@@ -15,7 +15,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New project from a built-in mesh",
             [],
             None,
-            "{mesh?: material_ball|sphere|cube|rounded_cube|cylinder|torus|plane|crate|udim_plane, resolution?: 1024, name?, uvTiles?: bool (UDIM; default: when the UVs leave tile 1001)}",
+            "{mesh?: material_ball|sphere|cube|rounded_cube|cylinder|torus|plane|crate|udim_plane, resolution?: 1024 (or the template's), name?, uvTiles?: bool (UDIM; default: when the UVs leave tile 1001), template?: project template name (see project.templates)}",
             always,
             new
         ),
@@ -39,9 +39,13 @@ pub fn specs() -> Vec<CommandSpec> {
 fn new(s: &mut Session, p: &Value) -> Result<Value> {
     let mesh_id = strp(p, "mesh").unwrap_or("material_ball");
     let mesh = primitives::builtin(mesh_id).ok_or_else(|| bad("project.new", format!("unknown built-in mesh `{mesh_id}`")))?;
-    let res = u64p(p, "resolution").unwrap_or(1024);
+    let template = crate::template_cmds::template_param(s, p, "project.new")?;
+    let res = u64p(p, "resolution").or(template.as_ref().map(|t| u64::from(t.resolution))).unwrap_or(1024);
     let name = strp(p, "name").unwrap_or("Untitled");
-    let next = Session::new_project_tiled(name, mesh, &format!("builtin:{mesh_id}"), None, u32::try_from(res).unwrap_or(0), boolp(p, "uvTiles"))?;
+    let mut next = Session::new_project_tiled(name, mesh, &format!("builtin:{mesh_id}"), None, u32::try_from(res).unwrap_or(0), boolp(p, "uvTiles"))?;
+    if let Some(t) = &template {
+        next.apply_template(t);
+    }
     s.switch_to(next);
     Ok(crate::inspect::session(s))
 }
@@ -58,8 +62,10 @@ pub fn sample_session(resolution: u32, bake_resolution: u32) -> Result<Session> 
     for ts in 0..s.set_count() {
         let set = s.doc.project.texture_set_mut(ts)?;
         set.bake.resolution = bake_resolution;
-        set.bake.rays = 24;
-        s.bake_now(ts)?;
+        for r in [&mut set.bake.ao, &mut set.bake.thickness, &mut set.bake.bent_normal] {
+            r.rays = 24;
+        }
+        s.bake_now(ts, false)?;
     }
     s.active_set = 1;
     crate::materials::apply(&mut s, "iron_rusted")?;

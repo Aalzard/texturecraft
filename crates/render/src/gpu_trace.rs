@@ -25,7 +25,7 @@ use crate::trace::{TraceDisplay, TraceScene, TraceSettings};
 /// Texture sets the tracer takes (one more array layer holds the default material).
 pub const MAX_SETS: usize = 255;
 /// Depth of the shader's BVH traversal stack (`STACK` in trace.wgsl).
-const STACK: usize = 64;
+pub(crate) const STACK: usize = 64;
 const KINDS: usize = DisplayKind::ALL.len();
 /// Bytes of the trace uniform: [`Head`] then 256 texture-set entries (`MAX_SETS` in trace.wgsl).
 const PARAMS_SIZE: u64 = (size_of::<Head>() + 256 * 16) as u64;
@@ -129,22 +129,22 @@ fn caught(f: impl Future<Output = Option<wgpu::Error>>) -> Option<wgpu::Error> {
 
 /// Run `f` with validation and out-of-memory errors turned into an `Err` instead of wgpu's
 /// default handler (which panics).
-fn scoped<T>(device: &wgpu::Device, what: &str, f: impl FnOnce() -> T) -> Result<T, String> {
+pub(crate) fn scoped<T>(device: &wgpu::Device, what: &str, f: impl FnOnce() -> T) -> Result<T, String> {
     let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let invalid = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let out = f();
     let errors = [caught(invalid.pop()), caught(oom.pop())];
     match errors.into_iter().flatten().next() {
-        Some(e) => Err(format!("GPU path tracing: {what}: {e}")),
+        Some(e) => Err(format!("{what}: {e}")),
         None => Ok(out),
     }
 }
 
-fn entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEntry {
+pub(crate) fn entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::COMPUTE, ty, count: None }
 }
 
-fn storage(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+pub(crate) fn storage(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
     entry(binding, wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only }, has_dynamic_offset: false, min_binding_size: None })
 }
 
@@ -152,7 +152,7 @@ fn texture(binding: u32, view_dimension: wgpu::TextureViewDimension) -> wgpu::Bi
     entry(binding, wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension, multisampled: false })
 }
 
-fn buffer(device: &wgpu::Device, label: &str, contents: &[u8]) -> wgpu::Buffer {
+pub(crate) fn buffer(device: &wgpu::Device, label: &str, contents: &[u8]) -> wgpu::Buffer {
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents, usage: wgpu::BufferUsages::STORAGE })
 }
 
@@ -161,7 +161,7 @@ fn bits(v: Vec3, w: u32) -> [u32; 4] {
 }
 
 /// Depth of the deepest leaf (the root is 1), or None for a malformed tree.
-fn bvh_depth(nodes: &[(Vec3, Vec3, u32, u32)]) -> Option<usize> {
+pub(crate) fn bvh_depth(nodes: &[(Vec3, Vec3, u32, u32)]) -> Option<usize> {
     let mut stack = vec![(0usize, 1usize)];
     let mut deepest = 0;
     let mut visited = 0usize;
@@ -195,7 +195,7 @@ impl GpuTracer {
         if !Self::supported(device) {
             return Err("GPU path tracing needs compute shaders (WebGPU, Vulkan, Metal or DirectX 12)".into());
         }
-        scoped(device, "pipelines", || Self::create(device))
+        scoped(device, "GPU path tracing: pipelines", || Self::create(device))
     }
 
     fn create(device: &wgpu::Device) -> GpuTracer {
@@ -221,7 +221,7 @@ impl GpuTracer {
         let post_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("tc_trace_post"), entries: &post_entries });
         let module =
             |label, src: &str| device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(src.into()) });
-        let trace_module = module("tc_trace", include_str!("shaders/trace.wgsl"));
+        let trace_module = module("tc_trace", concat!(include_str!("shaders/rays.wgsl"), include_str!("shaders/trace.wgsl")));
         let post_module = module("tc_trace_post", include_str!("shaders/trace_post.wgsl"));
         let pipe = |bgl: &wgpu::BindGroupLayout, m: &wgpu::ShaderModule, entry_point: &str| {
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -297,7 +297,7 @@ impl GpuTracer {
             for (what, b) in [("BVH", nodes.len()), ("triangle list", tris.len()), ("vertex list", verts.len())] {
                 fits(what, b * 16)?;
             }
-            self.geometry = Some(scoped(device, "mesh upload", || Geometry {
+            self.geometry = Some(scoped(device, "GPU path tracing: mesh upload", || Geometry {
                 mesh: scene.mesh.clone(),
                 tri_set: scene.tri_set.clone(),
                 nodes: buffer(device, "tc_trace_nodes", bytemuck::cast_slice(&nodes)),
@@ -323,7 +323,7 @@ impl GpuTracer {
             if !light {
                 cdf.push(0.0);
             }
-            let env = scoped(device, "environment upload", || {
+            let env = scoped(device, "GPU path tracing: environment upload", || {
                 let tex = device.create_texture_with_data(
                     queue,
                     &wgpu::TextureDescriptor {
@@ -391,7 +391,7 @@ impl GpuTracer {
                 old.as_ref().and_then(|m| m.arrays.get(k)).filter(|(t, _)| (t.width(), t.height(), t.depth_or_array_layers()) == (size.0, size.1, layers));
             let (tex, view) = match reuse {
                 Some(a) => a.clone(),
-                None => scoped(device, "material textures", || {
+                None => scoped(device, "GPU path tracing: material textures", || {
                     let tex = device.create_texture(&wgpu::TextureDescriptor {
                         label: Some("tc_trace_material"),
                         size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: layers },
@@ -474,7 +474,7 @@ impl GpuTracer {
                 mapped_at_creation: false,
             })
         };
-        self.acc = Some(scoped(device, "accumulation buffers", || Accum {
+        self.acc = Some(scoped(device, "GPU path tracing: accumulation buffers", || Accum {
             width: w,
             height: h,
             acc: ["tc_acc_hit", "tc_acc_albedo", "tc_acc_normal", "tc_acc_env"].map(buf),
@@ -643,33 +643,17 @@ impl GpuTracer {
     }
 }
 
-/// GPU buffers of the mesh: (BVH nodes, triangles in BVH order), vertices. An empty mesh gets
-/// one empty leaf over one degenerate triangle.
+/// GPU buffers of the mesh: (BVH nodes, triangles in BVH order), vertices.
 type GeometryData = ((Vec<[u32; 4]>, Vec<[u32; 4]>), Vec<[f32; 4]>);
 
 fn geometry_data(mesh: &Mesh, bvh: &texturecraft_geom::Bvh, tri_set: &[usize]) -> GeometryData {
-    let (tris, order) = bvh.triangles();
     let vcount = mesh.positions.len();
-    let mut nodes: Vec<[u32; 4]> = Vec::with_capacity(bvh.nodes().len() * 2);
-    for (lo, hi, first, count) in bvh.nodes() {
-        nodes.push(bits(lo, first));
-        nodes.push(bits(hi, count));
-    }
-    let mut out: Vec<[u32; 4]> = Vec::with_capacity(tris.len() * 4);
-    for (t, &orig) in tris.iter().zip(order) {
-        let o = orig as usize;
+    let rows = bvh_rows(bvh, (0, 0), |o| {
         let idx = [0, 1, 2].map(|k| mesh.indices.get(o * 3 + k).copied().filter(|i| (*i as usize) < vcount).unwrap_or(0));
         let set = tri_set.get(o).copied().filter(|s| *s < MAX_SETS).map_or(u32::MAX, |s| s as u32);
         let sign: f32 = mesh.tangents.get(idx[0] as usize).map_or(1.0, |t| if t.w < 0.0 { -1.0 } else { 1.0 });
-        out.push(bits(t[0], set));
-        out.push(bits(t[1], sign.to_bits()));
-        out.push(bits(t[2], 0));
-        out.push([idx[0], idx[1], idx[2], 0]);
-    }
-    if out.is_empty() {
-        nodes = vec![bits(Vec3::ZERO, 0), bits(Vec3::ZERO, 1)];
-        out = vec![[0; 4]; 4];
-    }
+        ([set, sign.to_bits(), 0], [idx[0], idx[1], idx[2], o as u32])
+    });
     let verts: Vec<[f32; 4]> = (0..vcount.max(1))
         .flat_map(|v| {
             let n = mesh.normals.get(v).copied().unwrap_or(Vec3::ZERO);
@@ -678,7 +662,35 @@ fn geometry_data(mesh: &Mesh, bvh: &texturecraft_geom::Bvh, tri_set: &[usize]) -
             [[n.x, n.y, n.z, uv.x], [t.x, t.y, t.z, uv.y]]
         })
         .collect();
-    ((nodes, out), verts)
+    (rows, verts)
+}
+
+/// `bvh` in the layout of `shaders/rays.wgsl`, numbered from `base` (first node, first
+/// triangle) so several BVHs can share one buffer: per node (lo, first), (hi, count); per
+/// triangle (p0, w0), (p1, w1), (p2, w2), `last`, where `(w, last) = per_tri(original index)`.
+/// An empty BVH gets one leaf over one degenerate triangle.
+pub(crate) fn bvh_rows(
+    bvh: &texturecraft_geom::Bvh,
+    (node_base, tri_base): (u32, u32),
+    per_tri: impl Fn(usize) -> ([u32; 3], [u32; 4]),
+) -> (Vec<[u32; 4]>, Vec<[u32; 4]>) {
+    let (tris, order) = bvh.triangles();
+    if tris.is_empty() {
+        return (vec![bits(Vec3::ZERO, tri_base), bits(Vec3::ZERO, 1)], vec![[0; 4]; 4]);
+    }
+    let nodes = bvh
+        .nodes()
+        .flat_map(|(lo, hi, first, count)| [bits(lo, first.saturating_add(if count > 0 { tri_base } else { node_base })), bits(hi, count)])
+        .collect();
+    let rows = tris
+        .iter()
+        .zip(order)
+        .flat_map(|(t, &orig)| {
+            let (w, last) = per_tri(orig as usize);
+            [bits(t[0], w[0]), bits(t[1], w[1]), bits(t[2], w[2]), last]
+        })
+        .collect();
+    (nodes, rows)
 }
 
 #[cfg(test)]

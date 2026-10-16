@@ -1,7 +1,8 @@
-//! Autodesk FBX 7.x, binary (32- and 64-bit node records, zlib-compressed arrays) and ASCII:
-//! mesh geometry with normals, UVs and per-polygon materials from the layer elements, every
+//! Autodesk FBX 6.x and 7.x, binary (32- and 64-bit node records, zlib-compressed arrays) and
+//! ASCII: mesh geometry with normals, UVs and per-polygon materials from the layer elements, every
 //! Model's transform and parent hierarchy, and the file's unit and axis system (converted to
-//! meters, Y up, like glTF).
+//! meters, Y up, like glTF). FBX 6 keeps the geometry inside its Model, names objects instead of
+//! numbering them and lists properties in `Properties60`; both read into the same scene.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -14,8 +15,8 @@ use crate::{FormatError, Result, malformed};
 
 const KIND: &str = "FBX";
 const MAGIC: &[u8] = b"Kaydara FBX Binary  \0";
-/// First FBX version with the object/connection layout read here.
-const MIN_VERSION: i64 = 7000;
+/// First FBX version with the object/connection layout read here (6.0).
+const MIN_VERSION: i64 = 6000;
 /// Deepest node nesting (and Model parent chain) followed.
 const MAX_DEPTH: usize = 64;
 /// Memory budget for parsed nodes and properties (arrays are held as f64).
@@ -63,6 +64,20 @@ impl Node {
         }
     }
 
+    /// Object id: the number (7.x) or the `Class::Name` string (6.x).
+    fn id_at(&self, i: usize) -> Option<String> {
+        match self.props.get(i) {
+            Some(Prop::I(v)) => Some(v.to_string()),
+            Some(Prop::S(s)) if !s.is_empty() => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    /// An object's name: after its id (7.x) or the id itself (6.x).
+    fn object_name(&self) -> &str {
+        clean_name(if self.int_at(0).is_some() { self.str_at(1) } else { self.str_at(0) })
+    }
+
     fn str_at(&self, i: usize) -> &str {
         match self.props.get(i) {
             Some(Prop::S(s)) => s,
@@ -85,9 +100,10 @@ impl Node {
         Cow::Owned(self.props.iter().filter_map(Prop::num).collect())
     }
 
-    /// The numbers of entry `name` in Properties70 (`P: name, type, subtype, flags, values`).
+    /// The numbers of entry `name` in Properties70 (`P: name, type, subtype, flags, values`) or
+    /// Properties60 (`Property: name, type, flags, values`).
     fn property(&self, name: &str) -> Option<Vec<f64>> {
-        let list = self.child("Properties70")?;
+        let list = self.child("Properties70").or_else(|| self.child("Properties60"))?;
         list.children.iter().find(|p| p.str_at(0) == name).map(|p| p.props.iter().filter_map(Prop::num).collect())
     }
 
@@ -382,51 +398,58 @@ pub(crate) fn read(bytes: &[u8]) -> Result<RawMesh> {
 fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
     let (nodes, version) = if bytes.starts_with(MAGIC) { parse_binary(bytes)? } else { parse_ascii(bytes)? };
     if version < MIN_VERSION {
-        return Err(FormatError::Unsupported(format!("FBX version {version} (re-export as FBX 2011 / 7.x or newer)")));
+        return Err(FormatError::Unsupported(format!("FBX version {version} (re-export as FBX 2006 / 6.1 or newer)")));
     }
     let root = |name: &str| nodes.iter().find(|n| n.name == name);
     let objects = root("Objects").ok_or_else(|| malformed(KIND, "the file has no Objects"))?;
     let (mut geometries, mut models, mut materials) = (HashMap::new(), HashMap::new(), HashMap::new());
+    // (geometry, model) instances; an FBX 6 Model holds its geometry itself.
+    let mut instances: Vec<(String, Option<String>)> = Vec::new();
     for o in &objects.children {
-        let Some(id) = o.int_at(0) else { continue };
+        let Some(id) = o.id_at(0) else { continue };
         match o.name.as_str() {
             "Geometry" if o.child("Vertices").is_some() => geometries.insert(id, o),
-            "Model" => models.insert(id, o),
+            "Model" => {
+                if o.child("Vertices").is_some() {
+                    geometries.insert(id.clone(), o);
+                    instances.push((id.clone(), Some(id.clone())));
+                }
+                models.insert(id, o)
+            }
             "Material" => materials.insert(id, o),
             _ => None,
         };
     }
-    // (geometry, model) instances, Model parents, and each Model's materials in slot order.
-    let mut instances: Vec<(i64, Option<i64>)> = Vec::new();
-    let mut parents: HashMap<i64, i64> = HashMap::new();
-    let mut slots: HashMap<i64, Vec<String>> = HashMap::new();
-    for c in root("Connections").into_iter().flat_map(|c| c.all("C")) {
-        let (Some(child), Some(parent)) = (c.int_at(1), c.int_at(2)) else { continue };
-        if c.str_at(0) != "OO" || !models.contains_key(&parent) {
+    // Model parents, and each Model's materials in slot order.
+    let mut parents: HashMap<String, String> = HashMap::new();
+    let mut slots: HashMap<String, Vec<String>> = HashMap::new();
+    for c in root("Connections").into_iter().flat_map(|c| c.all("C").chain(c.all("Connect"))) {
+        let (Some(child), Some(parent)) = (c.id_at(1), c.id_at(2)) else { continue };
+        if c.str_at(0) != "OO" || child == parent || !models.contains_key(&parent) {
             continue;
         }
-        if geometries.contains_key(&child) {
+        if models.contains_key(&child) {
+            parents.insert(child, parent);
+        } else if geometries.contains_key(&child) {
             instances.push((child, Some(parent)));
         } else if let Some(m) = materials.get(&child) {
-            let name = clean_name(m.str_at(1));
+            let name = m.object_name();
             slots.entry(parent).or_default().push(if name.is_empty() { format!("Material_{child}") } else { name.to_string() });
-        } else if models.contains_key(&child) {
-            parents.insert(child, parent);
         }
     }
-    let placed: HashSet<i64> = instances.iter().map(|(g, _)| *g).collect();
-    let mut unplaced: Vec<i64> = geometries.keys().filter(|g| !placed.contains(g)).copied().collect();
+    let placed: HashSet<&String> = instances.iter().map(|(g, _)| g).collect();
+    let mut unplaced: Vec<String> = geometries.keys().filter(|g| !placed.contains(g)).cloned().collect();
     unplaced.sort_unstable();
     instances.extend(unplaced.into_iter().map(|g| (g, None)));
 
-    let global = global_transform(root("GlobalSettings"));
+    let global = global_transform(root("GlobalSettings").or_else(|| objects.child("GlobalSettings")));
     let mut sink = PolygonSink::default();
     let no_slots = Vec::new();
     for (geom, model) in instances {
         let Some(g) = geometries.get(&geom) else { continue };
-        let m = match model.and_then(|m| models.get(&m).map(|n| (m, n))) {
+        let m = match model.as_ref().and_then(|m| models.get(m).map(|n| (m, n))) {
             Some((id, node)) => {
-                sink.part = clean_name(node.str_at(1)).to_string();
+                sink.part = node.object_name().to_string();
                 world(&models, &parents, id)? * geometric(node)
             }
             None => {
@@ -434,7 +457,7 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
                 Mat4::IDENTITY
             }
         };
-        let names = model.and_then(|m| slots.get(&m)).unwrap_or(&no_slots);
+        let names = model.as_ref().and_then(|m| slots.get(m)).unwrap_or(&no_slots);
         add_geometry(&mut sink, g, global * m, names)?;
     }
     Ok(sink.finish())
@@ -503,13 +526,13 @@ fn geometric(m: &Node) -> Mat4 {
         * Mat4::from_scale(m.vec3("GeometricScaling", Vec3::ONE))
 }
 
-fn world(models: &HashMap<i64, &Node>, parents: &HashMap<i64, i64>, id: i64) -> Result<Mat4> {
+fn world(models: &HashMap<String, &Node>, parents: &HashMap<String, String>, id: &str) -> Result<Mat4> {
     let mut m = Mat4::IDENTITY;
     let mut cur = Some(id);
     for _ in 0..=MAX_DEPTH {
-        let Some(node) = cur.and_then(|c| models.get(&c)) else { return Ok(m) };
+        let Some(node) = cur.and_then(|c| models.get(c)) else { return Ok(m) };
         m = local(node) * m;
-        cur = cur.and_then(|c| parents.get(&c)).copied();
+        cur = cur.and_then(|c| parents.get(c)).map(String::as_str);
     }
     Err(malformed(KIND, "the Model hierarchy is nested too deeply (or cyclic)"))
 }

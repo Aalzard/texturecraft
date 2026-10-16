@@ -12,6 +12,7 @@ use texturecraft_engine::formats::export::{FILE_TOKENS, MAX_PRESET_NAME, sanitiz
 use texturecraft_engine::formats::{Dest, ExportPreset, FileFormat, MapSpec, SourceRef, VirtualMap};
 
 use crate::TextureCraftApp;
+use crate::i18n::{n_, tr, trf};
 use crate::theme::{TOKENS, caption};
 use crate::widgets::{chip, icon_button};
 
@@ -37,8 +38,8 @@ impl Layout {
         match self {
             Layout::Rgb => "RGB",
             Layout::Rgba => "RGBA",
-            Layout::Gray => "Gray",
-            Layout::GrayAlpha => "Gray + A",
+            Layout::Gray => n_("Gray"),
+            Layout::GrayAlpha => n_("Gray + A"),
         }
     }
 
@@ -67,10 +68,10 @@ type Palette = [(&'static str, Vec<(&'static str, SourceRef)>); 4];
 
 static PALETTE: LazyLock<Palette> = LazyLock::new(|| {
     [
-        ("Texture set channels", Channel::ALL.iter().map(|&channel| (channel.label(), SourceRef::Channel { channel, component: 0 })).collect()),
-        ("Converted maps", VirtualMap::ALL.iter().map(|&map| (map.label(), SourceRef::Virtual { map, component: 0 })).collect()),
-        ("Mesh maps", BakedMap::ALL.iter().map(|&map| (map.label(), SourceRef::Baked { map, component: 0 })).collect()),
-        ("Constants", vec![("Black", SourceRef::Constant(0.0)), ("Gray 50%", SourceRef::Constant(0.5)), ("White", SourceRef::Constant(1.0))]),
+        (n_("Texture set channels"), Channel::ALL.iter().map(|&channel| (channel.label(), SourceRef::Channel { channel, component: 0 })).collect()),
+        (n_("Converted maps"), VirtualMap::ALL.iter().map(|&map| (map.label(), SourceRef::Virtual { map, component: 0 })).collect()),
+        (n_("Mesh maps"), BakedMap::ALL.iter().map(|&map| (map.label(), SourceRef::Baked { map, component: 0 })).collect()),
+        (n_("Constants"), vec![(n_("Black"), SourceRef::Constant(0.0)), (n_("Gray 50%"), SourceRef::Constant(0.5)), (n_("White"), SourceRef::Constant(1.0))]),
     ]
 });
 
@@ -79,7 +80,7 @@ fn source_label(s: &SourceRef) -> &'static str {
         SourceRef::Channel { channel, .. } => channel.label(),
         SourceRef::Virtual { map, .. } => map.label(),
         SourceRef::Baked { map, .. } => map.label(),
-        SourceRef::Constant(_) => "Constant",
+        SourceRef::Constant(_) => n_("Constant"),
     }
 }
 
@@ -219,26 +220,26 @@ fn preset_list(app: &mut TextureCraftApp, ui: &mut Ui, builtins: &[ExportPreset]
     let mut act = None;
     let sel = app.ui.export.preset.clone();
     let user = app.ui.export.draft.is_some();
-    ui.label(caption("Output templates"));
+    ui.label(caption(tr("Output templates")));
     ui.horizontal(|ui| {
         let tool = |ui: &mut Ui, enabled: bool, icon: &str, tip: &str| ui.add_enabled_ui(enabled, |ui| icon_button(ui, icon, tip, false, ICON)).inner.clicked();
-        if tool(ui, true, ic::PLUS, "New template") {
+        if tool(ui, true, ic::PLUS, tr("New template")) {
             act = Some(ListAction::New);
         }
-        if tool(ui, true, ic::COPY, "Duplicate the selected template") {
+        if tool(ui, true, ic::COPY, tr("Duplicate the selected template")) {
             act = Some(ListAction::Duplicate);
         }
-        if tool(ui, user, ic::PENCIL_SIMPLE, "Rename the selected template") {
+        if tool(ui, user, ic::PENCIL_SIMPLE, tr("Rename the selected template")) {
             act = Some(ListAction::StartRename(sel.clone()));
         }
-        if tool(ui, user, ic::TRASH, "Delete the selected template") {
+        if tool(ui, user, ic::TRASH, tr("Delete the selected template")) {
             act = Some(ListAction::Remove);
         }
         ui.separator();
-        if tool(ui, true, ic::DOWNLOAD_SIMPLE, "Import a template (.json)") {
+        if tool(ui, true, ic::DOWNLOAD_SIMPLE, tr("Import a template (.json)")) {
             act = Some(ListAction::Import);
         }
-        if tool(ui, true, ic::UPLOAD_SIMPLE, "Export the selected template (.json)") {
+        if tool(ui, true, ic::UPLOAD_SIMPLE, tr("Export the selected template (.json)")) {
             act = Some(ListAction::Export);
         }
     });
@@ -246,7 +247,8 @@ fn preset_list(app: &mut TextureCraftApp, ui: &mut Ui, builtins: &[ExportPreset]
     let names: Vec<String> = app.session.export_presets.list.iter().map(|p| p.name.clone()).collect();
     egui::ScrollArea::vertical().id_salt("exp_presets").auto_shrink([false; 2]).show(ui, |ui| {
         for p in builtins {
-            let r = ui.selectable_label(p.name == sel, format!("{}  {}", ic::LOCK_SIMPLE, p.name)).on_hover_text("Built-in (read-only): duplicate it to edit");
+            let r =
+                ui.selectable_label(p.name == sel, format!("{}  {}", ic::LOCK_SIMPLE, p.name)).on_hover_text(tr("Built-in (read-only): duplicate it to edit"));
             if r.clicked() {
                 act = Some(ListAction::Select(p.name.clone()));
             }
@@ -263,7 +265,7 @@ fn preset_list(app: &mut TextureCraftApp, ui: &mut Ui, builtins: &[ExportPreset]
                     }
                 }
                 None => {
-                    let r = ui.selectable_label(name == sel, format!("{}  {name}", ic::USER)).on_hover_text("Double-click to rename");
+                    let r = ui.selectable_label(name == sel, format!("{}  {name}", ic::USER)).on_hover_text(tr("Double-click to rename"));
                     if r.double_clicked() {
                         act = Some(ListAction::StartRename(name));
                     } else if r.clicked() {
@@ -281,11 +283,11 @@ fn apply(app: &mut TextureCraftApp, ctx: &egui::Context, act: ListAction) {
     match act {
         ListAction::Select(name) => app.ui.export.preset = name,
         ListAction::New => {
-            save_new(app, &ExportPreset { name: "New template".into(), maps: Vec::new() });
+            save_new(app, &ExportPreset { name: tr("New template").into(), maps: Vec::new() });
         }
         ListAction::Duplicate => {
             if let Some(p) = selected(app) {
-                let name = format!("{} copy", p.name).chars().take(MAX_PRESET_NAME).collect();
+                let name = trf("{name} copy", &[("name", &p.name)]).chars().take(MAX_PRESET_NAME).collect();
                 save_new(app, &ExportPreset { name, ..p });
             }
         }
@@ -299,7 +301,7 @@ fn apply(app: &mut TextureCraftApp, ctx: &egui::Context, act: ListAction) {
             let name = app.ui.export.preset.clone();
             if app.run("export.preset.remove", json!({ "name": name })).is_some() {
                 app.ui.export.preset = crate::state::ExportUi::default().preset;
-                app.toast(format!("Deleted template \"{name}\""), false);
+                app.toast(trf("Deleted template \"{name}\"", &[("name", &name)]), false);
             }
         }
         ListAction::Import => import_file(app, ctx),
@@ -333,16 +335,16 @@ fn rename(app: &mut TextureCraftApp, name: &str) {
 /// Add an imported preset (renamed when its name is taken) and select it.
 pub fn import(app: &mut TextureCraftApp, preset: &ExportPreset) {
     if let Some(name) = save_new(app, preset) {
-        app.toast(format!("Imported template \"{name}\""), false);
+        app.toast(trf("Imported template \"{name}\"", &[("name", &name)]), false);
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn import_file(app: &mut TextureCraftApp, _ctx: &egui::Context) {
-    let Some(path) = rfd::FileDialog::new().add_filter("Export template", &["json"]).pick_file() else { return };
+    let Some(path) = rfd::FileDialog::new().add_filter(tr("Export template"), &["json"]).pick_file() else { return };
     match texturecraft_engine::formats::load_preset(&path) {
         Ok(p) => import(app, &p),
-        Err(e) => app.toast(format!("Couldn't import {}: {e}", path.display()), true),
+        Err(e) => app.toast(trf("Couldn't import {name}: {error}", &[("name", &path.display()), ("error", &e)]), true),
     }
 }
 
@@ -356,16 +358,16 @@ fn export_file(app: &mut TextureCraftApp) {
     let name = format!("{}.json", sanitize_file_stem(&p.name));
     let saved = texturecraft_engine::formats::preset_to_json(&p).map_err(|e| e.to_string()).and_then(|json| write_json(&name, &json));
     match saved {
-        Ok(Some(to)) => app.toast(format!("Exported template \"{}\" to {to}", p.name), false),
+        Ok(Some(to)) => app.toast(trf("Exported template \"{name}\" to {path}", &[("name", &p.name), ("path", &to)]), false),
         Ok(None) => {}
-        Err(e) => app.toast(format!("Couldn't export the template: {e}"), true),
+        Err(e) => app.toast(trf("Couldn't export the template: {error}", &[("error", &e)]), true),
     }
 }
 
 /// Save `json` with the native dialog (Ok(None): cancelled).
 #[cfg(not(target_arch = "wasm32"))]
 fn write_json(name: &str, json: &str) -> Result<Option<String>, String> {
-    let Some(path) = rfd::FileDialog::new().add_filter("Export template", &["json"]).set_file_name(name).save_file() else { return Ok(None) };
+    let Some(path) = rfd::FileDialog::new().add_filter(tr("Export template"), &["json"]).set_file_name(name).save_file() else { return Ok(None) };
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
     Ok(Some(path.display().to_string()))
 }
@@ -409,7 +411,7 @@ fn outputs(app: &mut TextureCraftApp, ui: &mut Ui) {
         (Some(d), _) => (d.clone(), true),
         (None, Some(b)) => (b, false),
         (None, None) => {
-            ui.label(RichText::new("Select an output template").color(TOKENS.text_dim));
+            ui.label(RichText::new(tr("Select an output template")).color(TOKENS.text_dim));
             return;
         }
     };
@@ -418,28 +420,28 @@ fn outputs(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(&preset.name).strong().color(TOKENS.text_strong));
         if !editable {
-            ui.label(RichText::new(ic::LOCK_SIMPLE).color(TOKENS.text_dim)).on_hover_text("Built-in templates are read-only: duplicate one to edit it");
+            ui.label(RichText::new(ic::LOCK_SIMPLE).color(TOKENS.text_dim)).on_hover_text(tr("Built-in templates are read-only: duplicate one to edit it"));
         }
     });
     ui.add_enabled_ui(editable, |ui| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Add output").color(TOKENS.text_dim));
+            ui.label(RichText::new(tr("Add output")).color(TOKENS.text_dim));
             for l in Layout::ALL {
-                if ui.small_button(format!("{} {}", ic::PLUS, l.label())).clicked() {
+                if ui.small_button(format!("{} {}", ic::PLUS, tr(l.label()))).clicked() {
                     action = Some(MapAction::Add(l));
                 }
             }
         });
     });
     if let Err(e) = &preview {
-        ui.label(RichText::new(format!("Not saved: {e}")).color(TOKENS.danger).size(11.0));
+        ui.label(RichText::new(trf("Not saved: {error}", &[("error", e)])).color(TOKENS.danger).size(11.0));
     }
     let mut changed = false;
     let n = preset.maps.len();
     egui::ScrollArea::vertical().id_salt("exp_outputs").auto_shrink([false; 2]).show(ui, |ui| {
         if n == 0 {
             ui.add_space(8.0);
-            ui.label(RichText::new("No outputs yet: add one above, then drag input maps onto its channels.").color(TOKENS.text_dim));
+            ui.label(RichText::new(tr("No outputs yet: add one above, then drag input maps onto its channels.")).color(TOKENS.text_dim));
         }
         ui.add_enabled_ui(editable, |ui| {
             for (mi, map) in preset.maps.iter_mut().enumerate() {
@@ -501,7 +503,7 @@ fn output_card(ui: &mut Ui, mi: usize, n: usize, map: &mut MapSpec, file: Option
             let width = ui.available_width() - 4.0 * (ICON + ui.spacing().item_spacing.x);
             changed |= ui
                 .add(egui::TextEdit::singleline(&mut map.file).font(egui::TextStyle::Monospace).desired_width(width))
-                .on_hover_text("File name without extension; variables insert names")
+                .on_hover_text(tr("File name without extension; variables insert names"))
                 .changed();
             ui.menu_button(RichText::new(ic::CURRENCY_DOLLAR).size(13.0), |ui| {
                 for (token, what) in FILE_TOKENS {
@@ -513,14 +515,14 @@ fn output_card(ui: &mut Ui, mi: usize, n: usize, map: &mut MapSpec, file: Option
                 }
             })
             .response
-            .on_hover_text("Insert a variable");
-            if ui.add_enabled_ui(mi > 0, |ui| icon_button(ui, ic::ARROW_UP, "Move up", false, ICON)).inner.clicked() {
+            .on_hover_text(tr("Insert a variable"));
+            if ui.add_enabled_ui(mi > 0, |ui| icon_button(ui, ic::ARROW_UP, tr("Move up"), false, ICON)).inner.clicked() {
                 *action = Some(MapAction::Up(mi));
             }
-            if ui.add_enabled_ui(mi + 1 < n, |ui| icon_button(ui, ic::ARROW_DOWN, "Move down", false, ICON)).inner.clicked() {
+            if ui.add_enabled_ui(mi + 1 < n, |ui| icon_button(ui, ic::ARROW_DOWN, tr("Move down"), false, ICON)).inner.clicked() {
                 *action = Some(MapAction::Down(mi));
             }
-            if icon_button(ui, ic::TRASH, "Remove this output", false, ICON).clicked() {
+            if icon_button(ui, ic::TRASH, tr("Remove this output"), false, ICON).clicked() {
                 *action = Some(MapAction::Remove(mi));
             }
         });
@@ -533,15 +535,15 @@ fn output_card(ui: &mut Ui, mi: usize, n: usize, map: &mut MapSpec, file: Option
                     }
                 }
             });
-            egui::ComboBox::from_id_salt(("exp_map_bits", mi)).width(64.0).selected_text(format!("{} bits", map.bit_depth)).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt(("exp_map_bits", mi)).width(64.0).selected_text(trf("{n} bits", &[("n", &map.bit_depth)])).show_ui(ui, |ui| {
                 for &d in map.format.bit_depths() {
-                    changed |= ui.selectable_value(&mut map.bit_depth, d, format!("{d} bits")).changed();
+                    changed |= ui.selectable_value(&mut map.bit_depth, d, trf("{n} bits", &[("n", &d)])).changed();
                 }
             });
             let layout = Layout::of(map);
-            egui::ComboBox::from_id_salt(("exp_map_layout", mi)).width(72.0).selected_text(layout.label()).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt(("exp_map_layout", mi)).width(72.0).selected_text(tr(layout.label())).show_ui(ui, |ui| {
                 for l in Layout::ALL {
-                    if ui.selectable_label(l == layout, l.label()).clicked() && l != layout {
+                    if ui.selectable_label(l == layout, tr(l.label())).clicked() && l != layout {
                         set_layout(map, l);
                         changed = true;
                     }
@@ -549,7 +551,7 @@ fn output_card(ui: &mut Ui, mi: usize, n: usize, map: &mut MapSpec, file: Option
             });
             let (text, color) = match file {
                 Some(f) => (format!("{} {f}", ic::ARROW_RIGHT), TOKENS.text_dim),
-                None => ("Not exported: no source in this texture set".to_string(), TOKENS.text_dim),
+                None => (tr("Not exported: no source in this texture set").to_string(), TOKENS.text_dim),
             };
             ui.add(egui::Label::new(RichText::new(text).size(11.0).color(color)).truncate());
         });
@@ -565,16 +567,16 @@ fn channel_slots(ui: &mut Ui, mi: usize, map: &mut MapSpec) -> bool {
     for (k, (dest, src)) in map.channels.iter_mut().enumerate() {
         ui.horizontal(|ui| {
             let dest_name = match *dest {
-                Dest::L => "Gray",
+                Dest::L => tr("Gray"),
                 Dest::A => "A",
                 d => RGB.get(slot_component(d) as usize).copied().unwrap_or("R"),
             };
             ui.add_sized(vec2(30.0, 18.0), egui::Label::new(RichText::new(dest_name).size(11.0).color(TOKENS.text_dim)));
-            let combo = egui::ComboBox::from_id_salt(("exp_slot", mi, k)).width(170.0).selected_text(source_label(src)).show_ui(ui, |ui| {
+            let combo = egui::ComboBox::from_id_salt(("exp_slot", mi, k)).width(170.0).selected_text(tr(source_label(src))).show_ui(ui, |ui| {
                 for (group, inputs) in PALETTE.iter() {
-                    ui.label(caption(group));
+                    ui.label(caption(tr(group)));
                     for (label, s) in inputs {
-                        if ui.selectable_label(same_source(src, s), *label).clicked() {
+                        if ui.selectable_label(same_source(src, s), tr(label)).clicked() {
                             *src = with_component(s, slot_component(*dest));
                             changed = true;
                         }
@@ -614,14 +616,15 @@ fn channel_slots(ui: &mut Ui, mi: usize, map: &mut MapSpec) -> bool {
 
 /// Input maps to drag onto output channels.
 fn input_maps(ui: &mut Ui) {
-    ui.label(caption("Input maps"));
-    ui.label(RichText::new("Drag onto an output channel").size(11.0).color(TOKENS.text_dim));
+    ui.label(caption(tr("Input maps")));
+    ui.label(RichText::new(tr("Drag onto an output channel")).size(11.0).color(TOKENS.text_dim));
     egui::ScrollArea::vertical().id_salt("exp_inputs").auto_shrink([false; 2]).show(ui, |ui| {
         for (gi, (group, inputs)) in PALETTE.iter().enumerate() {
             ui.add_space(4.0);
-            ui.label(RichText::new(*group).strong().size(11.0));
+            ui.label(RichText::new(tr(group)).strong().size(11.0));
             ui.horizontal_wrapped(|ui| {
                 for (k, (label, s)) in inputs.iter().enumerate() {
+                    let label = tr(label);
                     // Not `dnd_drag_source`: its scope doesn't wrap inside `horizontal_wrapped`.
                     let r = chip(ui, label, false).interact(egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::Grab);
                     r.dnd_set_drag_payload(s.clone());

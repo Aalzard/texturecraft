@@ -202,9 +202,9 @@ pub fn menu_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mode = match app.ui.mode {
-                    Mode::Painting => "Painting",
-                    Mode::Baking => "Baking",
-                    Mode::Rendering => "Rendering",
+                    Mode::Painting => tr("Painting"),
+                    Mode::Baking => tr("Baking"),
+                    Mode::Rendering => tr("Rendering"),
                 };
                 ui.label(egui::RichText::new(mode).size(11.0).color(TOKENS.text_dim));
             });
@@ -234,7 +234,7 @@ fn menu_item(app: &mut TextureCraftApp, ctx: &egui::Context, ui: &mut egui::Ui, 
     #[cfg(not(target_arch = "wasm32"))]
     if item.id == "file.open" {
         ui.add_enabled_ui(!app.ui.recent.is_empty(), |ui| {
-            ui.menu_button("Recent projects", |ui| {
+            ui.menu_button(tr("Recent projects"), |ui| {
                 for path in app.ui.recent.clone() {
                     if ui.button(&path).clicked() {
                         crate::windows::open_path(app, &path);
@@ -242,7 +242,7 @@ fn menu_item(app: &mut TextureCraftApp, ctx: &egui::Context, ui: &mut egui::Ui, 
                     }
                 }
                 ui.separator();
-                if ui.button("Clear recent projects").clicked() {
+                if ui.button(tr("Clear recent projects")).clicked() {
                     app.ui.recent.clear();
                     ui.close();
                 }

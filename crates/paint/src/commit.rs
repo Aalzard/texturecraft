@@ -45,7 +45,7 @@ fn over(img: &mut TileImage, kind: ChannelKind, value: &[f32], src: &CommitSourc
             };
             let mut dst = match image.tile(tx, ty) {
                 Some(t) => t.to_vec(),
-                None => empty.iter().copied().cycle().take(TILE_AREA * comps).collect(),
+                None => empty.repeat(TILE_AREA),
             };
             for i in 0..TILE_AREA {
                 let mut m = from_u16(a.get(i).copied().unwrap_or(0)) * opacity;
@@ -114,12 +114,17 @@ pub fn commit_layer(pixels: &mut PixelStore, layer: LayerId, size: (u32, u32), v
     } else {
         values.keys().copied().collect()
     };
-    for c in channels {
+    for &c in &channels {
+        pixels.layer_mut(layer, c, size);
+    }
+    // The channels blend in parallel too: an 8K stroke touches hundreds of tiles per channel.
+    let images: Vec<(Channel, &mut TileImage)> =
+        pixels.layers.iter_mut().filter(|((id, c), _)| *id == layer && channels.contains(c)).map(|((_, c), img)| (*c, img)).collect();
+    images.into_par_iter().for_each(|(c, img)| {
         let v = values.get(&c).copied().unwrap_or([0.0; 3]);
-        let img = pixels.layer_mut(layer, c, size);
         let carried = src.carried.and_then(|m| m.get(&c));
         over(img, c.kind(), &v[..c.components()], &CommitSource { opacity, ..src }, c == Channel::BaseColor, carried);
-    }
+    });
 }
 
 /// Commit a stroke into the paint effect `effect` of a mask, painting gray `value`.

@@ -1,13 +1,21 @@
 use std::sync::atomic::Ordering::Relaxed;
 
-use texturecraft_core::BakeMatch;
+use texturecraft_core::{BakeMatch, DirectionMode, PositionMode, RayDistribution, RaySettings, SelfOcclusion};
 use texturecraft_geom::glam::{Vec2, Vec3, Vec4};
 use texturecraft_geom::primitives;
 
 use super::*;
 
 fn settings(res: u32, maps: &[BakedMap]) -> BakeSettings {
-    BakeSettings { resolution: res, dilation: 0, rays: 64, maps: maps.iter().copied().collect(), ..BakeSettings::default() }
+    with_rays(BakeSettings { resolution: res, dilation: 0, maps: maps.iter().copied().collect(), ..BakeSettings::default() }, 64, 0.25)
+}
+
+/// `s` with every secondary-ray map at `rays` rays of length `max_distance`.
+fn with_rays(mut s: BakeSettings, rays: u32, max_distance: f32) -> BakeSettings {
+    for r in [&mut s.ao, &mut s.thickness, &mut s.bent_normal] {
+        *r = RaySettings { rays, max_distance, ..*r };
+    }
+    s
 }
 
 fn run(mesh: &Mesh, s: &BakeSettings) -> Result<BakeOutput, BakeError> {
@@ -58,7 +66,7 @@ fn inside_of_a_closed_box_is_occluded() {
         *n = -*n;
     }
     m.compute_tangents();
-    let s = BakeSettings { max_distance: 4.0, ..settings(48, &[BakedMap::AmbientOcclusion]) };
+    let s = with_rays(settings(48, &[BakedMap::AmbientOcclusion]), 64, 4.0);
     let out = run(&m, &s).unwrap();
     let ao = mean(covered_values(&m, &out, BakedMap::AmbientOcclusion).into_iter().map(|v| v.1));
     assert!(ao < 0.3, "{ao}");
@@ -108,7 +116,7 @@ fn cube_edges_are_convex() {
 #[test]
 fn two_runs_are_identical_and_sized() {
     let m = primitives::material_ball();
-    let s = BakeSettings { antialiasing: 2, dilation: 2, rays: 8, maps: BakedMap::ALL.into_iter().collect(), ..settings(40, &[]) };
+    let s = with_rays(BakeSettings { antialiasing: 2, dilation: 2, maps: BakedMap::ALL.into_iter().collect(), ..settings(40, &[]) }, 8, 0.25);
     let a = run(&m, &s).unwrap();
     let b = run(&m, &s).unwrap();
     assert_eq!(a, b);
@@ -123,11 +131,11 @@ fn two_runs_are_identical_and_sized() {
 fn strips_match_a_single_pass() {
     let m = primitives::material_ball();
     let bvh = Bvh::new(&m);
-    let s = BakeSettings { antialiasing: 2, rays: 4, maps: BakedMap::ALL.into_iter().collect(), ..settings(64, &[]) };
+    let s = with_rays(BakeSettings { antialiasing: 2, maps: BakedMap::ALL.into_iter().collect(), ..settings(64, &[]) }, 4, 0.25);
     let req = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, tiles: (1, 1) };
     let whole = bake(&req, &Progress::new()).unwrap();
     // 128 × 2 supersampled texels per strip = 1 output row: 64 strips.
-    let strips = bake_in_strips(&req, &Progress::new(), 128 * 2).unwrap();
+    let strips = bake_in_strips(&req, &Progress::new(), 128 * 2, &CpuTracer).unwrap();
     for (map, a) in &whole.maps {
         let b = &strips.maps[map];
         let off = a.iter().zip(b).filter(|(a, b)| (*a - *b).abs() > 1e-3).count();
@@ -159,9 +167,11 @@ fn invalid_requests_are_errors() {
         BakeSettings { resolution: 8193, ..ok.clone() },
         BakeSettings { antialiasing: 3, ..ok.clone() },
         BakeSettings { antialiasing: 0, ..ok.clone() },
-        BakeSettings { rays: 0, ..ok.clone() },
-        BakeSettings { max_distance: f32::NAN, ..ok.clone() },
-        BakeSettings { max_distance: 0.0, ..ok.clone() },
+        BakeSettings { ao: RaySettings { rays: 0, ..ok.ao }, ..ok.clone() },
+        BakeSettings { ao: RaySettings { rays: MAX_RAYS + 1, ..ok.ao }, ..ok.clone() },
+        BakeSettings { ao: RaySettings { max_distance: f32::NAN, ..ok.ao }, ..ok.clone() },
+        BakeSettings { ao: RaySettings { max_distance: 0.0, ..ok.ao }, ..ok.clone() },
+        BakeSettings { ao: RaySettings { spread: f32::INFINITY, ..ok.ao }, ..ok.clone() },
         BakeSettings { max_rear: -1.0, ..ok.clone() },
         BakeSettings { curvature_strength: f32::INFINITY, ..ok.clone() },
     ];
@@ -215,7 +225,15 @@ fn normal_and_height_transfer_from_a_high_poly() {
     let (lb, hb) = (Bvh::new(&low), Bvh::new(&high));
     let s = settings(16, &[BakedMap::Normal, BakedMap::Height]);
     let out = bake(
-        &BakeRequest { mesh: &low, bvh: &lb, material: 0, settings: &s, high: Some(HighPoly { mesh: &high, bvh: &hb }), cage: None, tiles: (1, 1) },
+        &BakeRequest {
+            mesh: &low,
+            bvh: &lb,
+            material: 0,
+            settings: &s,
+            high: Some(HighPoly { mesh: &high, bvh: &hb, base_color: &[] }),
+            cage: None,
+            tiles: (1, 1),
+        },
         &Progress::new(),
     )
     .unwrap();
@@ -234,7 +252,10 @@ fn normal_and_height_transfer_from_a_high_poly() {
 
 fn transfer(low: &Mesh, high: &Mesh, cage: Option<&Mesh>, s: &BakeSettings) -> Result<BakeOutput, BakeError> {
     let (lb, hb) = (Bvh::new(low), Bvh::new(high));
-    bake(&BakeRequest { mesh: low, bvh: &lb, material: 0, settings: s, high: Some(HighPoly { mesh: high, bvh: &hb }), cage, tiles: (1, 1) }, &Progress::new())
+    bake(
+        &BakeRequest { mesh: low, bvh: &lb, material: 0, settings: s, high: Some(HighPoly { mesh: high, bvh: &hb, base_color: &[] }), cage, tiles: (1, 1) },
+        &Progress::new(),
+    )
 }
 
 /// Texel (x, y) of a `res`² bake of [`quad`] sits over world (2u − 1, 0, 2v − 1).
@@ -338,7 +359,7 @@ fn bent_normals_point_away_from_occluders() {
     )
     .unwrap();
     m.append(&wall);
-    let s = BakeSettings { max_distance: 2.0, ..settings(32, &[BakedMap::BentNormal, BakedMap::AmbientOcclusion]) };
+    let s = with_rays(settings(32, &[BakedMap::BentNormal, BakedMap::AmbientOcclusion]), 64, 2.0);
     let out = run(&m, &s).unwrap();
     let bent = &out.maps[&BakedMap::BentNormal];
     let ao = covered_values(&m, &out, BakedMap::AmbientOcclusion);
@@ -413,14 +434,14 @@ fn world_space_direction_is_a_facing_ratio() {
 fn bench_material_ball_2k() {
     let m = primitives::material_ball();
     let bvh = Bvh::new(&m);
-    let all = BakeSettings { resolution: 2048, ..BakeSettings::default() };
+    let all = with_rays(BakeSettings { resolution: 2048, ..BakeSettings::default() }, 64, 0.25);
     for maps in
         [vec![BakedMap::Position], vec![BakedMap::AmbientOcclusion], vec![BakedMap::Thickness], vec![BakedMap::Curvature], all.maps.iter().copied().collect()]
     {
         let s = BakeSettings { maps: maps.into_iter().collect(), ..all.clone() };
         let t = std::time::Instant::now();
         let out = bake(&BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, tiles: (1, 1) }, &Progress::new()).unwrap();
-        println!("material ball, material 0, {}² × {:?}, {} rays: {:.2?}", out.resolution, out.maps.keys(), s.rays, t.elapsed());
+        println!("material ball, material 0, {}² × {:?}, {} rays: {:.2?}", out.resolution, out.maps.keys(), s.ao.rays, t.elapsed());
     }
 }
 
@@ -443,4 +464,192 @@ fn uv_tiles_bake_side_by_side_in_one_atlas() {
     }
     let too_many = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, tiles: (0, 1) };
     assert!(bake(&too_many, &Progress::new()).is_err());
+}
+
+/// A floor ([`quad`], part "Quad") with a wall (part "Wall") standing at x = +1, facing the
+/// floor (−X) or, when `away`, away from it (+X); winding and normals agree.
+fn floor_and_wall(away: bool) -> Mesh {
+    let mut m = quad();
+    let (n, indices) = if away { (Vec3::X, vec![0, 2, 1, 0, 3, 2]) } else { (-Vec3::X, vec![0, 1, 2, 0, 2, 3]) };
+    let wall = Mesh::from_parts(
+        vec![Vec3::new(1.0, 0.0, -1.0), Vec3::new(1.0, 0.0, 1.0), Vec3::new(1.0, 2.0, 1.0), Vec3::new(1.0, 2.0, -1.0)],
+        Some(vec![n; 4]),
+        vec![Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y],
+        indices,
+        "Wall",
+    )
+    .unwrap();
+    m.append(&wall);
+    m
+}
+
+/// Mean of `map` (first component) over the floor where `x` is in `range` (the wall is at 1).
+fn floor_mean(m: &Mesh, s: &BakeSettings, map: BakedMap, range: std::ops::Range<f32>) -> f32 {
+    let out = run(m, s).unwrap();
+    mean(covered_values(m, &out, map).into_iter().filter(|(p, _)| range.contains(&p.x)).map(|v| v.1))
+}
+
+/// [`floor_mean`] next to the wall.
+fn near_wall(m: &Mesh, s: &BakeSettings, map: BakedMap) -> f32 {
+    floor_mean(m, s, map, 0.6..1.0)
+}
+
+#[test]
+fn ambient_occlusion_settings_shape_the_occlusion() {
+    let m = floor_and_wall(false);
+    let base = with_rays(settings(32, &[BakedMap::AmbientOcclusion]), 64, 2.0);
+    let ao = |f: &dyn Fn(&mut BakeSettings)| {
+        let mut s = base.clone();
+        f(&mut s);
+        near_wall(&m, &s, BakedMap::AmbientOcclusion)
+    };
+    let wide = ao(&|_| {});
+    assert!(wide < 0.85, "the wall occludes the floor beside it: {wide}");
+    // A wider spread gathers occlusion from farther away: the wall darkens a wider, softer band.
+    let far = |spread: f32| floor_mean(&m, &BakeSettings { ao: RaySettings { spread, ..base.ao }, ..base.clone() }, BakedMap::AmbientOcclusion, -1.0..-0.2);
+    let (narrow, wide_far) = (far(60.0), far(180.0));
+    assert!(narrow > 0.99 && wide_far < narrow - 0.05, "far from the wall: spread 60° {narrow}, 180° {wide_far}");
+    // Uniform rays graze the floor more often than cosine-weighted ones: they reach the wall
+    // from farther away.
+    let uniform = BakeSettings { ao: RaySettings { distribution: RayDistribution::Uniform, ..base.ao }, ..base.clone() };
+    let uniform_far = floor_mean(&m, &uniform, BakedMap::AmbientOcclusion, -1.0..-0.2);
+    assert!(uniform_far < wide_far - 0.02, "far from the wall: uniform {uniform_far}, cosine {wide_far}");
+    // Parts only occlude themselves when matched by name: the wall is another part.
+    let own = ao(&|s| s.ao_self_occlusion = SelfOcclusion::SameMeshName);
+    assert!(own > 0.999, "{own}");
+    // Back faces are ignored on request: a wall turned away no longer occludes.
+    let back =
+        |away: bool, ignore: bool| near_wall(&floor_and_wall(away), &BakeSettings { ao_ignore_backface: ignore, ..base.clone() }, BakedMap::AmbientOcclusion);
+    assert!((back(true, false) - wide).abs() < 1e-6, "without the option a wall occludes from either side");
+    assert!(back(true, true) > 0.999 && (back(false, true) - wide).abs() < 1e-6);
+}
+
+#[test]
+fn bent_normals_and_thickness_have_their_own_rays() {
+    let m = floor_and_wall(false);
+    let s = with_rays(settings(32, &[BakedMap::BentNormal, BakedMap::AmbientOcclusion]), 64, 2.0);
+    let lean = |s: &BakeSettings| near_wall(&m, s, BakedMap::BentNormal) * 2.0 - 1.0;
+    assert!(lean(&s) < -0.15, "{}", lean(&s));
+    // Bent-normal rays shorter than the gap to the wall see nothing; the AO keeps its own rays.
+    let short = BakeSettings { bent_normal: RaySettings { max_distance: 0.05, rays: 16, ..s.bent_normal }, ..s.clone() };
+    assert!(lean(&short) > 0.5 * lean(&s), "{} vs {}", lean(&short), lean(&s));
+    assert_eq!(near_wall(&m, &short, BakedMap::AmbientOcclusion), near_wall(&m, &s, BakedMap::AmbientOcclusion));
+    // Thickness of the slab's top and bottom: a wider spread sends rays through it at grazing
+    // angles (longer paths).
+    let slab = primitives::rounded_box(Vec3::new(1.0, 0.05, 1.0), 0.0);
+    let thick = |spread: f32| {
+        let mut s = settings(48, &[BakedMap::Thickness]);
+        s.thickness.spread = spread;
+        mean(
+            covered_values(&slab, &run(&slab, &s).unwrap(), BakedMap::Thickness)
+                .into_iter()
+                .filter(|(p, _)| p.y.abs() > 0.049 && p.x.abs().max(p.z.abs()) < 0.8)
+                .map(|v| v.1),
+        )
+    };
+    let (narrow, wide) = (thick(20.0), thick(180.0));
+    assert!(wide > narrow * 1.2, "spread 180°: {wide} vs 20°: {narrow}");
+}
+
+#[test]
+fn position_and_direction_modes() {
+    let m = quad();
+    let pos = |mode: PositionMode| {
+        let out = run(&m, &BakeSettings { position_mode: mode, ..settings(16, &[BakedMap::Position]) }).unwrap();
+        let g = UvGBuffer::new(&m, 0, 16, 16);
+        (0..256).filter(|i| g.surface(&m, *i).is_some()).map(|i| [0, 1, 2].map(|k| out.maps[&BakedMap::Position][i * 3 + k])).collect::<Vec<_>>()
+    };
+    // The flat quad: the box squashes y to 0 and stretches x, z over 0..1; the sphere keeps
+    // proportions around the centre (half diagonal √2 of 2√2 per unit).
+    let (bbox, sphere) = (pos(PositionMode::BoundingBox), pos(PositionMode::BoundingSphere));
+    assert!(bbox.iter().all(|p| p[1] == 0.0) && bbox.iter().any(|p| p[0] < 0.05) && bbox.iter().any(|p| p[0] > 0.95));
+    let r = 0.5 / 8.0f32.sqrt();
+    assert!(sphere.iter().all(|p| p[1] == 0.5 && (p[0] - 0.5).abs() <= 2.0 * r + 1e-4 && (p[2] - 0.5).abs() <= 2.0 * r + 1e-4));
+    let dir = |d: [f32; 3], mode| {
+        run(&m, &BakeSettings { direction: d, direction_mode: mode, ..settings(8, &[BakedMap::WorldDirection]) }).unwrap().maps[&BakedMap::WorldDirection]
+            [4 * 8 + 4]
+    };
+    assert_eq!(
+        (dir([1.0, 0.0, 0.0], DirectionMode::Positive), dir([0.0, -1.0, 0.0], DirectionMode::Positive), dir([0.0, 1.0, 0.0], DirectionMode::Positive)),
+        (0.0, 0.0, 1.0)
+    );
+    assert_eq!(dir([1.0, 0.0, 0.0], DirectionMode::Signed), 0.5);
+}
+
+#[test]
+fn curvature_radius_widens_the_normal_map_sampling() {
+    let at_top = |radius: u32| {
+        let s =
+            BakeSettings { max_frontal: 0.06, max_rear: 0.02, curvature_from_normal: true, curvature_radius: radius, ..settings(64, &[BakedMap::Curvature]) };
+        transfer(&quad(), &bumped(0.1, 0.4), None, &s).unwrap().maps[&BakedMap::Curvature][quad_texel(64, 0.0, 0.0)]
+    };
+    let (one, four) = (at_top(1), at_top(4));
+    assert!(one > 0.5 && four > one + 0.02, "radius 1: {one}, radius 4: {four}");
+}
+
+#[test]
+fn color_map_samples_the_high_poly_base_color_texture() {
+    let low = quad();
+    let mut high = quad();
+    high.positions.iter_mut().for_each(|p| p.y += 0.005);
+    // Four texels across u: red, red, blue (half transparent), blue; a second material tinted
+    // by its factor only.
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 128];
+    let tex = BaseColor { factor: Vec4::ONE, width: 4, height: 1, texels: vec![red, red, blue, blue] };
+    let hb = Bvh::new(&high);
+    let lb = Bvh::new(&low);
+    let s = settings(32, &[BakedMap::ColorMap, BakedMap::Opacity]);
+    let bake_with = |c: BaseColor| {
+        let base_color = [Some(Arc::new(c))];
+        let req = BakeRequest {
+            mesh: &low,
+            bvh: &lb,
+            material: 0,
+            settings: &s,
+            high: Some(HighPoly { mesh: &high, bvh: &hb, base_color: &base_color }),
+            cage: None,
+            tiles: (1, 1),
+        };
+        bake(&req, &Progress::new()).unwrap()
+    };
+    let out = bake_with(tex);
+    // Row 16 (v ≈ 0.5); columns 8 and 24 sit inside the red and blue halves (u ≈ 0.27, 0.77).
+    let (left, right) = (16 * 32 + 8, 16 * 32 + 24);
+    let (color, opacity) = (&out.maps[&BakedMap::ColorMap], &out.maps[&BakedMap::Opacity]);
+    let near = |a: &[f32], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3);
+    assert!(near(&color[left * 3..left * 3 + 3], [1.0, 0.0, 0.0]), "{:?}", &color[left * 3..left * 3 + 3]);
+    assert!(near(&color[right * 3..right * 3 + 3], [0.0, 0.0, 1.0]), "{:?}", &color[right * 3..right * 3 + 3]);
+    assert!((opacity[left] - 1.0).abs() < 1e-6 && (opacity[right] - 128.0 / 255.0).abs() < 1e-3);
+    // A factor alone tints in linear light; the map holds display-encoded color like a texture.
+    let half = bake_with(BaseColor { factor: Vec4::new(0.5, 1.0, 1.0, 1.0), width: 0, height: 0, texels: Vec::new() });
+    let r = half.maps[&BakedMap::ColorMap][left * 3];
+    assert!((r - texturecraft_texel::linear_to_srgb(0.5)).abs() < 1e-4, "{r}");
+}
+
+/// A tracer that never works (no GPU).
+struct Broken;
+
+impl Tracer for Broken {
+    fn name(&self) -> String {
+        "Broken".into()
+    }
+
+    fn scene<'a>(&'a self, _: &[rays::TraceMesh<'a>]) -> Result<Box<dyn RayScene + 'a>, BakeError> {
+        Err(BakeError::Tracer("no device".into()))
+    }
+}
+
+#[test]
+fn a_failing_tracer_falls_back_to_the_cpu() {
+    let m = floor_and_wall(false);
+    let bvh = Bvh::new(&m);
+    let s = with_rays(settings(16, &[BakedMap::AmbientOcclusion, BakedMap::Thickness]), 8, 1.0);
+    let req = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, tiles: (1, 1) };
+    let out = bake_on(&req, &Progress::new(), &Broken).unwrap();
+    assert_eq!(out.tracer, "CPU (Broken unavailable: no device)");
+    assert_eq!(out.maps, bake(&req, &Progress::new()).unwrap().maps);
+    // Bakes without rays never ask the tracer.
+    let flat = BakeSettings { maps: [BakedMap::Position].into_iter().collect(), ..s.clone() };
+    assert_eq!(bake_on(&BakeRequest { settings: &flat, ..req }, &Progress::new(), &Broken).unwrap().tracer, "CPU");
 }

@@ -172,7 +172,15 @@ impl BelowCache {
     }
 
     pub fn clear(&mut self) {
-        self.tiles.clear();
+        let tiles = std::mem::take(&mut self.tiles);
+        // Freeing a full cache (up to the byte budget in small bands) can take most of a
+        // second: a thread does it so the frame that switched the hot layer doesn't stall.
+        #[cfg(not(target_arch = "wasm32"))]
+        if !tiles.is_empty() {
+            let _ = std::thread::Builder::new().name("texturecraft-free".into()).spawn(move || drop(tiles));
+        }
+        #[cfg(target_arch = "wasm32")]
+        drop(tiles);
         self.order.clear();
         self.bytes = 0;
         self.key = None;

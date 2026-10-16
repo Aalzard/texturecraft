@@ -2,8 +2,8 @@
 //!
 //! Everything TextureCraft reads from or writes to disk:
 //!
-//! - [`mesh_import`]: glTF/GLB, FBX (7.x binary and ASCII), COLLADA, USD (usda, usdc, usdz),
-//!   OBJ, PLY and STL into a
+//! - [`mesh_import`]: glTF/GLB, FBX (6.x and 7.x, binary and ASCII), COLLADA, USD (usda, usdc,
+//!   usdz), Alembic (Ogawa), OBJ, PLY and STL into a
 //!   [`texturecraft_geom::Mesh`] (world space in meters, Y up, glTF UV convention, one submesh
 //!   per material), with an automatic unwrap ([`texturecraft_geom::unwrap::auto_unwrap`]) when
 //!   the file has no UVs and a [`MeshReport`].
@@ -33,7 +33,7 @@ pub use export::{
 };
 pub use image_res::{DecodedImage, decode_image};
 pub use mesh_export::{GlbTextures, UsdExport, UsdFormat, glb_bytes, glb_export_options, obj_bytes, usd_bytes, usd_export_options};
-pub use mesh_import::{ImportedMesh, MeshReport, import_high_poly_bytes, import_mesh_bytes};
+pub use mesh_import::{HighPolyMesh, ImportedMesh, MeshReport, import_high_poly_bytes, import_mesh_bytes};
 pub use presets::{builtin_preset, builtin_presets, preset_from_json, preset_to_json};
 #[cfg(not(target_arch = "wasm32"))]
 pub use presets::load_preset;

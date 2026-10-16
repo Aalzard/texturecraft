@@ -287,6 +287,42 @@ impl Bvh {
         self.traverse(o, d, tmax, true, &|_| true).is_some()
     }
 
+    /// The point nearest to `p` within `max_dist` on a triangle accepted by `filter` (original
+    /// index): a [`Hit`] with the distance in `t` and the barycentrics of vertices 1 and 2.
+    pub fn nearest(&self, p: Vec3, max_dist: f32, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
+        let root = self.nodes.first().filter(|_| !self.tris.is_empty() && p.is_finite())?;
+        let pa = Vec3A::from(p);
+        let box_d2 = |n: &Node| (n.lo - pa).max(pa - n.hi).max(Vec3A::ZERO).length_squared();
+        let (mut best_d2, mut best) = (max_dist * max_dist, None);
+        let mut stack = Stack::default();
+        stack.push((0, box_d2(root)));
+        while let Some((ni, d2)) = stack.pop() {
+            let Some(n) = self.nodes.get(ni as usize).filter(|_| d2 <= best_d2) else { continue };
+            if n.count > 0 {
+                for i in n.first as usize..(n.first as usize + n.count as usize).min(self.tris.len()) {
+                    let (Some(tri), Some(&orig)) = (self.tris.get(i), self.order.get(i)) else { continue };
+                    if !filter(orig) {
+                        continue;
+                    }
+                    let (q, u, v) = closest_on_triangle(p, tri);
+                    let dd = (q - p).length_squared();
+                    if dd < best_d2 {
+                        best_d2 = dd;
+                        best = Some(Hit { t: dd.sqrt(), tri: orig, u, v });
+                    }
+                }
+            } else {
+                // Push the farther child first so the nearer one is searched first.
+                let child = |c: u32| self.nodes.get(c as usize).map(|n| (c, box_d2(n)));
+                let (Some(l), Some(r)) = (child(n.first), child(n.first + 1)) else { continue };
+                let (near, far) = if l.1 <= r.1 { (l, r) } else { (r, l) };
+                stack.push(far);
+                stack.push(near);
+            }
+        }
+        best
+    }
+
     /// Call `f` with every triangle (original index) whose bounds overlap the box.
     pub fn query_box(&self, lo: Vec3, hi: Vec3, mut f: impl FnMut(u32)) {
         let mut stack = vec![0u32];
@@ -312,10 +348,77 @@ impl Bvh {
     }
 }
 
+/// The point of triangle `t` nearest to `p` and its barycentrics (weights of vertices 1 and 2),
+/// by Voronoi region (Ericson, Real-Time Collision Detection, 5.1.5). Degenerate triangles give
+/// a non-finite distance and are never nearest.
+fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
+    let [a, b, c] = *t;
+    let (ab, ac, ap) = (b - a, c - a, p - a);
+    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return (a, 0.0, 0.0);
+    }
+    let bp = p - b;
+    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return (b, 1.0, 0.0);
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return (a + ab * v, v, 0.0);
+    }
+    let cp = p - c;
+    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return (c, 0.0, 1.0);
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return (a + ac * w, 0.0, w);
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return (b + (c - b) * w, 1.0 - w, w);
+    }
+    let denom = 1.0 / (va + vb + vc);
+    let (v, w) = (vb * denom, vc * denom);
+    (a + ab * v + ac * w, v, w)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::primitives;
+
+    #[test]
+    fn nearest_point_matches_brute_force() {
+        let m = primitives::builtin("torus").unwrap();
+        let bvh = Bvh::new(&m);
+        let mut seed = 7u32;
+        let mut rnd = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32 * 4.0 - 2.0
+        };
+        for _ in 0..200 {
+            let p = Vec3::new(rnd(), rnd(), rnd());
+            let hit = bvh.nearest(p, f32::MAX, &|_| true).unwrap();
+            let brute = (0..m.triangle_count())
+                .map(|t| {
+                    let [a, b, c] = m.tri(t).unwrap().map(|i| m.positions[i]);
+                    (closest_on_triangle(p, &[a, b, c]).0 - p).length()
+                })
+                .fold(f32::MAX, f32::min);
+            assert!((hit.t - brute).abs() < 1e-5, "{} vs {brute}", hit.t);
+            let [a, b, c] = m.tri(hit.tri as usize).unwrap().map(|i| m.positions[i]);
+            let q = a * (1.0 - hit.u - hit.v) + b * hit.u + c * hit.v;
+            assert!(((q - p).length() - hit.t).abs() < 1e-4);
+        }
+        assert!(bvh.nearest(Vec3::splat(100.0), 1.0, &|_| true).is_none(), "out of range");
+        assert!(bvh.nearest(Vec3::ZERO, f32::MAX, &|_| false).is_none(), "filtered out");
+    }
 
     #[test]
     fn traversal_stack_spills_in_lifo_order() {

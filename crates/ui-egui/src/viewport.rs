@@ -13,6 +13,7 @@ use texturecraft_render::{Frame, Shade, ViewKind};
 
 use crate::TextureCraftApp;
 use crate::gpu::ViewCallback;
+use crate::i18n::{tr, trf};
 use crate::state::ViewLayout;
 use crate::theme::TOKENS;
 
@@ -101,14 +102,18 @@ fn add_callback(app: &mut TextureCraftApp, ui: &Ui, rect: Rect, frame: Frame, sy
     let scene = match (sync.0.take(), app.gpu.as_mut()) {
         (Some(aux), Some(g)) => {
             let t0 = crate::now_ms();
-            let scene = g.sync(&mut app.session, aux);
+            let scene = g.sync(&mut app.session, aux, u32::from(app.ui.prefs.viewport_texture.min(2)), f64::from(app.profiler.logic_ms));
             app.profiler.sync_ms += (crate::now_ms() - t0) as f32;
+            // Display tiles left for later frames (the frame budget ran out).
+            if app.session.caches.iter().any(|c| !c.upload.is_empty()) {
+                ui.ctx().request_repaint();
+            }
             Some(scene)
         }
         _ => None,
     };
     let Some(gpu) = &app.gpu else {
-        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "No GPU renderer available", egui::FontId::proportional(14.0), TOKENS.text_dim);
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, tr("No GPU renderer available"), egui::FontId::proportional(14.0), TOKENS.text_dim);
         return;
     };
     let cb = ViewCallback { frame, sync: Mutex::new(scene), rect, lost: gpu.lost.clone() };
@@ -121,9 +126,9 @@ fn view_header(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, id: &str) {
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(header).layout(egui::Layout::left_to_right(egui::Align::Center)));
     let current = texturecraft_engine::camera_cmds::current(&app.session);
     let names: Vec<String> = app.session.doc.project.cameras.iter().map(|c| c.name.clone()).collect();
-    let shown = current.and_then(|i| names.get(i)).map_or(DEFAULT_CAMERA, String::as_str);
+    let shown = current.and_then(|i| names.get(i)).map_or(tr(DEFAULT_CAMERA), String::as_str);
     egui::ComboBox::from_id_salt(format!("{id}_cam")).width(130.0).selected_text(shown).show_ui(&mut child, |ui| {
-        if ui.selectable_label(current.is_none(), DEFAULT_CAMERA).clicked() {
+        if ui.selectable_label(current.is_none(), tr(DEFAULT_CAMERA)).clicked() {
             app.run("camera.select", json!({}));
         }
         for (i, name) in names.iter().enumerate() {
@@ -132,30 +137,30 @@ fn view_header(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, id: &str) {
             }
         }
         ui.separator();
-        if ui.selectable_label(false, "Save view as camera").clicked() {
+        if ui.selectable_label(false, tr("Save view as camera")).clicked() {
             app.run("camera.add", json!({}));
         }
     });
     let label = app.session.view.label();
     let channels = app.session.doc.project.texture_set(app.session.ts()).map(|t| t.channel_list()).unwrap_or_default();
-    egui::ComboBox::from_id_salt(format!("{id}_mode")).width(130.0).selected_text(label).show_ui(&mut child, |ui| {
-        if ui.selectable_label(app.session.view == ViewMode::Material, "Material").clicked() {
+    egui::ComboBox::from_id_salt(format!("{id}_mode")).width(130.0).selected_text(tr(&label)).show_ui(&mut child, |ui| {
+        if ui.selectable_label(app.session.view == ViewMode::Material, tr("Material")).clicked() {
             app.run("viewport.view", json!({"mode": "material"}));
         }
         ui.separator();
         for c in channels {
-            if ui.selectable_label(app.session.view == ViewMode::Channel(c), c.label()).clicked() {
+            if ui.selectable_label(app.session.view == ViewMode::Channel(c), tr(c.label())).clicked() {
                 app.run("viewport.view", json!({"mode": c.id()}));
             }
         }
         ui.separator();
         for m in BakedMap::ALL {
-            if ui.selectable_label(app.session.view == ViewMode::MeshMap(m), format!("Mesh map: {}", m.label())).clicked() {
+            if ui.selectable_label(app.session.view == ViewMode::MeshMap(m), trf("Mesh map: {map}", &[("map", &tr(m.label()))])).clicked() {
                 app.run("viewport.view", json!({"mode": format!("map:{}", m.id())}));
             }
         }
         ui.separator();
-        if ui.selectable_label(app.session.view == ViewMode::UvChecker, "UV checker").clicked() {
+        if ui.selectable_label(app.session.view == ViewMode::UvChecker, tr("UV checker")).clicked() {
             app.run("viewport.view", json!({"mode": "uvChecker"}));
         }
     });
@@ -226,6 +231,24 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         }
     }
 
+    // Touch screens: two fingers orbit and pinch zooms, three fingers pan. A second finger
+    // cancels the stroke the first one started, so navigating leaves no paint behind.
+    let touch = ui.input(|i| i.multi_touch()).filter(|_| resp.contains_pointer() || resp.dragged());
+    if let Some(t) = touch {
+        if app.session.stroke_active() {
+            app.session.cancel_stroke();
+        }
+        let d = t.translation_delta;
+        if t.num_touches >= 3 {
+            app.session.camera.pan(d.x / size.y, d.y / size.y);
+        } else {
+            app.session.camera.orbit(d.x * 0.008, d.y * 0.008);
+        }
+        if t.zoom_delta.is_finite() && t.zoom_delta > 0.0 {
+            app.session.camera.zoom(t.zoom_delta.ln());
+        }
+    }
+
     // Stencil: S + left drag rotates, S + right drag scales, S + middle drag moves.
     if s_held && let Some(st) = app.session.tool.stencil.as_mut() {
         if resp.dragged_by(PointerButton::Primary) {
@@ -274,7 +297,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         }
     }
     // Painting.
-    let painting = app.ui.mode == crate::state::Mode::Painting && !alt && !s_held && !v_held && !focus_pick && placing.is_none();
+    let painting = app.ui.mode == crate::state::Mode::Painting && !alt && !s_held && !v_held && !focus_pick && placing.is_none() && touch.is_none();
     let path_tool = app.session.tool.tool == Tool::Path;
     let vp = app.session.viewport;
     let show = |app: &TextureCraftApp, p: Vec3| project(app, rect, p);
@@ -367,7 +390,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         ui.painter_at(rect).text(
             rect.left_top() + vec2(12.0, 40.0),
             egui::Align2::LEFT_TOP,
-            "Editing quick mask: paint where painting is allowed (U to finish)",
+            tr("Editing quick mask: paint where painting is allowed (U to finish)"),
             egui::FontId::proportional(12.0),
             Color32::from_rgb(0xe8, 0x6a, 0x6a),
         );
@@ -392,7 +415,7 @@ fn decal_overlay(app: &mut TextureCraftApp, ui: &Ui, rect: Rect) {
     }
     let painter = ui.painter_at(rect);
     if app.placing_decal.is_some() {
-        let hint = "Click the mesh to place the decal";
+        let hint = tr("Click the mesh to place the decal");
         painter.text(rect.left_top() + vec2(12.0, 40.0), egui::Align2::LEFT_TOP, hint, egui::FontId::proportional(12.0), TOKENS.accent);
     }
     let Some((d, corners)) = decal.and_then(|d| Some((d, texturecraft_engine::compose::pattern::decal_corners(&d)?))) else { return };
@@ -506,7 +529,7 @@ fn path_input(
                         d.insert_temp(drag_id, last);
                     });
                 }
-                None => app.toast("Place path points on the mesh", false),
+                None => app.toast(tr("Place path points on the mesh"), false),
             },
         }
     }
@@ -527,7 +550,7 @@ fn path_input(
 fn path_overlay(app: &TextureCraftApp, ui: &Ui, rect: Rect, resp: &egui::Response, uv: bool, show: impl Fn(&TextureCraftApp, Vec3) -> Option<Pos2>) {
     let p = ui.painter_at(rect);
     let path = &app.session.tool.path;
-    let hint = "Path: click adds a point, drag moves it, Enter applies, Esc cancels";
+    let hint = tr("Path: click adds a point, drag moves it, Enter applies, Esc cancels");
     p.text(rect.left_bottom() + vec2(56.0, -12.0), egui::Align2::LEFT_BOTTOM, hint, egui::FontId::proportional(12.0), TOKENS.text_dim);
     if path.uv != uv {
         return;
@@ -705,8 +728,9 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     match set.and_then(|t| Some((t, t.tile_grid()?))) {
         Some((t, g)) => {
             for (udim, (bx, by)) in t.uv_tiles.iter().filter_map(|u| Some((*u, g.block(*u)?))) {
-                let (u0, v0) = (bx as f32 / g.cols as f32, by as f32 / g.rows as f32);
-                let r = Rect::from_two_pos(to(u0, v0), to(u0 + 1.0 / g.cols as f32, v0 + 1.0 / g.rows as f32));
+                // A tile smaller than its block fills the block's top-left corner.
+                let (u0, v0, k) = (bx as f32 / g.cols as f32, by as f32 / g.rows as f32, t.tile_scale(udim));
+                let r = Rect::from_two_pos(to(u0, v0), to(u0 + k / g.cols as f32, v0 + k / g.rows as f32));
                 outline(r);
                 painter.text(r.left_top() + vec2(6.0, 4.0), egui::Align2::LEFT_TOP, udim.to_string(), egui::FontId::proportional(11.0), TOKENS.text_dim);
             }

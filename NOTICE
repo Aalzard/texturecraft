@@ -14,3 +14,7 @@ list (author, source, license) is in ATTRIBUTION.md.
 
 None: every bundled asset is original to TextureCraft (generated in code or drawn for this
 project). See ATTRIBUTION.md.
+
+Builds made with the optional CRAFT_FONTS_DIR input (storytold/craft-fonts) also embed the fonts
+listed in craft-fonts' ATTRIBUTION.md (BIZ UDPGothic and Noto Sans CJK SC, SIL Open Font License
+1.1); their licence texts ship with those builds.

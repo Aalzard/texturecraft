@@ -439,6 +439,9 @@ pub struct Renderer {
     content_rev: u64,
     mesh: Option<MeshGpu>,
     sets: Vec<SetGpu>,
+    /// Viewport texture resolution: display textures at 1/2^shift of each set's size (at least
+    /// as reduced as the device's texture limit needs).
+    display_shift: u32,
     /// Texture set index per mesh material.
     material_sets: Vec<Option<usize>>,
     views: HashMap<u64, ViewTargets>,
@@ -489,16 +492,26 @@ fn lazy(k: DisplayKind) -> bool {
 /// A `w × h` texture filled with `texel`.
 fn neutral_tex(device: &wgpu::Device, queue: &wgpu::Queue, (w, h): (u32, u32), format: wgpu::TextureFormat, mips: u32, texel: &[u8]) -> Tex {
     let t = Tex::new(device, "tc_set", w, h, format, mips);
-    let row: Vec<u8> = texel.iter().copied().cycle().take(texel.len() * w as usize).collect();
-    let data: Vec<u8> = row.iter().copied().cycle().take(row.len() * h as usize).collect();
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo { texture: &t.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        &data,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * texel.len() as u32), rows_per_image: Some(h) },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-    );
+    let row = texel.repeat(w as usize);
+    // Fill in bands of rows: an 8K texture's bytes at once would be hundreds of megabytes.
+    let band = (NEUTRAL_BAND_BYTES / row.len().max(1)).clamp(1, h.max(1) as usize) as u32;
+    let data = row.repeat(band as usize);
+    let mut y = 0;
+    while y < h {
+        let rows = band.min(h - y);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &t.texture, mip_level: 0, origin: wgpu::Origin3d { x: 0, y, z: 0 }, aspect: wgpu::TextureAspect::All },
+            data.get(..row.len() * rows as usize).unwrap_or_default(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row.len() as u32), rows_per_image: Some(rows) },
+            wgpu::Extent3d { width: w, height: rows, depth_or_array_layers: 1 },
+        );
+        y += rows;
+    }
     t
 }
+
+/// Bytes per write when filling a texture with one texel.
+const NEUTRAL_BAND_BYTES: usize = 8 << 20;
 
 /// The bind group of a set's textures (`set_bgl`): textures, then the sampler.
 fn set_bind_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, tex: &[Tex]) -> wgpu::BindGroup {
@@ -805,6 +818,7 @@ impl Renderer {
             content_rev: 0,
             mesh: None,
             sets: Vec::new(),
+            display_shift: 0,
             material_sets: Vec::new(),
             views: HashMap::new(),
         };
@@ -910,6 +924,12 @@ impl Renderer {
         self.content_rev += 1;
     }
 
+    /// Show texture sets at 1/2^`shift` of their size (0 = full, 1 = half, 2 = quarter…) from the
+    /// next [`Renderer::set_texture_sets`], which re-creates the sets that change.
+    pub fn set_display_shift(&mut self, shift: u32) {
+        self.display_shift = shift.min(6);
+    }
+
     /// Make the per-texture-set textures match `sets` (texels across and down per set: a
     /// UV-tiled set's atlas) and map mesh materials to sets. Re-created textures start neutral;
     /// returns the sets that were reset (the caller must upload all their tiles).
@@ -919,12 +939,12 @@ impl Renderer {
         self.sets.truncate(sets.len());
         let max = device.limits().max_texture_dimension_2d.max(1);
         for (i, &(size, _)) in sets.iter().enumerate() {
-            if self.sets.get(i).is_some_and(|s| s.size == size) {
-                // shortcut: a set larger than the device's textures shows every 2^shift-th texel;
-                // a texture array per UV tile would keep full detail on such devices.
+            // shortcut: a set larger than the device's textures shows every 2^shift-th texel;
+            // a texture array per UV tile would keep full detail on such devices.
+            let shift = (0..31).find(|s| size.0.max(size.1) >> s <= max).unwrap_or(0).max(self.display_shift);
+            if self.sets.get(i).is_some_and(|s| s.size == size && s.shift == shift) {
                 continue;
             }
-            let shift = (0..31).find(|s| size.0.max(size.1) >> s <= max).unwrap_or(0);
             let dims = display_dims(size, shift);
             let mut tex: Vec<Tex> = DisplayKind::ALL
                 .iter()

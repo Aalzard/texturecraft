@@ -15,11 +15,12 @@ use texturecraft_engine::smart_masks::SMART_MASKS;
 use texturecraft_render::ibl::ENVIRONMENTS;
 
 use crate::TextureCraftApp;
+use crate::i18n::tr;
 use crate::theme::TOKENS;
 use crate::widgets::{dnd_release, icon_button};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Tab {
+pub(crate) enum Tab {
     Materials,
     Smart,
     Masks,
@@ -30,7 +31,8 @@ enum Tab {
     Textures,
 }
 
-const TABS: [(Tab, &str, &str); 8] = [
+/// The shelf tabs: icon and (English, translated where shown) name.
+pub(crate) const TABS: [(Tab, &str, &str); 8] = [
     (Tab::Materials, ic::SPHERE, "Materials"),
     (Tab::Smart, ic::STACK, "Smart materials"),
     (Tab::Masks, ic::CIRCLE_HALF, "Smart masks"),
@@ -126,7 +128,7 @@ pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
         for (i, (_, icon, label)) in TABS.iter().enumerate() {
-            if icon_button(ui, icon, label, i == tab && !searching, 24.0).clicked() {
+            if icon_button(ui, icon, tr(label), i == tab && !searching, 24.0).clicked() {
                 tab = i;
                 app.ui.shelf_filter.clear();
             }
@@ -135,7 +137,7 @@ pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
     app.ui.shelf_tab = tab;
     ui.horizontal(|ui| {
         ui.label(RichText::new(ic::MAGNIFYING_GLASS).color(TOKENS.text_dim));
-        ui.add(egui::TextEdit::singleline(&mut app.ui.shelf_filter).hint_text("Search all assets").desired_width(f32::INFINITY));
+        ui.add(egui::TextEdit::singleline(&mut app.ui.shelf_filter).hint_text(tr("Search all assets")).desired_width(f32::INFINITY));
     });
     ui.add_space(4.0);
     let filter = app.ui.shelf_filter.to_lowercase();
@@ -145,6 +147,7 @@ pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
             if filter.is_empty() && i != tab {
                 continue;
             }
+            let title = tr(title);
             match t {
                 Tab::Materials => materials(app, ui, &ctx, &filter, false, title),
                 Tab::Smart => {
@@ -219,9 +222,9 @@ fn materials(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter
             for m in shown.iter().filter(|m| m.category == cat) {
                 let tex = app.thumbs.material(ctx, m.id);
                 let hint = if m.smart {
-                    "Add the smart material folder above the selected layer (or drag it into the layer stack)"
+                    tr("Add the smart material folder above the selected layer (or drag it into the layer stack)")
                 } else {
-                    "Add a fill layer with this material above the selected layer (or drag it into the layer stack)"
+                    tr("Add a fill layer with this material above the selected layer (or drag it into the layer stack)")
                 };
                 let asset = Asset::Material(m.id);
                 if tile(ui, tex.as_ref(), m.label, hint, Some(&asset)).clicked() {
@@ -249,19 +252,22 @@ fn library(app: &mut TextureCraftApp, ui: &mut Ui, filter: &str) {
         return;
     }
     ui.horizontal(|ui| {
-        header(ui, "My smart materials");
-        if ui.small_button(ic::ARROW_CLOCKWISE).on_hover_text("Rescan the library folder").clicked() {
+        header(ui, tr("My smart materials"));
+        if ui.small_button(ic::ARROW_CLOCKWISE).on_hover_text(tr("Rescan the library folder")).clicked() {
             app.library = None;
         }
     });
     if files.is_empty() {
-        ui.label(RichText::new("Right-click a layer > Create smart material").size(10.0).color(TOKENS.text_dim));
+        ui.label(RichText::new(tr("Right-click a layer > Create smart material")).size(10.0).color(TOKENS.text_dim));
     }
     for f in shown {
         let (label, asset) = (name(f), Asset::Library(f.display().to_string()));
-        let r = ui
-            .add(egui::Button::selectable(false, format!("{}  {label}", ic::SPHERE)).sense(Sense::click_and_drag()))
-            .on_hover_text(format!("{}: add above the selected layer (or drag it into the layer stack or onto the viewport)", f.display()));
+        let r = ui.add(egui::Button::selectable(false, format!("{}  {label}", ic::SPHERE)).sense(Sense::click_and_drag())).on_hover_ui(|ui| {
+            ui.label(crate::i18n::trf(
+                "{file}: add above the selected layer (or drag it into the layer stack or onto the viewport)",
+                &[("file", &f.display())],
+            ));
+        });
         if r.drag_started() {
             r.dnd_set_drag_payload(ShelfDrag { asset: asset.clone(), label });
         }
@@ -285,7 +291,7 @@ fn smart_masks(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filt
         for m in shown {
             let tex = app.thumbs.smart_mask(ctx, m.id);
             let asset = Asset::SmartMask(m.id);
-            let hint = "Replace the selected layer's mask with this smart mask (or drag it onto a layer)";
+            let hint = tr("Replace the selected layer's mask with this smart mask (or drag it onto a layer)");
             if tile(ui, tex.as_ref(), m.label, hint, Some(&asset)).clicked() {
                 apply(app, &asset);
             }
@@ -296,23 +302,23 @@ fn smart_masks(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filt
 /// The filter library, grouped: a click adds the filter to the selected layer's content (or its
 /// mask when the mask is selected), a drop onto a layer to that layer's content.
 fn filters(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter: &str, name: &str) {
-    let shown: Vec<_> = FILTERS.iter().filter(|f| matches(filter, &[f.label, f.group, f.id])).collect();
+    let shown: Vec<_> = FILTERS.iter().filter(|f| matches(filter, &[f.label, f.group, f.id, tr(f.label), tr(f.group)])).collect();
     if shown.is_empty() {
         return;
     }
     title(ui, name);
     for group in categories(&shown, |f| f.group) {
-        header(ui, group);
+        header(ui, tr(group));
         tiles(ui, |ui| {
             for f in shown.iter().filter(|f| f.group == group) {
                 let tex = app.thumbs.filter(ctx, f.id);
                 let hint = if f.mask {
-                    "Add to the selected layer's content, or its mask when the mask is selected (or drag it onto a layer)"
+                    tr("Add to the selected layer's content, or its mask when the mask is selected (or drag it onto a layer)")
                 } else {
-                    "Add this finish to the selected layer's roughness and height (or drag it onto a layer)"
+                    tr("Add this finish to the selected layer's roughness and height (or drag it onto a layer)")
                 };
                 let asset = Asset::Filter(f.id);
-                if tile(ui, tex.as_ref(), f.label, hint, Some(&asset)).clicked() {
+                if tile(ui, tex.as_ref(), tr(f.label), hint, Some(&asset)).clicked() {
                     apply(app, &asset);
                 }
             }
@@ -335,7 +341,7 @@ fn alpha_library(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, fi
             for &a in shown.iter().filter(|a| a.category == cat) {
                 let tex = app.thumbs.alpha(ctx, a);
                 let asset = Asset::Alpha(&a.id);
-                let r = tile(ui, tex.as_ref(), &a.label, "Use as the brush alpha (or drag it onto the viewport or brush properties)", Some(&asset));
+                let r = tile(ui, tex.as_ref(), &a.label, tr("Use as the brush alpha (or drag it onto the viewport or brush properties)"), Some(&asset));
                 if current.as_deref() == Some(a.id.as_str()) {
                     ui.painter().rect_stroke(r.rect, 3.0, Stroke::new(1.0, TOKENS.accent), egui::StrokeKind::Inside);
                 }
@@ -348,7 +354,7 @@ fn alpha_library(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, fi
 }
 
 fn procedurals(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter: &str, name: &str) {
-    let shown: Vec<ProceduralKind> = ProceduralKind::ALL.into_iter().filter(|k| matches(filter, &[k.label()])).collect();
+    let shown: Vec<ProceduralKind> = ProceduralKind::ALL.into_iter().filter(|k| matches(filter, &[k.label(), tr(k.label())])).collect();
     if shown.is_empty() {
         return;
     }
@@ -356,7 +362,7 @@ fn procedurals(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filt
     tiles(ui, |ui| {
         for k in shown {
             let tex = app.thumbs.procedural(ctx, k);
-            if tile(ui, tex.as_ref(), k.label(), "Add a fill layer using this pattern", None).clicked() {
+            if tile(ui, tex.as_ref(), tr(k.label()), tr("Add a fill layer using this pattern"), None).clicked() {
                 app.run("layer.add.fill", json!({"name": k.label()}));
                 app.run("layer.fill.set", json!({"channel": "baseColor", "procedural": k.label(), "low": [0.1, 0.1, 0.1], "high": [0.9, 0.9, 0.9]}));
             }
@@ -386,28 +392,28 @@ fn textures(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter:
     }
     ui.horizontal(|ui| {
         title(ui, name);
-        if ui.small_button("Import...").clicked() {
+        if ui.small_button(tr("Import...")).clicked() {
             crate::menus::invoke(app, ctx, "resource.import");
         }
     });
     if names.is_empty() {
-        ui.label(RichText::new("Import images to use them in fills and masks").size(10.0).color(TOKENS.text_dim));
+        ui.label(RichText::new(tr("Import images to use them in fills and masks")).size(10.0).color(TOKENS.text_dim));
     }
     tiles(ui, |ui| {
         for name in names {
             let Some(img) = app.session.images.get(&name).cloned() else { continue };
             let tex = app.thumbs.image(ctx, &name, &img);
             let asset = Asset::Texture(name.clone());
-            let r = tile(ui, Some(&tex), &name, "Add a fill layer using this image (or drag it onto the 3D view to place it as a decal)", Some(&asset));
+            let r = tile(ui, Some(&tex), &name, tr("Add a fill layer using this image (or drag it onto the 3D view to place it as a decal)"), Some(&asset));
             if r.clicked() {
                 apply(app, &asset);
             }
             r.context_menu(|ui| {
-                if ui.button("Add as decal (view center)").clicked() {
+                if ui.button(tr("Add as decal (view center)")).clicked() {
                     app.run("layer.add.decal", json!({"image": name}));
                     ui.close();
                 }
-                if ui.button("Remove resource").clicked() {
+                if ui.button(tr("Remove resource")).clicked() {
                     app.run("resource.remove", json!({"name": name}));
                     ui.close();
                 }
@@ -441,5 +447,7 @@ fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, hint: &str,
     }
     let galley = p.layout(label.to_string(), egui::FontId::proportional(9.5), TOKENS.text, rect.width() - 4.0);
     p.galley(egui::pos2(rect.center().x - galley.size().x * 0.5, img.bottom() + 3.0), galley, TOKENS.text);
-    resp.on_hover_text(format!("{label}: {hint}"))
+    resp.on_hover_ui(|ui| {
+        ui.label(format!("{label}: {hint}"));
+    })
 }

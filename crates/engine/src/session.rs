@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use texturecraft_compose::{BakedMaps, BelowCache, Composite, PaintTarget, PixelStore, StackKey, StrokePreview, covered_tiles, pad_tiles};
-use texturecraft_core::{Channel, Layer, LayerId, LayerKind, Project, TextureSet, TileGrid};
+use texturecraft_core::{Channel, Layer, LayerId, LayerKind, Project, TextureSet};
 use texturecraft_geom::glam::Vec2;
 use texturecraft_geom::{Bvh, Mesh, OrbitCamera, UvGBuffer};
 use texturecraft_paint::{BrushSettings, EyeDepth, Stroke, StrokeCanvas};
@@ -44,6 +44,8 @@ pub struct SetCache {
     pub revision: u64,
     /// Everything but the layer being edited, per tile (repaints evaluate only that layer).
     pub below: BelowCache,
+    /// Tiles per composite chunk that fit the last frame's budget (0: not measured yet).
+    pub chunk: usize,
 }
 
 impl SetCache {
@@ -51,7 +53,7 @@ impl SetCache {
         let (w, h) = ts.size();
         let gbuf = UvGBuffer::new(mesh, ts.material, w, h);
         // Padding stays inside each UV tile.
-        let dilation = DilationMap::in_blocks(&gbuf.coverage_mask(), w, h, Some(DISPLAY_PADDING), ts.resolution);
+        let dilation = DilationMap::in_blocks(&gbuf.coverage_mask(), w, h, Some(DISPLAY_PADDING), ts.block_resolution());
         let covered = covered_tiles(&gbuf);
         let all: BTreeSet<(u32, u32)> = texturecraft_compose::all_tiles(w, h).into_iter().collect();
         SetCache {
@@ -64,6 +66,7 @@ impl SetCache {
             upload: all,
             revision: 0,
             below: BelowCache::default(),
+            chunk: 0,
         }
     }
 
@@ -297,8 +300,10 @@ pub(crate) type DepthCache = (OrbitCamera, (u32, u32), u64, Arc<EyeDepth>);
 pub struct Session {
     pub doc: Document,
     pub mesh: Arc<Mesh>,
-    /// Unique per loaded mesh (GPU caches compare it).
+    /// Unique per loaded mesh and UV layout (GPU caches compare it).
     pub mesh_id: u64,
+    /// The mesh with its own UVs (`mesh` maps UV-tiled sets into their atlas).
+    pub(crate) source: Arc<Mesh>,
     pub bvh: Arc<Bvh>,
     /// Original mesh file (saved inside the project); None for built-in meshes.
     pub mesh_source: Option<(String, Vec<u8>)>,
@@ -334,6 +339,8 @@ pub struct Session {
     pub(crate) depth_cache: Option<DepthCache>,
     /// The user's export presets (kept when another project opens).
     pub export_presets: crate::preset_cmds::UserPresets,
+    /// The user's project templates (kept when another project opens).
+    pub templates: crate::template_cmds::UserTemplates,
 }
 
 impl Session {
@@ -341,18 +348,19 @@ impl Session {
     /// UVs of UV-tiled sets are mapped into their tile atlas (see [`Session::source_mesh`]).
     pub fn new(doc: Document, mesh: Mesh, mesh_source: Option<(String, Vec<u8>)>) -> Result<Session> {
         mesh.validate().map_err(|e| EngineError::Other(e.to_string()))?;
-        let mesh = map_tiled_uvs(mesh, &doc.project, TileGrid::to_atlas);
+        let source = Arc::new(mesh);
+        let mesh = tiled_mesh(&source, &doc.project);
         let bvh = Bvh::new(&mesh);
         let mut camera = OrbitCamera { yaw: 0.6, pitch: 0.25, ..OrbitCamera::default() };
         let (lo, hi) = mesh.bounds();
         camera.frame(lo, hi);
         let caches = doc.project.texture_sets.iter().map(|ts| SetCache::new(&mesh, ts)).collect();
         let selected = doc.project.texture_sets.iter().enumerate().filter_map(|(i, ts)| ts.stack.last().map(|id| (i, *id))).collect();
-        static NEXT_MESH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Ok(Session {
             doc,
-            mesh_id: NEXT_MESH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            mesh: Arc::new(mesh),
+            mesh_id: next_mesh_id(),
+            source,
+            mesh,
             bvh: Arc::new(bvh),
             mesh_source,
             bake_meshes: Default::default(),
@@ -376,14 +384,16 @@ impl Session {
             log: Vec::new(),
             depth_cache: None,
             export_presets: Default::default(),
+            templates: Default::default(),
         })
     }
 
     /// Replace this session with `next` (another project), keeping the viewport size and the
-    /// user's export presets.
+    /// user's export presets and project templates.
     pub fn switch_to(&mut self, mut next: Session) {
         next.viewport = self.viewport;
         next.export_presets = std::mem::take(&mut self.export_presets);
+        next.templates = std::mem::take(&mut self.templates);
         *self = next;
     }
 
@@ -422,9 +432,9 @@ impl Session {
         Ok(s)
     }
 
-    /// The mesh with its own UVs: UV-tiled sets' atlas UVs mapped back (for mesh export).
+    /// The mesh with its own UVs (UV-tiled sets' UVs outside their atlas), for mesh export.
     pub fn source_mesh(&self) -> Mesh {
-        map_tiled_uvs((*self.mesh).clone(), &self.doc.project, TileGrid::from_atlas)
+        (*self.source).clone()
     }
 
     pub fn project(&self) -> &Project {
@@ -481,6 +491,7 @@ impl Session {
     /// Mark dirty every texture set whose composite differs between `other` and the current
     /// document (after an edit, undo or redo).
     fn invalidate_changed(&mut self, other: &Document) {
+        self.follow_uv_layouts(&other.project);
         self.sync_caches();
         let resources = |d: &Document| d.resources.iter().map(|(n, b)| (n.clone(), Arc::as_ptr(b))).collect::<Vec<_>>();
         let all = resources(other) != resources(&self.doc);
@@ -494,6 +505,26 @@ impl Session {
                 && let Some(c) = self.caches.get_mut(ts)
             {
                 c.invalidate_all();
+            }
+        }
+    }
+
+    /// After the UV tile layout of a texture set changed (UV tiles on or off, tile
+    /// resolutions) between `before` and the current project, map the mesh's UVs into the new
+    /// atlas and rebuild those sets' caches.
+    fn follow_uv_layouts(&mut self, before: &Project) {
+        let layout =
+            |p: &Project, ts: usize| p.texture_sets.get(ts).map(|t| (t.material, t.uv_tiles.iter().map(|u| (*u, t.tile_scale(*u))).collect::<Vec<_>>()));
+        let changed: Vec<usize> = (0..self.doc.project.texture_sets.len()).filter(|ts| layout(before, *ts) != layout(&self.doc.project, *ts)).collect();
+        if changed.is_empty() && before.texture_sets.len() == self.doc.project.texture_sets.len() {
+            return;
+        }
+        self.mesh = tiled_mesh(&self.source, &self.doc.project);
+        self.mesh_id = next_mesh_id();
+        self.depth_cache = None;
+        for ts in changed {
+            if let (Some(c), Some(set)) = (self.caches.get_mut(ts), self.doc.project.texture_sets.get(ts)) {
+                *c = SetCache::new(&self.mesh, set);
             }
         }
     }
@@ -592,7 +623,7 @@ impl Session {
     /// goes first.
     pub fn update_for(&mut self, budget_ms: f64, clock: impl Fn() -> f64) -> bool {
         let start = clock();
-        let mut chunk = if budget_ms.is_finite() { rayon::current_num_threads().clamp(1, CHUNK) } else { CHUNK };
+        let first = if budget_ms.is_finite() { rayon::current_num_threads().clamp(1, CHUNK) } else { CHUNK };
         // The layer being edited: everything else is cached per tile.
         let hot = self.stroke.as_ref().and_then(|s| s.target).map(|t| self.paint_owner(t)).or_else(|| self.selected_layer());
         let stroke_size = self.stroke.as_ref().and_then(|s| self.caches.get(s.ts)).map(|c| c.size);
@@ -617,6 +648,9 @@ impl Session {
             cache.below.pass = cache.dirty.len();
             // Instances in sets of the stroke's size show the live stroke too.
             let preview = preview.as_ref().filter(|_| Some(cache.size) == stroke_size);
+            // Start at the size that fit the budget last time: with a heavy stack (smart
+            // materials at 8K) one tile per thread alone would take several frames' budget.
+            let mut chunk = if budget_ms.is_finite() && cache.chunk > 0 { cache.chunk } else { first };
             while !cache.dirty.is_empty() {
                 let t0 = clock();
                 let tiles = next_chunk(&mut cache.dirty, chunk);
@@ -640,11 +674,15 @@ impl Session {
                 changed = true;
                 let now = clock();
                 let left = budget_ms - (now - start);
+                // As many tiles as fit in what is left, at the pace of this chunk.
+                let per_tile = (now - t0) / tiles.len().max(1) as f64;
+                if budget_ms.is_finite() && per_tile > 0.0 {
+                    // Never above one tile per thread: work can turn heavy from one frame to the next.
+                    cache.chunk = ((budget_ms / per_tile) as usize).clamp(1, first);
+                }
                 if left <= 0.0 {
                     return changed;
                 }
-                // As many tiles as fit in what is left, at the pace of this chunk.
-                let per_tile = (now - t0) / tiles.len().max(1) as f64;
                 let fit = if per_tile > 0.0 { (left / per_tile) as usize } else { CHUNK };
                 if fit == 0 {
                     return changed;
@@ -774,7 +812,7 @@ pub fn check_size(ts: &TextureSet) -> Result<()> {
 /// UDIM numbers of the UV tiles material `m` of `mesh` paints, ascending: `mode` as in
 /// [`Session::new_project_tiled`]. Tiles outside 1001..=2000 are an error in UV tile mode and
 /// leave an automatic set classic (with a note in `log`).
-fn detect_uv_tiles(mesh: &Mesh, m: usize, mode: Option<bool>, log: &mut Vec<String>) -> std::result::Result<Vec<u32>, String> {
+pub(crate) fn detect_uv_tiles(mesh: &Mesh, m: usize, mode: Option<bool>, log: &mut Vec<String>) -> std::result::Result<Vec<u32>, String> {
     if mode == Some(false) {
         return Ok(Vec::new());
     }
@@ -798,16 +836,24 @@ fn detect_uv_tiles(mesh: &Mesh, m: usize, mode: Option<bool>, log: &mut Vec<Stri
     }
 }
 
-/// `mesh` with the UVs of each UV-tiled set's material mapped by `f` (`TileGrid::to_atlas` or
-/// `from_atlas`).
-fn map_tiled_uvs(mut mesh: Mesh, project: &Project, f: fn(&TileGrid, [f32; 2]) -> [f32; 2]) -> Mesh {
+fn next_mesh_id() -> u64 {
+    static NEXT_MESH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT_MESH.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `source` with the UVs of each UV-tiled set's material mapped into its atlas (shared when no
+/// set is UV-tiled).
+fn tiled_mesh(source: &Arc<Mesh>, project: &Project) -> Arc<Mesh> {
+    let tiled: Vec<_> = project.texture_sets.iter().filter_map(|ts| Some((ts, ts.tile_grid()?))).collect();
+    if tiled.is_empty() {
+        return source.clone();
+    }
+    let mut mesh = (**source).clone();
     let mut done = BTreeSet::new();
-    for ts in &project.texture_sets {
-        if let Some(grid) = ts.tile_grid()
-            && done.insert(ts.material)
-        {
-            mesh.map_material_uvs(ts.material, |uv| Vec2::from(f(&grid, uv.to_array())));
+    for (ts, grid) in tiled {
+        if done.insert(ts.material) {
+            mesh.map_material_uvs_with(ts.material, |c, uv| Vec2::from(ts.to_atlas(&grid, c.to_array(), uv.to_array())));
         }
     }
-    mesh
+    Arc::new(mesh)
 }

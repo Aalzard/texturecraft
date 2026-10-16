@@ -1,7 +1,7 @@
 //! Bake commands: settings, high-definition meshes, cage, and project round trips.
 
 use serde_json::{Value, json};
-use texturecraft_engine::core::{BakeMatch, BakedMap};
+use texturecraft_engine::core::{BakeMatch, BakedMap, DirectionMode, PositionMode, RayDistribution, RaySettings, SelfOcclusion};
 use texturecraft_engine::geom::{Mesh, primitives};
 use texturecraft_engine::{Session, execute};
 
@@ -126,4 +126,117 @@ fn bake_settings_apply_atomically() {
     execute(&mut s, "bake.settings", &copy).unwrap();
     let (a, b) = (&s.doc.project.texture_sets[0].bake, &s.doc.project.texture_sets[1].bake);
     assert_eq!(a, b);
+}
+
+#[test]
+fn per_map_ray_settings_round_trip() {
+    let mut s = plane_session();
+    let p = json!({
+        "ao": { "rays": 48, "maxDistance": 0.5, "spread": 90, "distribution": "uniform", "ignoreBackface": true, "selfOcclusion": "sameMeshName" },
+        "thickness": { "rays": 12, "spread": 45 },
+        "bentNormal": { "rays": 6, "maxDistance": 0.1 },
+        "curvatureRadius": 3,
+        "positionMode": "boundingSphere",
+        "directionMode": "positive",
+    });
+    let r = execute(&mut s, "bake.settings", &p).unwrap();
+    let b = s.doc.project.texture_sets[0].bake.clone();
+    assert_eq!(b.ao, RaySettings { rays: 48, max_distance: 0.5, spread: 90.0, distribution: RayDistribution::Uniform });
+    assert!(b.ao_ignore_backface && b.ao_self_occlusion == SelfOcclusion::SameMeshName);
+    assert_eq!((b.thickness.rays, b.thickness.spread, b.thickness.max_distance), (12, 45.0, 0.25));
+    assert_eq!((b.bent_normal.rays, b.bent_normal.max_distance, b.bent_normal.spread), (6, 0.1, 180.0));
+    assert_eq!((b.curvature_radius, b.position_mode, b.direction_mode), (3, PositionMode::BoundingSphere, DirectionMode::Positive));
+    assert_eq!(r[0]["settings"]["ao"]["selfOcclusion"], "sameMeshName");
+    assert_eq!(r[0]["settings"]["thickness"]["distribution"], "cosine");
+    // The project file keeps them.
+    let back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
+    assert_eq!(back.doc.project.texture_sets[0].bake, b);
+    // `rays` and `maxDistance` set every ray map; unknown names change nothing.
+    execute(&mut s, "bake.settings", &json!({ "rays": 16, "maxDistance": 0.2 })).unwrap();
+    let b = s.doc.project.texture_sets[0].bake.clone();
+    assert!([b.ao, b.thickness, b.bent_normal].iter().all(|r| r.rays == 16 && r.max_distance == 0.2));
+    for bad in [
+        json!({ "rays": 8, "ao": { "distribution": "gaussian" } }),
+        json!({ "ao": { "selfOcclusion": "never" } }),
+        json!({ "thickness": { "distribution": 3, "rays": 2 }, "positionMode": "uv" }),
+        json!({ "directionMode": "absolute" }),
+    ] {
+        assert!(execute(&mut s, "bake.settings", &bad).is_err(), "{bad}");
+        assert_eq!(s.doc.project.texture_sets[0].bake, b, "{bad} changed nothing");
+    }
+    // Forcing the CPU bakes there.
+    let r = execute(&mut s, "bake.run", &json!({ "resolution": 128, "maps": ["ambient_occlusion"], "cpu": true })).unwrap();
+    assert_eq!(r["tracer"], json!(["CPU"]));
+}
+
+/// A GLB of `mesh` lifted by `dy`: one part `Part_high` whose material's base color is `png`.
+fn textured_glb(mesh: &Mesh, dy: f32, png: &[u8]) -> Vec<u8> {
+    let mut bin = Vec::new();
+    let mut view = |bytes: &[u8]| {
+        let offset = bin.len();
+        bin.extend_from_slice(bytes);
+        bin.resize(bin.len().next_multiple_of(4), 0);
+        json!({ "buffer": 0, "byteOffset": offset, "byteLength": bytes.len() })
+    };
+    let floats = |v: Vec<f32>| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let views = [
+        view(&floats(mesh.positions.iter().flat_map(|p| [p.x, p.y + dy, p.z]).collect())),
+        view(&floats(mesh.uvs.iter().flat_map(|uv| [uv.x, uv.y]).collect())),
+        view(&mesh.indices.iter().flat_map(|i| i.to_le_bytes()).collect::<Vec<u8>>()),
+        view(png),
+    ];
+    let (lo, hi) = mesh.bounds();
+    let doc = json!({
+        "asset": { "version": "2.0" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "name": "Part_high", "mesh": 0 }],
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0, "TEXCOORD_0": 1 }, "indices": 2, "material": 0 }] }],
+        "materials": [{ "name": "Painted", "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 } } }],
+        "textures": [{ "source": 0 }],
+        "images": [{ "bufferView": 3, "mimeType": "image/png" }],
+        "buffers": [{ "byteLength": bin.len() }],
+        "bufferViews": views,
+        "accessors": [
+            { "bufferView": 0, "componentType": 5126, "count": mesh.positions.len(), "type": "VEC3", "min": [lo.x, lo.y + dy, lo.z], "max": [hi.x, hi.y + dy, hi.z] },
+            { "bufferView": 1, "componentType": 5126, "count": mesh.positions.len(), "type": "VEC2" },
+            { "bufferView": 2, "componentType": 5125, "count": mesh.indices.len(), "type": "SCALAR" }
+        ]
+    });
+    let mut text = serde_json::to_vec(&doc).unwrap();
+    text.resize(text.len().next_multiple_of(4), b' ');
+    let mut glb = Vec::new();
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&((12 + 8 + text.len() + 8 + bin.len()) as u32).to_le_bytes());
+    for (chunk, kind) in [(&text, b"JSON"), (&bin, b"BIN\0")] {
+        glb.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
+        glb.extend_from_slice(kind);
+        glb.extend_from_slice(chunk);
+    }
+    glb
+}
+
+#[test]
+fn color_map_samples_a_textured_gltf_high_poly() {
+    let mut s = plane_session();
+    let low = s.mesh.as_ref().clone();
+    // A 4×4 texture in quadrants: red, green / blue, mid grey (top row = v 0).
+    let quadrant = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [128, 128, 128, 255]];
+    let img = image::RgbaImage::from_fn(4, 4, |x, y| image::Rgba(quadrant[(y / 2 * 2 + x / 2) as usize]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    s.add_high_poly_bytes("painted.glb", textured_glb(&low, 0.002, &png)).unwrap();
+    assert!(s.log.iter().any(|l| l.contains("1 base color textures")), "{:?}", s.log);
+    execute(&mut s, "bake.run", &json!({ "resolution": 128, "maps": ["color_map", "opacity"], "dilation": 0 })).unwrap();
+    let color = &s.doc.baked[&0].maps[&BakedMap::ColorMap];
+    let at = |x: usize, y: usize| &color[(y * 128 + x) * 3..(y * 128 + x) * 3 + 3];
+    let grey = 128.0 / 255.0;
+    for ((x, y), want) in [((32, 32), [1.0, 0.0, 0.0]), ((96, 32), [0.0, 1.0, 0.0]), ((32, 96), [0.0, 0.0, 1.0]), ((96, 96), [grey; 3])] {
+        assert!(at(x, y).iter().zip(want).all(|(a, b)| (a - b).abs() < 2e-3), "texel {x},{y}: {:?} vs {want:?}", at(x, y));
+    }
+    assert!(s.doc.baked[&0].maps[&BakedMap::Opacity].iter().all(|o| *o > 0.99), "the high poly covers the plane");
+    // The textures come back with the project.
+    let back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
+    assert_eq!(back.bake_meshes.high[0].base_color, s.bake_meshes.high[0].base_color);
 }

@@ -11,6 +11,7 @@ pub mod control;
 pub mod dock;
 pub mod docking;
 pub mod export_templates;
+pub mod fonts;
 pub mod gpu;
 pub mod i18n;
 pub mod keymap;
@@ -45,6 +46,11 @@ pub struct BakeJob {
     pub total: usize,
 }
 
+/// The browser build's notice when WebGPU is unavailable and wgpu fell back to WebGL2.
+pub const WEBGL_NOTICE: &str = i18n::n_(
+    "WebGPU isn't available in this browser, so TextureCraft runs on WebGL2: Rendering mode path traces on the CPU (slower) and large texture sets show at reduced resolution. A current Chrome, Edge or Safari has WebGPU.",
+);
+
 pub struct Toast {
     pub text: String,
     pub error: bool,
@@ -78,6 +84,10 @@ pub struct TextureCraftApp {
     pub placing_decal: Option<texturecraft_engine::core::LayerId>,
     /// The wgpu state (screenshots read the renderer's targets).
     pub render_state: Option<eframe::egui_wgpu::RenderState>,
+    /// CJK fallback fonts for the UI language.
+    pub fonts: fonts::UiFonts,
+    /// A notice across the top of the window until dismissed (English key, shown translated).
+    pub banner: Option<&'static str>,
     last_time: f64,
     /// When the next autosave is due (seconds of app time; desktop only).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -88,8 +98,16 @@ pub struct TextureCraftApp {
 impl TextureCraftApp {
     pub fn new(cc: &eframe::CreationContext<'_>, session: Session) -> TextureCraftApp {
         theme::install(&cc.egui_ctx);
+        // Bakes cast their rays on a GPU device of their own (created on the first bake).
+        #[cfg(not(target_arch = "wasm32"))]
+        texturecraft_engine::bake_cmds::install_gpu_tracer(Arc::new(texturecraft_render::gpu_bake::GpuBaker::new()));
         let gpu = cc.wgpu_render_state.as_ref().map(gpu::init);
-        let ui = cc.storage.and_then(|s| eframe::get_value::<UiState>(s, "ui")).unwrap_or_default();
+        // The first run speaks the OS (or browser) language.
+        let ui = cc.storage.and_then(|s| eframe::get_value::<UiState>(s, "ui")).unwrap_or_else(|| {
+            let mut ui = UiState::default();
+            ui.prefs.language = i18n::os_language().into();
+            ui
+        });
         let next_autosave = ui.prefs.autosave_minutes as f64 * 60.0;
         let mut app = TextureCraftApp {
             session,
@@ -109,13 +127,21 @@ impl TextureCraftApp {
             last_paint_point: None,
             placing_decal: None,
             render_state: cc.wgpu_render_state.clone(),
+            fonts: fonts::UiFonts::default(),
+            banner: None,
             last_time: 0.0,
             next_autosave,
             styled: true,
         };
         app.ui.rename = None;
         app.ui.windows.new_project = false;
+        i18n::set_language(&app.ui.prefs.language);
         export_templates::load_library(&mut app, cc.storage);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let skipped = app.session.load_templates(user_dir("templates"));
+            app.session.log.extend(skipped.into_iter().map(|w| format!("Project template skipped: {w}")));
+        }
         app
     }
 
@@ -165,7 +191,7 @@ impl TextureCraftApp {
                 Err(std::sync::mpsc::TryRecvError::Empty) => return,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.bake = None;
-                    self.toast("bake worker stopped", true);
+                    self.toast(i18n::tr("The bake worker stopped"), true);
                     return;
                 }
             }
@@ -174,7 +200,7 @@ impl TextureCraftApp {
         if job.current.is_none() {
             if job.queue.is_empty() {
                 self.bake = None;
-                self.toast("Mesh maps baked", false);
+                self.toast(i18n::tr("Mesh maps baked"), false);
                 return;
             }
             let ts = job.queue.remove(0);
@@ -254,12 +280,18 @@ impl TextureCraftApp {
 }
 
 impl eframe::App for TextureCraftApp {
+    /// The browser never tells eframe the page is closing, so save often there.
+    fn auto_save_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(if cfg!(target_arch = "wasm32") { 5 } else { 30 })
+    }
+
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, "ui", &self.ui);
         export_templates::save_library(self, storage);
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let t0 = now_ms();
         let now = ctx.input(|i| i.time);
         let dt = (now - self.last_time) as f32;
         if dt > 0.0 {
@@ -284,9 +316,13 @@ impl eframe::App for TextureCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.autosave(now);
         i18n::set_language(&self.ui.prefs.language);
+        #[cfg(target_arch = "wasm32")]
+        keymap::sync_captured(&self.ui.keymap);
+        self.fonts.update(ctx, i18n::current().code, self.ui.windows.settings);
         menus::shortcuts(self, ctx);
         profile::drive(self, ctx);
         self.toasts.retain(|t| t.until > now);
+        self.profiler.logic_ms = (now_ms() - t0) as f32;
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -294,6 +330,7 @@ impl eframe::App for TextureCraftApp {
         let t0 = now_ms();
         if !self.ui.hide_ui {
             menus::menu_bar(self, ui);
+            banner(self, ui);
             toolbar::top_bar(self, ui);
             toolbar::status_bar(self, ui);
             toolbar::tool_shelf(self, ui);
@@ -338,6 +375,24 @@ pub fn now_ms() -> f64 {
     }
     #[cfg(target_arch = "wasm32")]
     0.0
+}
+
+/// The dismissable notice under the menu bar.
+fn banner(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
+    let Some(text) = app.banner else { return };
+    egui::Panel::top("banner").frame(egui::Frame::NONE.fill(theme::TOKENS.row_selected).inner_margin(egui::Margin::symmetric(10, 5))).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(egui_phosphor::regular::INFO).color(theme::TOKENS.accent));
+            // The text wraps in the width the dismiss button leaves.
+            let width = (ui.available_width() - 28.0).max(80.0);
+            ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(i18n::tr(text)).color(theme::TOKENS.text_strong)).wrap());
+            });
+            if widgets::icon_button(ui, egui_phosphor::regular::X, i18n::tr("Dismiss"), false, 18.0).clicked() {
+                app.banner = None;
+            }
+        });
+    });
 }
 
 fn toasts(app: &mut TextureCraftApp, ctx: &egui::Context) {

@@ -274,10 +274,163 @@ fn fbx_ascii_and_z_up() {
     check_fbx_scene(&import_mesh_bytes("z.fbx", &binary_fbx(&scene(true), 7700, true)).unwrap().mesh, true);
 }
 
+/// The scene of [`scene`] (Y up) as FBX 6.1 writes it: geometry inside the Model, objects named
+/// `Class::Name`, `Properties60`, `Connect` records, GlobalSettings inside Objects.
+const FBX61: &str = r#"; FBX 6.1.0 project file
+FBXHeaderExtension:  {
+	FBXHeaderVersion: 1003
+	FBXVersion: 6100
+}
+Definitions:  {
+	Version: 100
+	Count: 4
+}
+Objects:  {
+	Model: "Model::Parent", "Null" {
+		Version: 232
+		Properties60:  {
+			Property: "QuaternionInterpolate", "bool", "",0
+			Property: "Lcl Translation", "Lcl Translation", "A+",0,0,100
+			Property: "Lcl Rotation", "Lcl Rotation", "A+",0,0,90
+			Property: "Lcl Scaling", "Lcl Scaling", "A+",1,1,1
+		}
+		MultiLayer: 0
+		Shading: Y
+		Culling: "CullingOff"
+		TypeFlags: "Null"
+	}
+	Model: "Model::Child", "Mesh" {
+		Version: 232
+		Properties60:  {
+			Property: "Lcl Translation", "Lcl Translation", "A+",100,0,0
+		}
+		Vertices: 0,0,0,100,0,0,100,100,0,0,100,0,200,0,0,300,0,0,200,100,0
+		PolygonVertexIndex: 0,1,2,-4,4,5,-7
+		GeometryVersion: 124
+		LayerElementNormal: 0 {
+			Version: 101
+			Name: ""
+			MappingInformationType: "ByPolygonVertex"
+			ReferenceInformationType: "Direct"
+			Normals: 0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1
+		}
+		LayerElementUV: 0 {
+			Version: 101
+			Name: "UVChannel_1"
+			MappingInformationType: "ByPolygonVertex"
+			ReferenceInformationType: "IndexToDirect"
+			UV: 0,0,1,0,1,1,0,1
+			UVIndex: 0,1,2,3,0,1,3
+		}
+		LayerElementMaterial: 0 {
+			Version: 101
+			Name: ""
+			MappingInformationType: "ByPolygon"
+			ReferenceInformationType: "IndexToDirect"
+			Materials: 0,1
+		}
+		Layer: 0 {
+			Version: 100
+			LayerElement:  {
+				Type: "LayerElementNormal"
+				TypedIndex: 0
+			}
+		}
+	}
+	Material: "Material::Red", "" {
+		Version: 102
+		ShadingModel: "lambert"
+	}
+	Material: "Material::Blue", "" {
+		Version: 102
+	}
+	GlobalSettings:  {
+		Version: 1000
+		Properties60:  {
+			Property: "UpAxis", "int", "",1
+			Property: "UpAxisSign", "int", "",1
+			Property: "FrontAxis", "int", "",2
+			Property: "UnitScaleFactor", "double", "",1
+		}
+	}
+}
+Connections:  {
+	Connect: "OO", "Model::Parent", "Model::Scene"
+	Connect: "OO", "Model::Child", "Model::Parent"
+	Connect: "OO", "Material::Red", "Model::Child"
+	Connect: "OO", "Material::Blue", "Model::Child"
+}
+Takes:  {
+	Current: ""
+}
+"#;
+
+/// [`FBX61`] as a node tree for the binary encoding (FBX 6.1 binary names are `Name\0\1Class`).
+fn scene61() -> Vec<N> {
+    let p60 = |name: &'static str, values: &[f64]| {
+        let mut props = vec![P::S(name), P::S(name), P::S("A+")];
+        props.extend(values.iter().map(|v| P::D(*v)));
+        n("Property", props, vec![])
+    };
+    let mut child = vec![
+        n("Properties60", vec![], vec![p60("Lcl Translation", &[100.0, 0.0, 0.0])]),
+        n(
+            "Vertices",
+            vec![P::Doubles(vec![0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 100.0, 100.0, 0.0, 0.0, 100.0, 0.0, 200.0, 0.0, 0.0, 300.0, 0.0, 0.0, 200.0, 100.0, 0.0])],
+            vec![],
+        ),
+        n("PolygonVertexIndex", vec![P::Ints(vec![0, 1, 2, -4, 4, 5, -7])], vec![]),
+    ];
+    child.push(layer("LayerElementNormal", "ByPolygonVertex", "Direct", vec![n("Normals", vec![P::Doubles([0.0, 0.0, 1.0].repeat(7))], vec![])]));
+    child.push(layer(
+        "LayerElementUV",
+        "ByPolygonVertex",
+        "IndexToDirect",
+        vec![n("UV", vec![P::Doubles(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0])], vec![]), n("UVIndex", vec![P::Ints(vec![0, 1, 2, 3, 0, 1, 3])], vec![])],
+    ));
+    child.push(layer("LayerElementMaterial", "ByPolygon", "IndexToDirect", vec![n("Materials", vec![P::Ints(vec![0, 1])], vec![])]));
+    let connect = |a: &'static str, b: &'static str| n("Connect", vec![P::S("OO"), P::S(a), P::S(b)], vec![]);
+    vec![
+        n("FBXHeaderExtension", vec![], vec![n("FBXVersion", vec![P::I(6100)], vec![])]),
+        n(
+            "Objects",
+            vec![],
+            vec![
+                n(
+                    "Model",
+                    vec![P::S("Parent\u{0}\u{1}Model"), P::S("Null")],
+                    vec![n("Properties60", vec![], vec![p60("Lcl Translation", &[0.0, 0.0, 100.0]), p60("Lcl Rotation", &[0.0, 0.0, 90.0])])],
+                ),
+                n("Model", vec![P::S("Child\u{0}\u{1}Model"), P::S("Mesh")], child),
+                n("Material", vec![P::S("Red\u{0}\u{1}Material"), P::S("")], vec![]),
+                n("Material", vec![P::S("Blue\u{0}\u{1}Material"), P::S("")], vec![]),
+            ],
+        ),
+        n(
+            "Connections",
+            vec![],
+            vec![
+                connect("Parent\u{0}\u{1}Model", "Scene\u{0}\u{1}Model"),
+                connect("Child\u{0}\u{1}Model", "Parent\u{0}\u{1}Model"),
+                connect("Red\u{0}\u{1}Material", "Child\u{0}\u{1}Model"),
+                connect("Blue\u{0}\u{1}Material", "Child\u{0}\u{1}Model"),
+            ],
+        ),
+    ]
+}
+
+#[test]
+fn fbx_6_ascii_and_binary_read_like_7() {
+    check_fbx_scene(&import_mesh_bytes("six.fbx", FBX61.as_bytes()).unwrap().mesh, false);
+    check_fbx_scene(&import_mesh_bytes("six.fbx", &binary_fbx(&scene61(), 6100, false)).unwrap().mesh, false);
+    hammer("x.fbx", FBX61.as_bytes());
+    hammer("x.fbx", &binary_fbx(&scene61(), 6100, true));
+}
+
 #[test]
 fn fbx_old_versions_and_garbage_are_errors() {
     let mut old = binary_fbx(&scene(false), 7400, false);
-    old[23..27].copy_from_slice(&6100u32.to_le_bytes());
+    old[23..27].copy_from_slice(&5800u32.to_le_bytes());
     assert!(matches!(import_mesh_bytes("old.fbx", &old), Err(FormatError::Unsupported(_))));
     assert!(import_mesh_bytes("a.fbx", b"; FBX 6.1.0 project file\nObjects: {\n}\n").is_err());
     // An array claiming 2^32-1 doubles never allocates its claim.

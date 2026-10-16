@@ -44,11 +44,11 @@ fresh random token the app writes to `<temp>/texturecraft-control-<port>.token` 
 | `ui.inspect` | | UI state, viewport rect, fps, bake progress, toasts |
 | `ui.menu.list` | | the menu catalog: `{menu, submenu, label, id, shortcut, implemented, enabled}` |
 | `ui.menu.invoke` | `{id}` | behaves like a menu click (may open a window) |
-| `ui.set` | fields of the UI state, e.g. `{"layout": "Only3D"}`; `dock` is the panel layout (`{main, windows}`: `{"tabs": {"tabs": [...], "active": 0}}` or `{"split": {"vertical", "fraction", "first", "second"}}` nodes over `Viewport`, `Assets`, `TextureSetList`, `Layers`, `TextureSetSettings`, `Properties`, `Display`, `Shader`, `History`, `Log`), `keymap` the custom shortcuts (`{"file.save": "F5"}`, `""` unbinds) | `null` |
+| `ui.set` | fields of the UI state, e.g. `{"layout": "Only3D"}`; `dock` is the panel layout (`{main, windows}`: `{"tabs": {"tabs": [...], "active": 0}}` or `{"split": {"vertical", "fraction", "first", "second"}}` nodes over `Viewport`, `Assets`, `TextureSetList`, `Layers`, `TextureSetSettings`, `Properties`, `Display`, `Shader`, `History`, `Log`; `closed` lists where each closed panel was, so reopening it puts it back), `prefs` the settings (`{"language": "ja", "viewport_texture": 1}`), `keymap` the custom shortcuts (`{"file.save": "F5"}`, `""` unbinds) | `null` |
 | `viewport.screenshot` | `{view?: "3d" \| "2d"}` | `{width, height, png}` (PNG, base64) |
 | `ui.screenshot` | | `{width, height, png}` of the whole window, after the next frame |
 | `debug.paintTest` | `{from: [x, y], to: [x, y], frames?: 120}` | Paints a straight stroke through the real frame loop (viewport pixels, one point per frame) for performance work |
-| `debug.frames` | | Frame timing since the last call (then cleared): `{frames, intervalMs, uiMs, syncMs}` each `{avg, p95, max}`; `syncMs` is compositing plus display tile conversion |
+| `debug.frames` | | Frame timing since the last call (then cleared): `{frames, intervalMs, uiMs, syncMs, logicMs}` each `{avg, p95, max}`; `syncMs` is compositing plus display tile conversion, `logicMs` input, control requests and scripted strokes before the UI is built; `worst` breaks down the slowest frame |
 
 Example session:
 
@@ -105,7 +105,7 @@ a `path`) is refused, and so is any command given a `path` or `dir` (`resource.i
 | `command_list` | `{filter?}` | Command ids, labels, params docs, enabled now |
 | `command_run` | `{id, params?}` | Any command by id |
 | `command_batch` | `{steps: [{id, params?}]}` | Stops at the first error: `{completed, results, failed: {index, id, error}}` (a tool error) |
-| `project_new` | `{mesh?, resolution?, name?}` | Built-in mesh: material_ball, sphere, cube, rounded_cube, cylinder, torus, plane, crate |
+| `project_new` | `{mesh?, resolution?, name?, template?}` | Built-in mesh: material_ball, sphere, cube, rounded_cube, cylinder, torus, plane, crate; `template` names a project template (`project.templates`) |
 | `project_open` | `{path}` | `.tcraft` or a mesh file, relative to the read root |
 | `project_save` | `{path?}` | `.tcraft` (appended if missing), relative to the write root |
 | `mesh_import` | `{path, resolution?}` | New project from .glb/.gltf/.fbx/.dae/.usd/.usda/.usdc/.usdz/.obj/.ply/.stl |
@@ -113,7 +113,7 @@ a `path`) is refused, and so is any command given a `path` or `dir` (`resource.i
 | `material_save` | `{path, layer?, name?}` | A layer or folder as a `.tcmat` smart material below the write root |
 | `material_load` | `{path}` | Add a `.tcmat` smart material above the selection |
 | `textures_export` | `{dir, preset?, ts?, format?, padding?, size?}` | Writes files below the write root |
-| `bake` | `{ts?, resolution?, maps?}` | Mesh maps for generators and smart materials |
+| `bake` | `{ts?, resolution?, maps?, cpu?}` | Mesh maps for generators and smart materials; rays on the GPU when there is one (`cpu: true`: on the CPU). Per-map ray settings (`ao`, `thickness`, `bentNormal`: rays, maxDistance, spread, distribution; AO ignoreBackface, selfOcclusion) are `bake.settings` parameters |
 | `paint_stroke` | `{points, viewport?, color?, roughness?, metallic?, height?, size?, hardness?}` | Paint tool + brush material + `tool.stroke`; points in viewport pixels |
 | `viewport_render` | `{view?: "3d" \| "2d", width?, height?, yaw?, pitch?, samples?, bounces?, cpu?}` | Headless: PNG image (≤ 2048 px a side); yaw/pitch in degrees for this render only; `samples` (1–4096) path traces the 3D view instead, on the GPU when it has compute shaders, else (or with `cpu: true`) on the CPU (no GPU needed) |
 | `viewport_screenshot` | `{view?}` | Bridge: the app's 3D or 2D view |

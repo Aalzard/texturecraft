@@ -1,10 +1,11 @@
-//! Mesh import: glTF/GLB, FBX, COLLADA, USD (usda, usdc, usdz), OBJ, PLY and STL into a
+//! Mesh import: glTF/GLB, FBX, COLLADA, USD (usda, usdc, usdz), Alembic, OBJ, PLY and STL into a
 //! world-space [`Mesh`] with one submesh per material and part (glTF node, OBJ object, FBX
-//! model, COLLADA node, USD Mesh prim; unnamed parts take the file stem), materials contiguous,
+//! model, COLLADA node, USD Mesh prim, Alembic PolyMesh; unnamed parts take the file stem), materials contiguous,
 //! glTF UV convention (origin top-left, v down),
 //! normals (computed when missing), vertex colors (glTF, OBJ, PLY), UVs (auto-unwrapped when
 //! missing) and MikkTSpace tangents. glTF cameras come along as the project's camera list.
 
+mod abc;
 mod dae;
 mod fbx;
 mod gltf;
@@ -22,7 +23,7 @@ use std::collections::hash_map::Entry;
 
 use texturecraft_geom::glam::{Vec2, Vec3, Vec4};
 use texturecraft_geom::unwrap::{all_triangles_degenerate, auto_unwrap, weld_ids};
-use texturecraft_geom::{MAX_TRIANGLES, Mesh, SubMesh, UvGBuffer};
+use texturecraft_geom::{BaseColor, MAX_TRIANGLES, Mesh, SubMesh, UvGBuffer};
 
 use crate::{FormatError, Result};
 
@@ -37,7 +38,7 @@ const UNWRAP_PADDING: f32 = 4.0;
 const REPORT_RESOLUTION: u32 = 512;
 
 /// File extensions [`import_mesh_bytes`] understands.
-pub const MESH_EXTENSIONS: [&str; 11] = ["gltf", "glb", "fbx", "dae", "usd", "usda", "usdc", "usdz", "obj", "ply", "stl"];
+pub const MESH_EXTENSIONS: [&str; 12] = ["gltf", "glb", "fbx", "dae", "usd", "usda", "usdc", "usdz", "abc", "obj", "ply", "stl"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImportedMesh {
@@ -90,6 +91,15 @@ pub(crate) struct RawMesh {
     pub groups: Vec<(String, String, Vec<u32>)>,
     pub warnings: Vec<String>,
     pub cameras: Vec<RawCamera>,
+    /// Materials whose base color is not plain white (glTF).
+    pub base_colors: Vec<RawBaseColor>,
+}
+
+/// A material's base color as a file gives it: the linear factor and the encoded texture.
+pub(crate) struct RawBaseColor {
+    pub material: String,
+    pub factor: Vec4,
+    pub image: Option<Vec<u8>>,
 }
 
 impl RawMesh {
@@ -219,16 +229,72 @@ pub fn import_mesh(path: &std::path::Path) -> Result<ImportedMesh> {
     finish(read(name, &bytes, path.parent())?)
 }
 
+/// Largest side of a base color texture kept for color-map bakes (larger ones are downscaled),
+/// and the texel budget of one high poly's textures.
+const BASE_COLOR_SIDE: u32 = 4096;
+const BASE_COLOR_TEXELS: u64 = 1 << 26;
+
+/// A high-poly mesh for baking and the base color of each of its materials (None: white).
+#[derive(Clone, Debug, PartialEq)]
+pub struct HighPolyMesh {
+    pub mesh: Mesh,
+    pub base_color: Vec<Option<BaseColor>>,
+    /// Textures that could not be used.
+    pub warnings: Vec<String>,
+}
+
 /// Import a high-poly (or cage) mesh for baking: like [`import_mesh_bytes`], but missing UVs stay
-/// at 0 and no tangents are generated (bakers read positions, normals, colors and part names), so
-/// million-triangle meshes import quickly.
-pub fn import_high_poly_bytes(file_name: &str, bytes: &[u8]) -> Result<Mesh> {
-    let (mut mesh, _, uvs) = geometry(read(file_name, bytes, None)?)?;
+/// at 0 and no tangents are generated (bakers read positions, normals, colors, UVs and part
+/// names), so million-triangle meshes import quickly. Base color factors and embedded textures
+/// (glTF) come along for the color map, textures downscaled to [`BASE_COLOR_SIDE`].
+pub fn import_high_poly_bytes(file_name: &str, bytes: &[u8]) -> Result<HighPolyMesh> {
+    let mut raw = read(file_name, bytes, None)?;
+    let colors = std::mem::take(&mut raw.base_colors);
+    let (mut mesh, mut warnings, uvs) = geometry(raw)?;
     let n = mesh.positions.len();
     mesh.uvs = uvs.filter(|uv| uv.len() == n && uv.iter().all(|v| v.is_finite())).unwrap_or_else(|| vec![Vec2::ZERO; n]);
     mesh.tangents = vec![Vec4::new(1.0, 0.0, 0.0, 1.0); n];
     mesh.validate()?;
-    Ok(mesh)
+    let mut budget = BASE_COLOR_TEXELS;
+    let base_color = mesh
+        .materials
+        .iter()
+        .map(|m| {
+            let c = colors.iter().find(|c| c.material == *m)?;
+            let (width, height, texels) = match c.image.as_deref().map(|b| decode_base_color(b, &mut budget)) {
+                Some(Ok(t)) => t,
+                Some(Err(e)) => {
+                    warnings.push(format!("base color texture of {m}: {e}"));
+                    (0, 0, Vec::new())
+                }
+                None => (0, 0, Vec::new()),
+            };
+            Some(BaseColor { factor: c.factor, width, height, texels })
+        })
+        .collect();
+    Ok(HighPolyMesh { mesh, base_color, warnings })
+}
+
+/// Decode a base color texture to RGBA8, at most [`BASE_COLOR_SIDE`] per side, charging its
+/// texels to `budget`.
+fn decode_base_color(bytes: &[u8], budget: &mut u64) -> Result<(u32, u32, Vec<[u8; 4]>)> {
+    let bad = |e: image::ImageError| FormatError::Malformed { kind: "image", msg: e.to_string() };
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| bad(e.into()))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(crate::MAX_IMAGE_SIZE);
+    limits.max_image_height = Some(crate::MAX_IMAGE_SIZE);
+    reader.limits(limits);
+    let img = crate::guard("image", || reader.decode().map_err(bad))?;
+    let img =
+        if img.width().max(img.height()) > BASE_COLOR_SIDE { img.resize(BASE_COLOR_SIDE, BASE_COLOR_SIDE, image::imageops::FilterType::Triangle) } else { img };
+    let rgba = img.into_rgba8();
+    let (w, h) = rgba.dimensions();
+    let texels = u64::from(w) * u64::from(h);
+    if texels > *budget {
+        return Err(FormatError::TooLarge(format!("the base color textures exceed {} megatexels", BASE_COLOR_TEXELS >> 20)));
+    }
+    *budget -= texels;
+    Ok((w, h, rgba.pixels().map(|p| p.0).collect()))
 }
 
 fn read(file_name: &str, bytes: &[u8], base: Option<&std::path::Path>) -> Result<RawMesh> {
@@ -237,6 +303,7 @@ fn read(file_name: &str, bytes: &[u8], base: Option<&std::path::Path>) -> Result
         "fbx" => fbx::read(bytes)?,
         "dae" => dae::read(bytes)?,
         "usd" | "usda" | "usdc" | "usdz" => usd::read(file_name, bytes)?,
+        "abc" => abc::read(bytes)?,
         "obj" => obj::read(bytes)?,
         "ply" => ply::read(bytes)?,
         "stl" => stl::read(bytes)?,

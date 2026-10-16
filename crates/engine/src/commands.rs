@@ -62,6 +62,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(crate::camera_cmds::specs());
         v.extend(crate::quick_mask::specs());
         v.extend(crate::set_cmds::specs());
+        v.extend(crate::uv_tile_cmds::specs());
+        v.extend(crate::template_cmds::specs());
         v.extend(crate::project_cmds::specs());
         v.extend(crate::bake_cmds::specs());
         v.extend(crate::file_cmds::specs());

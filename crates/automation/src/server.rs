@@ -67,6 +67,10 @@ pub struct NewParams {
     pub resolution: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Project template (channels, normal format, resolution, shader): a name from the
+    /// `project.templates` command, e.g. "PBR - Metallic Roughness" (default) or "PBR - Specular Glossiness".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -136,6 +140,9 @@ pub struct BakeParams {
     /// Mesh map ids, e.g. ["ambientOcclusion", "curvature"] (default: the set's bake settings).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maps: Option<Vec<String>>,
+    /// Cast the rays on the CPU even when a GPU is available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -426,7 +433,8 @@ impl TexturecraftMcp {
         to_result(self.call("textures.export", params(&p)).await)
     }
 
-    #[tool(description = "Bake mesh maps (ambient occlusion, curvature, thickness, …) for generators and smart materials.")]
+    #[tool(description = "Bake mesh maps (ambient occlusion, curvature, thickness, …) for generators and smart materials. Rays run \
+        on the GPU when there is one (`cpu: true` forces the CPU); per-map ray settings are `bake.settings` parameters (command_run).")]
     async fn bake(&self, Parameters(p): Parameters<BakeParams>) -> Result<CallToolResult, McpError> {
         to_result(self.run("bake.run", params(&p)).await)
     }

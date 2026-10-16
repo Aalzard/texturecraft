@@ -118,6 +118,65 @@ pub enum BakeMatch {
     ByMeshName,
 }
 
+/// How secondary rays spread over their cone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RayDistribution {
+    /// Cosine-weighted: more rays near the normal.
+    #[default]
+    Cosine,
+    /// Uniform over the cone's solid angle.
+    Uniform,
+}
+
+/// Which geometry occludes ambient occlusion and bent-normal rays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SelfOcclusion {
+    /// Every part occludes every other.
+    #[default]
+    Always,
+    /// Only parts with the same mesh name (suffixes removed) occlude each other.
+    SameMeshName,
+}
+
+/// Position map normalization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PositionMode {
+    /// Each axis spans the bounding box (0..1 per axis).
+    #[default]
+    BoundingBox,
+    /// One scale for every axis: the bounding sphere around the box centre (keeps proportions).
+    BoundingSphere,
+}
+
+/// World space direction map encoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum DirectionMode {
+    /// −1..1 to 0..1: mid grey where the surface is perpendicular to the direction.
+    #[default]
+    Signed,
+    /// 0..1: black where the surface is perpendicular or faces away.
+    Positive,
+}
+
+/// Secondary-ray parameters of one map (ambient occlusion, thickness, bent normals).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RaySettings {
+    /// Rays per sample.
+    pub rays: u32,
+    /// Max ray length relative to the bounding-box diagonal.
+    pub max_distance: f32,
+    /// Full cone angle around the normal in degrees (180 = the whole hemisphere).
+    pub spread: f32,
+    pub distribution: RayDistribution,
+}
+
+impl Default for RaySettings {
+    fn default() -> Self {
+        RaySettings { rays: 32, max_distance: 0.25, spread: 180.0, distribution: RayDistribution::Cosine }
+    }
+}
+
 /// Bake parameters (Painter's "Common parameters" plus the per-map parameters). Fields missing
 /// from older projects take their defaults.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -129,16 +188,25 @@ pub struct BakeSettings {
     /// Supersampling per axis: 1 (none), 2, 4 or 8.
     pub antialiasing: u32,
     pub dilation: u32,
-    /// Rays per texel for AO, thickness and bent normals.
-    pub rays: u32,
-    /// Max occluder distance relative to the bounding-box diagonal.
-    pub max_distance: f32,
+    /// Ambient occlusion rays.
+    pub ao: RaySettings,
+    /// Ambient occlusion and bent-normal rays ignore surfaces they hit from behind.
+    pub ao_ignore_backface: bool,
+    pub ao_self_occlusion: SelfOcclusion,
+    /// Thickness rays (into the surface).
+    pub thickness: RaySettings,
+    /// Bent-normal rays (they follow the ambient occlusion's occluder rules).
+    pub bent_normal: RaySettings,
     /// Curvature strength.
     pub curvature_strength: f32,
     /// Curvature from the baked normal map instead of the mesh.
     pub curvature_from_normal: bool,
+    /// Sampling radius of curvature from the normal map, in texels (0: by resolution).
+    pub curvature_radius: u32,
+    pub position_mode: PositionMode,
     /// World-space direction of the "World space direction" map.
     pub direction: [f32; 3],
+    pub direction_mode: DirectionMode,
     pub maps: BTreeSet<BakedMap>,
     /// Bake from the low poly itself ("Use low poly mesh as high poly").
     pub use_low_as_high: bool,
@@ -159,11 +227,17 @@ impl Default for BakeSettings {
             resolution: 1024,
             antialiasing: 1,
             dilation: 16,
-            rays: 32,
-            max_distance: 0.25,
+            ao: RaySettings::default(),
+            ao_ignore_backface: false,
+            ao_self_occlusion: SelfOcclusion::Always,
+            thickness: RaySettings::default(),
+            bent_normal: RaySettings::default(),
             curvature_strength: 1.0,
             curvature_from_normal: false,
+            curvature_radius: 0,
+            position_mode: PositionMode::BoundingBox,
             direction: [0.0, 1.0, 0.0],
+            direction_mode: DirectionMode::Signed,
             maps: [
                 BakedMap::Normal,
                 BakedMap::WorldNormal,
@@ -227,14 +301,28 @@ pub struct TextureSet {
     #[serde(default = "yes")]
     pub visible: bool,
     /// UDIM numbers of the UV tiles this set paints, ascending (Painter's "UV Tiles" mode);
-    /// empty for a classic set covering UV 0..1. Each tile is `resolution²` texels of one
-    /// atlas laid out by [`TileGrid`].
+    /// empty for a classic set covering UV 0..1. Each tile is one block of an atlas laid out by
+    /// [`TileGrid`], [`TextureSet::block_resolution`] texels square.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uv_tiles: Vec<u32>,
+    /// Per-tile resolutions overriding `resolution` (UDIM → texels per side). A tile smaller
+    /// than the atlas block fills the block's top-left corner (see [`TextureSet::to_atlas`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tile_resolutions: BTreeMap<u32, u32>,
 }
+
+/// Smallest and largest texture set (and UV tile) resolutions.
+pub const MIN_RESOLUTION: u32 = 128;
+pub const MAX_RESOLUTION: u32 = 8192;
 
 /// Lowest and highest UDIM numbers (columns 0..=9, rows 0..=99).
 pub const UDIM_RANGE: std::ops::RangeInclusive<u32> = 1001..=2000;
+
+/// The UDIM tile holding mesh UV `uv` (v down: row r covers v in −r..1−r), if in range.
+pub fn udim_at(uv: [f32; 2]) -> Option<u32> {
+    let (c, r) = (uv[0].floor(), -uv[1].floor());
+    ((0.0..=9.0).contains(&c) && (0.0..=99.0).contains(&r)).then(|| 1001 + c as u32 + 10 * r as u32)
+}
 
 /// The atlas of a UV-tiled texture set: the bounding grid of its tiles, `cols × rows` blocks of
 /// `resolution²` texels. Block (0, 0) is the top-left: the lowest column of the highest row, so
@@ -309,6 +397,7 @@ impl TextureSet {
             baked: BTreeSet::new(),
             visible: true,
             uv_tiles: Vec::new(),
+            tile_resolutions: BTreeMap::new(),
         }
     }
 
@@ -323,10 +412,59 @@ impl TextureSet {
         self.height_strength / self.tile_grid().map_or(1.0, |g| g.cols as f32)
     }
 
-    /// Texels across and down: `resolution` per tile of the atlas grid.
+    /// Texels across and down: [`TextureSet::block_resolution`] per block of the atlas grid.
     pub fn size(&self) -> (u32, u32) {
         let (cols, rows) = self.tile_grid().map_or((1, 1), |g| (g.cols, g.rows));
-        (self.resolution.saturating_mul(cols), self.resolution.saturating_mul(rows))
+        let block = self.block_resolution();
+        (block.saturating_mul(cols), block.saturating_mul(rows))
+    }
+
+    /// Texels per side of UV tile `udim` (its override, else `resolution`).
+    pub fn tile_resolution(&self, udim: u32) -> u32 {
+        self.tile_resolutions.get(&udim).copied().unwrap_or(self.resolution)
+    }
+
+    /// Texels per side of an atlas block: the largest tile resolution (`resolution` for a
+    /// classic set or one without overrides).
+    pub fn block_resolution(&self) -> u32 {
+        if self.tile_resolutions.is_empty() {
+            return self.resolution;
+        }
+        self.uv_tiles.iter().map(|t| self.tile_resolution(*t)).max().unwrap_or(self.resolution)
+    }
+
+    /// The fraction of its atlas block UV tile `udim` fills along each side (1 for uniform sets
+    /// and tiles the set does not paint).
+    pub fn tile_scale(&self, udim: u32) -> f32 {
+        if self.tile_resolutions.is_empty() || !self.uv_tiles.contains(&udim) {
+            return 1.0;
+        }
+        (self.tile_resolution(udim) as f32 / self.block_resolution().max(1) as f32).clamp(1e-3, 1.0)
+    }
+
+    /// Scale of the tile holding mesh UV `uv` (v down) and that tile's origin corner.
+    fn tile_at(&self, uv: [f32; 2]) -> (f32, [f32; 2]) {
+        (udim_at(uv).map_or(1.0, |u| self.tile_scale(u)), [uv[0].floor(), uv[1].floor()])
+    }
+
+    /// Mesh UV → atlas UV of a UV-tiled set for a vertex of a triangle whose UV centroid is
+    /// `centroid` (it names the tile, so vertices on tile borders map with their own triangle).
+    pub fn to_atlas(&self, grid: &TileGrid, centroid: [f32; 2], uv: [f32; 2]) -> [f32; 2] {
+        if self.tile_resolutions.is_empty() {
+            return grid.to_atlas(uv);
+        }
+        let (s, [c, r]) = self.tile_at(centroid);
+        grid.to_atlas([c + (uv[0] - c) * s, r + (uv[1] - r) * s])
+    }
+
+    /// Atlas UV → mesh UV of a UV-tiled set (inverse of [`TextureSet::to_atlas`]).
+    pub fn from_atlas(&self, grid: &TileGrid, uv: [f32; 2]) -> [f32; 2] {
+        let m = grid.from_atlas(uv);
+        if self.tile_resolutions.is_empty() {
+            return m;
+        }
+        let (s, [c, r]) = self.tile_at(m);
+        [c + (m[0] - c) / s, r + (m[1] - r) / s]
     }
 
     pub fn has_channel(&self, c: Channel) -> bool {
@@ -691,6 +829,12 @@ impl Project {
         if let Some(t) = self.texture_sets.iter().find(|t| !t.uv_tiles.is_empty() && (t.tile_grid().is_none() || !t.uv_tiles.is_sorted_by(|a, b| a < b))) {
             return Err(CoreError::Invalid(format!("texture set \"{}\" has invalid UV tiles {:?}", t.name, t.uv_tiles)));
         }
+        let bad_tile_res = |t: &TextureSet| {
+            t.tile_resolutions.iter().any(|(u, r)| !t.uv_tiles.contains(u) || !r.is_power_of_two() || !(MIN_RESOLUTION..=MAX_RESOLUTION).contains(r))
+        };
+        if let Some(t) = self.texture_sets.iter().find(|t| bad_tile_res(t)) {
+            return Err(CoreError::Invalid(format!("texture set \"{}\" has invalid UV tile resolutions {:?}", t.name, t.tile_resolutions)));
+        }
         let mut seen = BTreeSet::new();
         for ts in 0..self.texture_sets.len() {
             for (id, depth) in self.walk(ts) {
@@ -818,6 +962,37 @@ mod tests {
     }
 
     #[test]
+    fn per_map_bake_settings_round_trip_and_old_projects_load() {
+        let mut p = project();
+        let b = &mut p.texture_sets[0].bake;
+        b.ao = RaySettings { rays: 96, max_distance: 0.4, spread: 120.0, distribution: RayDistribution::Uniform };
+        b.ao_ignore_backface = true;
+        b.ao_self_occlusion = SelfOcclusion::SameMeshName;
+        b.thickness.spread = 60.0;
+        b.bent_normal.rays = 8;
+        b.curvature_radius = 3;
+        b.position_mode = PositionMode::BoundingSphere;
+        b.direction_mode = DirectionMode::Positive;
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(serde_json::from_str::<Project>(&json).unwrap(), p);
+        // Settings saved before per-map rays (one shared ray count) load with the defaults.
+        let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let old = v["texture_sets"][0]["bake"].as_object_mut().unwrap();
+        for k in ["ao", "ao_ignore_backface", "ao_self_occlusion", "thickness", "bent_normal", "curvature_radius", "position_mode", "direction_mode"] {
+            old.remove(k);
+        }
+        old.insert("rays".into(), 64.into());
+        old.insert("max_distance".into(), 0.3.into());
+        let back: Project = serde_json::from_value(v).unwrap();
+        let d = BakeSettings::default();
+        let b = &back.texture_sets[0].bake;
+        assert_eq!(
+            (b.ao, b.thickness, b.bent_normal, b.ao_self_occlusion, b.position_mode),
+            (d.ao, d.thickness, d.bent_normal, d.ao_self_occlusion, d.position_mode)
+        );
+    }
+
+    #[test]
     fn content_effects_and_anchors_round_trip_and_old_projects_load() {
         use crate::{Effect, EffectKind, Fill, Filter, Mask, MaskBackground, Projection, Source};
         let mut p = project();
@@ -893,6 +1068,33 @@ mod tests {
         assert_eq!(p.texture_sets[0].size(), (1024, 512));
         let json = serde_json::to_string(&p).unwrap();
         assert_eq!(serde_json::from_str::<Project>(&json).unwrap(), p);
+    }
+
+    #[test]
+    fn per_tile_resolutions_scale_tiles_within_their_blocks() {
+        let mut p = project();
+        let t = &mut p.texture_sets[0];
+        t.uv_tiles = vec![1001, 1002];
+        let g = t.tile_grid().unwrap();
+        // Uniform sets map exactly like the grid.
+        assert_eq!(t.to_atlas(&g, [1.5, 0.5], [1.0, 0.25]), g.to_atlas([1.0, 0.25]));
+        t.tile_resolutions.insert(1002, 128);
+        assert_eq!((t.block_resolution(), t.size(), t.tile_scale(1002), t.tile_scale(1001)), (512, (1024, 512), 0.25, 1.0));
+        // Tile 1002 fills the top-left quarter of block 1; a vertex on the 1001/1002 border maps
+        // with its own triangle's tile.
+        assert_eq!(t.to_atlas(&g, [1.5, 0.5], [2.0, 1.0]), [0.5 + 0.125, 0.25]);
+        assert_eq!(t.to_atlas(&g, [1.5, 0.5], [1.0, 0.0]), [0.5, 0.0]);
+        assert_eq!(t.to_atlas(&g, [0.5, 0.5], [1.0, 1.0]), [0.5, 1.0]);
+        assert_eq!(t.from_atlas(&g, [0.5 + 0.0625, 0.125]), [1.5, 0.5]);
+        assert_eq!(udim_at([1.5, -0.5]), Some(1012));
+        assert_eq!(udim_at([-0.5, 0.5]), None);
+        p.validate().unwrap();
+        // A tile resolution must be a valid size of a tile the set paints.
+        for bad in [(1002, 100), (1002, 16384), (1005, 256)] {
+            let mut q = p.clone();
+            q.texture_sets[0].tile_resolutions = [bad].into_iter().collect();
+            assert!(q.validate().is_err(), "{bad:?}");
+        }
     }
 
     #[test]

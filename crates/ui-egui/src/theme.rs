@@ -49,11 +49,16 @@ pub const TOKENS: Tokens = Tokens {
     radius: 3,
 };
 
-/// Install fonts (egui defaults + the Phosphor icon font) and the dark style.
-pub fn install(ctx: &egui::Context) {
+/// The app's fonts: egui's defaults and the Phosphor icon font (`fonts::UiFonts` adds CJK).
+pub fn font_definitions() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-    ctx.set_fonts(fonts);
+    fonts
+}
+
+/// Install the fonts and the dark style.
+pub fn install(ctx: &egui::Context) {
+    ctx.set_fonts(font_definitions());
     let t = TOKENS;
     ctx.all_styles_mut(|s| {
         s.text_styles = [

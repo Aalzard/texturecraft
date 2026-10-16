@@ -13,6 +13,7 @@ texturecraft-core = { workspace = true }
 texturecraft-texel = { workspace = true }
 texturecraft-geom = { workspace = true }
 texturecraft-compose = { workspace = true }
+texturecraft-bake = { workspace = true }
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
 half = { workspace = true }

@@ -23,6 +23,9 @@ pub mod material_lib;
 pub mod materials;
 pub mod painting;
 pub mod path_tool;
+// Mesh reimport reads files: native only.
+#[cfg(not(target_arch = "wasm32"))]
+mod preserve;
 pub mod preset_cmds;
 pub mod preview;
 pub mod project_cmds;
@@ -31,7 +34,9 @@ pub mod resource_cmds;
 pub mod session;
 pub mod set_cmds;
 pub mod smart_masks;
+pub mod template_cmds;
 pub mod tool_cmds;
+pub mod uv_tile_cmds;
 pub mod view_cmds;
 
 pub use bake_cmds::{BakeMesh, BakeMeshes, BakeTask};

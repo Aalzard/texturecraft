@@ -5,8 +5,8 @@
 
 use std::collections::VecDeque;
 
-use texturecraft_engine::geom::glam::Vec2;
 use serde_json::{Value, json};
+use texturecraft_engine::geom::glam::Vec2;
 
 use crate::TextureCraftApp;
 
@@ -19,6 +19,8 @@ struct FrameStat {
     interval_ms: f32,
     ui_ms: f32,
     sync_ms: f32,
+    /// Input, shortcuts, control requests and scripted strokes before the UI is built.
+    logic_ms: f32,
 }
 
 #[derive(Default)]
@@ -27,6 +29,8 @@ pub struct Profiler {
     last_end: Option<f64>,
     /// Scene sync time of the frame being built.
     pub sync_ms: f32,
+    /// Time in `App::logic` this frame.
+    pub logic_ms: f32,
     paint: Option<PaintTest>,
 }
 
@@ -46,7 +50,7 @@ impl Profiler {
         if self.frames.len() == KEEP {
             self.frames.pop_front();
         }
-        self.frames.push_back(FrameStat { interval_ms, ui_ms, sync_ms: std::mem::take(&mut self.sync_ms) });
+        self.frames.push_back(FrameStat { interval_ms, ui_ms, sync_ms: std::mem::take(&mut self.sync_ms), logic_ms: std::mem::take(&mut self.logic_ms) });
     }
 
     /// Averages and worst cases since the last call (then cleared).
@@ -64,6 +68,11 @@ impl Profiler {
             "intervalMs": stat(|f| f.interval_ms),
             "uiMs": stat(|f| f.ui_ms),
             "syncMs": stat(|f| f.sync_ms),
+            "logicMs": stat(|f| f.logic_ms),
+            // The slowest frame's breakdown: what to look at first.
+            "worst": frames.iter().max_by(|a, b| a.interval_ms.total_cmp(&b.interval_ms)).map(|f| json!({
+                "intervalMs": f.interval_ms, "uiMs": f.ui_ms, "syncMs": f.sync_ms, "logicMs": f.logic_ms,
+            })),
             "painting": self.paint.is_some(),
         })
     }

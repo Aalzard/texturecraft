@@ -261,9 +261,39 @@ impl TileImage {
         if !any || self.width == 0 || self.height == 0 {
             return None;
         }
-        let get = |x: u32, y: u32| {
-            let (x, y) = (x.min(self.width - 1), y.min(self.height - 1));
+        let mut data = vec![0u16; TILE_AREA * comps];
+        for ly in 0..TILE {
+            let y = ty * TILE + ly;
+            if y >= dh {
+                break;
+            }
+            let fy = (y as f32 + 0.5) * sh / dh as f32;
+            for lx in 0..TILE {
+                let x = tx * TILE + lx;
+                if x >= dw {
+                    break;
+                }
+                let fx = (x as f32 + 0.5) * sw / dw as f32;
+                let o = ((ly * TILE + lx) as usize) * comps;
+                if let Some(out) = data.get_mut(o..o + comps) {
+                    self.bilinear(fx, fy, empty, out);
+                }
+            }
+        }
+        Some(data)
+    }
+
+    /// Bilinear sample at `(fx, fy)` in texels (texel centers at +0.5, clamped to the image)
+    /// into `out` (one value per component); unallocated texels read as `empty`. Returns
+    /// whether any of the four texels is allocated.
+    fn bilinear(&self, fx: f32, fy: f32, empty: &[u16], out: &mut [u16]) -> bool {
+        let (fx, fy) = ((fx - 0.5).max(0.0), (fy - 0.5).max(0.0));
+        let (ix, wx, iy, wy) = (fx.floor() as u32, fx.fract(), fy.floor() as u32, fy.fract());
+        let mut any = false;
+        let mut get = |x: u32, y: u32| {
+            let (x, y) = (x.min(self.width.saturating_sub(1)), y.min(self.height.saturating_sub(1)));
             if self.is_allocated(x / TILE, y / TILE) {
+                any = true;
                 self.get(x, y)
             } else {
                 let mut e = [0u16; 4];
@@ -273,33 +303,48 @@ impl TileImage {
                 e
             }
         };
+        let (a, b, c, d) = (get(ix, iy), get(ix + 1, iy), get(ix, iy + 1), get(ix + 1, iy + 1));
+        for (k, slot) in out.iter_mut().enumerate().take(4) {
+            let top = a[k] as f32 * (1.0 - wx) + b[k] as f32 * wx;
+            let bot = c[k] as f32 * (1.0 - wx) + d[k] as f32 * wx;
+            *slot = (top * (1.0 - wy) + bot * wy + 0.5) as u16;
+        }
+        any
+    }
+
+    /// Whether a bilinear read anywhere in the texel box `(x0, y0)..(x1, y1)` can touch an
+    /// allocated tile (callers skip work for regions that would read only `empty`).
+    pub fn any_allocated_in(&self, x0: f32, y0: f32, x1: f32, y1: f32) -> bool {
+        let span = |lo: f32, hi: f32, n: u32| ((lo - 1.0).max(0.0) as u32 / TILE, ((hi + 1.0).max(0.0) as u32 / TILE).min(n.saturating_sub(1)));
+        let ((ax, bx), (ay, by)) = (span(x0.min(x1), x0.max(x1), self.tiles_x), span(y0.min(y1), y0.max(y1), self.tiles_y));
+        (ay..=by).any(|sy| (ax..=bx).any(|sx| self.is_allocated(sx, sy)))
+    }
+
+    /// Tile (tx, ty) of a `width × height` image resampled through `map`: the center of
+    /// destination texel (x, y) reads this image bilinearly at `map(x + 0.5, y + 0.5)` (texels;
+    /// None leaves `empty`). None when no texel of the tile reads an allocated source texel.
+    pub fn remapped_tile(&self, width: u32, height: u32, tx: u32, ty: u32, empty: &[u16], map: &dyn Fn(f32, f32) -> Option<(f32, f32)>) -> Option<Vec<u16>> {
+        if self.allocated_count() == 0 || self.width == 0 || self.height == 0 {
+            return None;
+        }
+        let comps = self.comps;
         let mut data = vec![0u16; TILE_AREA * comps];
-        for ly in 0..TILE {
-            let y = ty * TILE + ly;
-            if y >= dh {
-                break;
-            }
-            let fy = ((y as f32 + 0.5) * sh / dh as f32 - 0.5).max(0.0);
-            let (iy, wy) = (fy.floor() as u32, fy.fract());
-            for lx in 0..TILE {
-                let x = tx * TILE + lx;
-                if x >= dw {
-                    break;
-                }
-                let fx = ((x as f32 + 0.5) * sw / dw as f32 - 0.5).max(0.0);
-                let (ix, wx) = (fx.floor() as u32, fx.fract());
-                let (a, b, c, d) = (get(ix, iy), get(ix + 1, iy), get(ix, iy + 1), get(ix + 1, iy + 1));
+        let mut any = false;
+        for ly in 0..TILE.min(height.saturating_sub(ty * TILE)) {
+            for lx in 0..TILE.min(width.saturating_sub(tx * TILE)) {
                 let o = ((ly * TILE + lx) as usize) * comps;
-                for k in 0..comps {
-                    let top = a[k] as f32 * (1.0 - wx) + b[k] as f32 * wx;
-                    let bot = c[k] as f32 * (1.0 - wx) + d[k] as f32 * wx;
-                    if let Some(slot) = data.get_mut(o + k) {
-                        *slot = (top * (1.0 - wy) + bot * wy + 0.5) as u16;
+                let Some(out) = data.get_mut(o..o + comps) else { continue };
+                match map((tx * TILE + lx) as f32 + 0.5, (ty * TILE + ly) as f32 + 0.5) {
+                    Some((sx, sy)) if sx.is_finite() && sy.is_finite() => any |= self.bilinear(sx, sy, empty, out),
+                    _ => {
+                        for (d, s) in out.iter_mut().zip(empty) {
+                            *d = *s;
+                        }
                     }
                 }
             }
         }
-        Some(data)
+        any.then_some(data)
     }
 }
 
@@ -320,5 +365,19 @@ mod resample_tests {
         assert!(!up.is_allocated(3, 3), "empty regions stay sparse");
         let down = img.resampled(64, 64, &[]);
         assert_eq!(down.get(10, 10)[..2], [30000, 65535]);
+    }
+
+    #[test]
+    fn remap_moves_texels_and_keeps_sparsity() {
+        let mut img = TileImage::new(128, 128, 2);
+        img.set(10, 20, &[1000, 65535]);
+        // Mirror horizontally into a 256-wide image (destination x reads source 127.x - x / 2).
+        let map = |x: f32, y: f32| (x < 256.0).then(|| (128.0 - x / 2.0, y / 2.0));
+        let tile = |tx, ty| img.remapped_tile(256, 256, tx, ty, &[0, 0], &map);
+        assert!(tile(0, 0).is_none(), "nothing allocated is read there");
+        let t = tile(3, 0).unwrap();
+        // Destination (234, 41) center (234.5, 41.5) reads (10.75, 20.75): mostly texel (10, 20).
+        let v = t[((41 * TILE + (234 - 192)) * 2) as usize];
+        assert!(v > 500, "{v}");
     }
 }
