@@ -15,6 +15,8 @@ enum P {
     S(&'static str),
     Doubles(Vec<f64>),
     Ints(Vec<i32>),
+    /// Binary data (`R`); ASCII writes it as base64 after an empty first value.
+    R(Vec<u8>),
 }
 
 struct N {
@@ -154,6 +156,11 @@ impl FbxWriter {
                 }
                 P::Doubles(v) => self.array(&mut props, b'd', v.len(), v.iter().flat_map(|x| x.to_le_bytes()).collect()),
                 P::Ints(v) => self.array(&mut props, b'i', v.len(), v.iter().flat_map(|x| x.to_le_bytes()).collect()),
+                P::R(b) => {
+                    props.push(b'R');
+                    props.extend((b.len() as u32).to_le_bytes());
+                    props.extend(b);
+                }
             }
         }
         let start = out.len();
@@ -200,6 +207,10 @@ fn ascii_fbx(nodes: &[N]) -> String {
                 P::S(t) => format!("\"{}\"", t.split_once("\u{0}\u{1}").map_or(t.to_string(), |(name, class)| format!("{class}::{name}"))),
                 P::Doubles(v) => format!("*{} {{\n a: {}\n}}", v.len(), v.iter().map(|x| num(*x)).collect::<Vec<_>>().join(",")),
                 P::Ints(v) => format!("*{} {{\n a: {}\n}}", v.len(), v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")),
+                P::R(b) => {
+                    use base64::Engine as _;
+                    format!(", \"{}\"", base64::engine::general_purpose::STANDARD.encode(b))
+                }
             })
             .collect();
         s.push_str(&format!("{}{}: {}", " ".repeat(indent), node.name, values.join(", ")));
@@ -264,6 +275,40 @@ fn fbx_binary_32_and_64_bit_compressed_or_not() {
         let m = import_mesh_bytes("scene.fbx", &bytes).unwrap_or_else(|e| panic!("{version} {compress}: {e}")).mesh;
         check_fbx_scene(&m, false);
     }
+}
+
+/// [`scene`] with a diffuse color on Red and an embedded diffuse texture on Blue.
+fn textured_scene(png: &[u8]) -> Vec<N> {
+    let mut nodes = scene(false);
+    let objects = nodes.iter_mut().find(|n| n.name == "Objects").unwrap();
+    let red = objects.children.iter_mut().find(|n| matches!(n.props.first(), Some(P::L(30)))).unwrap();
+    red.children.push(props70(vec![prop("DiffuseColor", &[0.5, 0.25, 1.0]), prop("DiffuseFactor", &[0.5])]));
+    objects.children.push(n("Texture", vec![P::L(40), P::S("Tex\u{0}\u{1}Texture"), P::S("")], vec![]));
+    objects.children.push(n("Video", vec![P::L(50), P::S("Tex\u{0}\u{1}Video"), P::S("Clip")], vec![n("Content", vec![P::R(png.to_vec())], vec![])]));
+    let connections = nodes.iter_mut().find(|n| n.name == "Connections").unwrap();
+    connections.children.push(n("C", vec![P::S("OP"), P::L(40), P::L(31), P::S("DiffuseColor")], vec![]));
+    connections.children.push(n("C", vec![P::S("OO"), P::L(50), P::L(40)], vec![]));
+    nodes
+}
+
+#[test]
+fn fbx_diffuse_colors_and_embedded_textures_reach_high_polys() {
+    let mut png = Vec::new();
+    let img = image::RgbaImage::from_fn(2, 2, |x, y| image::Rgba([if x == 0 { 255 } else { 0 }, if y == 0 { 255 } else { 0 }, 7, 255]));
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let nodes = textured_scene(&png);
+    for (label, bytes) in [("binary", binary_fbx(&nodes, 7500, true)), ("ascii", ascii_fbx(&nodes).into_bytes())] {
+        let hp = import_high_poly_bytes("textured.fbx", &bytes).unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_eq!(hp.mesh.materials, vec!["Red".to_string(), "Blue".to_string()], "{label}");
+        let red = hp.base_color[0].as_ref().unwrap();
+        assert_eq!((red.factor, red.width), (texturecraft_geom::glam::Vec4::new(0.25, 0.125, 0.5, 1.0), 0), "{label}");
+        let blue = hp.base_color[1].as_ref().unwrap();
+        assert_eq!((blue.width, blue.height, blue.texels[0], blue.texels[3]), (2, 2, [255, 255, 7, 255], [0, 0, 7, 255]), "{label}");
+        assert!(hp.warnings.is_empty(), "{label}: {:?}", hp.warnings);
+        // The plain import reads the same file.
+        check_fbx_scene(&import_mesh_bytes("textured.fbx", &bytes).unwrap().mesh, false);
+    }
+    hammer("x.fbx", &binary_fbx(&nodes, 7500, false));
 }
 
 #[test]

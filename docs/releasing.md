@@ -3,27 +3,95 @@
 The recipe is craftrules' [release playbook](release-playbook.md); this page covers what is
 specific to TextureCraft. The pipeline is [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
-## Cutting a release
+## Release manager checklist
 
-1. On `main`, set the version: `cargo xtask version set 1.2.0` (rewrites `[workspace.package]
-   version` in the root `Cargo.toml`, the single source of truth, and refreshes `Cargo.lock`).
-   `cargo xtask version` prints it. A version with a hyphen (`1.2.0-rc.1`) becomes a pre-release.
-2. Merge `main` into `release` (fast-forward) and push. Only org admins and the `release-managers`
-   team can push `release`.
-3. The run builds every platform and creates or updates the **draft** GitHub Release
-   `TextureCraft v<version>`, tag `v<version>`, with `SHA256SUMS.txt`. Review it, then publish.
-   A draft is updated in place (assets replaced); a published release is never overwritten, so
-   bump the version before building again.
+The steps below are the release manager's; agents never create the `release` branch, tags or
+GitHub Releases. The shared runbook with copy-paste `gh` commands is craftrules
+`release/cut-a-release.md`.
 
-Test builds: dispatch the workflow on `release` with a `version` such as `1.2.0-rc.1`; the input
-overrides `Cargo.toml` for that run (`cargo xtask version set` runs in every build job). A
-dispatch on any other branch is a dry run: Linux, Flatpak, FreeBSD and web build for real, the
-signing jobs are refused by the `release` environment (0 steps), and no draft is created.
+### 1. One-time repository setup (org admin)
 
-Before the first release, an org admin runs craftrules `release/signing-setup.md` steps 1-2 for
-`storytold/texturecraft` (the `release` environment, its deployment-branch rule, the ruleset and
-the twelve secrets) and adds the repo to the org's Default runner group (`release/cut-a-release.md`
-§3), or the macOS job waits forever.
+Status on 2026-10-16: `storytold/texturecraft` has no `release` environment, no ruleset, no
+secrets and no `release` branch yet. An org admin runs craftrules `release/signing-setup.md` steps
+1-2 for this repo:
+
+1. Create the **`release` environment**, with deployment branches limited to `release`.
+2. Add the **ruleset on `refs/heads/release`** (restrict creations, updates and deletions, block
+   force pushes; bypass: the `release-managers` team and the Organization admin role).
+3. Set these **environment secrets** on `release` (`gh secret set <NAME> --env release -R
+   storytold/texturecraft`). Never as org- or repo-level Actions secrets: only the `release`
+   environment keeps them away from other branches.
+
+   | Secret | Read by |
+   |---|---|
+   | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD` | macOS: Developer ID certificate into a temporary keychain |
+   | `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | macOS: notarization (`notarytool`) and its verification |
+   | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE` | Windows: Azure Trusted Signing (the org's method) |
+   | `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` | Windows: a `.pfx` instead of Azure; takes precedence when set. Leave unset |
+
+   Those twelve (`APPLE_*` and `KEYCHAIN_PASSWORD`, `AZURE_*`) are all a signed release needs;
+   `GITHUB_TOKEN` is provided by Actions.
+4. Add the repo to the org's **Default runner group** (Settings → Actions → Runner groups). The
+   macOS job (`macos-15-xlarge`) and the FreeBSD job (`github-ubuntu-16core`) run on larger runners,
+   which only serve repos in that group; outside it they wait for a runner forever, with no error.
+
+### 2. Set the version
+
+On `main`:
+
+```sh
+cargo xtask version                 # prints the current version
+cargo xtask version set 0.2.0       # or 0.2.0-rc.1 for a pre-release
+```
+
+`set` rewrites `[workspace.package] version` in the root `Cargo.toml` (the single source of truth)
+and refreshes `Cargo.lock`. Commit, push, and wait for CI on `main` to pass.
+
+### 3. Cut the release
+
+Fast-forward `release` to `main` and push it (only the `release-managers` team and org admins can):
+
+```sh
+git fetch origin
+git push origin origin/main:refs/heads/release
+```
+
+That push runs `release.yml`, and also `freebsd.yml` and `windows-arm64.yml` (build, test, install
+checks). A version with a hyphen becomes a pre-release. To test without bumping, dispatch
+`release.yml` on `release` with `version` set (e.g. `0.2.0-rc.1`); a dispatch on any other branch
+is a dry run (Linux, Flatpak, FreeBSD and web build; the signing jobs are refused by the
+environment, so no draft is made).
+
+### 4. Wait for green and verify
+
+```sh
+RID=$(gh run list -R storytold/texturecraft -w release.yml -L1 --json databaseId --jq '.[0].databaseId')
+gh run watch $RID -R storytold/texturecraft
+gh run view $RID -R storytold/texturecraft --log | grep -E "status: Accepted|staple and validate action worked|::warning"
+```
+
+- Every job is green, and no `::warning::` names a missing secret (that platform shipped unsigned:
+  fix the secret and re-run, don't publish).
+- macOS: two `The staple and validate action worked!` lines (app and DMG) and `status: Accepted`.
+- The draft `TextureCraft v<version>` exists, targets the commit you pushed, and carries every
+  file in the table below plus `SHA256SUMS.txt`.
+- Download, check and launch at least one artifact per platform:
+  - Windows: `signtool verify /pa /v texturecraft-<v>-windows-x64.msi` succeeds and names the
+    org's publisher; install, open a `.tcraft` by double-click, `texturecraft-cli --version` from the
+    install dir, uninstall.
+  - macOS: `spctl -a -vvv -t install texturecraft-<v>-macos-universal.dmg` says *Notarized
+    Developer ID*; the app opens with no Gatekeeper prompt.
+  - Linux: `sha256sum -c SHA256SUMS.txt --ignore-missing`, then run the AppImage and install the
+    `.deb` or `.rpm`; `texturecraft --version`, `texturecraft-cli --version`.
+  - Web: unzip `texturecraft-web-<v>.zip`, serve it (`python3 -m http.server`), open it in a
+    WebGPU browser.
+
+### 5. Publish
+
+Review the generated notes, then publish the draft (`gh release edit v<version> -R
+storytold/texturecraft --draft=false --latest`, or `--prerelease` for an rc). A draft is updated in
+place by a re-run; a published release is never overwritten, so bump the version before building
+again.
 
 ## What gets built
 
@@ -31,14 +99,17 @@ All file names are `texturecraft-<version>-<platform>-<arch>.<ext>`, written to 
 
 | Platform | Artifacts | Script |
 |---|---|---|
-| macOS (`macos-15-xlarge`) | `-macos-universal.dmg` (`TextureCraft.app`), `texturecraft-cli-<version>-macos-universal.zip` | `packaging/macos/package.sh`, `verify.sh` |
+| macOS universal (`macos-15-xlarge`) | `-macos-universal.dmg` (`TextureCraft.app`), `texturecraft-cli-<version>-macos-universal.zip` | `packaging/macos/package.sh`, `verify.sh` |
 | Windows x64, x86, arm64 | `-windows-<arch>.msi`, `-windows-<arch>-portable.zip` | `packaging/windows/package.ps1` |
 | Linux x86_64, aarch64 (Ubuntu 22.04, glibc 2.35) | `.AppImage` + `.AppImage.zsync`, `.deb`, `.rpm`, `.tar.gz` | `packaging/linux/package.sh` |
 | Flatpak x86_64, aarch64 | `-linux-<arch>.flatpak`, repackaged from the Linux tarball | `packaging/linux/flatpak-bundle.sh` |
-| FreeBSD x86_64 (14.3 VM) | `-freebsd-x86_64.tar.gz` | `packaging/freebsd/package.sh` |
+| FreeBSD x86_64 (14.3 VM on `github-ubuntu-16core`) | `-freebsd-x86_64.tar.gz` | `packaging/freebsd/package.sh` |
 | Web | `texturecraft-web-<version>.zip` (trunk, `wasm-release` profile; hosting notes in `packaging/web/README.md`) | `packaging/web/package.sh` |
 
-Every desktop package ships both binaries, `texturecraft` and `texturecraft-cli`. The packaging
+Every desktop package ships both binaries, `texturecraft` and `texturecraft-cli` (on macOS the CLI
+is its own zip next to the DMG). Release builds embed the craft-fonts CJK UI fonts
+(`CRAFT_FONTS_REF` in `release.yml`) and ship their `OFL-<family>.txt` licences with the other
+notices. The packaging
 scripts smoke-test `texturecraft-cli --version`, and the Linux job also runs the AppImage with
 `--version`, so both binaries must print their version and exit without opening a window.
 
@@ -48,7 +119,7 @@ scripts smoke-test `texturecraft-cli --version`, and the Linux job also runs the
 |---|---|
 | Bundle / app id | `ai.storyteller.texturecraft` |
 | Project format | `.tcraft`, MIME `application/x-texturecraft`, UTI `ai.storyteller.texturecraft.project` (owned) |
-| Also opens | `.glb .gltf .obj .ply .stl` ("Open with" only, never the default app) |
+| Also opens | `.glb .gltf .fbx .dae .usd .usda .usdc .usdz .abc .obj .ply .stl` (formats `mesh_import::MESH_EXTENSIONS`; "Open with" only, never the default app). Declared in `texturecraft.wxs`, `Info.plist.in`, the `.desktop` file, `mime.xml` and the AppStream metainfo: keep all five in step |
 | WiX UpgradeCode | `7E670E60-BB22-4E6B-8749-DD3FD4CA8979`, never change it |
 | Flathub manifest | `packaging/linux/flatpak/ai.storyteller.TextureCraft.yml` (release bundle: `…TextureCraft.bundle.yml`) |
 | macOS minimum | 11.0 (`LSMinimumSystemVersion`, `MACOSX_DEPLOYMENT_TARGET`) |
@@ -99,6 +170,8 @@ the drawing and keep `ATTRIBUTION.md` in step.
 - `bash packaging/linux/apprun-test.sh` and `bash packaging/freebsd/package.sh --dry-run` run
   anywhere with bash.
 - `packaging/macos/package.sh --arch aarch64` on a Mac builds an ad-hoc signed DMG.
-- `packaging/windows/package.ps1 -Arch x64` on Windows (needs WiX 5.0.2) builds an unsigned MSI.
+- `pwsh packaging/windows/package.ps1 -Arch x64` on Windows (needs WiX 5.0.2) builds an unsigned
+  MSI and portable zip. Use PowerShell 7 as CI does: Windows PowerShell 5.1 with redirected output
+  turns cargo's stderr into an error, so there build with cargo first and pass `-SkipBuild`.
 - `.github/workflows/packaging-lint.yml` runs actionlint, shellcheck, the PowerShell parser and
   the desktop/AppStream/Flatpak validators on every change to `packaging/` or the workflows.

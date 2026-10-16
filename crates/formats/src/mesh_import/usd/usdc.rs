@@ -362,6 +362,11 @@ impl<'a> Crate<'a> {
                         match name {
                             "typeName" => prop.type_name = self.tokens_of(rep, budget)?.into_iter().next().unwrap_or_default(),
                             "default" | "targetPaths" => prop.value = self.value(rep, budget)?,
+                            "connectionPaths" => {
+                                if let Some(Val::Path(p)) = self.value(rep, budget)? {
+                                    prop.connect = p.into_iter().next();
+                                }
+                            }
                             "timeSamples" => samples = Some(rep),
                             "interpolation" => prop.interpolation = self.tokens_of(rep, budget)?.into_iter().next(),
                             _ => {}

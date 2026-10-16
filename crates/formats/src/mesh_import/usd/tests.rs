@@ -7,7 +7,7 @@ use texturecraft_geom::glam::{Vec2, Vec3};
 
 use super::codec;
 use crate::mesh_import::tests::hammer;
-use crate::{ExportedFile, UsdFormat, import_mesh_bytes, usd_bytes};
+use crate::{ExportedFile, UsdFormat, import_high_poly_bytes, import_mesh_bytes, usd_bytes};
 
 /// Two meshes in a Z-up, centimeter stage: a quad + triangle (`Red`, with a `Blue` subset on
 /// the triangle; faceVarying indexed st and normals) under a translated root, and a triangle
@@ -82,6 +82,13 @@ def Xform "World" (
         def Material "Green"
         {
             token outputs:surface.connect = </World/Looks/Green/PBR.outputs:surface>
+
+            def Shader "PBR"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.5, 0.25, 1)
+                token outputs:surface
+            }
         }
     }
 
@@ -319,6 +326,26 @@ fn usda_usdc_and_usdz_round_trip_with_textures() {
     let out = usd_bytes(&m, "Test scene", &textures, UsdFormat::Usda).unwrap();
     assert_eq!(out.textures.len(), 5);
     assert!(usd_bytes(&Mesh::default(), "x", &[], UsdFormat::Usdc).is_err());
+}
+
+/// UsdPreviewSurface base colors reach high polys: a `diffuseColor` value (usda), and the
+/// connected UsdUVTexture inside a usdz package (a usdc layer's texture files are not in the
+/// mesh bytes: white).
+#[test]
+fn usd_base_colors_reach_high_polys() {
+    let hp = import_high_poly_bytes("scene.usda", SCENE.as_bytes()).unwrap();
+    assert_eq!(hp.mesh.materials, vec!["Red".to_string(), "Blue".to_string(), "Green".to_string()]);
+    assert!(hp.base_color[0].is_none() && hp.base_color[1].is_none());
+    assert_eq!(hp.base_color[2].as_ref().map(|c| (c.factor, c.width)), Some((texturecraft_geom::glam::Vec4::new(0.5, 0.25, 1.0, 1.0), 0)));
+    let m = import_mesh_bytes("scene.usda", SCENE.as_bytes()).unwrap().mesh;
+    let textures = vec![vec![file("BaseColor.png", png([200, 10, 10]))], vec![file("Roughness.png", png([128; 3]))], vec![]];
+    for (format, ext, textured) in [(UsdFormat::Usdz, "usdz", true), (UsdFormat::Usdc, "usdc", false)] {
+        let bytes = usd_bytes(&m, "Test scene", &textures, format).unwrap().bytes;
+        let hp = import_high_poly_bytes(&format!("t.{ext}"), &bytes).unwrap();
+        let red = hp.base_color[0].as_ref().map(|c| (c.width, c.height, c.texels.first().copied()));
+        assert_eq!(red, textured.then_some((2, 2, Some([200, 10, 10, 255]))), "{ext}");
+        assert!(hp.base_color[1].is_none(), "{ext}: no base color texture, white");
+    }
 }
 
 #[test]

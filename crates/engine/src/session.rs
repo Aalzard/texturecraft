@@ -38,6 +38,9 @@ pub struct SetCache {
     pub composite: Composite,
     /// Tiles to recomposite.
     pub dirty: BTreeSet<(u32, u32)>,
+    /// Tiles to recomposite at low priority: what they show is already right (a committed
+    /// stroke's live preview), but it was composited from the stroke, not the layer pixels.
+    pub settle: BTreeSet<(u32, u32)>,
     /// Tiles whose display textures must be re-uploaded.
     pub upload: BTreeSet<(u32, u32)>,
     /// Bumps on every composite change (thumbnails, exports, caches).
@@ -49,7 +52,7 @@ pub struct SetCache {
 }
 
 impl SetCache {
-    fn new(mesh: &Mesh, ts: &TextureSet) -> SetCache {
+    pub(crate) fn new(mesh: &Mesh, ts: &TextureSet) -> SetCache {
         let (w, h) = ts.size();
         let gbuf = UvGBuffer::new(mesh, ts.material, w, h);
         // Padding stays inside each UV tile.
@@ -63,6 +66,7 @@ impl SetCache {
             covered_tiles: Arc::new(covered),
             composite: Composite::with_size(&ts.channel_list(), w, h),
             dirty: all.clone(),
+            settle: BTreeSet::new(),
             upload: all,
             revision: 0,
             below: BelowCache::default(),
@@ -292,6 +296,8 @@ pub(crate) struct ActiveStroke {
     /// History snapshot taken when the stroke began.
     pub before: Document,
     pub label: String,
+    /// The commit's destination tiles, copied as the stroke reaches them.
+    pub staging: texturecraft_paint::Staging,
 }
 
 /// A stroke visibility buffer and what it was rendered for: camera, size, mesh id.
@@ -460,6 +466,12 @@ impl Session {
 
     /// Run an undoable edit. On error the document is left untouched.
     pub fn edit<T>(&mut self, label: &str, f: impl FnOnce(&mut Session) -> Result<T>) -> Result<T> {
+        self.edit_merging(label, false, f)
+    }
+
+    /// [`Session::edit`] that, with `merge`, continues the previous undo step when it has the
+    /// same label (a drag in the viewport is one step however many updates it makes).
+    pub fn edit_merging<T>(&mut self, label: &str, merge: bool, f: impl FnOnce(&mut Session) -> Result<T>) -> Result<T> {
         let before = self.doc.clone();
         let result = f(self).and_then(|v| match self.doc.project.instance_cycle() {
             Some(id) => Err(EngineError::Other(format!("instance layer {} would draw itself", id.0))),
@@ -467,7 +479,7 @@ impl Session {
         });
         match result {
             Ok(v) => {
-                self.push_history(label, before);
+                self.record(label, before, merge);
                 Ok(v)
             }
             Err(e) => {
@@ -478,12 +490,20 @@ impl Session {
     }
 
     pub(crate) fn push_history(&mut self, label: &str, before: Document) {
+        self.record(label, before, false);
+    }
+
+    /// A change from `before` to the current document: a new undo step `label`, or with
+    /// `merge` part of the previous one when it has the same label.
+    fn record(&mut self, label: &str, before: Document, merge: bool) {
         self.modified = true;
         self.revision = self.revision.wrapping_add(1);
         self.invalidate_changed(&before);
-        self.undo.push((label.to_string(), before));
-        if self.undo.len() > MAX_HISTORY {
-            self.undo.remove(0);
+        if !(merge && self.undo.last().is_some_and(|(l, _)| l == label)) {
+            self.undo.push((label.to_string(), before));
+            if self.undo.len() > MAX_HISTORY {
+                self.undo.remove(0);
+            }
         }
         self.redo.clear();
     }
@@ -513,8 +533,7 @@ impl Session {
     /// resolutions) between `before` and the current project, map the mesh's UVs into the new
     /// atlas and rebuild those sets' caches.
     fn follow_uv_layouts(&mut self, before: &Project) {
-        let layout =
-            |p: &Project, ts: usize| p.texture_sets.get(ts).map(|t| (t.material, t.uv_tiles.iter().map(|u| (*u, t.tile_scale(*u))).collect::<Vec<_>>()));
+        let layout = |p: &Project, ts: usize| p.texture_sets.get(ts).map(uv_layout);
         let changed: Vec<usize> = (0..self.doc.project.texture_sets.len()).filter(|ts| layout(before, *ts) != layout(&self.doc.project, *ts)).collect();
         if changed.is_empty() && before.texture_sets.len() == self.doc.project.texture_sets.len() {
             return;
@@ -620,7 +639,8 @@ impl Session {
     /// chunks sized from the time the previous chunk took, and what is left stays dirty for the
     /// next call (at least one chunk runs). The UI calls this every frame so a full recomposite
     /// of a large texture set spreads over frames instead of freezing. The active texture set
-    /// goes first.
+    /// goes first; settling tiles (see [`SetCache::settle`]) get at most [`SETTLE_BUDGET_MS`]
+    /// of a finite budget, after the dirty ones.
     pub fn update_for(&mut self, budget_ms: f64, clock: impl Fn() -> f64) -> bool {
         let start = clock();
         let first = if budget_ms.is_finite() { rayon::current_num_threads().clamp(1, CHUNK) } else { CHUNK };
@@ -645,15 +665,25 @@ impl Session {
         for ts in order {
             let Some(cache) = self.caches.get_mut(ts) else { continue };
             cache.below.set_hot(hot);
-            cache.below.pass = cache.dirty.len();
+            cache.below.pass = cache.dirty.len() + cache.settle.len();
             // Instances in sets of the stroke's size show the live stroke too.
             let preview = preview.as_ref().filter(|_| Some(cache.size) == stroke_size);
             // Start at the size that fit the budget last time: with a heavy stack (smart
             // materials at 8K) one tile per thread alone would take several frames' budget.
             let mut chunk = if budget_ms.is_finite() && cache.chunk > 0 { cache.chunk } else { first };
-            while !cache.dirty.is_empty() {
+            loop {
+                if cache.dirty.is_empty() {
+                    if cache.settle.is_empty() || clock() - start >= budget_ms.min(SETTLE_BUDGET_MS) {
+                        break;
+                    }
+                    // Small chunks: the settle slice of the budget is short.
+                    cache.dirty.extend(next_chunk(&mut cache.settle, chunk.min(first)));
+                }
                 let t0 = clock();
                 let tiles = next_chunk(&mut cache.dirty, chunk);
+                for t in &tiles {
+                    cache.settle.remove(t);
+                }
                 let empty = BakedMaps::default();
                 let inputs = texturecraft_compose::Inputs {
                     project: &self.doc.project,
@@ -693,9 +723,9 @@ impl Session {
         changed
     }
 
-    /// Tiles still waiting to be composited, over every texture set.
+    /// Tiles still waiting to be composited, over every texture set (settling ones included).
     pub fn pending_tiles(&self) -> usize {
-        self.caches.iter().map(|c| c.dirty.len()).sum()
+        self.caches.iter().map(|c| c.dirty.len() + c.settle.len()).sum()
     }
 
     /// The layer a stroke target belongs to (an effect's owner).
@@ -707,12 +737,28 @@ impl Session {
     /// Mark `tiles` of texture set `ts` dirty after painting `target`, and the same tiles of
     /// other sets of that size drawing it through an instance.
     pub(crate) fn mark_painted(&mut self, ts: usize, target: Option<PaintTarget>, tiles: impl IntoIterator<Item = (u32, u32)>) {
+        self.mark_tiles(ts, target, tiles, |c| &mut c.dirty);
+    }
+
+    /// [`Session::mark_painted`] for the tiles of a committed stroke: they settle at low
+    /// priority (see [`SetCache::settle`]).
+    pub(crate) fn mark_settle(&mut self, ts: usize, target: Option<PaintTarget>, tiles: impl IntoIterator<Item = (u32, u32)>) {
+        self.mark_tiles(ts, target, tiles, |c| &mut c.settle);
+    }
+
+    fn mark_tiles(
+        &mut self,
+        ts: usize,
+        target: Option<PaintTarget>,
+        tiles: impl IntoIterator<Item = (u32, u32)>,
+        set: impl Fn(&mut SetCache) -> &mut BTreeSet<(u32, u32)>,
+    ) {
         let size = self.caches.get(ts).map(|c| c.size);
         let sets = target.map(|t| self.doc.project.sets_drawing(self.paint_owner(t))).unwrap_or_default();
         let tiles: Vec<(u32, u32)> = tiles.into_iter().collect();
         for (i, c) in self.caches.iter_mut().enumerate() {
             if i == ts || (sets.contains(&i) && Some(c.size) == size) {
-                c.dirty.extend(tiles.iter().copied());
+                set(c).extend(tiles.iter().copied());
             }
         }
     }
@@ -770,6 +816,8 @@ impl Memory {
 
 /// Most tiles per composite chunk (a 1024² region).
 const CHUNK: usize = 256;
+/// The most a budgeted update spends on settling tiles (what they show is already right).
+pub const SETTLE_BUDGET_MS: f64 = 6.0;
 
 /// Take up to `n` dirty tiles, block by block (16 × 16 tiles) so neighbourhood filters
 /// evaluate compact regions.
@@ -834,6 +882,11 @@ pub(crate) fn detect_uv_tiles(mesh: &Mesh, m: usize, mode: Option<bool>, log: &m
         }
         (Some(false), _) => Ok(Vec::new()),
     }
+}
+
+/// Where texture set `t`'s UV tiles sit in its atlas (the mesh maps its UVs by this).
+pub(crate) fn uv_layout(t: &TextureSet) -> (usize, Vec<(u32, f32)>) {
+    (t.material, t.uv_tiles.iter().map(|u| (*u, t.tile_scale(*u))).collect())
 }
 
 fn next_mesh_id() -> u64 {

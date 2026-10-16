@@ -14,6 +14,12 @@
 //! the same, each new frame renders with a sub-pixel jitter and is averaged into the view's
 //! accumulation target, up to [`TAA_SAMPLES`] frames (4× MSAA each); then the view stops
 //! rendering until something changes. [`Renderer::accumulating`] tells the shell to keep redrawing.
+//!
+//! Screen-space refraction (sets with a Transmission channel): the scene pass first renders
+//! without the transmissive surfaces into the view's `behind` target (with mips for rough
+//! glass), then transmissive surfaces refract that image, falling back to the environment where
+//! the refracted ray leaves the view or shows nothing. Displacement draws a dense copy of the
+//! mesh ([`crate::subdivide`]) moved along its normals by the height channel in the vertex shader.
 
 use std::collections::HashMap;
 
@@ -25,6 +31,7 @@ use texturecraft_geom::{Mesh, OrbitCamera};
 use texturecraft_texel::TILE;
 
 use crate::ibl;
+use crate::subdivide::{self, Vertex};
 
 pub const MSAA: u32 = 4;
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -43,6 +50,11 @@ const BLOOM_GAIN: f32 = 0.15;
 pub const TAA_SAMPLES: u32 = 16;
 /// Largest depth of field blur radius, as a fraction of the view height.
 const MAX_COC: f32 = 0.03;
+/// Mip levels of the refraction source (the roughest glass reads 1/64 resolution).
+const BEHIND_LEVELS: u32 = 7;
+/// How far refracted rays travel before they look up the scene behind, as a fraction of the
+/// mesh's bounding radius (no thickness channel: a constant, like a thin shell).
+const REFRACTION_DEPTH: f32 = 0.2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -61,6 +73,8 @@ struct GlobalsRaw {
     material: [f32; 4],
     scatter: [f32; 4],
     fwd: [f32; 4],
+    disp: [f32; 4],
+    refr: [f32; 4],
 }
 
 /// The post pass uniform (see `Post` in post.wgsl).
@@ -72,15 +86,6 @@ struct PostRaw {
     c: [f32; 4],
     d: [f32; 4],
     e: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Vertex {
-    pos: [f32; 3],
-    nrm: [f32; 3],
-    tan: [f32; 4],
-    uv: [f32; 2],
 }
 
 #[repr(C)]
@@ -147,6 +152,12 @@ pub struct Shade {
     /// free path per color channel as a fraction of the mesh's bounding radius. Set by
     /// [`Shade::from_project`] for projects with a Scattering weight channel.
     pub sss_blur: Option<[f32; 3]>,
+    /// Transmissive surfaces refract the scene behind them (3D material view; an extra pass).
+    /// Set by [`Shade::from_project`] for projects with a Transmission channel.
+    pub refraction: bool,
+    /// Move the surface by the height channel (3D view): a dense copy of the mesh, displaced in
+    /// the vertex shader at the height-to-normal strength.
+    pub displacement: bool,
 }
 
 /// The viewport's subsurface scattering approximation: the diffuse lighting wraps around the
@@ -182,16 +193,22 @@ impl Shade {
             scatter: scatter_wrap(d),
             ior: d.ior,
             dof: d.dof.enabled.then_some([d.dof.focus_distance, d.dof.aperture]),
+            displacement: d.displacement,
             ..Shade::default()
         }
     }
 
     /// [`Shade::from_display`] of the project's settings, plus the subsurface blur where a
-    /// texture set has the Scattering weight channel.
+    /// texture set has the Scattering weight channel and refraction where one has Transmission.
     pub fn from_project(p: &Project) -> Shade {
         let d = &p.display;
-        let scatters = d.scatter_radius > 0.0 && p.texture_sets.iter().any(|t| t.has_channel(Channel::ScatterWeight));
-        Shade { sss_blur: scatters.then(|| d.scatter_color.map(|c| c.max(0.0) * d.scatter_radius)), ..Shade::from_display(d) }
+        let has = |c: Channel| p.texture_sets.iter().any(|t| t.has_channel(c));
+        let scatters = d.scatter_radius > 0.0 && has(Channel::ScatterWeight);
+        Shade {
+            sss_blur: scatters.then(|| d.scatter_color.map(|c| c.max(0.0) * d.scatter_radius)),
+            refraction: has(Channel::Transmission),
+            ..Shade::from_display(d)
+        }
     }
 }
 
@@ -224,6 +241,8 @@ impl Default for Shade {
             ior: 1.5,
             dof: None,
             sss_blur: None,
+            refraction: false,
+            displacement: false,
         }
     }
 }
@@ -314,12 +333,24 @@ struct SetGpu {
     mips_dirty: Vec<bool>,
 }
 
-struct MeshGpu {
-    id: u64,
+/// Vertex and index buffers with their draws (first index, count, material).
+struct Geometry {
     vb: wgpu::Buffer,
     ib: wgpu::Buffer,
-    /// (first index, count, material)
     draws: Vec<(u32, u32, usize)>,
+    triangles: usize,
+}
+
+struct MeshGpu {
+    id: u64,
+    geo: Geometry,
+    /// The vertices and indices of a mesh coarse enough to subdivide for displacement, until
+    /// its dense copy is built.
+    coarse: Option<(Vec<Vertex>, Vec<u32>)>,
+    /// The subdivided copy displacement draws (built on first use; None: the mesh is dense).
+    dense: Option<Geometry>,
+    /// World length per UV unit (displacement scale).
+    world_per_uv: f32,
     /// Unique UV edges as a line list, per material: (first index, count, material).
     lines: wgpu::Buffer,
     line_draws: Vec<(u32, u32, usize)>,
@@ -353,6 +384,15 @@ struct Bloom {
     up: Vec<wgpu::BindGroup>,
 }
 
+/// What a view's transmissive surfaces refract: the scene without them, with mips.
+struct Behind {
+    /// Mip 0 (the scene pass resolves into it), the whole chain (`refr_bg`).
+    level0: wgpu::TextureView,
+    bg: wgpu::BindGroup,
+    /// Per mip from 1: its view and the bind group reading the level above.
+    mips: Vec<(wgpu::TextureView, wgpu::BindGroup)>,
+}
+
 struct ViewTargets {
     size: [u32; 2],
     msaa: wgpu::TextureView,
@@ -376,6 +416,7 @@ struct ViewTargets {
     post_bg: wgpu::BindGroup,
     bloom: Option<Bloom>,
     fx: Option<Fx>,
+    behind: Option<Behind>,
     blit_buf: wgpu::Buffer,
     blit_bg: wgpu::BindGroup,
     /// Set by [`Renderer::prepare`]: the view has content to blit.
@@ -404,7 +445,12 @@ pub struct Renderer {
     blit_bgl: wgpu::BindGroupLayout,
     mip_bgl: wgpu::BindGroupLayout,
     fx_bgl: wgpu::BindGroupLayout,
+    /// The refraction source of the mesh pipelines (group 2), and that bind group reading black.
+    refr_bgl: wgpu::BindGroupLayout,
+    refr_black: wgpu::BindGroup,
     mesh_pipeline: wgpu::RenderPipeline,
+    /// The scene behind transmissive surfaces: `fs_mesh` without them.
+    opaque_pipeline: wgpu::RenderPipeline,
     uv_pipeline: wgpu::RenderPipeline,
     wire_pipeline: wgpu::RenderPipeline,
     wire3d_pipeline: wgpu::RenderPipeline,
@@ -612,6 +658,18 @@ fn shadow_view(device: &wgpu::Device, size: u32) -> wgpu::TextureView {
         .create_view(&Default::default())
 }
 
+/// A buffer of `usage` holding `data`.
+fn upload_buffer(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, data: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: (data.len() as u64).max(4).next_multiple_of(4),
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&buf, 0, data);
+    buf
+}
+
 /// One fullscreen-triangle pass into `target`.
 fn fullscreen(
     encoder: &mut wgpu::CommandEncoder,
@@ -698,8 +756,20 @@ impl Renderer {
         );
         // The display textures, the aux texture, the sampler.
         let textures = DisplayKind::ALL.len() as u32 + 1;
-        let set_entries: Vec<_> = (0..textures).map(tex_entry).chain(std::iter::once(sampler_entry(textures))).collect();
+        // Displacement reads the height (and the sampler) in the vertex shader.
+        let height = DisplayKind::ALL.iter().position(|k| *k == DisplayKind::Height).unwrap_or(0) as u32;
+        let set_entries: Vec<_> = (0..textures)
+            .map(tex_entry)
+            .chain(std::iter::once(sampler_entry(textures)))
+            .map(|mut e| {
+                if e.binding == height || e.binding == textures {
+                    e.visibility |= wgpu::ShaderStages::VERTEX;
+                }
+                e
+            })
+            .collect();
         let set_bgl = bgl("tc_set", &set_entries);
+        let refr_bgl = bgl("tc_refr", &[tex_entry(0)]);
         let blit_bgl = bgl("tc_blit", &[tex_entry(0), sampler_entry(1), uniform_entry(2)]);
         let mip_bgl = bgl("tc_mip", &[tex_entry(0), sampler_entry(1)]);
         let fx_bgl = bgl("tc_fx", &[tex_entry(0), sampler_entry(1), uniform_entry(3), tex_entry(4), tex_entry(5), tex_entry(6)]);
@@ -707,7 +777,8 @@ impl Renderer {
         let pl = |label: &str, groups: &[Option<&wgpu::BindGroupLayout>]| {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: groups, immediate_size: 0 })
         };
-        let layout = pl("tc_mesh", &[Some(&globals_bgl), Some(&set_bgl)]);
+        let layout = pl("tc_uv", &[Some(&globals_bgl), Some(&set_bgl)]);
+        let mesh_layout = pl("tc_mesh", &[Some(&globals_bgl), Some(&set_bgl), Some(&refr_bgl)]);
         let bg_layout = pl("tc_bg", &[Some(&globals_bgl)]);
         let blit_layout = pl("tc_blit", &[Some(&blit_bgl)]);
         let fx_layout = pl("tc_fx", &[Some(&fx_bgl)]);
@@ -722,8 +793,28 @@ impl Renderer {
         let hdr_format = if hdr_renderable(device) { HDR_FORMAT } else { COLOR_FORMAT };
         let hdr = |fs, blend| Some((fs, hdr_format, blend));
         let always = || Some(depth_state(false, wgpu::CompareFunction::Always));
-        let mesh_pipeline =
-            pipeline(device, "tc_mesh", &layout, &module, "vs_mesh", &vb, hdr("fs_mesh", None), MSAA, Some(depth_state(true, wgpu::CompareFunction::Less)));
+        let mesh_pipeline = pipeline(
+            device,
+            "tc_mesh",
+            &mesh_layout,
+            &module,
+            "vs_mesh",
+            &vb,
+            hdr("fs_mesh", None),
+            MSAA,
+            Some(depth_state(true, wgpu::CompareFunction::Less)),
+        );
+        let opaque_pipeline = pipeline(
+            device,
+            "tc_opaque",
+            &mesh_layout,
+            &module,
+            "vs_mesh",
+            &vb,
+            hdr("fs_opaque", None),
+            MSAA,
+            Some(depth_state(true, wgpu::CompareFunction::Less)),
+        );
         let uv_pipeline = pipeline(device, "tc_uv", &layout, &module, "vs_uv", &vb, hdr("fs_uv", None), MSAA, always());
         let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
         let wire_pipeline = pipeline(device, "tc_wire", &layout, &module, "vs_uv", &vb, hdr("fs_wire", blend), MSAA, always());
@@ -735,7 +826,7 @@ impl Renderer {
         let bloom_pipelines = [("fs_bloom_pre", None), ("fs_bloom_down", None), ("fs_bloom_up", Some(ADDITIVE))]
             .map(|(fs, blend)| pipeline(device, "tc_bloom", &fx_layout, &post_module, "vs_full", &[], hdr(fs, blend), 1, None));
         let gbuf_pipeline =
-            pipeline(device, "tc_gbuf", &layout, &module, "vs_mesh", &vb, hdr("fs_gbuf", None), 1, Some(depth_state(true, wgpu::CompareFunction::Less)));
+            pipeline(device, "tc_gbuf", &mesh_layout, &module, "vs_mesh", &vb, hdr("fs_gbuf", None), 1, Some(depth_state(true, wgpu::CompareFunction::Less)));
         let sss_pipelines = ["fs_sss_h", "fs_sss_v"].map(|fs| pipeline(device, "tc_sss", &fx_layout, &post_module, "vs_full", &[], hdr(fs, None), 1, None));
         let dof_pipeline = pipeline(device, "tc_dof", &fx_layout, &post_module, "vs_full", &[], hdr("fs_dof", None), 1, None);
         let dof_target = Some(wgpu::ColorTargetState { format: hdr_format, blend: None, write_mask: wgpu::ColorWrites::ALL });
@@ -815,6 +906,11 @@ impl Renderer {
             buf: shadow_buf,
         };
         let black = Tex::new(device, "tc_black", 1, 1, COLOR_FORMAT, 1).view;
+        let refr_black = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tc_refr_black"),
+            layout: &refr_bgl,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&black) }],
+        });
         let env = Tex::new(device, "tc_env", 512, 256, wgpu::TextureFormat::Rgba16Float, ENV_LEVELS);
         let mut r = Renderer {
             target_format,
@@ -824,7 +920,10 @@ impl Renderer {
             blit_bgl,
             mip_bgl,
             fx_bgl,
+            refr_bgl,
+            refr_black,
             mesh_pipeline,
+            opaque_pipeline,
             uv_pipeline,
             wire_pipeline,
             wire3d_pipeline,
@@ -919,21 +1018,12 @@ impl Renderer {
                 uv: mesh.uvs.get(i).map(|u| u.to_array()).unwrap_or([0.0, 0.0]),
             })
             .collect();
-        let mk = |label: &str, data: &[u8], usage: wgpu::BufferUsages| {
-            let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: (data.len() as u64).max(4).next_multiple_of(4),
-                usage: usage | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf, 0, data);
-            buf
-        };
+        let mk = |label: &str, data: &[u8], usage: wgpu::BufferUsages| upload_buffer(device, queue, label, data, usage);
         let mut idx_bytes = bytemuck::cast_slice::<u32, u8>(&mesh.indices).to_vec();
         idx_bytes.resize(idx_bytes.len().next_multiple_of(4), 0);
         let vb = mk("tc_vb", bytemuck::cast_slice(&verts), wgpu::BufferUsages::VERTEX);
         let ib = mk("tc_ib", &idx_bytes, wgpu::BufferUsages::INDEX);
-        let draws = mesh.submeshes.iter().map(|s| (s.start, s.count, s.material)).collect();
+        let draws: Vec<(u32, u32, usize)> = mesh.submeshes.iter().map(|s| (s.start, s.count, s.material)).collect();
         // UV edges (each shared edge once) per material, for the 2D view wireframe.
         let mut line_idx: Vec<u32> = Vec::new();
         let mut line_draws = Vec::new();
@@ -954,8 +1044,22 @@ impl Renderer {
         let lines = mk("tc_lines", bytemuck::cast_slice(&line_idx), wgpu::BufferUsages::INDEX);
         let (lo, hi) = mesh.bounds();
         let (center, radius) = ((lo + hi) * 0.5, ((hi - lo).length() * 0.5).max(1e-3));
-        self.mesh = Some(MeshGpu { id, vb, ib, draws, lines, line_draws, center, radius });
+        let triangles = mesh.indices.len() / 3;
+        let world_per_uv = subdivide::world_per_uv(&verts, &mesh.indices).unwrap_or(radius);
+        let coarse = (subdivide::level_for(triangles) > 0).then(|| (verts, mesh.indices.clone()));
+        let geo = Geometry { vb, ib, draws, triangles };
+        self.mesh = Some(MeshGpu { id, geo, coarse, dense: None, world_per_uv, lines, line_draws, center, radius });
         self.content_rev += 1;
+    }
+
+    /// Build the mesh's dense copy for displacement (once per mesh).
+    fn ensure_dense(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let Some(m) = self.mesh.as_mut() else { return };
+        let Some((verts, indices)) = m.coarse.take() else { return };
+        let (v, i, draws) = subdivide::subdivide(&verts, &indices, &m.geo.draws, subdivide::level_for(m.geo.triangles));
+        let vb = upload_buffer(device, queue, "tc_dense_vb", bytemuck::cast_slice(&v), wgpu::BufferUsages::VERTEX);
+        let ib = upload_buffer(device, queue, "tc_dense_ib", bytemuck::cast_slice(&i), wgpu::BufferUsages::INDEX);
+        m.dense = Some(Geometry { vb, ib, draws, triangles: i.len() / 3 });
     }
 
     /// Show texture sets at 1/2^`shift` of their size (0 = full, 1 = half, 2 = quarter…) from the
@@ -1092,15 +1196,7 @@ impl Renderer {
                     continue;
                 }
                 let format = self.sets[si].tex[ti].format;
-                if !self.mip_pipelines.contains_key(&format) {
-                    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("tc_mip"),
-                        bind_group_layouts: &[Some(&self.mip_bgl)],
-                        immediate_size: 0,
-                    });
-                    let p = pipeline(device, "tc_mip", &layout, &self.util_module, "vs_full", &[], Some(("fs_mip", format, None)), 1, None);
-                    self.mip_pipelines.insert(format, p);
-                }
+                self.ensure_mip_pipeline(device, format);
                 let Some(pipe) = self.mip_pipelines.get(&format) else { continue };
                 let t = &self.sets[si].tex[ti];
                 for level in 1..t.mips {
@@ -1121,6 +1217,54 @@ impl Renderer {
                 }
             }
         }
+    }
+
+    /// The pipeline that downsamples one mip level of `format` into the next.
+    fn ensure_mip_pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
+        if !self.mip_pipelines.contains_key(&format) {
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("tc_mip"),
+                bind_group_layouts: &[Some(&self.mip_bgl)],
+                immediate_size: 0,
+            });
+            let p = pipeline(device, "tc_mip", &layout, &self.util_module, "vs_full", &[], Some(("fs_mip", format, None)), 1, None);
+            self.mip_pipelines.insert(format, p);
+        }
+    }
+
+    /// The refraction source of a view of `size`: the scene without transmissive surfaces, with
+    /// a short mip chain (rough glass reads blurrier levels).
+    fn create_behind(&self, device: &wgpu::Device, size: [u32; 2]) -> Behind {
+        let levels = mip_count(size[0].max(size[1])).min(BEHIND_LEVELS);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("tc_behind"),
+            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.hdr_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let level = |l: u32| texture.create_view(&wgpu::TextureViewDescriptor { base_mip_level: l, mip_level_count: Some(1), ..Default::default() });
+        let mip_bg = |src: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("tc_behind_mip"),
+                layout: &self.mip_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                ],
+            })
+        };
+        let mips = (1..levels).map(|l| (level(l), mip_bg(&level(l - 1)))).collect();
+        let all = texture.create_view(&Default::default());
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tc_refr"),
+            layout: &self.refr_bgl,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&all) }],
+        });
+        Behind { level0: level(0), bg, mips }
     }
 
     /// Effect bind group (`fx_bgl`): source texture, the post uniform, up to three extra
@@ -1191,6 +1335,7 @@ impl Renderer {
             post_buf,
             bloom: None,
             fx: None,
+            behind: None,
             blit_buf,
             blit_bg,
             ready: false,
@@ -1221,11 +1366,16 @@ impl Renderer {
         }
     }
 
-    fn targets(&mut self, device: &wgpu::Device, id: u64, size: [u32; 2], bloom: bool, fx: bool) -> Option<&mut ViewTargets> {
+    fn targets(&mut self, device: &wgpu::Device, id: u64, size: [u32; 2], bloom: bool, fx: bool, refraction: bool) -> Option<&mut ViewTargets> {
         let size = [size[0].clamp(1, 8192), size[1].clamp(1, 8192)];
         if self.views.get(&id).is_none_or(|v| v.size != size) {
             let v = self.create_targets(device, size);
             self.views.insert(id, v);
+        }
+        if refraction && self.views.get(&id).is_some_and(|v| v.behind.is_none()) {
+            self.ensure_mip_pipeline(device, self.hdr_format);
+            let b = self.create_behind(device, size);
+            self.views.get_mut(&id)?.behind = Some(b);
         }
         if fx && self.views.get(&id).is_some_and(|v| v.fx.is_none()) {
             let f = self.create_fx(device, size);
@@ -1314,10 +1464,12 @@ impl Renderer {
         });
         pass.set_pipeline(&self.shadow_pipeline);
         pass.set_bind_group(0, &self.shadow.bg, &[]);
+        // shortcut: casters are the base mesh (not displaced); a displaced shadow pass would
+        // need the set textures in shadow.wgsl.
         if let Some(m) = &self.mesh {
-            pass.set_vertex_buffer(0, m.vb.slice(..));
-            pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
-            for (range, _) in self.drawable(&m.draws, visible, None) {
+            pass.set_vertex_buffer(0, m.geo.vb.slice(..));
+            pass.set_index_buffer(m.geo.ib.slice(..), wgpu::IndexFormat::Uint32);
+            for (range, _) in self.drawable(&m.geo.draws, visible, None) {
                 pass.draw_indexed(range, 0, 0..1);
             }
         }
@@ -1383,6 +1535,17 @@ impl Renderer {
         let dof = s.dof.filter(|_| scene_fx);
         let sss = s.sss_blur.filter(|m| scene_fx && m.iter().any(|v| *v > 0.0));
         let fx_on = dof.is_some() || sss.is_some();
+        let refraction = s.refraction && !data && frame.kind == ViewKind::Scene && self.mesh.is_some();
+        let displace = s.displacement && frame.kind == ViewKind::Scene;
+        if displace {
+            self.ensure_dense(device, queue);
+        }
+        let disp = match self.mesh.as_ref().filter(|_| displace) {
+            // Height-to-normal's slope: strength 1 tilts 45° for a height change of 1 over 1/16 of
+            // the UV square; the vertex shader samples the mip whose texels match the vertex spacing.
+            Some(m) => [1.0, m.world_per_uv / 16.0, 1.0 / (m.dense.as_ref().unwrap_or(&m.geo).triangles.max(1) as f32 * 0.5).sqrt(), 0.0],
+            None => [0.0; 4],
+        };
         let cam = &frame.camera;
         let half_h = (cam.fov.clamp(5.0, 150.0).to_radians() * 0.5).tan();
         let height = frame.size[1].max(1) as f32;
@@ -1411,6 +1574,8 @@ impl Renderer {
             material: [if s.spec_gloss { 1.0 } else { 0.0 }, if s.parallax { 1.0 } else { 0.0 }, sample as f32, s.ior],
             scatter: [s.scatter[0], s.scatter[1], s.scatter[2], if sss.is_some() { 1.0 } else { 0.0 }],
             fwd: [fwd.x, fwd.y, fwd.z, 0.0],
+            disp,
+            refr: [if refraction { 1.0 } else { 0.0 }, (BEHIND_LEVELS - 1) as f32, REFRACTION_DEPTH * radius, 0.0],
         };
         let flag = |b: bool| if b { 1.0 } else { 0.0 };
         let post = PostRaw {
@@ -1420,7 +1585,7 @@ impl Renderer {
             d: sss_d,
             e: [flag(cam.ortho), 0.0, 0.0, 0.0],
         };
-        let Some(v) = self.targets(device, frame.view_id, frame.size, bloom, fx_on) else { return };
+        let Some(v) = self.targets(device, frame.view_id, frame.size, bloom, fx_on, refraction) else { return };
         queue.write_buffer(&v.globals, 0, bytemuck::bytes_of(&raw));
         queue.write_buffer(&v.post_buf, 0, bytemuck::bytes_of(&post));
         v.ready = true;
@@ -1428,6 +1593,9 @@ impl Renderer {
         v.samples = sample;
         let Some(v) = self.views.get(&frame.view_id) else { return };
         let Some(globals_bg) = v.globals_bg.as_ref() else { return };
+        if refraction && let Some(b) = &v.behind {
+            self.behind_pass(encoder, v, b, globals_bg, frame);
+        }
         let weight = 1.0 / f64::from(sample + 1);
         match v.fx.as_ref().filter(|_| fx_on) {
             // The effects run on every frame before it joins the average, so idle accumulation
@@ -1489,11 +1657,27 @@ impl Renderer {
         });
         pass.set_pipeline(&self.gbuf_pipeline);
         pass.set_bind_group(0, globals_bg, &[]);
-        pass.set_vertex_buffer(0, m.vb.slice(..));
-        pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
-        for (range, set) in self.drawable(&m.draws, &frame.visible, None) {
+        pass.set_bind_group(2, &self.refr_black, &[]);
+        let geo = self.geometry(m, frame);
+        pass.set_vertex_buffer(0, geo.vb.slice(..));
+        pass.set_index_buffer(geo.ib.slice(..), wgpu::IndexFormat::Uint32);
+        for (range, set) in self.drawable(&geo.draws, &frame.visible, None) {
             pass.set_bind_group(1, &set.bind_group, &[]);
             pass.draw_indexed(range, 0, 0..1);
+        }
+    }
+
+    /// The triangles a frame draws: the dense copy when it displaces.
+    fn geometry<'a>(&self, m: &'a MeshGpu, frame: &Frame) -> &'a Geometry {
+        m.dense.as_ref().filter(|_| frame.shade.displacement && frame.kind == ViewKind::Scene).unwrap_or(&m.geo)
+    }
+
+    /// The scene without transmissive surfaces into `b` (MSAA resolved into mip 0), then its mips.
+    fn behind_pass(&self, encoder: &mut wgpu::CommandEncoder, v: &ViewTargets, b: &Behind, globals_bg: &wgpu::BindGroup, frame: &Frame) {
+        self.draw_scene(encoder, v, &b.level0, globals_bg, frame, &self.opaque_pipeline, None, &self.refr_black);
+        let Some(pipe) = self.mip_pipelines.get(&self.hdr_format) else { return };
+        for (dst, bg) in &b.mips {
+            fullscreen(encoder, "tc_behind_mip", dst, CLEAR, pipe, bg);
         }
     }
 
@@ -1544,6 +1728,32 @@ impl Renderer {
 
     /// Background, mesh and wireframe into the view's MSAA HDR target, resolved to `resolve`.
     fn scene_pass(&self, encoder: &mut wgpu::CommandEncoder, v: &ViewTargets, resolve: &wgpu::TextureView, globals_bg: &wgpu::BindGroup, frame: &Frame) {
+        let uv_ts = match frame.kind {
+            ViewKind::Scene => None,
+            ViewKind::Uv { ts, .. } => Some(ts),
+        };
+        let (pipe, wire) = match uv_ts {
+            None => (&self.mesh_pipeline, frame.shade.wireframe_3d.then_some(&self.wire3d_pipeline)),
+            Some(_) => (&self.uv_pipeline, frame.shade.wireframe.then_some(&self.wire_pipeline)),
+        };
+        // Transmissive surfaces refract what the behind pass rendered this frame.
+        let refr = v.behind.as_ref().filter(|_| frame.shade.refraction).map_or(&self.refr_black, |b| &b.bg);
+        self.draw_scene(encoder, v, resolve, globals_bg, frame, pipe, wire, refr);
+    }
+
+    /// One scene pass: background, then the mesh with `pipe` and the wireframe with `wire`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_scene(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        v: &ViewTargets,
+        resolve: &wgpu::TextureView,
+        globals_bg: &wgpu::BindGroup,
+        frame: &Frame,
+        pipe: &wgpu::RenderPipeline,
+        wire: Option<&wgpu::RenderPipeline>,
+        refr: &wgpu::BindGroup,
+    ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("tc_view"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1569,14 +1779,13 @@ impl Renderer {
             ViewKind::Scene => None,
             ViewKind::Uv { ts, .. } => Some(ts),
         };
-        let (pipe, wire) = match uv_ts {
-            None => (&self.mesh_pipeline, frame.shade.wireframe_3d.then_some(&self.wire3d_pipeline)),
-            Some(_) => (&self.uv_pipeline, frame.shade.wireframe.then_some(&self.wire_pipeline)),
-        };
-        pass.set_vertex_buffer(0, m.vb.slice(..));
-        for (pipe, ib, ranges) in [(Some(pipe), &m.ib, &m.draws), (wire, &m.lines, &m.line_draws)] {
+        pass.set_bind_group(2, refr, &[]);
+        let geo = self.geometry(m, frame);
+        // The wireframe draws the mesh's own edges (displaced in the vertex shader too).
+        for (pipe, vb, ib, ranges) in [(Some(pipe), &geo.vb, &geo.ib, &geo.draws), (wire, &m.geo.vb, &m.lines, &m.line_draws)] {
             let Some(pipe) = pipe else { continue };
             pass.set_pipeline(pipe);
+            pass.set_vertex_buffer(0, vb.slice(..));
             pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
             for (range, set) in self.drawable(ranges, &frame.visible, uv_ts) {
                 pass.set_bind_group(1, &set.bind_group, &[]);

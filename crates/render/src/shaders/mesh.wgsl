@@ -22,6 +22,8 @@ struct Globals {
     material: vec4<f32>, // x specular/glossiness shading (1), y parallax occlusion (1), z accumulation sample index, w IOR of transmission
     scatter: vec4<f32>,  // xyz per-channel diffuse wrap at scattering weight 1 (0 = Lambert), w G-buffer holds the scattering light (1)
     fwd: vec4<f32>,      // xyz camera view direction (unit), w -
+    disp: vec4<f32>,     // x displacement on (1), y world units per unit of height at strength 1, z vertex spacing in UV units, w -
+    refr: vec4<f32>,     // x screen-space refraction on (1), y lods of the scene behind, z refraction depth (world units), w -
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -41,6 +43,9 @@ struct Globals {
 @group(1) @binding(8) var t_aux: texture_2d<f32>;
 @group(1) @binding(9) var samp: sampler;
 
+// The scene behind transmissive surfaces (screen-space refraction), black when off.
+@group(2) @binding(0) var behind_tex: texture_2d<f32>;
+
 struct VIn {
     @location(0) pos: vec3<f32>,
     @location(1) nrm: vec3<f32>,
@@ -56,11 +61,24 @@ struct VOut {
     @location(3) uv: vec2<f32>,
 };
 
+// The vertex moved along its normal by the height channel (displacement), at the mip whose texels
+// match the vertex spacing.
+fn displaced(v: VIn) -> vec3<f32> {
+    if (g.disp.x < 0.5) {
+        return v.pos;
+    }
+    let dims = vec2<f32>(textureDimensions(t_height));
+    let h = textureSampleLevel(t_height, samp, v.uv, max(log2(dims.x * g.disp.z), 0.0)).r;
+    let n = v.nrm * inverseSqrt(max(dot(v.nrm, v.nrm), 1e-12));
+    return v.pos + n * (h * g.mode.z * g.disp.y);
+}
+
 @vertex
 fn vs_mesh(v: VIn) -> VOut {
     var o: VOut;
-    o.clip = g.view_proj * vec4<f32>(v.pos, 1.0);
-    o.wpos = v.pos;
+    let p = displaced(v);
+    o.clip = g.view_proj * vec4<f32>(p, 1.0);
+    o.wpos = p;
     o.nrm = v.nrm;
     o.tan = v.tan;
     o.uv = v.uv;
@@ -308,14 +326,29 @@ fn unlit(c: vec4<f32>) -> Shaded {
     return Shaded(c, vec3<f32>(0.0));
 }
 
-@fragment
-fn fs_mesh(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+fn mesh_color(i: VOut, front: bool) -> vec4<f32> {
     let o = shade_mesh(i, front);
     if (g.scatter.w > 0.5) {
         // The subsurface blur pass adds the scattering light back, blurred (fx.wgsl).
         return o.color - vec4<f32>(o.sss, 0.0);
     }
     return o.color;
+}
+
+@fragment
+fn fs_mesh(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return mesh_color(i, front);
+}
+
+// The scene behind transmissive surfaces: everything but them (what they refract).
+@fragment
+fn fs_opaque(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let trans = textureSample(t_extra, samp, i.uv).b * (1.0 - textureSample(t_orm, samp, i.uv).b);
+    let c = mesh_color(i, front);
+    if (trans > 0.0) {
+        discard;
+    }
+    return c;
 }
 
 // The depth of field / subsurface G-buffer: rgb the scattering diffuse light (when the blur is
@@ -485,13 +518,25 @@ fn shade_mesh(i: VOut, front: bool) -> Shaded {
     }
 
     if (trans > 0.0) {
-        // shortcut: one refraction into the environment straight behind (no exit interface, no
-        // scene behind the surface); the path tracer refracts through the whole mesh.
+        // shortcut: one refraction interface (no exit); the path tracer refracts through the
+        // whole mesh.
         var td = refract(-v, n, 1.0 / max(g.material.w, 1.0));
         if (dot(td, td) < 1e-6) {
             td = reflect(-v, n);
         }
-        let behind = textureSampleLevel(env_tex, env_samp, env_uv(td), rough * g.env.y).rgb;
+        var behind = textureSampleLevel(env_tex, env_samp, env_uv(td), rough * g.env.y).rgb;
+        if (g.refr.x > 0.5) {
+            // Screen-space refraction: the opaque scene where the refracted ray lands on screen,
+            // over the environment where that shows nothing (or the ray leaves the view).
+            let p = g.view_proj * vec4<f32>(i.wpos + td * g.refr.z, 1.0);
+            let s = p.xy / max(p.w, 1e-6);
+            let suv = vec2<f32>(s.x * 0.5 + 0.5, 0.5 - s.y * 0.5);
+            if (p.w > 0.0 && all(suv >= vec2<f32>(0.0)) && all(suv <= vec2<f32>(1.0))) {
+                let lod = g.refr.y * rough * clamp(g.material.w * 2.0 - 2.0, 0.0, 1.0);
+                let seen = textureSampleLevel(behind_tex, samp, suv, lod);
+                behind = seen.rgb + behind * (1.0 - seen.a);
+            }
+        }
         layers += behind * albedo * (vec3<f32>(1.0) - env_brdf(f0, rough, nov)) * (trans * base_scale);
     }
 
@@ -616,7 +661,8 @@ fn vs_wire3d(v: VIn) -> VOut {
     o.nrm = v.nrm;
     o.tan = v.tan;
     o.uv = v.uv;
-    o.clip = g.view_proj * vec4<f32>(v.pos + (g.eye.xyz - v.pos) * 0.002, 1.0);
+    let p = displaced(v);
+    o.clip = g.view_proj * vec4<f32>(p + (g.eye.xyz - p) * 0.002, 1.0);
     return o;
 }
 

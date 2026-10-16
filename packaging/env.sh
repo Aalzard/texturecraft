@@ -50,4 +50,10 @@ copy_docs() {
   for f in README.md LICENSE-MIT LICENSE-APACHE NOTICE ATTRIBUTION.md; do
     if [ -f "$ROOT/$f" ]; then cp "$ROOT/$f" "$dest/"; fi
   done
+  # Licences of the craft-fonts faces crates/ui-egui/build.rs embeds (release builds set CRAFT_FONTS_DIR).
+  if [ -n "${CRAFT_FONTS_DIR:-}" ]; then
+    for f in biz-ud-pgothic noto-sans-cjk-sc; do
+      if [ -f "$CRAFT_FONTS_DIR/fonts/$f/OFL.txt" ]; then cp "$CRAFT_FONTS_DIR/fonts/$f/OFL.txt" "$dest/OFL-$f.txt"; fi
+    done
+  fi
 }

@@ -3,14 +3,17 @@
 //! Model's transform and parent hierarchy, and the file's unit and axis system (converted to
 //! meters, Y up, like glTF). FBX 6 keeps the geometry inside its Model, names objects instead of
 //! numbering them and lists properties in `Properties60`; both read into the same scene.
+//! Materials bring their diffuse color and, when the file embeds it (a Video's `Content`), the
+//! diffuse texture (for high-poly color map bakes).
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::Read as _;
 
-use texturecraft_geom::glam::{Mat3, Mat4, Vec2, Vec3};
+use base64::Engine as _;
+use texturecraft_geom::glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 
-use super::{Corner, PolygonSink, RawMesh, check_vertices};
+use super::{Corner, PolygonSink, RawBaseColor, RawMesh, check_vertices};
 use crate::{FormatError, Result, malformed};
 
 const KIND: &str = "FBX";
@@ -29,6 +32,8 @@ enum Prop {
     I(i64),
     F(f64),
     S(String),
+    /// Binary data (`R`), such as an embedded image.
+    Raw(Vec<u8>),
     Arr(Vec<f64>),
 }
 
@@ -87,6 +92,19 @@ impl Node {
 
     fn child_str(&self, name: &str) -> &str {
         self.child(name).map_or("", |c| c.str_at(0))
+    }
+
+    /// Embedded file bytes of a Video: binary data, or base64 text in ASCII files.
+    fn content(&self) -> Option<Vec<u8>> {
+        let c = self.child("Content")?;
+        let bytes = match c.props.first()? {
+            Prop::Raw(b) => b.clone(),
+            _ => {
+                let text: String = c.props.iter().filter_map(|p| if let Prop::S(s) = p { Some(s.as_str()) } else { None }).collect();
+                base64::engine::general_purpose::STANDARD.decode(text.trim()).ok()?
+            }
+        };
+        (!bytes.is_empty()).then_some(bytes)
     }
 
     /// Array payload: a binary array, an ASCII `*N { a: ... }` block or a bare value list.
@@ -209,9 +227,14 @@ impl<'a> Binary<'a> {
             b'L' => Prop::I(i64::from_le_bytes(self.bytes()?)),
             b'F' => Prop::F(f32::from_le_bytes(self.bytes()?) as f64),
             b'D' => Prop::F(f64::from_le_bytes(self.bytes()?)),
-            b'S' | b'R' => {
+            b'S' => {
                 let n = self.u32()?;
                 Prop::S(String::from_utf8_lossy(self.take(n)?).into_owned())
+            }
+            b'R' => {
+                let n = self.u32()?;
+                self.budget.charge(n)?;
+                Prop::Raw(self.take(n)?.to_vec())
             }
             b'f' | b'd' | b'l' | b'i' | b'b' => Prop::Arr(self.array(ty)?),
             other => return Err(malformed(KIND, format!("unknown property type 0x{other:02x}"))),
@@ -342,6 +365,10 @@ impl<'a> Ascii<'a> {
     fn node(&mut self, name: &str, depth: usize) -> Result<Node> {
         self.budget.charge(NODE_COST)?;
         let mut props = Vec::new();
+        // An empty first value (`Content: , "..."`).
+        if let Some((Tok::Comma, after)) = self.lex()? {
+            self.pos = after;
+        }
         while let Some((tok, after)) = self.lex()? {
             let prop = match tok {
                 Tok::Str(s) => Some(Prop::S(String::from_utf8_lossy(s).into_owned())),
@@ -403,6 +430,7 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
     let root = |name: &str| nodes.iter().find(|n| n.name == name);
     let objects = root("Objects").ok_or_else(|| malformed(KIND, "the file has no Objects"))?;
     let (mut geometries, mut models, mut materials) = (HashMap::new(), HashMap::new(), HashMap::new());
+    let (mut textures, mut videos) = (HashMap::new(), HashMap::new());
     // (geometry, model) instances; an FBX 6 Model holds its geometry itself.
     let mut instances: Vec<(String, Option<String>)> = Vec::new();
     for o in &objects.children {
@@ -417,13 +445,16 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
                 models.insert(id, o)
             }
             "Material" => materials.insert(id, o),
+            "Texture" => textures.insert(id, o),
+            "Video" => videos.insert(id, o),
             _ => None,
         };
     }
     // Model parents, and each Model's materials in slot order.
     let mut parents: HashMap<String, String> = HashMap::new();
     let mut slots: HashMap<String, Vec<String>> = HashMap::new();
-    for c in root("Connections").into_iter().flat_map(|c| c.all("C").chain(c.all("Connect"))) {
+    let connections: Vec<&Node> = root("Connections").into_iter().flat_map(|c| c.all("C").chain(c.all("Connect"))).collect();
+    for c in &connections {
         let (Some(child), Some(parent)) = (c.id_at(1), c.id_at(2)) else { continue };
         if c.str_at(0) != "OO" || child == parent || !models.contains_key(&parent) {
             continue;
@@ -433,8 +464,7 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
         } else if geometries.contains_key(&child) {
             instances.push((child, Some(parent)));
         } else if let Some(m) = materials.get(&child) {
-            let name = m.object_name();
-            slots.entry(parent).or_default().push(if name.is_empty() { format!("Material_{child}") } else { name.to_string() });
+            slots.entry(parent).or_default().push(material_name(&child, m));
         }
     }
     let placed: HashSet<&String> = instances.iter().map(|(g, _)| g).collect();
@@ -442,6 +472,7 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
     unplaced.sort_unstable();
     instances.extend(unplaced.into_iter().map(|g| (g, None)));
 
+    let base_colors = base_colors(&materials, &textures, &videos, &connections);
     let global = global_transform(root("GlobalSettings").or_else(|| objects.child("GlobalSettings")));
     let mut sink = PolygonSink::default();
     let no_slots = Vec::new();
@@ -460,7 +491,61 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
         let names = model.as_ref().and_then(|m| slots.get(m)).unwrap_or(&no_slots);
         add_geometry(&mut sink, g, global * m, names)?;
     }
-    Ok(sink.finish())
+    let mut raw = sink.finish();
+    raw.base_colors = base_colors;
+    Ok(raw)
+}
+
+/// A material's name in the mesh: its object name, or `Material_<id>` when it has none.
+fn material_name(id: &str, m: &Node) -> String {
+    let name = m.object_name();
+    if name.is_empty() { format!("Material_{id}") } else { name.to_string() }
+}
+
+/// Each material's diffuse color (× diffuse factor) or, when one is connected and embedded,
+/// its diffuse texture (the texture replaces the color, as in most FBX viewers).
+fn base_colors(
+    materials: &HashMap<String, &Node>,
+    textures: &HashMap<String, &Node>,
+    videos: &HashMap<String, &Node>,
+    connections: &[&Node],
+) -> Vec<RawBaseColor> {
+    // Texture → its Video, material → its diffuse texture (a property connection wins).
+    let (mut video_of, mut diffuse) = (HashMap::new(), HashMap::new());
+    for c in connections {
+        let (Some(child), Some(parent)) = (c.id_at(1), c.id_at(2)) else { continue };
+        if videos.contains_key(&child) && textures.contains_key(&parent) {
+            video_of.insert(parent, child);
+        } else if textures.contains_key(&child) && materials.contains_key(&parent) {
+            match (c.str_at(0), c.str_at(3)) {
+                ("OP", "DiffuseColor" | "Maya|baseColor") => {
+                    diffuse.insert(parent, child);
+                }
+                ("OO", _) => {
+                    diffuse.entry(parent).or_insert(child);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out: Vec<RawBaseColor> = materials
+        .iter()
+        .filter_map(|(id, m)| {
+            let texture = diffuse.get(id);
+            let image =
+                texture.and_then(|t| video_of.get(t)).and_then(|v| videos.get(v)).or_else(|| texture.and_then(|t| textures.get(t))).and_then(|n| n.content());
+            let factor = match (&image, m.property("DiffuseColor").as_deref()) {
+                (None, Some([r, g, b, ..])) => {
+                    let f = m.number("DiffuseFactor").unwrap_or(1.0);
+                    Vec4::new((r * f) as f32, (g * f) as f32, (b * f) as f32, 1.0)
+                }
+                _ => Vec4::ONE,
+            };
+            (image.is_some() || (factor != Vec4::ONE && factor.is_finite())).then(|| RawBaseColor { material: material_name(id, m), factor, image })
+        })
+        .collect();
+    out.sort_by(|a, b| a.material.cmp(&b.material));
+    out
 }
 
 /// `Name\0\1Class` (binary) or `Class::Name` (ASCII) to `Name`.

@@ -296,8 +296,11 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
             app.placing_decal = None;
         }
     }
+    // The selected decal's frame and handles: drag to move, scale or turn it.
+    let decal_drag = !alt && !s_held && !v_held && !focus_pick && placing.is_none() && touch.is_none() && decal_input(app, ui, &resp, rect);
     // Painting.
-    let painting = app.ui.mode == crate::state::Mode::Painting && !alt && !s_held && !v_held && !focus_pick && placing.is_none() && touch.is_none();
+    let painting =
+        app.ui.mode == crate::state::Mode::Painting && !alt && !s_held && !v_held && !focus_pick && placing.is_none() && touch.is_none() && !decal_drag;
     let path_tool = app.session.tool.tool == Tool::Path;
     let vp = app.session.viewport;
     let show = |app: &TextureCraftApp, p: Vec3| project(app, rect, p);
@@ -399,45 +402,191 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     axis_gizmo(ui, rect, app, false);
 }
 
-/// The frame of the selected decal layer over the 3D view (a hint while placing it): outline,
-/// a tick on its top edge and its projection direction.
+/// What a drag on the selected decal's frame does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DecalGrab {
+    /// Inside the frame: slide it over the surface.
+    Move,
+    /// A corner: scale it about its center.
+    Scale,
+    /// The round handle above its top edge: turn it.
+    Rotate,
+}
+
+impl DecalGrab {
+    fn cursor(self, dragging: bool) -> egui::CursorIcon {
+        match self {
+            DecalGrab::Move => egui::CursorIcon::Move,
+            DecalGrab::Scale => egui::CursorIcon::ResizeNwSe,
+            DecalGrab::Rotate if dragging => egui::CursorIcon::Grabbing,
+            DecalGrab::Rotate => egui::CursorIcon::Grab,
+        }
+    }
+}
+
+/// A decal handle being dragged (kept in egui's memory between frames).
+#[derive(Clone, Copy, Debug)]
+struct DecalDrag {
+    layer: texturecraft_engine::core::LayerId,
+    grab: DecalGrab,
+    /// Where the drag started, the decal's center on screen and the decal then.
+    from: Pos2,
+    center: Pos2,
+    start: texturecraft_engine::core::Decal,
+    /// The drag made its undo step: later updates merge into it.
+    stepped: bool,
+}
+
+fn decal_drag_id() -> egui::Id {
+    egui::Id::new("tc_decal_drag")
+}
+
+/// Screen distance from the top edge to the rotation handle (points).
+const DECAL_KNOB: f32 = 24.0;
+
+/// The selected decal layer (its content, not its mask) as the 3D view shows it.
+struct DecalFrame {
+    layer: texturecraft_engine::core::LayerId,
+    decal: texturecraft_engine::core::Decal,
+    /// Top left, top right, bottom right, bottom left.
+    corners: [Pos2; 4],
+    center: Pos2,
+    /// The middle of the top edge and the rotation handle above it.
+    top: Pos2,
+    knob: Pos2,
+}
+
+impl DecalFrame {
+    fn of(app: &TextureCraftApp, rect: Rect) -> Option<DecalFrame> {
+        use texturecraft_engine::compose::pattern::{decal_axes, decal_corners};
+        use texturecraft_engine::core::{Fill, LayerKind, Projection};
+        if app.ui.mode != crate::state::Mode::Painting || app.session.target != texturecraft_engine::StackTarget::Content {
+            return None;
+        }
+        let p = &app.session.doc.project;
+        let layer = app.session.selected_layer().and_then(|id| p.content_layer(id))?;
+        let LayerKind::Fill(Fill { projection: Projection::Decal(decal), .. }) = &layer.kind else { return None };
+        let [a, b, c, d] = decal_corners(decal)?.map(|q| project(app, rect, q));
+        let corners = [a?, b?, c?, d?];
+        let center = project(app, rect, decal_axes(decal)?.0)?;
+        let top = corners[0].lerp(corners[1], 0.5);
+        let knob = top + (top - center).normalized() * DECAL_KNOB;
+        Some(DecalFrame { layer: layer.id, decal: *decal, corners, center, top, knob })
+    }
+
+    /// The handle under screen point `p`.
+    fn grab(&self, p: Pos2) -> Option<DecalGrab> {
+        if self.knob.distance(p) <= HANDLE_GRAB {
+            return Some(DecalGrab::Rotate);
+        }
+        if self.corners.iter().any(|c| c.distance(p) <= HANDLE_GRAB) {
+            return Some(DecalGrab::Scale);
+        }
+        // Inside the (convex) frame: on the same side of every edge.
+        let side = |i: usize| {
+            let (a, b) = (self.corners[i], self.corners[(i + 1) % 4]);
+            (b - a).x * (p - a).y - (b - a).y * (p - a).x
+        };
+        let s = [side(0), side(1), side(2), side(3)];
+        (s.iter().all(|v| *v >= 0.0) || s.iter().all(|v| *v <= 0.0)).then_some(DecalGrab::Move)
+    }
+}
+
+/// Drags on the selected decal's frame and handles (one undo step per drag, the decal updates
+/// live). Returns whether a decal drag owns the pointer.
+fn decal_input(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, rect: Rect) -> bool {
+    let ctx = ui.ctx();
+    let frame = DecalFrame::of(app, rect);
+    let mut drag = ctx.data(|d| d.get_temp::<DecalDrag>(decal_drag_id())).filter(|d| frame.as_ref().is_some_and(|f| f.layer == d.layer));
+    if resp.drag_started_by(PointerButton::Primary)
+        && let (Some(f), Some(from)) = (&frame, ctx.input(|i| i.pointer.press_origin()))
+        && let Some(grab) = f.grab(from)
+    {
+        drag = Some(DecalDrag { layer: f.layer, grab, from, center: f.center, start: f.decal, stepped: false });
+    }
+    let Some(mut d) = drag.filter(|_| resp.dragged_by(PointerButton::Primary) || resp.drag_started_by(PointerButton::Primary)) else {
+        ctx.data_mut(|m| m.remove::<DecalDrag>(decal_drag_id()));
+        if let (Some(f), Some(h)) = (&frame, resp.hover_pos())
+            && let Some(g) = f.grab(h)
+        {
+            ctx.set_cursor_icon(g.cursor(false));
+        }
+        return false;
+    };
+    ctx.set_cursor_icon(d.grab.cursor(true));
+    if let Some(p) = resp.interact_pointer_pos().filter(|_| ctx.input(|i| i.pointer.delta() != egui::Vec2::ZERO)) {
+        let mut params = match d.grab {
+            DecalGrab::Move => {
+                let q = d.center + (p - d.from) - rect.left_top();
+                let vp = app.session.viewport;
+                json!({"x": q.x, "y": q.y, "viewport": [vp.x, vp.y]})
+            }
+            DecalGrab::Scale => {
+                let k = (p - d.center).length() / (d.from - d.center).length().max(1.0);
+                json!({"size": [d.start.size[0] * k, d.start.size[1] * k]})
+            }
+            DecalGrab::Rotate => {
+                // Screen y points down: counter-clockwise angles turn the decal's right toward its up.
+                let angle = |v: egui::Vec2| (-v.y).atan2(v.x).to_degrees();
+                json!({"rotation": d.start.rotation + angle(p - d.center) - angle(d.from - d.center)})
+            }
+        };
+        params["layer"] = json!(d.layer.0);
+        params["merge"] = json!(d.stepped);
+        // Off the mesh while moving: the decal waits where it is.
+        d.stepped |= texturecraft_engine::execute(&mut app.session, "layer.decal.set", &params).is_ok();
+    }
+    ctx.data_mut(|m| m.insert_temp(decal_drag_id(), d));
+    true
+}
+
+/// The frame of the selected decal layer over the 3D view with its handles (and a hint while
+/// placing it): outline, corner handles, the rotation handle and the projection direction.
 fn decal_overlay(app: &mut TextureCraftApp, ui: &Ui, rect: Rect) {
     use texturecraft_engine::core::{Fill, LayerKind, Projection};
     let p = &app.session.doc.project;
     let sel = app.session.selected_layer().and_then(|id| p.content_layer(id));
-    let decal = match sel.map(|l| &l.kind) {
-        Some(LayerKind::Fill(Fill { projection: Projection::Decal(d), .. })) => Some(*d),
-        _ => None,
-    };
+    let is_decal = matches!(sel.map(|l| &l.kind), Some(LayerKind::Fill(Fill { projection: Projection::Decal(_), .. })));
     // Placing follows the selection: another layer selected stops it.
-    if app.placing_decal.is_some() && app.placing_decal != sel.map(|l| l.id).filter(|_| decal.is_some()) {
+    if app.placing_decal.is_some() && app.placing_decal != sel.map(|l| l.id).filter(|_| is_decal) {
         app.placing_decal = None;
     }
     let painter = ui.painter_at(rect);
+    let hint_at = rect.left_top() + vec2(12.0, 40.0);
     if app.placing_decal.is_some() {
         let hint = tr("Click the mesh to place the decal");
-        painter.text(rect.left_top() + vec2(12.0, 40.0), egui::Align2::LEFT_TOP, hint, egui::FontId::proportional(12.0), TOKENS.accent);
+        painter.text(hint_at, egui::Align2::LEFT_TOP, hint, egui::FontId::proportional(12.0), TOKENS.accent);
     }
-    let Some((d, corners)) = decal.and_then(|d| Some((d, texturecraft_engine::compose::pattern::decal_corners(&d)?))) else { return };
-    let pts: Vec<Pos2> = corners.iter().filter_map(|c| project(app, rect, *c)).collect();
-    let (Some(axes), true) = (texturecraft_engine::compose::pattern::decal_axes(&d), pts.len() == 4) else { return };
-    let mut outline = pts.clone();
-    outline.extend(pts.first().copied());
-    for (w, color) in [(3.0, Color32::from_black_alpha(140)), (1.2, Color32::from_white_alpha(220))] {
-        painter.add(egui::Shape::dashed_line(&outline, Stroke::new(w, color), 6.0, 4.0));
+    let Some(f) = DecalFrame::of(app, rect) else { return };
+    let active = ui.ctx().data(|d| d.get_temp::<DecalDrag>(decal_drag_id())).map(|d| d.grab);
+    let hovered = ui.ctx().pointer_hover_pos().filter(|h| rect.contains(*h)).and_then(|h| f.grab(h));
+    if app.placing_decal.is_none() && (hovered.is_some() || active.is_some()) {
+        let hint = tr("Drag the frame to move the decal, a corner to scale it, the round handle to turn it");
+        painter.text(hint_at, egui::Align2::LEFT_TOP, hint, egui::FontId::proportional(12.0), TOKENS.text_dim);
     }
-    // Top edge tick and the projection direction from the center.
-    let (o, _, up, n) = axes;
-    let top = (corners[0] + corners[1]) * 0.5;
-    let reach = d.size[0].max(d.size[1]) * 0.25;
-    for (a, b) in [(top, top + up * reach * 0.4), (o, o + n * reach)] {
-        if let (Some(a), Some(b)) = (project(app, rect, a), project(app, rect, b)) {
-            painter.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(140)));
-            painter.line_segment([a, b], Stroke::new(1.4, TOKENS.accent));
-        }
+    let shadow = Stroke::new(3.0, Color32::from_black_alpha(140));
+    let mut outline = f.corners.to_vec();
+    outline.push(f.corners[0]);
+    let frame_color = if active == Some(DecalGrab::Move) || hovered == Some(DecalGrab::Move) { TOKENS.accent } else { Color32::from_white_alpha(220) };
+    for stroke in [shadow, Stroke::new(1.2, frame_color)] {
+        painter.add(egui::Shape::dashed_line(&outline, stroke, 6.0, 4.0));
     }
-    if let Some(c) = project(app, rect, o) {
-        painter.circle(c, 3.5, TOKENS.accent, Stroke::new(1.0, Color32::from_black_alpha(180)));
+    // The projection direction from the center.
+    if let Some((o, _, _, n)) = texturecraft_engine::compose::pattern::decal_axes(&f.decal)
+        && let Some(tip) = project(app, rect, o + n * f.decal.size[0].max(f.decal.size[1]) * 0.25)
+    {
+        painter.line_segment([f.center, tip], shadow);
+        painter.line_segment([f.center, tip], Stroke::new(1.4, TOKENS.accent));
+    }
+    painter.circle(f.center, 3.5, TOKENS.accent, Stroke::new(1.0, Color32::from_black_alpha(180)));
+    // Handles: white, the one under the pointer or being dragged in the accent color.
+    let fill = |g: DecalGrab| if active == Some(g) || (active.is_none() && hovered == Some(g)) { TOKENS.accent } else { Color32::WHITE };
+    let edge = Stroke::new(1.0, Color32::from_black_alpha(200));
+    painter.line_segment([f.top, f.knob], shadow);
+    painter.line_segment([f.top, f.knob], Stroke::new(1.4, Color32::from_white_alpha(220)));
+    painter.circle(f.knob, 5.0, fill(DecalGrab::Rotate), edge);
+    for c in f.corners {
+        painter.rect(Rect::from_center_size(c, vec2(8.0, 8.0)), 1.0, fill(DecalGrab::Scale), edge, egui::StrokeKind::Middle);
     }
 }
 

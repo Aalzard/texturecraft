@@ -104,6 +104,79 @@
     </dict>
     <dict>
       <key>UTTypeIdentifier</key>
+      <string>ai.storyteller.texturecraft.fbx</string>
+      <key>UTTypeDescription</key>
+      <string>FBX Model</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>fbx</string></array>
+        <key>public.mime-type</key>
+        <array><string>model/x-fbx</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.khronos.collada.digital-asset-exchange</string>
+      <key>UTTypeDescription</key>
+      <string>COLLADA Model</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>dae</string></array>
+        <key>public.mime-type</key>
+        <array><string>model/vnd.collada+xml</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>com.pixar.universal-scene-description</string>
+      <key>UTTypeDescription</key>
+      <string>Universal Scene Description</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>usd</string><string>usda</string><string>usdc</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>com.pixar.universal-scene-description-mobile</string>
+      <key>UTTypeDescription</key>
+      <string>Universal Scene Description Package</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>usdz</string></array>
+        <key>public.mime-type</key>
+        <array><string>model/vnd.usdz+zip</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>ai.storyteller.texturecraft.alembic</string>
+      <key>UTTypeDescription</key>
+      <string>Alembic Model</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string><string>public.3d-content</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>abc</string></array>
+        <key>public.mime-type</key>
+        <array><string>model/x-alembic</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
       <string>public.geometry-definition-format</string>
       <key>UTTypeDescription</key>
       <string>Wavefront OBJ Model</string>
@@ -173,6 +246,11 @@
       <array>
         <string>ai.storyteller.texturecraft.gltf-binary</string>
         <string>ai.storyteller.texturecraft.gltf</string>
+        <string>ai.storyteller.texturecraft.fbx</string>
+        <string>org.khronos.collada.digital-asset-exchange</string>
+        <string>com.pixar.universal-scene-description</string>
+        <string>com.pixar.universal-scene-description-mobile</string>
+        <string>ai.storyteller.texturecraft.alembic</string>
         <string>public.geometry-definition-format</string>
         <string>public.polygon-file-format</string>
         <string>public.standard-tesselated-geometry-format</string>

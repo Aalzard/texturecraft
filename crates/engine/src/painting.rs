@@ -7,8 +7,8 @@ use texturecraft_compose::PaintTarget;
 use texturecraft_core::{Channel, Effect, EffectKind, LayerId, LayerKind, Mask, MaskBackground};
 use texturecraft_geom::glam::Vec2;
 use texturecraft_paint::{
-    CommitSource, EyeDepth, PickCtx, Pickup, PickupMode, RasterCtx, Shape, Stroke, StrokeCanvas, SurfaceHit, commit_layer, commit_mask, fill_triangles, pick,
-    rasterize,
+    CommitSource, EyeDepth, PickCtx, Pickup, PickupMode, RasterCtx, Shape, Staging, Stroke, StrokeCanvas, SurfaceHit, commit_layer, commit_mask,
+    fill_triangles, pick, rasterize,
 };
 
 use crate::session::{ActiveStroke, CloneFrom, FillMode, Session, StackTarget, Tool};
@@ -191,6 +191,7 @@ impl Session {
             stencil,
             before,
             label: label.to_string(),
+            staging: Staging::default(),
         });
         Ok(())
     }
@@ -295,13 +296,7 @@ impl Session {
             .map(|(i, c)| texturecraft_paint::UvStamp { center: *c, radius, angle, flow: b.flow, hardness: b.hardness, seed: n0 + i as u32 })
             .collect();
         texturecraft_paint::rasterize_uv(&mut st.canvas, &cache.gbuf, Self::shape(&self.images, b), &stamps);
-        let recent = std::mem::take(&mut st.canvas.recent);
-        let (ts, target) = (st.ts, st.target);
-        if target.is_some() {
-            self.mark_painted(ts, target, recent);
-        } else {
-            self.quick_mask.revision = self.quick_mask.revision.wrapping_add(1);
-        }
+        self.stroke_painted();
     }
 
     /// Add a pointer sample to the active stroke. Returns whether it hit the mesh.
@@ -327,14 +322,29 @@ impl Session {
             shape: Self::shape(&self.images, &st.stroke.settings),
         };
         rasterize(&mut st.canvas, &rctx, &stamps);
+        self.stroke_painted();
+        hit
+    }
+
+    /// After stamps were rasterized: prepare the tiles the commit will write (so it only swaps
+    /// them in) and mark the touched tiles for the live preview.
+    fn stroke_painted(&mut self) {
+        let Some(st) = self.stroke.as_mut() else { return };
         let recent = std::mem::take(&mut st.canvas.recent);
         let (ts, target) = (st.ts, st.target);
-        if target.is_some() {
-            self.mark_painted(ts, target, recent);
-        } else {
+        let Some(t) = target else {
             self.quick_mask.revision = self.quick_mask.revision.wrapping_add(1);
-        }
-        hit
+            return;
+        };
+        let gbuf = self.caches.get(ts).map(|c| c.gbuf.clone());
+        let (pixels, mask_value) = (&self.doc.pixels, self.tool.mask_value);
+        let mut staging = std::mem::take(&mut st.staging);
+        with_commit_source(st, gbuf.as_deref(), &self.mesh, &recent, |src| match t {
+            PaintTarget::Layer(id) => staging.stage_layer(pixels, id, &st.values, &src),
+            PaintTarget::Mask(eid) => staging.stage_mask(pixels, eid, mask_value, &src),
+        });
+        st.staging = staging;
+        self.mark_painted(ts, target, recent);
     }
 
     pub fn stroke_active(&self) -> bool {
@@ -343,7 +353,7 @@ impl Session {
 
     /// Commit the active stroke (one undo step).
     pub fn end_stroke(&mut self) -> Result<()> {
-        let Some(st) = self.stroke.take() else { return Ok(()) };
+        let Some(mut st) = self.stroke.take() else { return Ok(()) };
         let size = (st.canvas.alpha.width(), st.canvas.alpha.height());
         if st.canvas.dirty.is_empty() {
             // Nothing painted: drop any mask effect the stroke created.
@@ -352,19 +362,19 @@ impl Session {
         }
         let gbuf = self.caches.get(st.ts).map(|c| c.gbuf.clone());
         let mesh = self.mesh.clone();
-        let stencil_fn = |x: u32, y: u32| -> Option<([f32; 3], f32)> {
-            let g = gbuf.as_ref()?;
-            let p = g.surface(&mesh, (y * g.width + x) as usize)?.pos;
-            st.stencil.as_ref()?.sample_world(p)
-        };
-        let per_texel: Option<texturecraft_paint::TexelFn> = if st.stencil.is_some() { Some(&stencil_fn) } else { None };
-        let carried = st.canvas.pickup.as_ref().map(|p| &p.values);
-        let src = CommitSource { alpha: &st.canvas.alpha, tiles: &st.canvas.dirty, opacity: st.stroke.settings.opacity, erase: st.erase, per_texel, carried };
+        let mut staging = std::mem::take(&mut st.staging);
+        let mask_value = self.tool.mask_value;
         match st.target {
-            Some(PaintTarget::Layer(id)) => commit_layer(&mut self.doc.pixels, id, size, &st.values, src),
-            Some(PaintTarget::Mask(eid)) => commit_mask(&mut self.doc.pixels, eid, size, self.tool.mask_value, src),
+            Some(PaintTarget::Layer(id)) => {
+                let pixels = &mut self.doc.pixels;
+                with_commit_source(&st, gbuf.as_deref(), &mesh, &st.canvas.dirty, |src| commit_layer(pixels, id, size, &st.values, src, &mut staging));
+            }
+            Some(PaintTarget::Mask(eid)) => {
+                let pixels = &mut self.doc.pixels;
+                with_commit_source(&st, gbuf.as_deref(), &mesh, &st.canvas.dirty, |src| commit_mask(pixels, eid, size, mask_value, src, &mut staging));
+            }
             None => {
-                self.commit_quick_mask(st.ts, size, src);
+                with_commit_source(&st, gbuf.as_deref(), &mesh, &st.canvas.dirty, |src| self.commit_quick_mask(st.ts, size, src));
                 return Ok(());
             }
         }
@@ -375,7 +385,9 @@ impl Session {
         self.redo.clear();
         self.modified = true;
         self.revision = self.revision.wrapping_add(1);
-        self.mark_painted(st.ts, st.target, st.canvas.dirty.iter().copied());
+        // The live preview already shows the committed result: the stroke's tiles recomposite
+        // from the committed pixels at low priority, without holding up this frame.
+        self.mark_settle(st.ts, st.target, st.canvas.dirty.iter().copied());
         Ok(())
     }
 
@@ -456,8 +468,8 @@ impl Session {
             let target = s.paint_target()?;
             let values = s.stroke_values(target);
             match target {
-                PaintTarget::Layer(id) => commit_layer(&mut s.doc.pixels, id, size, &values, src(s.tool.brush.opacity)),
-                PaintTarget::Mask(eid) => commit_mask(&mut s.doc.pixels, eid, size, s.tool.mask_value, src(s.tool.brush.opacity)),
+                PaintTarget::Layer(id) => commit_layer(&mut s.doc.pixels, id, size, &values, src(s.tool.brush.opacity), &mut Staging::default()),
+                PaintTarget::Mask(eid) => commit_mask(&mut s.doc.pixels, eid, size, s.tool.mask_value, src(s.tool.brush.opacity), &mut Staging::default()),
             }
             Ok(())
         })
@@ -540,4 +552,23 @@ impl Session {
     pub fn selected_layer_id(&self) -> Option<LayerId> {
         self.selected_layer()
     }
+}
+
+/// Run `f` with stroke `st` as a commit source over `tiles` (the Projection tool's stencil
+/// colors and alpha come from the surface under each texel).
+fn with_commit_source<R>(
+    st: &ActiveStroke,
+    gbuf: Option<&texturecraft_geom::UvGBuffer>,
+    mesh: &texturecraft_geom::Mesh,
+    tiles: &BTreeSet<(u32, u32)>,
+    f: impl FnOnce(CommitSource) -> R,
+) -> R {
+    let stencil_fn = |x: u32, y: u32| -> Option<([f32; 3], f32)> {
+        let g = gbuf?;
+        let p = g.surface(mesh, (y * g.width + x) as usize)?.pos;
+        st.stencil.as_ref()?.sample_world(p)
+    };
+    let per_texel: Option<texturecraft_paint::TexelFn> = if st.stencil.is_some() { Some(&stencil_fn) } else { None };
+    let carried = st.canvas.pickup.as_ref().map(|p| &p.values);
+    f(CommitSource { alpha: &st.canvas.alpha, tiles, opacity: st.stroke.settings.opacity, erase: st.erase, per_texel, carried })
 }

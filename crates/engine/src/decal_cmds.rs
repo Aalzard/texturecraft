@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit decal",
             [],
             None,
-            "{layer?, x?, y?, viewport? | position?, normal? (re-place it), size?: height | [w,h], rotation?: degrees, offset?: [right, up] (world units from where it was placed), depth?, image?}",
+            "{layer?, x?, y?, viewport? | position?, normal? (re-place it), size?: height | [w,h], rotation?: degrees, offset?: [right, up] (world units from where it was placed), depth?, image?, merge?: true continues the previous Edit decal undo step (drags)}",
             has_layer,
             set
         ),
@@ -152,7 +152,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(bad(cmd, format!("no image resource `{name}`")));
     }
-    s.edit("Edit decal", |s| {
+    s.edit_merging("Edit decal", crate::commands::boolp(p, "merge").unwrap_or(false), |s| {
         if let LayerKind::Fill(f) = &mut s.doc.project.layer_mut(id)?.kind {
             f.projection = Projection::Decal(d);
             if let Some(name) = image {

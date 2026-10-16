@@ -21,6 +21,14 @@ struct FrameStat {
     sync_ms: f32,
     /// Input, shortcuts, control requests and scripted strokes before the UI is built.
     logic_ms: f32,
+    /// The scripted stroke ended (was committed) in this frame.
+    stroke_end: bool,
+}
+
+impl FrameStat {
+    fn json(&self) -> Value {
+        json!({ "intervalMs": self.interval_ms, "uiMs": self.ui_ms, "syncMs": self.sync_ms, "logicMs": self.logic_ms })
+    }
 }
 
 #[derive(Default)]
@@ -32,6 +40,8 @@ pub struct Profiler {
     /// Time in `App::logic` this frame.
     pub logic_ms: f32,
     paint: Option<PaintTest>,
+    /// The scripted stroke ended in the frame being built.
+    stroke_end: bool,
 }
 
 /// A stroke from `from` to `to` (viewport pixels) over `frames` frames.
@@ -50,7 +60,13 @@ impl Profiler {
         if self.frames.len() == KEEP {
             self.frames.pop_front();
         }
-        self.frames.push_back(FrameStat { interval_ms, ui_ms, sync_ms: std::mem::take(&mut self.sync_ms), logic_ms: std::mem::take(&mut self.logic_ms) });
+        self.frames.push_back(FrameStat {
+            interval_ms,
+            ui_ms,
+            sync_ms: std::mem::take(&mut self.sync_ms),
+            logic_ms: std::mem::take(&mut self.logic_ms),
+            stroke_end: std::mem::take(&mut self.stroke_end),
+        });
     }
 
     /// Averages and worst cases since the last call (then cleared).
@@ -70,9 +86,10 @@ impl Profiler {
             "syncMs": stat(|f| f.sync_ms),
             "logicMs": stat(|f| f.logic_ms),
             // The slowest frame's breakdown: what to look at first.
-            "worst": frames.iter().max_by(|a, b| a.interval_ms.total_cmp(&b.interval_ms)).map(|f| json!({
-                "intervalMs": f.interval_ms, "uiMs": f.ui_ms, "syncMs": f.sync_ms, "logicMs": f.logic_ms,
-            })),
+            "worst": frames.iter().max_by(|a, b| a.interval_ms.total_cmp(&b.interval_ms)).map(FrameStat::json),
+            // The frame that committed the scripted stroke and the next one (whose interval
+            // includes presenting the commit frame).
+            "strokeEnd": frames.iter().position(|f| f.stroke_end).map(|i| frames.iter().skip(i).take(2).map(FrameStat::json).collect::<Vec<_>>()),
             "painting": self.paint.is_some(),
         })
     }
@@ -91,7 +108,8 @@ pub fn start_paint_test(app: &mut TextureCraftApp, p: &Value) -> Result<(), Stri
     Ok(())
 }
 
-/// Advance the scripted stroke by one frame (called from the frame loop).
+/// Advance the scripted stroke by one frame (called from the frame loop). Like a pointer
+/// release, the frame after the last point commits the stroke.
 pub fn drive(app: &mut TextureCraftApp, ctx: &egui::Context) {
     let Some(t) = app.profiler.paint.as_mut() else { return };
     let (i, frames) = (t.i, t.frames);
@@ -105,14 +123,14 @@ pub fn drive(app: &mut TextureCraftApp, ctx: &egui::Context) {
             app.profiler.paint = None;
             return;
         }
-    } else {
+    } else if i < frames {
         s.continue_stroke(p, 1.0);
-    }
-    if i + 1 >= frames {
+    } else {
         if let Err(e) = s.end_stroke() {
             log::warn!("paint test: {e}");
         }
         app.profiler.paint = None;
+        app.profiler.stroke_end = true;
     }
     ctx.request_repaint();
 }

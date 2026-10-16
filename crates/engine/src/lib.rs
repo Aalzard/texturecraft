@@ -44,6 +44,7 @@ pub use commands::{CommandSpec, command_specs, execute, find};
 pub use path_tool::PathState;
 pub use project_cmds::sample_session;
 pub use session::{CloneFrom, CloneSource, Document, FillMode, Session, SetCache, StackTarget, StencilState, Tool, ToolState, ViewMode};
+pub use set_cmds::{ResizeOutput, ResizeTask};
 
 pub use texturecraft_bake as bake;
 pub use texturecraft_compose as compose;

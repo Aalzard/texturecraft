@@ -22,6 +22,7 @@ pub mod ibl;
 pub mod mesh_maps;
 pub mod readback;
 pub mod renderer;
+mod subdivide;
 pub mod trace;
 
 pub use renderer::{COLOR_FORMAT, Frame, MSAA, Renderer, Shade, ViewKind, aux_size, uv_view_scale};

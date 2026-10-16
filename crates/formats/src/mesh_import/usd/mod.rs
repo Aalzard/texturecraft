@@ -5,7 +5,9 @@
 //! (`primvars:normals` or `normals`), UVs (`primvars:st`, `st0`, `UVMap` or the first
 //! `texCoord2f[]` primvar, indexed or not, any interpolation), `orientation`, and material names
 //! from `material:binding` (inherited down the hierarchy) and `materialBind` GeomSubsets. Stage
-//! `metersPerUnit` (USD's fallback is 0.01) and `upAxis` become meters, Y up.
+//! `metersPerUnit` (USD's fallback is 0.01) and `upAxis` become meters, Y up. A material's
+//! UsdPreviewSurface gives its base color: the `diffuseColor` value, or the UsdUVTexture it is
+//! connected to when the texture file is inside the `.usdz` package (for color map bakes).
 //!
 //! Not composed: external references, payloads, sublayers and variant sets (each warns once),
 //! inherits and specializes. Time-sampled values use their first sample.
@@ -21,7 +23,7 @@ use std::io::Read as _;
 
 use texturecraft_geom::glam::{DMat4, DQuat, DVec3, DVec4, Mat3, Mat4, Vec2, Vec3, Vec4};
 
-use super::{Corner, MAX_MESH_FILE_BYTES, PolygonSink, RawMesh};
+use super::{Corner, MAX_MESH_FILE_BYTES, PolygonSink, RawBaseColor, RawMesh};
 use crate::{FormatError, Result, malformed};
 
 pub(crate) const KIND: &str = "USD";
@@ -33,6 +35,8 @@ const MAX_DEPTH: usize = 128;
 const MAX_PRIM_VISITS: usize = 1_000_000;
 /// Entries accepted in a `.usdz` package.
 const MAX_ZIP_ENTRIES: usize = 100_000;
+/// Largest texture file read from a `.usdz` package.
+const MAX_TEXTURE_BYTES: u64 = 1 << 28;
 
 /// A decoded value: numbers (scalars, vectors, quaternions as w x y z, matrices row-major and
 /// bools all flattened), tokens / strings / asset paths, or paths.
@@ -49,6 +53,8 @@ pub(crate) struct Prop {
     pub type_name: String,
     pub value: Option<Val>,
     pub interpolation: Option<String>,
+    /// The first connection source (`name.connect`): an attribute path.
+    pub connect: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -126,9 +132,12 @@ impl Budget {
 
 pub(crate) fn read(file_name: &str, bytes: &[u8]) -> Result<RawMesh> {
     crate::guard(KIND, || {
-        let ext = super::extension(file_name);
-        let layer = if ext == "usdz" { read_usdz(bytes)? } else { read_layer(bytes)? };
-        compose(&layer)
+        if super::extension(file_name) == "usdz" {
+            let (layer, mut package) = read_usdz(bytes)?;
+            compose(&layer, Some(&mut package))
+        } else {
+            compose(&read_layer(bytes)?, None)
+        }
     })
 }
 
@@ -144,25 +153,42 @@ fn read_layer(bytes: &[u8]) -> Result<Layer> {
     }
 }
 
-/// The first USD layer of a `.usdz` package.
-fn read_usdz(bytes: &[u8]) -> Result<Layer> {
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| malformed(KIND, format!("usdz package: {e}")))?;
+/// A `.usdz` package: its files, and the folder of the layer read (asset paths are relative
+/// to it).
+struct Package<'a> {
+    zip: zip::ZipArchive<std::io::Cursor<&'a [u8]>>,
+    dir: String,
+}
+
+impl Package<'_> {
+    /// Entry `name`'s bytes, at most `cap` (None when missing, larger or unreadable).
+    fn read(&mut self, name: &str, cap: u64) -> Option<Vec<u8>> {
+        let f = self.zip.by_name(name).ok()?;
+        let mut data = Vec::new();
+        f.take(cap + 1).read_to_end(&mut data).ok()?;
+        (data.len() as u64 <= cap).then_some(data)
+    }
+
+    /// The package file asset path `asset` names (relative to the layer's folder).
+    fn asset(&mut self, asset: &str) -> Option<Vec<u8>> {
+        let rel = asset.trim_start_matches("./").trim_start_matches('/');
+        let path = if self.dir.is_empty() { rel.to_string() } else { format!("{}/{rel}", self.dir) };
+        self.read(&path, MAX_TEXTURE_BYTES).or_else(|| self.read(rel, MAX_TEXTURE_BYTES))
+    }
+}
+
+/// The first USD layer of a `.usdz` package, and the package.
+fn read_usdz(bytes: &[u8]) -> Result<(Layer, Package<'_>)> {
+    let zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| malformed(KIND, format!("usdz package: {e}")))?;
     if zip.len() > MAX_ZIP_ENTRIES {
         return Err(FormatError::TooLarge(format!("the usdz package has more than {MAX_ZIP_ENTRIES} entries")));
     }
-    for i in 0..zip.len() {
-        let mut f = zip.by_index(i).map_err(|e| malformed(KIND, format!("usdz package: {e}")))?;
-        if !matches!(super::extension(f.name()).as_str(), "usda" | "usdc" | "usd") {
-            continue;
-        }
-        let mut data = Vec::new();
-        (&mut f).take(MAX_MESH_FILE_BYTES + 1).read_to_end(&mut data).map_err(|e| malformed(KIND, format!("usdz package: {e}")))?;
-        if data.len() as u64 > MAX_MESH_FILE_BYTES {
-            return Err(FormatError::TooLarge("the usdz layer is larger than 2 GiB".into()));
-        }
-        return read_layer(&data);
-    }
-    Err(malformed(KIND, "the usdz package contains no USD layer"))
+    let name = zip.file_names().filter(|n| matches!(super::extension(n).as_str(), "usda" | "usdc" | "usd")).min_by_key(|n| zip.index_for_name(n));
+    let name = name.ok_or_else(|| malformed(KIND, "the usdz package contains no USD layer"))?.to_string();
+    let dir = name.rsplit_once('/').map_or("", |(d, _)| d).to_string();
+    let mut package = Package { zip, dir };
+    let data = package.read(&name, MAX_MESH_FILE_BYTES).ok_or_else(|| FormatError::TooLarge("the usdz layer is unreadable or larger than 2 GiB".into()))?;
+    Ok((read_layer(&data)?, package))
 }
 
 /// Composes the layer's stage into polygons.
@@ -178,7 +204,7 @@ struct Stage<'a> {
 /// A composed prim: its specs, strongest first (the prim, then what it references).
 type Composed = Vec<usize>;
 
-fn compose(layer: &Layer) -> Result<RawMesh> {
+fn compose(layer: &Layer, mut package: Option<&mut Package>) -> Result<RawMesh> {
     let mpu = layer.meters_per_unit.filter(|m| m.is_finite() && *m > 0.0).unwrap_or(0.01) as f32;
     let up = match layer.up_axis.as_deref() {
         Some("Z" | "z") => Mat4::from_cols(Vec4::X, -Vec4::Z, Vec4::Y, Vec4::W),
@@ -190,7 +216,13 @@ fn compose(layer: &Layer) -> Result<RawMesh> {
         stage.sink.warn(w.clone());
     }
     stage.visit(&[0], stage.global, None, 0)?;
-    Ok(stage.sink.finish())
+    let mut raw = stage.sink.finish();
+    let mut names: Vec<String> = raw.groups.iter().map(|(m, _, _)| m.clone()).collect();
+    names.sort();
+    names.dedup();
+    let mut stage = Stage { sink: PolygonSink::default(), ..stage };
+    raw.base_colors = names.iter().filter_map(|n| stage.base_color(n, package.as_deref_mut())).collect();
+    Ok(raw)
 }
 
 /// Last element of a prim path: the material name of a binding.
@@ -239,6 +271,40 @@ impl<'a> Stage<'a> {
             Val::Num(v) => Some(v),
             _ => None,
         }
+    }
+
+    /// The prim path an attribute is connected to (`/Looks/Red/Tex.outputs:rgb` → `/Looks/Red/Tex`).
+    fn connected_prim(&mut self, c: &[usize], name: &str) -> Option<Composed> {
+        let source = self.specs(c).filter_map(|s| s.props.get(name)).find_map(|p| p.connect.as_deref())?;
+        self.prim_at(source.split('.').next().unwrap_or(source))
+    }
+
+    /// The composed prim at `path`.
+    fn prim_at(&mut self, path: &str) -> Option<Composed> {
+        let i = *self.by_path.get(path)?;
+        let mut out = Vec::new();
+        self.expand(&[i], &mut out, 0);
+        Some(out)
+    }
+
+    /// Base color of the Material prim named `name` (bindings name materials by their last path
+    /// element): its UsdPreviewSurface's `diffuseColor` value, or the texture of the UsdUVTexture
+    /// connected to it when `package` holds the file (white × the texture's `scale`).
+    fn base_color(&mut self, name: &str, package: Option<&mut Package>) -> Option<RawBaseColor> {
+        let path = self.layer.prims.iter().find(|p| p.type_name == "Material" && p.name == name)?.path.clone();
+        let material = self.prim_at(&path)?;
+        let surface = self.connected_prim(&material, "outputs:surface").filter(|s| self.token(s, "info:id") == Some("UsdPreviewSurface"))?;
+        let rgb = |v: &[f64]| match v {
+            [r, g, b, ..] => Some(Vec4::new(*r as f32, *g as f32, *b as f32, 1.0)).filter(|c| c.is_finite()),
+            _ => None,
+        };
+        let texture = self.connected_prim(&surface, "inputs:diffuseColor").filter(|t| self.token(t, "info:id") == Some("UsdUVTexture"));
+        let image = texture.as_ref().and_then(|t| package?.asset(self.token(t, "inputs:file")?));
+        let factor = match (&image, texture) {
+            (Some(_), Some(t)) => self.nums(&t, "inputs:scale").and_then(rgb).unwrap_or(Vec4::ONE),
+            _ => self.nums(&surface, "inputs:diffuseColor").and_then(rgb).unwrap_or(Vec4::ONE),
+        };
+        (image.is_some() || factor != Vec4::ONE).then(|| RawBaseColor { material: name.to_string(), factor, image })
     }
 
     fn token(&self, c: &[usize], name: &str) -> Option<&'a str> {

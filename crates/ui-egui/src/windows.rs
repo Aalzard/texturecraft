@@ -174,6 +174,9 @@ pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.add_space(6.0);
     ui.checkbox(&mut d.parallax, tr("Parallax occlusion (height channel)"))
         .on_hover_text(tr("Offsets the textures by the height channel, at the height to normal strength"));
+    ui.checkbox(&mut d.displacement, tr("Displacement (height channel)")).on_hover_text(tr(
+        "Moves the surface by the height channel on a finer copy of the mesh, at the height to normal strength (viewport only: painting follows the base surface)",
+    ));
     ui.add_space(6.0);
     ui.label(caption(tr("Subsurface scattering")));
     ui.horizontal(|ui| {

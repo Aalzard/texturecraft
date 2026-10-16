@@ -191,3 +191,104 @@ fn smart_materials_save_and_load_with_pixels() {
     assert!(s.add_smart_material_bytes(b"junk").is_err());
     s.doc.project.validate().unwrap();
 }
+
+/// Strokes drawn frame by frame (paint, erase, a mask) commit their staged tiles, which then
+/// settle at low priority to exactly what a full recomposite gives; undo restores.
+#[test]
+fn committed_strokes_settle_to_the_full_composite() {
+    use texturecraft_engine::geom::glam::Vec2;
+    let mut s = Session::new_project("t", primitives::sphere(1.0, 48, 24), "builtin:sphere", None, 2048).unwrap();
+    s.viewport = Vec2::new(400.0, 400.0);
+    execute(&mut s, "layer.add.fill", &json!({"color": [0.2, 0.5, 0.3], "roughness": 0.7})).unwrap();
+    execute(&mut s, "layer.add.paint", &Value::Null).unwrap();
+    execute(&mut s, "tool.brush", &json!({"size": 25, "hardness": 70, "opacity": 0.8})).unwrap();
+    s.update();
+    let full = |s: &mut Session| {
+        s.caches[0].invalidate_all();
+        s.update();
+        s.caches[0].composite.clone()
+    };
+    let original = full(&mut s);
+    for step in ["paint", "eraser", "mask"] {
+        match step {
+            "eraser" => drop(execute(&mut s, "tool.select", &json!({"tool": "eraser"})).unwrap()),
+            "mask" => {
+                execute(&mut s, "tool.select", &json!({"tool": "paint"})).unwrap();
+                execute(&mut s, "mask.add.white", &Value::Null).unwrap();
+                s.target = texturecraft_engine::StackTarget::Mask;
+                s.tool.mask_value = 0.2;
+            }
+            _ => {}
+        }
+        s.update();
+        s.begin_stroke(Vec2::new(120.0, 200.0), s.viewport, 1.0).unwrap();
+        for i in 1..30 {
+            s.continue_stroke(Vec2::new(120.0 + i as f32 * 6.0, 200.0 + (i as f32 * 0.4).sin() * 40.0), 1.0);
+            s.update();
+        }
+        s.end_stroke().unwrap();
+        // Nothing was left dirty: the committed tiles only settle, a slice per budgeted update.
+        assert!(s.caches[0].dirty.is_empty(), "{step}");
+        let settling = s.caches[0].settle.len();
+        assert!(settling > 32, "{step}: {settling} tiles settle");
+        let t = std::cell::Cell::new(0.0);
+        let clock = || {
+            t.set(t.get() + 2.0);
+            t.get()
+        };
+        s.update_for(30.0, clock);
+        let left = s.pending_tiles();
+        assert!(left > 0 && left < settling, "{step}: {left} of {settling} left after one slice");
+        s.update();
+        let settled = s.caches[0].composite.clone();
+        assert_eq!(settled, full(&mut s), "{step}: settled tiles match a full recomposite");
+    }
+    // Mask stroke, white mask, eraser and paint strokes.
+    for _ in 0..4 {
+        execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    }
+    assert_eq!(full(&mut s), original);
+}
+
+/// A resize prepared from a snapshot and applied later matches the command, keeps edits made
+/// while it ran, and undoes in one step.
+#[test]
+fn background_resizes_match_the_command_and_keep_later_edits() {
+    use texturecraft_engine::bake::Progress;
+    let stroke = |s: &mut Session, y: u32| {
+        execute(s, "tool.stroke", &json!({"points": [[150, y], [250, y]]})).unwrap();
+    };
+    let (mut a, mut b) = (session(), session());
+    for s in [&mut a, &mut b] {
+        execute(s, "tool.brush", &json!({"size": 10})).unwrap();
+        stroke(s, 200);
+    }
+    execute(&mut a, "textureSet.resolution", &json!({"resolution": 512})).unwrap();
+    let task = b.resize_task(0, 512).unwrap();
+    let progress = Progress::new();
+    let out = task.run(&progress).unwrap();
+    assert_eq!(progress.fraction(), 1.0);
+    assert_eq!(out.target(), (0, 512));
+    b.apply_resize(out).unwrap();
+    assert_eq!(a.doc.pixels.layers, b.doc.pixels.layers);
+    a.update();
+    b.update();
+    assert_eq!(a.caches[0].composite, b.caches[0].composite);
+    assert_eq!(b.caches[0].size, (512, 512));
+    // A stroke painted while the resize ran is kept (the resize runs again on apply).
+    let out = b.resize_task(0, 1024).unwrap().run(&Progress::new()).unwrap();
+    stroke(&mut b, 260);
+    let painted = |s: &Session| s.doc.pixels.layers.values().map(|i| i.allocated_count()).sum::<usize>();
+    let before = painted(&b);
+    b.apply_resize(out).unwrap();
+    assert_eq!(b.doc.project.texture_sets[0].resolution, 1024);
+    stroke(&mut a, 260);
+    execute(&mut a, "textureSet.resolution", &json!({"resolution": 1024})).unwrap();
+    assert_eq!(a.doc.pixels.layers, b.doc.pixels.layers);
+    assert!(painted(&b) > before);
+    assert_eq!(b.undo_label(), Some("Texture set size"));
+    execute(&mut b, "edit.undo", &Value::Null).unwrap();
+    assert_eq!((b.doc.project.texture_sets[0].resolution, painted(&b)), (512, before));
+    b.update();
+    assert_eq!(b.caches[0].size, (512, 512));
+}

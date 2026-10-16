@@ -15,6 +15,9 @@ licensed and keep their license file next to them.
 | `assets/app-icon/texturecraft.icns` | macOS app icon (16-1024 px) | TextureCraft contributors | original | MIT OR Apache-2.0 |
 | `assets/app-icon/hicolor/{16x16,24x24,32x32,48x48,64x64,128x128,256x256,512x512}/apps/ai.storyteller.texturecraft.png` | App icon, hicolor theme PNGs | TextureCraft contributors | original | MIT OR Apache-2.0 |
 | `assets/app-icon/hicolor/scalable/apps/ai.storyteller.texturecraft.svg` | App icon, hicolor scalable (copy of `icon.svg`) | TextureCraft contributors | original | MIT OR Apache-2.0 |
+| `docs/images/texturecraft-workspace.png` | README screenshot: the TextureCraft workspace with procedural materials | TextureCraft contributors | original screenshot of TextureCraft | MIT OR Apache-2.0 |
+| `docs/images/texturecraft-render.png` | README render: worn paint on the material ball (`texturecraft-cli render --samples 256`) | TextureCraft contributors | original render | MIT OR Apache-2.0 |
+| `docs/images/texturecraft-materials.png` | README render: car paint, velvet and brushed steel on the material ball (`texturecraft-cli render --samples 256`, three renders side by side) | TextureCraft contributors | original render | MIT OR Apache-2.0 |
 | `docs/brand/artcraft-*.svg`, `docs/brand/artcraft-*.png` | ArtCraft logo and mark | ArtCraft Team | storytold/craftrules `assets/brand/` | ArtCraft brand terms, not open source ([`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt)) |
 
 ## Third-party assets compiled into the binary
@@ -24,7 +27,7 @@ These come from Rust crate dependencies (not files in this repository) and keep 
 | Asset | Used for | Author | Source | License |
 |---|---|---|---|---|
 | Phosphor Icons (regular), via the `egui-phosphor` crate | Every UI icon (tools, layers, panels) | Phosphor Icons (Helena Zhang, Tobias Fried) | https://phosphoricons.com, https://github.com/amPerl/egui-phosphor | MIT (icons); crate MIT OR Apache-2.0 |
-| egui default fonts (Ubuntu-Light, Hack, Noto Emoji, emoji-icon-font), via `epaint_default_fonts` | UI text | Canonical / Source Foundry / Google / Jessie Jung | https://github.com/emilk/egui | Ubuntu Font Licence 1.0, MIT, OFL 1.1, MIT |
+| egui default fonts (Ubuntu-Light, Hack, Noto Emoji, emoji-icon-font), via `epaint_default_fonts` | UI text | Canonical / Source Foundry / Google / Jessie Jung | https://github.com/emilk/egui | Ubuntu Font Licence 1.0, MIT + Bitstream Vera License, OFL 1.1, MIT |
 | Only in builds made with `CRAFT_FONTS_DIR`: BIZ UDPGothic Regular (desktop and web) and Noto Sans CJK SC Regular (desktop), from storytold/craft-fonts (`crates/ui-egui/build.rs`) | Japanese and Chinese UI text | The BIZ UDGothic Project Authors (Morisawa Inc.); The Noto Project Authors | https://github.com/storytold/craft-fonts (pinned sources in its `fonts/manifest.txt` and `ATTRIBUTION.md`) | OFL 1.1 |
 
 Without craft-fonts, Chinese, Japanese and Korean UI text uses the operating system's fonts at run

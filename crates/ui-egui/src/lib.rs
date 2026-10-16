@@ -33,11 +33,17 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use serde_json::Value;
+use texturecraft_engine::Session;
 use texturecraft_engine::bake::Progress;
-use texturecraft_engine::{BakeTask, Session};
 
 pub use control::ControlRequest;
 pub use state::UiState;
+
+/// A texture set resize running on a worker thread (`Session::resize_task`).
+pub struct ResizeJob {
+    pub progress: Arc<Progress>,
+    pub rx: std::sync::mpsc::Receiver<texturecraft_engine::Result<texturecraft_engine::ResizeOutput>>,
+}
 
 /// A background bake of one or more texture sets.
 pub struct BakeJob {
@@ -64,6 +70,7 @@ pub struct TextureCraftApp {
     pub control: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     pub toasts: Vec<Toast>,
     pub bake: Option<BakeJob>,
+    pub resize: Option<ResizeJob>,
     pub thumbs: thumbs::Thumbs,
     /// Last frame's viewport rect (logical points), for scripted input.
     pub viewport_rect: egui::Rect,
@@ -116,6 +123,7 @@ impl TextureCraftApp {
             control: None,
             toasts: Vec::new(),
             bake: None,
+            resize: None,
             thumbs: thumbs::Thumbs::default(),
             viewport_rect: egui::Rect::NOTHING,
             screenshot_waiters: Vec::new(),
@@ -207,8 +215,8 @@ impl TextureCraftApp {
             match self.session.bake_task(ts) {
                 Ok(task) => {
                     let progress = Arc::new(Progress::new());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    spawn_bake(task, progress.clone(), tx);
+                    let p = progress.clone();
+                    let rx = spawn_worker("texturecraft-bake", move || task.run(&p));
                     if let Some(job) = self.bake.as_mut() {
                         job.current = Some((ts, progress, rx));
                     }
@@ -226,6 +234,40 @@ impl TextureCraftApp {
         }
     }
 
+    /// Resize texture set `ts` to `resolution` on a worker thread (the document changes when
+    /// it is done, as one undo step).
+    pub fn start_resize(&mut self, ts: usize, resolution: u32) {
+        if self.resize.is_some() {
+            return;
+        }
+        match self.session.resize_task(ts, resolution) {
+            Ok(task) => {
+                let progress = Arc::new(Progress::new());
+                let p = progress.clone();
+                self.resize = Some(ResizeJob { progress, rx: spawn_worker("texturecraft-resize", move || task.run(&p)) });
+            }
+            Err(e) => self.toast(e.to_string(), true),
+        }
+    }
+
+    /// Apply a finished resize (after any stroke in progress ends).
+    fn poll_resize(&mut self, ctx: &egui::Context) {
+        let Some(job) = &self.resize else { return };
+        ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        if self.session.stroke_active() {
+            return;
+        }
+        let result = match job.rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(texturecraft_engine::EngineError::Other(i18n::tr("The resize worker stopped").into())),
+        };
+        self.resize = None;
+        if let Err(e) = result.and_then(|out| self.session.apply_resize(out)) {
+            self.toast(e.to_string(), true);
+        }
+    }
+
     /// Bake progress 0..1 across all queued sets.
     pub fn bake_progress(&self) -> Option<f32> {
         let job = self.bake.as_ref()?;
@@ -235,17 +277,26 @@ impl TextureCraftApp {
     }
 }
 
+/// Run `f` on a worker thread named `name`; its result arrives on the returned channel.
 #[cfg(not(target_arch = "wasm32"))]
-fn spawn_bake(task: BakeTask, progress: Arc<Progress>, tx: std::sync::mpsc::Sender<texturecraft_engine::Result<texturecraft_engine::bake::BakeOutput>>) {
-    std::thread::spawn(move || {
-        let _ = tx.send(task.run(&progress));
+fn spawn_worker<T: Send + 'static>(name: &str, f: impl FnOnce() -> T + Send + 'static) -> std::sync::mpsc::Receiver<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name(name.into()).spawn(move || {
+        let _ = tx.send(f());
     });
+    if let Err(e) = spawned {
+        // The receiver reports a stopped worker.
+        log::warn!("could not start {name}: {e}");
+    }
+    rx
 }
 
 #[cfg(target_arch = "wasm32")]
-fn spawn_bake(task: BakeTask, progress: Arc<Progress>, tx: std::sync::mpsc::Sender<texturecraft_engine::Result<texturecraft_engine::bake::BakeOutput>>) {
-    // shortcut: no threads on the web; the bake runs on the UI thread (the window pauses).
-    let _ = tx.send(task.run(&progress));
+fn spawn_worker<T: Send + 'static>(_name: &str, f: impl FnOnce() -> T + Send + 'static) -> std::sync::mpsc::Receiver<T> {
+    // shortcut: no threads on the web; the work runs on the UI thread (the window pauses).
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _ = tx.send(f());
+    rx
 }
 
 impl TextureCraftApp {
@@ -315,6 +366,7 @@ impl eframe::App for TextureCraftApp {
             web_files::dropped(self, ctx, f);
         }
         self.poll_bake(ctx);
+        self.poll_resize(ctx);
         let scale = self.ui.prefs.ui_scale.clamp(0.5, 3.0);
         if (ctx.zoom_factor() - scale).abs() > 1e-3 {
             ctx.set_zoom_factor(scale);

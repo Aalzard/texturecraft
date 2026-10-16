@@ -601,7 +601,7 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
             egui::ComboBox::from_id_salt("ts_size").selected_text(format!("{}", set.resolution)).show_ui(ui, |ui| {
                 for r in [256u32, 512, 1024, 2048, 4096, 8192] {
                     if ui.selectable_label(r == set.resolution, format!("{r}")).clicked() {
-                        app.run("textureSet.resolution", json!({"ts": ts, "resolution": r}));
+                        app.start_resize(ts, r);
                     }
                 }
             });

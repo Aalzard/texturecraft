@@ -233,3 +233,31 @@ fn instances_show_their_source_in_sets_of_another_resolution() {
     let half = reds(&mut s);
     assert!(half * 5 > same && half * 3 < same, "about a quarter of the texels: {same} -> {half}");
 }
+
+/// A decal dragged in the viewport (one update per frame with `merge`) is one undo step that
+/// returns it to where the drag started.
+#[test]
+fn decal_drags_merge_into_one_undo_step() {
+    let mut s = session();
+    let name = s.import_resource_bytes("logo.png", png(8, 8, |_, _| [255, 0, 0, 255])).unwrap();
+    let layer = id(execute(&mut s, "layer.add.decal", &json!({"image": name, "x": 200, "y": 200, "size": 0.3})).unwrap(), "layer");
+    let depth = s.history_labels().len();
+    let start = execute(&mut s, "project.inspect", &Value::Null).unwrap()["layers"].clone();
+    let drag =
+        [json!({"x": 190, "y": 200}), json!({"x": 180, "y": 195, "merge": true}), json!({"size": 0.5, "merge": true}), json!({"rotation": 30, "merge": true})];
+    for p in drag {
+        let mut p = p;
+        p["layer"] = json!(layer.0);
+        execute(&mut s, "layer.decal.set", &p).unwrap();
+    }
+    assert_eq!(s.history_labels().len(), depth + 1, "one step for the whole drag");
+    assert!(red(at(&mut s, Channel::BaseColor, 180.0, 195.0)));
+    // A merge never folds into a step of another kind.
+    execute(&mut s, "layer.add.fill", &Value::Null).unwrap();
+    execute(&mut s, "layer.decal.set", &json!({"layer": layer.0, "size": 0.2, "merge": true})).unwrap();
+    assert_eq!(s.history_labels().len(), depth + 3);
+    for _ in 0..3 {
+        execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    }
+    assert_eq!(execute(&mut s, "project.inspect", &Value::Null).unwrap()["layers"], start);
+}

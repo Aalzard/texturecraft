@@ -213,25 +213,25 @@ impl Session {
 }
 
 /// Resample every painted image of texture set `ts` to `size` (after a size change).
-pub(crate) fn resample_set(s: &mut Session, ts: usize, size: (u32, u32)) {
-    map_set_images(s, ts, |img, empty| fit(img, size, empty));
+pub(crate) fn resample_set(doc: &mut Document, ts: usize, size: (u32, u32)) {
+    map_set_images(doc, ts, |img, empty| fit(img, size, empty));
 }
 
 /// Replace every painted image of texture set `ts` (layers, content and mask paint effects) by
 /// `f(image, empty texel)`.
-pub(crate) fn map_set_images(s: &mut Session, ts: usize, f: impl Fn(&TileImage, &[u16]) -> TileImage) {
-    let ids: Vec<LayerId> = s.doc.project.walk(ts).into_iter().map(|(id, _)| id).collect();
+pub(crate) fn map_set_images(doc: &mut Document, ts: usize, f: impl Fn(&TileImage, &[u16]) -> TileImage) {
+    let ids: Vec<LayerId> = doc.project.walk(ts).into_iter().map(|(id, _)| id).collect();
     let effect_ids: Vec<LayerId> = ids
         .iter()
-        .filter_map(|id| s.doc.project.layers.get(id))
+        .filter_map(|id| doc.project.layers.get(id))
         .flat_map(|l| l.mask.iter().flat_map(|m| m.effects.iter()).chain(l.content_effects.iter()).map(|e| e.id))
         .collect();
-    for ((id, c), img) in s.doc.pixels.layers.iter_mut() {
+    for ((id, c), img) in doc.pixels.layers.iter_mut() {
         if ids.contains(id) || effect_ids.contains(id) {
             *img = f(img, &empty_texel(*c));
         }
     }
-    for (id, img) in s.doc.pixels.masks.iter_mut() {
+    for (id, img) in doc.pixels.masks.iter_mut() {
         if effect_ids.contains(id) {
             *img = f(img, &[0, 0]);
         }

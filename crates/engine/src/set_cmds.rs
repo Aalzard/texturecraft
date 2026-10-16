@@ -3,8 +3,12 @@
 use serde_json::{Value, json};
 use texturecraft_core::{Channel, ChannelBlend, ChannelFormat, NormalFormat};
 
+use std::sync::Arc;
+
+use texturecraft_geom::Mesh;
+
 use crate::commands::{CommandSpec, always, bad, boolp, channel_param, f32p, strp, u64p};
-use crate::session::{StackTarget, check_resolution};
+use crate::session::{Document, SetCache, StackTarget, check_resolution};
 use crate::{Result, Session, cmd};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -49,23 +53,97 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
 fn resolution(s: &mut Session, p: &Value) -> Result<Value> {
     let ts = ts_param(s, p, "textureSet.resolution")?;
     let r = u64p(p, "resolution").ok_or_else(|| bad("textureSet.resolution", "`resolution` is required"))?;
-    let r = check_resolution(u32::try_from(r).unwrap_or(0))?;
-    s.edit("Texture set size", |s| {
-        let set = s.doc.project.texture_set_mut(ts)?;
+    let task = s.resize_task(ts, u32::try_from(r).unwrap_or(0))?;
+    let out = task.run(&texturecraft_bake::Progress::new())?;
+    s.apply_resize(out)
+}
+
+/// A texture set size change prepared from a snapshot of the document, so the UI can run the
+/// resampling and the new texel caches (seconds at 8K) on a worker thread:
+/// [`Session::resize_task`], [`ResizeTask::run`], then [`Session::apply_resize`] (one undo step).
+pub struct ResizeTask {
+    ts: usize,
+    resolution: u32,
+    doc: Document,
+    mesh: Arc<Mesh>,
+    /// The session's revision and mesh when the task was made: the result applies only to them.
+    from: (u64, u64),
+}
+
+/// What [`ResizeTask::run`] computed.
+pub struct ResizeOutput {
+    ts: usize,
+    resolution: u32,
+    doc: Document,
+    /// The set's new caches (None when its UV tile layout moved: the session rebuilds them).
+    cache: Option<SetCache>,
+    log: Vec<String>,
+    from: (u64, u64),
+}
+
+impl ResizeTask {
+    /// Resample the set's painted pixels (bilinear; strokes are not replayed) and build its
+    /// caches. Progress goes from 0 to 1.
+    pub fn run(self, progress: &texturecraft_bake::Progress) -> Result<ResizeOutput> {
+        let ResizeTask { ts, resolution, mut doc, mesh, from } = self;
+        let set = doc.project.texture_set_mut(ts)?;
         let old = set.clone();
-        set.resolution = r;
+        set.resolution = resolution;
         crate::session::check_size(set)?;
         let size = set.size();
-        // Painted pixels are resampled (bilinear); strokes are not replayed. Tiles of their own
-        // resolution keep it, so the others move within their atlas blocks.
+        let mut log = Vec::new();
+        // Tiles of their own resolution keep it, so the others move within their atlas blocks.
         if old.tile_resolutions.is_empty() {
-            crate::layer_ops::resample_set(s, ts, size);
-            Ok(())
+            crate::layer_ops::resample_set(&mut doc, ts, size);
         } else {
-            crate::uv_tile_cmds::relayout(s, ts, &old)
+            crate::uv_tile_cmds::relayout(&mut doc, ts, &old, &mut log)?;
         }
-    })?;
-    Ok(json!({ "ts": ts, "resolution": r }))
+        progress.done.store(3_000, std::sync::atomic::Ordering::Relaxed);
+        let set = doc.project.texture_set(ts)?;
+        let cache = (crate::session::uv_layout(&old) == crate::session::uv_layout(set)).then(|| SetCache::new(&mesh, set));
+        progress.done.store(10_000, std::sync::atomic::Ordering::Relaxed);
+        Ok(ResizeOutput { ts, resolution, doc, cache, log, from })
+    }
+}
+
+impl ResizeOutput {
+    /// The texture set and resolution this resize is for.
+    pub fn target(&self) -> (usize, u32) {
+        (self.ts, self.resolution)
+    }
+}
+
+impl Session {
+    /// Prepare resizing texture set `ts` to `resolution` (a power of two, 128..8192).
+    pub fn resize_task(&mut self, ts: usize, resolution: u32) -> Result<ResizeTask> {
+        let resolution = check_resolution(resolution)?;
+        self.doc.project.texture_set(ts)?;
+        self.cancel_stroke();
+        Ok(ResizeTask { ts, resolution, doc: self.doc.clone(), mesh: self.mesh.clone(), from: (self.revision, self.mesh_id) })
+    }
+
+    /// Apply a finished resize as one undo step. When the document changed while it ran, the
+    /// resize runs again here on the current document.
+    pub fn apply_resize(&mut self, out: ResizeOutput) -> Result<Value> {
+        if out.from != (self.revision, self.mesh_id) || self.stroke_active() {
+            let task = self.resize_task(out.ts, out.resolution)?;
+            return self.apply_resize(task.run(&texturecraft_bake::Progress::new())?);
+        }
+        let ResizeOutput { ts, resolution, doc, cache, log, .. } = out;
+        let before = std::mem::replace(&mut self.doc, doc);
+        // The new caches go in first, so the history step keeps them instead of rebuilding.
+        if let (Some(c), Some(slot)) = (cache, self.caches.get_mut(ts)) {
+            let old = std::mem::replace(slot, c);
+            // Freeing an 8K set's caches takes tens of milliseconds: a thread does it.
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = std::thread::Builder::new().name("texturecraft-free".into()).spawn(move || drop(old));
+            #[cfg(target_arch = "wasm32")]
+            drop(old);
+        }
+        self.log.extend(log);
+        self.push_history("Texture set size", before);
+        Ok(json!({ "ts": ts, "resolution": resolution }))
+    }
 }
 
 fn channel(s: &mut Session, p: &Value, add: bool) -> Result<Value> {

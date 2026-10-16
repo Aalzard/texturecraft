@@ -12,7 +12,7 @@ use texturecraft_core::{TextureSet, udim_at};
 use texturecraft_texel::TileImage;
 
 use crate::commands::{CommandSpec, always, bad, boolp, u64p};
-use crate::session::{check_resolution, check_size, detect_uv_tiles};
+use crate::session::{Document, check_resolution, check_size, detect_uv_tiles};
 use crate::set_cmds::ts_param;
 use crate::{Result, Session, cmd};
 
@@ -63,7 +63,7 @@ fn tile_resolution(s: &mut Session, p: &Value) -> Result<Value> {
         }
         check_size(set)?;
         let size = set.size();
-        relayout(s, ts, &old)?;
+        relayout(&mut s.doc, ts, &old, &mut s.log)?;
         Ok(size)
     })?;
     Ok(json!({ "ts": ts, "tile": tile, "resolution": r, "size": size }))
@@ -91,7 +91,7 @@ fn uv_tiles(s: &mut Session, p: &Value) -> Result<Value> {
         set.tile_resolutions.retain(|u, _| tiles.contains(u));
         set.uv_tiles = tiles.clone();
         check_size(set)?;
-        relayout(s, ts, &old)
+        relayout(&mut s.doc, ts, &old, &mut s.log)
     })?;
     Ok(json!({ "ts": ts, "uvTiles": tiles, "dropped": dropped }))
 }
@@ -120,9 +120,9 @@ fn from_layout(set: &TextureSet, a: [f32; 2]) -> Option<[f32; 2]> {
 }
 
 /// Resample texture set `ts`'s painted images and baked maps from layout `old` into the set's
-/// current layout (call inside [`Session::edit`] after changing the set).
-pub(crate) fn relayout(s: &mut Session, ts: usize, old: &TextureSet) -> Result<()> {
-    let new = s.doc.project.texture_set(ts)?.clone();
+/// current layout (inside [`Session::edit`] after changing the set). Notes go to `log`.
+pub(crate) fn relayout(doc: &mut Document, ts: usize, old: &TextureSet, log: &mut Vec<String>) -> Result<()> {
+    let new = doc.project.texture_set(ts)?.clone();
     let map = |a: [f32; 2]| from_layout(&new, a).and_then(|m| to_layout(old, m));
     let ((ow, oh), (nw, nh)) = (old.size(), new.size());
     let texel = |x: f32, y: f32| map([x / nw as f32, y / nh as f32]).map(|o| (o[0] * ow as f32, o[1] * oh as f32));
@@ -130,16 +130,16 @@ pub(crate) fn relayout(s: &mut Session, ts: usize, old: &TextureSet) -> Result<(
     let tiles: Vec<(u32, u32)> = (0..all.tiles_y()).flat_map(|ty| (0..all.tiles_x()).map(move |tx| (tx, ty))).collect();
     // Blocks and tiles are multiples of 64 texels (resolutions are powers of two ≥ 128), so the
     // map is affine (or None) over each destination tile.
-    crate::layer_ops::map_set_images(s, ts, |img, empty| remap_image(img, (nw, nh), empty, &texel, &tiles, true));
-    if let Some(baked) = s.doc.baked.get(&ts) {
+    crate::layer_ops::map_set_images(doc, ts, |img, empty| remap_image(img, (nw, nh), empty, &texel, &tiles, true));
+    if let Some(baked) = doc.baked.get(&ts) {
         match remap_baked(baked, old, &new, &map) {
             Some(b) => {
-                s.doc.baked.insert(ts, b);
+                doc.baked.insert(ts, b);
             }
             None => {
-                s.doc.baked.remove(&ts);
-                s.doc.project.texture_set_mut(ts)?.baked.clear();
-                s.log.push(format!("Texture set \"{}\": the baked mesh maps no longer fit; bake them again", new.name));
+                doc.baked.remove(&ts);
+                doc.project.texture_set_mut(ts)?.baked.clear();
+                log.push(format!("Texture set \"{}\": the baked mesh maps no longer fit; bake them again", new.name));
             }
         }
     }

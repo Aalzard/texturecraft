@@ -34,7 +34,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             settings
         ),
-        cmd!("bake.highPoly.add", "Add high definition mesh", [], None, "{path} — a mesh file (glb, gltf, fbx, dae, obj, ply, stl)", always, high_add),
+        cmd!(
+            "bake.highPoly.add",
+            "Add high definition mesh",
+            [],
+            None,
+            "{path} — a mesh file (glb, gltf, fbx, dae, usd, usda, usdc, usdz, abc, obj, ply, stl; base color textures from glb, embedded FBX media and usdz packages feed the color map)",
+            always,
+            high_add
+        ),
         cmd!("bake.highPoly.remove", "Remove high definition mesh", [], None, "{index? | name? | all?: true}", always, high_remove),
         cmd!("bake.highPoly.list", "List high definition meshes", [], None, "{}", always, |s, _| Ok(meshes_json(s))),
         cmd!("bake.cage.set", "Load cage mesh", [], None, "{path} — a mesh with the low poly's triangles", always, cage_set),

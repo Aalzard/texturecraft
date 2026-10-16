@@ -113,6 +113,13 @@ foreach ($f in 'README.md', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE', 'ATTRIBUT
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
 }
+# Licences of the craft-fonts faces crates/ui-egui/build.rs embeds (release builds set CRAFT_FONTS_DIR).
+if ($env:CRAFT_FONTS_DIR) {
+  foreach ($f in 'biz-ud-pgothic', 'noto-sans-cjk-sc') {
+    $p = Join-Path $env:CRAFT_FONTS_DIR "fonts\$f\OFL.txt"
+    if (Test-Path $p) { Copy-Item $p (Join-Path $Portable "OFL-$f.txt") }
+  }
+}
 $Zip = Join-Path $Dist "texturecraft-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $Portable -DestinationPath $Zip

@@ -240,3 +240,28 @@ fn color_map_samples_a_textured_gltf_high_poly() {
     let back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
     assert_eq!(back.bake_meshes.high[0].base_color, s.bake_meshes.high[0].base_color);
 }
+
+/// The color map reads a USDZ high poly's UsdPreviewSurface texture like a glTF one.
+#[test]
+fn color_map_samples_a_textured_usdz_high_poly() {
+    use texturecraft_engine::formats::{ExportedFile, UsdFormat, usd_bytes};
+    let mut s = plane_session();
+    let mut high = s.mesh.as_ref().clone();
+    for p in &mut high.positions {
+        p.y += 0.002;
+    }
+    let quadrant = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [128, 128, 128, 255]];
+    let img = image::RgbaImage::from_fn(4, 4, |x, y| image::Rgba(quadrant[(y / 2 * 2 + x / 2) as usize]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let texture = ExportedFile { name: "BaseColor.png".into(), bytes: png, width: 4, height: 4, warnings: vec![] };
+    let usdz = usd_bytes(&high, "painted", &[vec![texture]], UsdFormat::Usdz).unwrap().bytes;
+    s.add_high_poly_bytes("painted.usdz", usdz).unwrap();
+    execute(&mut s, "bake.run", &json!({ "resolution": 128, "maps": ["color_map"], "dilation": 0 })).unwrap();
+    let color = &s.doc.baked[&0].maps[&BakedMap::ColorMap];
+    let at = |x: usize, y: usize| &color[(y * 128 + x) * 3..(y * 128 + x) * 3 + 3];
+    let grey = 128.0 / 255.0;
+    for ((x, y), want) in [((32, 32), [1.0, 0.0, 0.0]), ((96, 32), [0.0, 1.0, 0.0]), ((32, 96), [0.0, 0.0, 1.0]), ((96, 96), [grey; 3])] {
+        assert!(at(x, y).iter().zip(want).all(|(a, b)| (a - b).abs() < 2e-3), "texel {x},{y}: {:?} vs {want:?}", at(x, y));
+    }
+}

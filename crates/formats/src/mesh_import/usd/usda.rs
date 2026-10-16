@@ -465,11 +465,15 @@ impl Parser<'_, '_> {
                 }
             }
         }
-        if !keep || suffix == "connect" || suffix == "spline" {
+        if !keep || suffix == "spline" {
             return Ok(());
         }
         let Some(spec) = self.layer.prims.get_mut(prim) else { return Ok(()) };
         let prop = spec.props.entry(name).or_default();
+        if suffix == "connect" {
+            prop.connect = acc.paths.into_iter().next();
+            return Ok(());
+        }
         // A plain default and its time samples may both be authored; the default wins.
         if has_value && (suffix != "timeSamples" || prop.value.is_none()) {
             prop.value = acc.into_val();

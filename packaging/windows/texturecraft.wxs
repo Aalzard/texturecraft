@@ -11,6 +11,7 @@
   UpgradeCode is TextureCraft's for good: generated once (2026-10-14), never change it, or new
   versions install beside old ones instead of replacing them.
 -->
+<?define MeshExtensions = glb;gltf;fbx;dae;usd;usda;usdc;usdz;abc;obj;ply;stl ?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
       Name="TextureCraft"
@@ -60,24 +61,21 @@
             <Verb Id="open" Command="Open" TargetFile="TextureCraftExe" Argument="&quot;%1&quot;" />
           </Extension>
         </ProgId>
-        <!-- Meshes: offered under "Open with", never forced as the default. -->
+        <!-- Meshes (formats mesh_import::MESH_EXTENSIONS): offered under "Open with", never forced
+             as the default. -->
         <ProgId Id="TextureCraft.Mesh" Description="3D Model" Icon="TextureCraftExe" IconIndex="0" />
         <RegistryValue Root="HKLM" Key="Software\Classes\TextureCraft.Mesh\shell\open\command" Value="&quot;[#TextureCraftExe]&quot; &quot;%1&quot;" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\.glb\OpenWithProgids" Name="TextureCraft.Mesh" Value="" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\.gltf\OpenWithProgids" Name="TextureCraft.Mesh" Value="" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\.obj\OpenWithProgids" Name="TextureCraft.Mesh" Value="" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\.ply\OpenWithProgids" Name="TextureCraft.Mesh" Value="" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\.stl\OpenWithProgids" Name="TextureCraft.Mesh" Value="" Type="string" />
+        <?foreach Ext in $(var.MeshExtensions)?>
+        <RegistryValue Root="HKLM" Key="Software\Classes\.$(var.Ext)\OpenWithProgids" Name="TextureCraft.Mesh" Value="" Type="string" />
+        <?endforeach?>
 
         <!-- "Open with" app list and the Run dialog (Win+R "texturecraft"). -->
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe" Name="FriendlyAppName" Value="TextureCraft" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\shell\open\command" Value="&quot;[#TextureCraftExe]&quot; &quot;%1&quot;" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".tcraft" Value="" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".glb" Value="" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".gltf" Value="" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".obj" Value="" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".ply" Value="" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".stl" Value="" Type="string" />
+        <?foreach Ext in $(var.MeshExtensions)?>
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\texturecraft.exe\SupportedTypes" Name=".$(var.Ext)" Value="" Type="string" />
+        <?endforeach?>
         <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\texturecraft.exe" Value="[#TextureCraftExe]" Type="string" />
       </Component>
 

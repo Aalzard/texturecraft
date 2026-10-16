@@ -259,6 +259,8 @@ fn bench_1080p() {
         s.sss_blur = Some([0.1, 0.04, 0.025]);
     });
     println!("depth of field + subsurface blur: {:.3} ms/frame", run(&mut h, &both));
+    println!("displacement (dense copy): {:.3} ms/frame", run(&mut h, &shaded(&frame, |s| s.displacement = true)));
+    println!("screen-space refraction: {:.3} ms/frame", run(&mut h, &shaded(&frame, |s| s.refraction = true)));
     // Every extra lobe painted (full-size lobe textures), with the key light.
     fill_res(&mut h, 2048, &[0, 1], DisplayKind::Lobes, &[255, 25, 200, 60]);
     fill_res(&mut h, 2048, &[0, 1], DisplayKind::Sheen, &[200, 150, 255, 200]);
@@ -646,4 +648,65 @@ fn coat_normal_turns_the_coat_reflection() {
     let tilted = render(&mut h, &lit, "coat_normal_tilted");
     let diff = region_mean(&mask, |x, y| (tilted.luma(x, y) - flat.luma(x, y)).abs());
     assert!(diff > 2.0, "a tilted coat normal moves the coat highlight: {diff}");
+}
+
+// ---- Displacement and screen-space refraction --------------------------------------------------
+
+#[test]
+fn displacement_moves_the_silhouette_by_the_height_channel() {
+    let Some((mut h, frame)) = setup() else { return };
+    let disp = shaded(&frame, |s| s.displacement = true);
+    // Flat heights: the dense copy draws the same surface (but for a few outline pixels where
+    // the split edges cover other MSAA samples).
+    let (off, on) = (render(&mut h, &frame, "disp_flat_off"), render(&mut h, &disp, "disp_flat_on"));
+    let moved = off.px.chunks(4).zip(on.px.chunks(4)).filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2)).count();
+    assert!(moved < 40, "flat heights leave the surface where it was ({moved} pixels differ)");
+    let area = |h: &mut Headless, f: &Frame| mesh_mask(h, f, &[0, 1]).iter().filter(|m| **m).count();
+    let base = area(&mut h, &frame);
+    upload_height(&mut h, |_, _| [0.5, 0.04, 0.04, 0.04]);
+    render(&mut h, &disp, "disp_raised");
+    let grown = area(&mut h, &disp);
+    assert!(grown > base + base / 50, "raised heights grow the silhouette: {base} -> {grown} pixels");
+    upload_height(&mut h, |_, _| [-0.5, 0.04, 0.04, 0.04]);
+    render(&mut h, &disp, "disp_lowered");
+    let shrunk = area(&mut h, &disp);
+    assert!(shrunk + base / 50 < base, "lowered heights shrink it: {base} -> {shrunk} pixels");
+    assert_eq!(area(&mut h, &frame), base, "without displacement heights only shade");
+    // A checker of heights reaches the shading and the outline.
+    upload_height(&mut h, |x, y| [if (x / 16 + y / 16) % 2 == 0 { 0.6 } else { -0.6 }, 0.04, 0.04, 0.04]);
+    let bumpy = render(&mut h, &shaded(&disp, |s| s.light = LIGHT), "disp_checker");
+    assert!(bumpy.mean(200, 100, 280, 180) > 20.0, "lit, finite shading");
+}
+
+#[test]
+fn refraction_shows_the_scene_behind_transmissive_surfaces() {
+    let Some((mut h, frame)) = setup() else { return };
+    let refr = shaded(&frame, |s| s.refraction = true);
+    // The ball away from its outline (outline pixels mix in the pedestal behind them).
+    let ball = rim(&mesh_mask(&mut h, &frame, &[0]), 2, false);
+    assert_eq!(render(&mut h, &refr, "refr_opaque").px, render(&mut h, &frame, "refr_opaque_off").px, "without transmission nothing changes");
+    // A clear glass ball (set 0) on its pedestal (set 1), painted red, then green.
+    fill(&mut h, &[0], DisplayKind::BaseColor, &[255, 255, 255, 255]);
+    fill(&mut h, &[0], DisplayKind::Orm, &[255, 10, 0, 128]);
+    fill(&mut h, &[0], DisplayKind::Extra, &[128, 128, 255, 0]);
+    let seen = |h: &mut Headless, f: &Frame, name: &str| {
+        fill(h, &[1], DisplayKind::BaseColor, &[255, 0, 0, 255]);
+        let red = render(h, f, &format!("{name}_red"));
+        fill(h, &[1], DisplayKind::BaseColor, &[0, 255, 0, 255]);
+        let green = render(h, f, &format!("{name}_green"));
+        (0..ball.len()).filter(|i| ball[*i] && red.at(*i as u32 % 480, *i as u32 / 480) != green.at(*i as u32 % 480, *i as u32 / 480)).count()
+    };
+    assert_eq!(seen(&mut h, &frame, "refr_env"), 0, "refracting only the environment, the pedestal never shows through");
+    let through = seen(&mut h, &refr, "refr_scene");
+    let total = ball.iter().filter(|b| **b).count();
+    println!("refraction: the pedestal shows through {through} of {total} ball pixels");
+    assert!(through > total / 20, "the pedestal shows through the glass: {through} of {total} pixels");
+    // Rough glass blurs what it shows: fewer sharp edges across the ball.
+    fill(&mut h, &[1], DisplayKind::BaseColor, &[255, 0, 0, 255]);
+    checker(&mut h);
+    fill(&mut h, &[0], DisplayKind::BaseColor, &[255, 255, 255, 255]);
+    let clear = render(&mut h, &refr, "refr_clear_checker");
+    fill(&mut h, &[0], DisplayKind::Orm, &[255, 200, 0, 128]);
+    let frosted = render(&mut h, &refr, "refr_frosted_checker");
+    assert!(detail(&frosted, &ball) < detail(&clear, &ball), "frosted glass blurs the scene behind");
 }

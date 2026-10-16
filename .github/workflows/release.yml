@@ -33,6 +33,13 @@ env:
   RUST_BACKTRACE: 1
   TEXTURECRAFT_BUILD_SHA: ${{ github.sha }}
   INPUT_VERSION: ${{ inputs.version }}
+  # craft-fonts (https://github.com/storytold/craft-fonts): the CJK UI fonts every release embeds
+  # (craftrules standards/fonts.md; crates/ui-egui/build.rs picks the faces). Each build job checks
+  # out this commit into ./craft-fonts. Bump it deliberately.
+  CRAFT_FONTS_REF: 3d9ab3a132ed0eff457e424226a435a901da30d3
+  # With CRAFT_FONTS_DIR set, a missing or broken checkout fails the build instead of shipping
+  # without the fonts.
+  CRAFT_FONTS_REQUIRED: "1"
 
 jobs:
   version:
@@ -71,8 +78,15 @@ jobs:
     env:
       TEXTURECRAFT_VERSION: ${{ needs.version.outputs.version }}
       TEXTURECRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out craft-fonts (embedded CJK UI fonts)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
@@ -130,8 +144,15 @@ jobs:
     env:
       TEXTURECRAFT_VERSION: ${{ needs.version.outputs.version }}
       TEXTURECRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out craft-fonts (embedded CJK UI fonts)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: ${{ matrix.target }}
@@ -178,9 +199,16 @@ jobs:
     env:
       TEXTURECRAFT_VERSION: ${{ needs.version.outputs.version }}
       TEXTURECRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
       NFPM_VERSION: 2.47.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out craft-fonts (embedded CJK UI fonts)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
       - name: Install build and packaging tools
         run: |
           sudo apt-get update
@@ -259,14 +287,22 @@ jobs:
     name: FreeBSD x86_64
     needs: version
     # GitHub has no FreeBSD runners: build in a FreeBSD 14.3 VM, the same image and packages as
-    # .github/workflows/freebsd.yml.
-    runs-on: ubuntu-latest
+    # .github/workflows/freebsd.yml. A private repo's ubuntu-latest (2 vCPUs, 7-8 GB) is too small
+    # for this VM (QEMU "cannot set up guest memory"), so it runs on the org's 16-core larger
+    # runner, which needs the repo in the org's Default runner group (as macos-15-xlarge does).
+    runs-on: github-ubuntu-16core
     timeout-minutes: 180
     env:
       TEXTURECRAFT_VERSION: ${{ needs.version.outputs.version }}
       TEXTURECRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out craft-fonts (embedded CJK UI fonts)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
       - name: Build and package in a FreeBSD VM (tar.gz)
         # vmactions/freebsd-vm v1.5.9, pinned by commit (it runs our build).
         uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
@@ -276,7 +312,7 @@ jobs:
           cpu: 4
           mem: 12288
           # Passed into the VM by name; never templated into the script below.
-          envs: "TEXTURECRAFT_VERSION TEXTURECRAFT_BUILD_DATE TEXTURECRAFT_BUILD_SHA INPUT_VERSION"
+          envs: "TEXTURECRAFT_VERSION TEXTURECRAFT_BUILD_DATE TEXTURECRAFT_BUILD_SHA INPUT_VERSION CRAFT_FONTS_REQUIRED"
           # The FreeBSD CI packages, plus bash for the packaging script.
           prepare: |
             pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2
@@ -288,6 +324,8 @@ jobs:
             # Build outside the checkout so only dist/ is copied back out of the VM (copying the
             # target dir back fails on large builds). 4 jobs: more runs the VM out of memory.
             export CARGO_TARGET_DIR=/var/tmp/texturecraft-target CARGO_BUILD_JOBS=4
+            # The craft-fonts checkout is synced into the VM with the workspace.
+            export CRAFT_FONTS_DIR="$PWD/craft-fonts"
             if [ -n "$INPUT_VERSION" ]; then cargo xtask version set "$TEXTURECRAFT_VERSION"; fi
             bash packaging/freebsd/package.sh
             tar -tzf dist/release/texturecraft-*-freebsd-x86_64.tar.gz \
@@ -305,9 +343,16 @@ jobs:
     env:
       TEXTURECRAFT_VERSION: ${{ needs.version.outputs.version }}
       TEXTURECRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
       TRUNK_VERSION: 0.21.14
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out craft-fonts (embedded CJK UI fonts)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: wasm32-unknown-unknown

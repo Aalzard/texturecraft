@@ -284,3 +284,69 @@ fn bench_single_layers() {
         println!("[single] {label:<32} {:.2?}/tile ({n} tiles)", t.elapsed() / n.max(1) as u32);
     }
 }
+
+/// The frame where an 8K stroke ends: `end_stroke` and the first budgeted update after it.
+#[test]
+#[ignore]
+fn bench_8k_stroke_end() {
+    let mut s = texturecraft_engine::project_cmds::sample_session(2048, 256).unwrap();
+    s.viewport = Vec2::new(1700.0, 1230.0);
+    execute(&mut s, "textureSet.resolution", &json!({"resolution": 8192})).unwrap();
+    execute(&mut s, "layer.add.paint", &Value::Null).unwrap();
+    s.update();
+    upload_bytes(&mut s);
+    for size in [0.02, 0.08] {
+        s.tool.brush.size = size;
+        for rep in 0..3 {
+            s.begin_stroke(Vec2::new(500.0, 500.0 + rep as f32 * 40.0), s.viewport, 1.0).unwrap();
+            for i in 0..60 {
+                let p = Vec2::new(500.0 + i as f32 * 10.0, 500.0 + rep as f32 * 40.0 + i as f32 * 3.3);
+                s.continue_stroke(p, 1.0);
+                s.update();
+                upload_bytes(&mut s);
+            }
+            let t = Instant::now();
+            s.end_stroke().unwrap();
+            let end = t.elapsed();
+            let tiles = s.caches[0].dirty.len();
+            let t = Instant::now();
+            s.update();
+            let after = t.elapsed();
+            let t = Instant::now();
+            let up = upload_bytes(&mut s);
+            println!("[8k] size {size}: end_stroke {end:.2?}, update {after:.2?} ({tiles} tiles), display {:.2?} ({:.1} MB)", t.elapsed(), mb(up));
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn bench_8k_resize() {
+    let mut s = texturecraft_engine::project_cmds::sample_session(2048, 256).unwrap();
+    execute(&mut s, "layer.add.paint", &Value::Null).unwrap();
+    execute(&mut s, "tool.stroke", &json!({"points": [[300, 300], [700, 500]]})).unwrap();
+    s.update();
+    let t = Instant::now();
+    execute(&mut s, "textureSet.resolution", &json!({"resolution": 8192})).unwrap();
+    println!("[resize] 2K → 8K command {:.2?}", t.elapsed());
+    // The UI's way: the worker thread's part, then what the frame that applies it pays.
+    let t = Instant::now();
+    let out = s.resize_task(0, 4096).unwrap().run(&texturecraft_engine::bake::Progress::new()).unwrap();
+    let worker = t.elapsed();
+    let t = Instant::now();
+    s.apply_resize(out).unwrap();
+    println!("[resize] 8K → 4K worker {worker:.2?}, apply {:.2?}", t.elapsed());
+    let t = Instant::now();
+    let out = s.resize_task(0, 8192).unwrap().run(&texturecraft_engine::bake::Progress::new()).unwrap();
+    let worker = t.elapsed();
+    let t = Instant::now();
+    s.apply_resize(out).unwrap();
+    println!("[resize] 4K → 8K worker {worker:.2?}, apply {:.2?}", t.elapsed());
+    let t = Instant::now();
+    let gbuf = texturecraft_engine::geom::UvGBuffer::new(&s.mesh, 0, 8192, 8192);
+    println!("[resize] gbuffer {:.2?}", t.elapsed());
+    let t = Instant::now();
+    let d = texturecraft_engine::texel::DilationMap::in_blocks(&gbuf.coverage_mask(), 8192, 8192, Some(8), 8192);
+    println!("[resize] dilation {:.2?}", t.elapsed());
+    drop(d);
+}

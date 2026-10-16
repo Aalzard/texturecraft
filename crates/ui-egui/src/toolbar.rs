@@ -236,6 +236,9 @@ pub fn status_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
                     if ui.small_button(tr("Cancel")).clicked() {
                         app.cancel_bake();
                     }
+                } else if let Some(job) = &app.resize {
+                    let bar = egui::ProgressBar::new(job.progress.fraction()).desired_width(160.0).desired_height(10.0);
+                    ui.add(bar.animate(true).text(RichText::new(tr("Resizing")).size(10.0)));
                 } else if let Some(p) = app.gpu.as_ref().and_then(|g| g.composite_progress(&app.session)) {
                     ui.add(egui::ProgressBar::new(p).desired_width(160.0).desired_height(10.0).text(RichText::new(tr("Compositing")).size(10.0)));
                     ui.ctx().request_repaint();

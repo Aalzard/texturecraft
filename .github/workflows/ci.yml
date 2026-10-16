@@ -44,6 +44,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          # Pinned, so a new stable's clippy lints can't turn main red overnight (1.99 added
+          # chunks_exact_to_as_chunks). Bump it on purpose, together with the lint fixes.
+          toolchain: "1.96.0"
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
 
