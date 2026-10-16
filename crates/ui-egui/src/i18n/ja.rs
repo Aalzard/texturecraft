@@ -894,4 +894,18 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Position normalized to the low poly's bounding box or sphere.", "ローポリのバウンディングボックスまたはスフィアで正規化した位置。"),
     ("Base colors (textures, factors) and vertex colors of the high definition meshes.", "高精細メッシュのベースカラー (テクスチャ、係数) と頂点カラー。"),
     ("White where the high poly covers the low poly, times its alpha.", "ハイポリがローポリを覆う部分が白 (アルファを乗算)。"),
+    // Settings › Interface: brightness and accent color.
+    ("Brightness", "明るさ"),
+    ("Dark", "ダーク"),
+    ("Medium dark", "ミディアムダーク"),
+    ("Medium light", "ミディアムライト"),
+    ("Light", "ライト"),
+    ("Accent color", "アクセントカラー"),
+    ("Copper", "カッパー"),
+    ("Coral", "コーラル"),
+    ("Blue", "ブルー"),
+    ("Violet", "バイオレット"),
+    ("Green", "グリーン"),
+    ("Amber", "アンバー"),
+    ("Pink", "ピンク"),
 ];

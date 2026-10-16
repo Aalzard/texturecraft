@@ -13,6 +13,7 @@ texturecraft-engine = { workspace = true }
 texturecraft-render = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "persistence"] }
 egui = { workspace = true }
+craft-ui = { workspace = true }
 egui-phosphor = { version = "0.14", features = ["regular", "fill"] }
 # Dockable, tabbed, floating panels (MIT).
 egui_dock = { version = "0.21", features = ["serde"] }

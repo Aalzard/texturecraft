@@ -100,7 +100,11 @@ fn main() {
     if let Some(i) = icon() {
         viewport = viewport.with_icon(i);
     }
-    let options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
+    // Scripted runs (agents, films, tests) set TEXTURECRAFT_NO_PREFS so they neither read nor
+    // overwrite the user's saved UI layout and settings: state goes to a throwaway folder.
+    let persistence_path =
+        std::env::var_os("TEXTURECRAFT_NO_PREFS").map(|_| std::env::temp_dir().join(format!("texturecraft-noprefs-{}.ron", std::process::id())));
+    let options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, persistence_path, ..Default::default() };
     let control = args.control;
     let r = eframe::run_native(
         "TextureCraft",

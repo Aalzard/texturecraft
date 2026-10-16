@@ -53,6 +53,9 @@ schemars = "1"
 base64 = "0.22"
 cap-std = "4"
 getrandom = "0.3"
+# Shared Craft egui components (widget palette, icon buttons): storytold/craft-libs, MIT OR
+# Apache-2.0, pinned to the rev VectorCraft uses.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

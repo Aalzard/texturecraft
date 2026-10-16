@@ -35,6 +35,10 @@ The token is `TEXTURECRAFT_CONTROL_TOKEN` when that is set (16 characters or mor
 fresh random token the app writes to `<temp>/texturecraft-control-<port>.token` (`<temp>` is
 `%TEMP%` on Windows, `$TMPDIR` or `/tmp` elsewhere). Any other first request is refused.
 
+Scripted runs (agents, recordings, tests) can set `TEXTURECRAFT_NO_PREFS` (any value) so the app
+neither reads nor overwrites the user's saved layout and settings: it starts from the defaults and
+keeps its state in a throwaway file.
+
 | Method | Params | Result |
 |---|---|---|
 | `ping` | | `"pong"` |
@@ -44,9 +48,10 @@ fresh random token the app writes to `<temp>/texturecraft-control-<port>.token` 
 | `ui.inspect` | | UI state, viewport rect, fps, bake progress, toasts |
 | `ui.menu.list` | | the menu catalog: `{menu, submenu, label, id, shortcut, implemented, enabled}` |
 | `ui.menu.invoke` | `{id}` | behaves like a menu click (may open a window) |
-| `ui.set` | fields of the UI state, e.g. `{"layout": "Only3D"}`; `dock` is the panel layout (`{main, windows}`: `{"tabs": {"tabs": [...], "active": 0}}` or `{"split": {"vertical", "fraction", "first", "second"}}` nodes over `Viewport`, `Assets`, `TextureSetList`, `Layers`, `TextureSetSettings`, `Properties`, `Display`, `Shader`, `History`, `Log`; `closed` lists where each closed panel was, so reopening it puts it back), `prefs` the settings (`{"language": "ja", "viewport_texture": 1}`), `keymap` the custom shortcuts (`{"file.save": "F5"}`, `""` unbinds) | `null` |
+| `ui.set` | fields of the UI state, e.g. `{"layout": "Only3D"}`; `dock` is the panel layout (`{main, windows}`: `{"tabs": {"tabs": [...], "active": 0}}` or `{"split": {"vertical", "fraction", "first", "second"}}` nodes over `Viewport`, `Assets`, `TextureSetList`, `Layers`, `TextureSetSettings`, `Properties`, `Display`, `Shader`, `History`, `Log`; `closed` lists where each closed panel was, so reopening it puts it back), `prefs` the settings (`{"language": "ja", "viewport_texture": 1, "brightness": "light", "accent": "blue"}`; missing fields take their defaults; `brightness` is `dark`, `mediumDark` (default), `mediumLight` or `light`, `accent` `copper` (default), `coral`, `blue`, `violet`, `green`, `amber` or `pink`, applied on the next frame), `keymap` the custom shortcuts (`{"file.save": "F5"}`, `""` unbinds) | `null` |
 | `viewport.screenshot` | `{view?: "3d" \| "2d"}` | `{width, height, png}` (PNG, base64) |
 | `ui.screenshot` | | `{width, height, png}` of the whole window, after the next frame |
+| `ui.resize` | `{width, height}` | Sets the window's inner size in points (640–7680), leaving maximized state; for recordings and screenshots at a fixed size |
 | `debug.paintTest` | `{from: [x, y], to: [x, y], frames?: 120}` | Paints a straight stroke through the real frame loop (viewport pixels, one point per frame) for performance work |
 | `debug.frames` | | Frame timing since the last call (then cleared): `{frames, intervalMs, uiMs, syncMs, logicMs}` each `{avg, p95, max}`; `syncMs` is compositing plus display tile conversion, `logicMs` input, control requests and scripted strokes before the UI is built; `worst` breaks down the slowest frame; `strokeEnd` lists the frame that committed a `debug.paintTest` stroke and the one after it (null without one) |
 

@@ -927,4 +927,18 @@ pub const TABLE: &[(&str, &str)] = &[
         "Couleurs de base (textures, facteurs) et couleurs de sommets des maillages haute définition.",
     ),
     ("White where the high poly covers the low poly, times its alpha.", "Blanc là où le high poly couvre le low poly, multiplié par son alpha."),
+    // Settings › Interface: brightness and accent color.
+    ("Brightness", "Luminosité"),
+    ("Dark", "Sombre"),
+    ("Medium dark", "Moyennement sombre"),
+    ("Medium light", "Moyennement clair"),
+    ("Light", "Clair"),
+    ("Accent color", "Couleur d'accentuation"),
+    ("Copper", "Cuivre"),
+    ("Coral", "Corail"),
+    ("Blue", "Bleu"),
+    ("Violet", "Violet"),
+    ("Green", "Vert"),
+    ("Amber", "Ambre"),
+    ("Pink", "Rose"),
 ];

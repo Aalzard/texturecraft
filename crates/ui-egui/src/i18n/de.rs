@@ -924,4 +924,18 @@ pub const TABLE: &[(&str, &str)] = &[
         "Grundfarben (Texturen, Faktoren) und Vertexfarben der hochauflösenden Meshes.",
     ),
     ("White where the high poly covers the low poly, times its alpha.", "Weiß, wo das High-Poly das Low-Poly bedeckt, mal dessen Alpha."),
+    // Settings › Interface: brightness and accent color.
+    ("Brightness", "Helligkeit"),
+    ("Dark", "Dunkel"),
+    ("Medium dark", "Mitteldunkel"),
+    ("Medium light", "Mittelhell"),
+    ("Light", "Hell"),
+    ("Accent color", "Akzentfarbe"),
+    ("Copper", "Kupfer"),
+    ("Coral", "Koralle"),
+    ("Blue", "Blau"),
+    ("Violet", "Violett"),
+    ("Green", "Grün"),
+    ("Amber", "Bernstein"),
+    ("Pink", "Pink"),
 ];

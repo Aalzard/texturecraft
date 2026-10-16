@@ -13,7 +13,7 @@ use texturecraft_engine::formats::{Dest, ExportPreset, FileFormat, MapSpec, Sour
 
 use crate::TextureCraftApp;
 use crate::i18n::{n_, tr, trf};
-use crate::theme::{TOKENS, caption};
+use crate::theme::{Tokens, caption};
 use crate::widgets::{chip, icon_button};
 
 const ICON: f32 = 20.0;
@@ -407,25 +407,26 @@ pub fn save_library(app: &TextureCraftApp, storage: &mut dyn eframe::Storage) {
 
 /// The selected template's output maps (editable for user templates).
 fn outputs(app: &mut TextureCraftApp, ui: &mut Ui) {
+    let tk = Tokens::get(ui.ctx());
     let (mut preset, editable) = match (&app.ui.export.draft, selected(app)) {
         (Some(d), _) => (d.clone(), true),
         (None, Some(b)) => (b, false),
         (None, None) => {
-            ui.label(RichText::new(tr("Select an output template")).color(TOKENS.text_dim));
+            ui.label(RichText::new(tr("Select an output template")).color(tk.text_dim));
             return;
         }
     };
     let preview = preview_names(app, &preset);
     let mut action = None;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(&preset.name).strong().color(TOKENS.text_strong));
+        ui.label(RichText::new(&preset.name).strong().color(tk.text_strong));
         if !editable {
-            ui.label(RichText::new(ic::LOCK_SIMPLE).color(TOKENS.text_dim)).on_hover_text(tr("Built-in templates are read-only: duplicate one to edit it"));
+            ui.label(RichText::new(ic::LOCK_SIMPLE).color(tk.text_dim)).on_hover_text(tr("Built-in templates are read-only: duplicate one to edit it"));
         }
     });
     ui.add_enabled_ui(editable, |ui| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(tr("Add output")).color(TOKENS.text_dim));
+            ui.label(RichText::new(tr("Add output")).color(tk.text_dim));
             for l in Layout::ALL {
                 if ui.small_button(format!("{} {}", ic::PLUS, tr(l.label()))).clicked() {
                     action = Some(MapAction::Add(l));
@@ -434,14 +435,14 @@ fn outputs(app: &mut TextureCraftApp, ui: &mut Ui) {
         });
     });
     if let Err(e) = &preview {
-        ui.label(RichText::new(trf("Not saved: {error}", &[("error", e)])).color(TOKENS.danger).size(11.0));
+        ui.label(RichText::new(trf("Not saved: {error}", &[("error", e)])).color(tk.danger).size(11.0));
     }
     let mut changed = false;
     let n = preset.maps.len();
     egui::ScrollArea::vertical().id_salt("exp_outputs").auto_shrink([false; 2]).show(ui, |ui| {
         if n == 0 {
             ui.add_space(8.0);
-            ui.label(RichText::new(tr("No outputs yet: add one above, then drag input maps onto its channels.")).color(TOKENS.text_dim));
+            ui.label(RichText::new(tr("No outputs yet: add one above, then drag input maps onto its channels.")).color(tk.text_dim));
         }
         ui.add_enabled_ui(editable, |ui| {
             for (mi, map) in preset.maps.iter_mut().enumerate() {
@@ -496,8 +497,9 @@ fn preview_names(app: &mut TextureCraftApp, preset: &ExportPreset) -> Result<Vec
 
 /// One output file: name template, format, bit depth, layout and its channel sources.
 fn output_card(ui: &mut Ui, mi: usize, n: usize, map: &mut MapSpec, file: Option<&str>, action: &mut Option<MapAction>) -> bool {
+    let tk = Tokens::get(ui.ctx());
     let mut changed = false;
-    egui::Frame::new().fill(TOKENS.row).corner_radius(TOKENS.radius).inner_margin(6.0).show(ui, |ui| {
+    egui::Frame::new().fill(tk.row).corner_radius(tk.radius).inner_margin(6.0).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             let width = ui.available_width() - 4.0 * (ICON + ui.spacing().item_spacing.x);
@@ -550,8 +552,8 @@ fn output_card(ui: &mut Ui, mi: usize, n: usize, map: &mut MapSpec, file: Option
                 }
             });
             let (text, color) = match file {
-                Some(f) => (format!("{} {f}", ic::ARROW_RIGHT), TOKENS.text_dim),
-                None => (tr("Not exported: no source in this texture set").to_string(), TOKENS.text_dim),
+                Some(f) => (format!("{} {f}", ic::ARROW_RIGHT), tk.text_dim),
+                None => (tr("Not exported: no source in this texture set").to_string(), tk.text_dim),
             };
             ui.add(egui::Label::new(RichText::new(text).size(11.0).color(color)).truncate());
         });
@@ -562,6 +564,7 @@ fn output_card(ui: &mut Ui, mi: usize, n: usize, map: &mut MapSpec, file: Option
 
 /// A source picker per output channel that also takes input maps dropped from the palette.
 fn channel_slots(ui: &mut Ui, mi: usize, map: &mut MapSpec) -> bool {
+    let tk = Tokens::get(ui.ctx());
     let mut changed = false;
     let mut dropped = None;
     for (k, (dest, src)) in map.channels.iter_mut().enumerate() {
@@ -571,7 +574,7 @@ fn channel_slots(ui: &mut Ui, mi: usize, map: &mut MapSpec) -> bool {
                 Dest::A => "A",
                 d => RGB.get(slot_component(d) as usize).copied().unwrap_or("R"),
             };
-            ui.add_sized(vec2(30.0, 18.0), egui::Label::new(RichText::new(dest_name).size(11.0).color(TOKENS.text_dim)));
+            ui.add_sized(vec2(30.0, 18.0), egui::Label::new(RichText::new(dest_name).size(11.0).color(tk.text_dim)));
             let combo = egui::ComboBox::from_id_salt(("exp_slot", mi, k)).width(170.0).selected_text(tr(source_label(src))).show_ui(ui, |ui| {
                 for (group, inputs) in PALETTE.iter() {
                     ui.label(caption(tr(group)));
@@ -585,7 +588,7 @@ fn channel_slots(ui: &mut Ui, mi: usize, map: &mut MapSpec) -> bool {
             });
             let r = &combo.response;
             if r.dnd_hover_payload::<SourceRef>().is_some() {
-                ui.painter().rect_stroke(r.rect.expand(2.0), 3.0, egui::Stroke::new(1.5, TOKENS.accent), egui::StrokeKind::Outside);
+                ui.painter().rect_stroke(r.rect.expand(2.0), 3.0, egui::Stroke::new(1.5, tk.accent), egui::StrokeKind::Outside);
             }
             if let Some(input) = r.dnd_release_payload::<SourceRef>() {
                 dropped = Some((*dest, (*input).clone()));
@@ -616,8 +619,9 @@ fn channel_slots(ui: &mut Ui, mi: usize, map: &mut MapSpec) -> bool {
 
 /// Input maps to drag onto output channels.
 fn input_maps(ui: &mut Ui) {
+    let tk = Tokens::get(ui.ctx());
     ui.label(caption(tr("Input maps")));
-    ui.label(RichText::new(tr("Drag onto an output channel")).size(11.0).color(TOKENS.text_dim));
+    ui.label(RichText::new(tr("Drag onto an output channel")).size(11.0).color(tk.text_dim));
     egui::ScrollArea::vertical().id_salt("exp_inputs").auto_shrink([false; 2]).show(ui, |ui| {
         for (gi, (group, inputs)) in PALETTE.iter().enumerate() {
             ui.add_space(4.0);

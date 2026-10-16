@@ -10,7 +10,7 @@ use egui_phosphor::regular as ic;
 use crate::TextureCraftApp;
 use crate::i18n::{tr, trf};
 use crate::menus::{CATALOG, parse_shortcut};
-use crate::theme::TOKENS;
+use crate::theme::Tokens;
 use crate::widgets::{icon_button, section};
 
 pub type Keymap = BTreeMap<String, String>;
@@ -162,6 +162,7 @@ fn pressed(ctx: &egui::Context) -> Option<KeyboardShortcut> {
 
 /// The shortcut editor window.
 pub fn window(app: &mut TextureCraftApp, ctx: &egui::Context) {
+    let tk = Tokens::get(ctx);
     if !app.ui.windows.shortcuts {
         return;
     }
@@ -181,7 +182,7 @@ pub fn window(app: &mut TextureCraftApp, ctx: &egui::Context) {
     crate::windows::window("keyboard_shortcuts", tr("Keyboard shortcuts"), &mut open).default_width(480.0).show(ctx, |ui| {
         let resolved = resolve(&app.ui.keymap);
         ui.horizontal(|ui| {
-            ui.label(RichText::new(ic::MAGNIFYING_GLASS).color(TOKENS.text_dim));
+            ui.label(RichText::new(ic::MAGNIFYING_GLASS).color(tk.text_dim));
             ui.add(egui::TextEdit::singleline(&mut filter).hint_text(tr("Search commands or keys")).desired_width(300.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add_enabled(!app.ui.keymap.is_empty(), egui::Button::new(tr("Reset all"))).on_hover_text(tr("Restore every default shortcut")).clicked() {
@@ -193,7 +194,7 @@ pub fn window(app: &mut TextureCraftApp, ctx: &egui::Context) {
         if clashes > 0 {
             ui.label(
                 RichText::new(format!("{} {}", ic::WARNING, trf("{n} items share a shortcut; the first one listed wins.", &[("n", &clashes)])))
-                    .color(TOKENS.danger),
+                    .color(tk.danger),
             );
         }
         ui.add_space(4.0);
@@ -209,7 +210,7 @@ pub fn window(app: &mut TextureCraftApp, ctx: &egui::Context) {
                     }
                     ui.horizontal(|ui| {
                         ui.label(tr(b.label));
-                        ui.label(RichText::new(tr(b.group)).size(10.5).color(TOKENS.text_dim));
+                        ui.label(RichText::new(tr(b.group)).size(10.5).color(tk.text_dim));
                     });
                     let waiting = capture == Some(i);
                     let text = if waiting { tr("Press a key...") } else { current.unwrap_or("-") };
@@ -220,7 +221,7 @@ pub fn window(app: &mut TextureCraftApp, ctx: &egui::Context) {
                     let bound = current.is_some();
                     ui.horizontal(|ui| {
                         if let Some(other) = conflict(&resolved, i).and_then(|j| bindings().get(j)) {
-                            ui.label(RichText::new(ic::WARNING).color(TOKENS.danger))
+                            ui.label(RichText::new(ic::WARNING).color(tk.danger))
                                 .on_hover_text(trf("Also bound to {item} ({menu})", &[("item", &tr(other.label)), ("menu", &tr(other.group))]));
                         }
                         if bound && icon_button(ui, ic::X, tr("Remove the shortcut"), false, 18.0).clicked() {

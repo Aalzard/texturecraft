@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::TextureCraftApp;
 use crate::i18n::tr;
-use crate::theme::TOKENS;
+use crate::theme::Tokens;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Panel {
@@ -549,6 +549,7 @@ struct Host<'a> {
     /// Panels closed by their tab or window button this frame (closed after drawing, so their
     /// places are remembered).
     closing: Vec<Panel>,
+    tk: Tokens,
 }
 
 impl TabViewer for Host<'_> {
@@ -608,51 +609,60 @@ impl TabViewer for Host<'_> {
         (*tab == Panel::Viewport).then(|| {
             let mut s = global.clone();
             s.tab_body.inner_margin = Margin::ZERO;
-            s.tab_body.bg_fill = TOKENS.viewport;
+            s.tab_body.bg_fill = self.tk.viewport;
+            s.tab_body.corner_radius = CornerRadius::ZERO;
             s
         })
     }
 }
 
-/// The dock look: flat dark tab bars, Painter-style uppercase captions, thin separators.
-fn style(egui_style: &egui::Style) -> Style {
-    let t = TOKENS;
+/// The dock look: every panel group is a rounded card on the window's frame colour, its tab strip
+/// without hard lines, the shown tab a rounded pill, Painter-style uppercase captions.
+fn style(egui_style: &egui::Style, t: &Tokens) -> Style {
+    let card = crate::theme::CARD_RADIUS;
     let mut s = Style::from_egui(egui_style);
-    s.separator.width = 2.0;
+    // The gaps between the cards are the separators, in the frame's colour until grabbed.
+    s.dock_area_padding = Some(Margin::same(6));
+    s.main_surface_border_stroke = Stroke::NONE;
+    s.main_surface_border_rounding = CornerRadius::ZERO;
+    s.separator.width = 6.0;
     // Smallest panel extent a separator drag leaves (the crate's 175 px would grow the list).
     s.separator.extra = 60.0;
-    s.separator.color_idle = t.separator;
-    s.separator.color_hovered = t.accent_dim;
+    s.separator.color_idle = t.chrome;
+    s.separator.color_hovered = t.button_border;
     s.separator.color_dragged = t.accent;
-    s.tab_bar.bg_fill = t.chrome;
-    s.tab_bar.height = 24.0;
-    s.tab_bar.hline_color = t.separator;
-    s.tab_bar.corner_radius = CornerRadius::ZERO;
-    for (tab, text) in [
-        (&mut s.tab.active, t.text_strong),
-        (&mut s.tab.focused, t.text_strong),
-        (&mut s.tab.active_with_kb_focus, t.text_strong),
-        (&mut s.tab.focused_with_kb_focus, t.text_strong),
-        (&mut s.tab.hovered, t.text),
-        (&mut s.tab.inactive, t.text_dim),
-        (&mut s.tab.inactive_with_kb_focus, t.text_dim),
+    s.tab_bar.bg_fill = t.panel;
+    s.tab_bar.height = 30.0;
+    s.tab_bar.inner_margin = Margin::same(4);
+    s.tab_bar.hline_color = egui::Color32::TRANSPARENT;
+    s.tab_bar.corner_radius = CornerRadius { nw: card, ne: card, sw: 0, se: 0 };
+    for (tab, text, fill) in [
+        (&mut s.tab.active, t.text_strong, t.button),
+        (&mut s.tab.focused, t.text_strong, t.button),
+        (&mut s.tab.active_with_kb_focus, t.text_strong, t.button),
+        (&mut s.tab.focused_with_kb_focus, t.text_strong, t.button),
+        (&mut s.tab.hovered, t.text, t.row_hover),
+        (&mut s.tab.inactive, t.text_dim, t.panel),
+        (&mut s.tab.inactive_with_kb_focus, t.text_dim, t.panel),
     ] {
         tab.text_color = text;
-        tab.corner_radius = CornerRadius::ZERO;
-        tab.bg_fill = if text == t.text_strong { t.panel } else { t.chrome };
-        tab.outline_color = tab.bg_fill;
+        tab.corner_radius = CornerRadius::same(6);
+        tab.bg_fill = fill;
+        tab.outline_color = fill;
     }
+    s.tab.spacing = 2.0;
     let body = &mut s.tab.tab_body;
     body.bg_fill = t.panel;
-    body.inner_margin = Margin::symmetric(6, 4);
+    body.inner_margin = Margin::symmetric(8, 4);
     body.stroke = Stroke::NONE;
-    body.corner_radius = CornerRadius::ZERO;
+    body.corner_radius = CornerRadius { nw: 0, ne: 0, sw: card, se: card };
     // The viewport's group hides its tab bar entirely: no drag strip, no "show tab bar" button.
     body.hidden_tab_bar_drag_height = Some(0.0);
     s.buttons.show_tab_bar_size = 0.0;
     s.buttons.show_tab_bar_hover_expand = 0.0;
     s.buttons.show_tab_bar_color = egui::Color32::TRANSPARENT;
     s.buttons.show_tab_bar_active_color = egui::Color32::TRANSPARENT;
+    s.buttons.close_tab_bg_fill = t.row_hover;
     s.overlay.selection_color = t.accent.gamma_multiply(0.35);
     s
 }
@@ -667,17 +677,18 @@ pub fn show(app: &mut TextureCraftApp, ui: &mut Ui) {
     for (_, leaf) in state.iter_leaves_mut() {
         leaf.tab_bar_hidden = leaf.tabs == [Panel::Viewport];
     }
-    let mut host = Host { app, closing: Vec::new() };
+    let tk = Tokens::get(ui.ctx());
+    let mut host = Host { app, closing: Vec::new(), tk };
     DockArea::new(&mut state)
         .id(Id::new("dock_area"))
-        .style(style(ui.style()))
+        .style(style(ui.style(), &tk))
         .hidable_tab_bars(true)
         .tab_context_menus(false)
         .show_leaf_close_all_buttons(false)
         .show_leaf_collapse_buttons(false)
         .show_secondary_button_hint(false)
         .show_inside(ui, &mut host);
-    let Host { app, closing } = host;
+    let Host { app, closing, .. } = host;
     // A layout adopted while drawing (Window ▸ Load UI Layout) wins over the drawn one.
     if app.ui.dock.state.is_none() {
         app.ui.dock.state = Some(state);

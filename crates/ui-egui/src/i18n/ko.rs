@@ -882,4 +882,18 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Position normalized to the low poly's bounding box or sphere.", "로우 폴리의 바운딩 박스 또는 스피어로 정규화한 위치입니다."),
     ("Base colors (textures, factors) and vertex colors of the high definition meshes.", "고해상도 메시의 베이스 컬러(텍스처, 계수)와 버텍스 컬러입니다."),
     ("White where the high poly covers the low poly, times its alpha.", "하이 폴리가 로우 폴리를 덮는 곳은 흰색이며, 알파가 곱해집니다."),
+    // Settings › Interface: brightness and accent color.
+    ("Brightness", "밝기"),
+    ("Dark", "어둡게"),
+    ("Medium dark", "약간 어둡게"),
+    ("Medium light", "약간 밝게"),
+    ("Light", "밝게"),
+    ("Accent color", "강조 색상"),
+    ("Copper", "구리"),
+    ("Coral", "코랄"),
+    ("Blue", "파랑"),
+    ("Violet", "보라"),
+    ("Green", "초록"),
+    ("Amber", "호박색"),
+    ("Pink", "분홍"),
 ];

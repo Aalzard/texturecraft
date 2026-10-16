@@ -81,6 +81,17 @@ pub(crate) fn encode_png(w: u32, h: u32, rgba: Vec<u8>) -> Option<(u32, u32, Vec
 pub fn handle(app: &mut TextureCraftApp, ctx: &egui::Context, method: &str, p: &Value) -> Value {
     match method {
         "ping" => ok(json!("pong")),
+        "ui.resize" => {
+            let size = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| v.clamp(640.0, 7680.0) as f32);
+            match (size("width"), size("height")) {
+                (Some(w), Some(h)) => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+                    ok(Value::Null)
+                }
+                _ => err("`width` and `height` (points, 640..7680) are required"),
+            }
+        }
         "debug.frames" => ok(app.profiler.report()),
         "debug.paintTest" => match crate::profile::start_paint_test(app, p) {
             Ok(()) => ok(Value::Null),

@@ -14,8 +14,8 @@ use crate::TextureCraftApp;
 use crate::i18n::LANGUAGES;
 use crate::i18n::{tr, trf};
 use crate::state::Mode;
-use crate::theme::{TOKENS, caption};
-use crate::widgets::{color_swatch, icon_button, slider};
+use crate::theme::{Accent, Brightness, Tokens, caption};
+use crate::widgets::{color_swatch, icon_button, primary_button, slider};
 
 pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
     new_project(app, ctx);
@@ -151,6 +151,7 @@ fn cameras(app: &mut TextureCraftApp, ui: &mut Ui) {
 
 /// The Shader Settings panel body (a dock tab).
 pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
+    let tk = Tokens::get(ui.ctx());
     let mut d = app.session.doc.project.display.clone();
     let before = d.clone();
     let model = |sg: bool| if sg { tr("TextureCraft PBR - Specular Glossiness") } else { tr("TextureCraft PBR - Metallic Roughness") };
@@ -170,7 +171,7 @@ pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
     let optional = tr(
         "Optional channels add a clear coat (Coat weight, Coat roughness, Coat normal), sheen (Sheen weight, color, roughness), anisotropy (Anisotropy level, angle), subsurface scattering (Scattering weight) and transmission (Transmission).",
     );
-    ui.label(RichText::new(format!("{model_text} {channels} {optional}")).color(TOKENS.text_dim));
+    ui.label(RichText::new(format!("{model_text} {channels} {optional}")).color(tk.text_dim));
     ui.add_space(6.0);
     ui.checkbox(&mut d.parallax, tr("Parallax occlusion (height channel)"))
         .on_hover_text(tr("Offsets the textures by the height channel, at the height to normal strength"));
@@ -180,7 +181,7 @@ pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.add_space(6.0);
     ui.label(caption(tr("Subsurface scattering")));
     ui.horizontal(|ui| {
-        ui.label(RichText::new(tr("Scatter color")).color(TOKENS.text));
+        ui.label(RichText::new(tr("Scatter color")).color(tk.text));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| color_swatch(ui, "shader_scatter_color", &mut d.scatter_color, 44.0))
     })
     .response
@@ -209,14 +210,15 @@ pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
 
 /// The History panel body (a dock tab).
 pub(crate) fn history(app: &mut TextureCraftApp, ui: &mut Ui) {
+    let tk = Tokens::get(ui.ctx());
     let labels = app.session.history_labels();
     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-        ui.label(RichText::new(tr("Project opened")).color(TOKENS.text_dim));
+        ui.label(RichText::new(tr("Project opened")).color(tk.text_dim));
         for l in &labels {
             ui.label(l);
         }
         if let Some(r) = app.session.redo_label() {
-            ui.label(RichText::new(trf("{action} (undone)", &[("action", &r)])).color(TOKENS.text_dim));
+            ui.label(RichText::new(trf("{action} (undone)", &[("action", &r)])).color(tk.text_dim));
         }
     });
     ui.horizontal(|ui| {
@@ -316,7 +318,7 @@ fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::new(RichText::new(tr("Create")).color(Color32::WHITE)).fill(TOKENS.accent)).clicked() {
+                if ui.add(primary_button(ui, tr("Create"))).clicked() {
                     create = true;
                 }
                 if ui.button(tr("Cancel")).clicked() {
@@ -343,6 +345,7 @@ fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
 }
 
 fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
+    let tk = Tokens::get(ctx);
     let mut open = app.ui.windows.settings;
     // A language whose script no font draws is listed by its English name and disabled.
     let drawable = LANGUAGES.each_ref().map(|l| crate::fonts::Script::of_language(l.code).is_none_or(|s| app.fonts.covers(s)));
@@ -362,6 +365,33 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
             });
         });
         slider(ui, tr("Interface scale"), &mut p.ui_scale, 0.75..=2.0, 2);
+        ui.horizontal(|ui| {
+            ui.label(tr("Brightness"));
+            egui::ComboBox::from_id_salt("brightness").width(140.0).selected_text(tr(p.brightness.label())).show_ui(ui, |ui| {
+                for b in Brightness::ALL {
+                    ui.selectable_value(&mut p.brightness, b, tr(b.label()));
+                }
+            });
+        });
+        ui.horizontal(|ui| {
+            ui.label(tr("Accent color"));
+            for a in Accent::ALL {
+                let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, p.accent == a, tr(a.label())));
+                let ring = if p.accent == a {
+                    tk.text_strong
+                } else if resp.hovered() {
+                    tk.text_dim
+                } else {
+                    Color32::TRANSPARENT
+                };
+                ui.painter().circle(rect.center(), 6.5, a.colors(tk.dark).0, egui::Stroke::NONE);
+                ui.painter().circle_stroke(rect.center(), 9.0, egui::Stroke::new(1.5, ring));
+                if resp.on_hover_text(tr(a.label())).clicked() {
+                    p.accent = a;
+                }
+            }
+        });
         ui.add_space(6.0);
         ui.label(caption(tr("Viewport")));
         ui.horizontal(|ui| {
@@ -385,14 +415,14 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
             ui.label(
                 RichText::new(trf("0 turns autosave off. Copies go to {folder}", &[("folder", &crate::user_dir("autosave").display())]))
                     .size(10.5)
-                    .color(TOKENS.text_dim),
+                    .color(tk.text_dim),
             );
             ui.add_space(6.0);
             ui.label(caption(tr("Folders")));
             for (label, dir) in [(tr("Smart materials"), crate::library_dir()), (tr("UI layouts"), crate::user_dir("layouts"))] {
                 ui.horizontal(|ui| {
                     ui.label(label);
-                    ui.label(RichText::new(dir.display().to_string()).size(10.5).color(TOKENS.text_dim));
+                    ui.label(RichText::new(dir.display().to_string()).size(10.5).color(tk.text_dim));
                 });
             }
             ui.add_space(6.0);
@@ -435,10 +465,11 @@ fn export_mesh(app: &mut TextureCraftApp, ctx: &egui::Context) {
 }
 
 fn about(app: &mut TextureCraftApp, ctx: &egui::Context) {
+    let tk = Tokens::get(ctx);
     let mut open = app.ui.windows.about;
     dialog("about", tr("About TextureCraft"), &mut open).show(ctx, |ui| {
         ui.vertical_centered(|ui| {
-            ui.label(RichText::new("TextureCraft").size(22.0).strong().color(TOKENS.text_strong));
+            ui.label(RichText::new("TextureCraft").size(22.0).strong().color(tk.text_strong));
             ui.label(trf("Version {version}", &[("version", &texturecraft_engine::VERSION)]));
             ui.add_space(6.0);
             ui.label(tr("3D texture painting: layers, masks, smart materials, mesh map baking and export."));
@@ -447,7 +478,7 @@ fn about(app: &mut TextureCraftApp, ctx: &egui::Context) {
             ui.hyperlink_to(tr("Join the ArtCraft community on Discord"), "https://discord.gg/artcraft");
             ui.hyperlink_to("getartcraft.com/apps/texturecraft", "https://getartcraft.com/apps/texturecraft");
             ui.add_space(6.0);
-            ui.label(RichText::new(tr("Made by the ArtCraft team and community.")).color(TOKENS.text_dim));
+            ui.label(RichText::new(tr("Made by the ArtCraft team and community.")).color(tk.text_dim));
         });
     });
     app.ui.windows.about = open;
@@ -466,11 +497,10 @@ pub(crate) fn log(app: &mut TextureCraftApp, ui: &mut Ui) {
 // Bake mode (Painter's "Bake Mesh Maps": texture sets, bakers, common and per-map parameters)
 
 pub fn bake_left(app: &mut TextureCraftApp, ui: &mut Ui) {
-    egui::Panel::left("bake_left")
-        .resizable(true)
-        .default_size(320.0)
-        .frame(egui::Frame::NONE.fill(TOKENS.panel).inner_margin(egui::Margin::symmetric(8, 6)))
-        .show(ui, |ui| bake_body(app, ui));
+    let tk = Tokens::get(ui.ctx());
+    egui::Panel::left("bake_left").resizable(true).default_size(320.0).frame(egui::Frame::NONE).show(ui, |ui| {
+        crate::theme::card(ui, &tk, egui::Margin { left: 6, right: 0, top: 6, bottom: 6 }, egui::Margin::symmetric(8, 6), |ui| bake_body(app, ui));
+    });
 }
 
 /// The bake settings, scrollable (the Assets dock slot shows them in bake mode).
@@ -533,10 +563,12 @@ fn bake_panel(app: &mut TextureCraftApp, ui: &mut Ui) {
 }
 
 fn hint(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).color(TOKENS.text_dim).size(11.0));
+    let tk = Tokens::get(ui.ctx());
+    ui.label(RichText::new(text).color(tk.text_dim).size(11.0));
 }
 
 fn common_params(app: &mut TextureCraftApp, ui: &mut Ui, b: &mut BakeSettings) {
+    let tk = Tokens::get(ui.ctx());
     ui.label(caption(tr("Common parameters")));
     egui::ComboBox::from_label(tr("Output size")).selected_text(format!("{}", b.resolution)).show_ui(ui, |ui| {
         for r in [256u32, 512, 1024, 2048, 4096, 8192] {
@@ -561,7 +593,7 @@ fn common_params(app: &mut TextureCraftApp, ui: &mut Ui, b: &mut BakeSettings) {
     }
 
     ui.add_space(6.0);
-    ui.label(RichText::new(tr("High definition meshes")).strong().color(TOKENS.text_strong));
+    ui.label(RichText::new(tr("High definition meshes")).strong().color(tk.text_strong));
     let ctx = ui.ctx().clone();
     let highs: Vec<(String, usize)> = app.session.bake_meshes.high.iter().map(|h| (h.name.clone(), h.mesh.triangle_count())).collect();
     let mut remove = None;
@@ -717,8 +749,8 @@ fn bake_bar(app: &mut TextureCraftApp, ctx: &egui::Context) {
                 }
             } else {
                 let sets: Vec<usize> = app.session.doc.project.texture_sets.iter().enumerate().filter(|(_, t)| t.bake.enabled).map(|(i, _)| i).collect();
-                let label = RichText::new(trf("Bake selected textures ({n})", &[("n", &sets.len())])).color(Color32::WHITE);
-                if ui.add_enabled(!sets.is_empty(), egui::Button::new(label).fill(TOKENS.accent)).clicked() {
+                let label = trf("Bake selected textures ({n})", &[("n", &sets.len())]);
+                if ui.add_enabled(!sets.is_empty(), primary_button(ui, &label)).clicked() {
                     app.start_bake(sets);
                 }
             }
@@ -1033,6 +1065,7 @@ fn export_settings_tab(app: &mut TextureCraftApp, ui: &mut Ui, presets: &[textur
 }
 
 pub fn export(app: &mut TextureCraftApp, ctx: &egui::Context) {
+    let tk = Tokens::get(ctx);
     if !app.ui.windows.export {
         return;
     }
@@ -1087,7 +1120,7 @@ pub fn export(app: &mut TextureCraftApp, ctx: &egui::Context) {
                             });
                         }
                         Err(e) => {
-                            ui.label(RichText::new(e.to_string()).color(TOKENS.danger));
+                            ui.label(RichText::new(e.to_string()).color(tk.danger));
                         }
                     }
                 }
@@ -1100,7 +1133,7 @@ pub fn export(app: &mut TextureCraftApp, ctx: &egui::Context) {
                 app.ui.export = crate::state::ExportUi::default();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::new(RichText::new(tr("Export")).color(Color32::WHITE)).fill(TOKENS.accent)).clicked() {
+                if ui.add(primary_button(ui, tr("Export"))).clicked() {
                     do_export = true;
                 }
                 if ui.button(tr("Cancel")).clicked() {

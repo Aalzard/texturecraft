@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crate::TextureCraftApp;
 use crate::i18n::tr;
 use crate::state::{Mode, ViewLayout};
-use crate::theme::TOKENS;
+use crate::theme::Tokens;
 
 /// One menu entry. `label == "-"` is a separator; `sub` names a submenu group.
 #[derive(Clone, Copy, Debug)]
@@ -171,7 +171,8 @@ pub fn parse_shortcut(s: &str) -> Option<KeyboardShortcut> {
 }
 
 pub fn menu_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
-    egui::Panel::top("menu_bar").exact_size(24.0).frame(egui::Frame::NONE.fill(TOKENS.chrome).inner_margin(egui::Margin::symmetric(6, 0))).show(ui, |ui| {
+    let tk = Tokens::get(ui.ctx());
+    egui::Panel::top("menu_bar").exact_size(24.0).frame(egui::Frame::NONE.fill(tk.chrome).inner_margin(egui::Margin::symmetric(6, 0))).show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             let ctx = ui.ctx().clone();
             for top in TOP {
@@ -206,7 +207,7 @@ pub fn menu_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
                     Mode::Baking => tr("Baking"),
                     Mode::Rendering => tr("Rendering"),
                 };
-                ui.label(egui::RichText::new(mode).size(11.0).color(TOKENS.text_dim));
+                ui.label(egui::RichText::new(mode).size(11.0).color(tk.text_dim));
             });
         });
     });

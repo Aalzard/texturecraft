@@ -828,4 +828,18 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Position normalized to the low poly's bounding box or sphere.", "按低模包围盒或包围球归一化的位置。"),
     ("Base colors (textures, factors) and vertex colors of the high definition meshes.", "高精度网格的基础颜色（纹理、系数）和顶点颜色。"),
     ("White where the high poly covers the low poly, times its alpha.", "高模覆盖低模处为白色，再乘以其 Alpha。"),
+    // Settings › Interface: brightness and accent color.
+    ("Brightness", "亮度"),
+    ("Dark", "深色"),
+    ("Medium dark", "中等深色"),
+    ("Medium light", "中等浅色"),
+    ("Light", "浅色"),
+    ("Accent color", "强调色"),
+    ("Copper", "铜色"),
+    ("Coral", "珊瑚色"),
+    ("Blue", "蓝色"),
+    ("Violet", "紫罗兰色"),
+    ("Green", "绿色"),
+    ("Amber", "琥珀色"),
+    ("Pink", "粉色"),
 ];

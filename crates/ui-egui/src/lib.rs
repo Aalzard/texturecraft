@@ -99,7 +99,8 @@ pub struct TextureCraftApp {
     /// When the next autosave is due (seconds of app time; desktop only).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     next_autosave: f64,
-    styled: bool,
+    /// The brightness and accent the style was last built for.
+    styled: Option<(theme::Brightness, theme::Accent)>,
 }
 
 impl TextureCraftApp {
@@ -139,7 +140,7 @@ impl TextureCraftApp {
             banner: None,
             last_time: 0.0,
             next_autosave,
-            styled: true,
+            styled: None,
         };
         app.ui.rename = None;
         app.ui.windows.new_project = false;
@@ -355,9 +356,10 @@ impl eframe::App for TextureCraftApp {
             self.fps = self.fps * 0.9 + (1.0 / dt) * 0.1;
         }
         self.last_time = now;
-        if !self.styled {
-            theme::install(ctx);
-            self.styled = true;
+        let style = (self.ui.prefs.brightness, self.ui.prefs.accent);
+        if self.styled != Some(style) {
+            theme::apply(ctx, style.0, style.1);
+            self.styled = Some(style);
         }
         control::poll(self, ctx);
         web_files::poll(self);
@@ -400,7 +402,10 @@ impl eframe::App for TextureCraftApp {
         }
         let hide = self.ui.hide_ui;
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(if hide { theme::TOKENS.viewport } else { theme::TOKENS.separator }))
+            .frame(egui::Frame::NONE.fill({
+                let tk = theme::Tokens::get(&ctx);
+                if hide { tk.viewport } else { tk.chrome }
+            }))
             .show(ui, |ui| if hide { viewport::central(self, ui) } else { docking::show(self, ui) });
         windows::show(self, &ctx);
         toasts(self, &ctx);
@@ -438,13 +443,14 @@ pub fn now_ms() -> f64 {
 /// The dismissable notice under the menu bar.
 fn banner(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     let Some(text) = app.banner else { return };
-    egui::Panel::top("banner").frame(egui::Frame::NONE.fill(theme::TOKENS.row_selected).inner_margin(egui::Margin::symmetric(10, 5))).show(ui, |ui| {
+    let tk = theme::Tokens::get(ui.ctx());
+    egui::Panel::top("banner").frame(egui::Frame::NONE.fill(tk.row_selected).inner_margin(egui::Margin::symmetric(10, 5))).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(egui_phosphor::regular::INFO).color(theme::TOKENS.accent));
+            ui.label(egui::RichText::new(egui_phosphor::regular::INFO).color(tk.accent));
             // The text wraps in the width the dismiss button leaves.
             let width = (ui.available_width() - 28.0).max(80.0);
             ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(i18n::tr(text)).color(theme::TOKENS.text_strong)).wrap());
+                ui.add(egui::Label::new(egui::RichText::new(i18n::tr(text)).color(tk.text_strong)).wrap());
             });
             if widgets::icon_button(ui, egui_phosphor::regular::X, i18n::tr("Dismiss"), false, 18.0).clicked() {
                 app.banner = None;
@@ -458,16 +464,18 @@ fn toasts(app: &mut TextureCraftApp, ctx: &egui::Context) {
         return;
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    let tk = theme::Tokens::get(ctx);
     egui::Area::new(egui::Id::new("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -36.0)).show(ctx, |ui| {
         for t in &app.toasts {
             egui::Frame::NONE
-                .fill(egui::Color32::from_rgb(0x30, 0x30, 0x30))
-                .stroke(egui::Stroke::new(1.0, if t.error { theme::TOKENS.danger } else { theme::TOKENS.accent }))
-                .corner_radius(4)
+                .fill(tk.panel)
+                .stroke(egui::Stroke::new(1.0, if t.error { tk.danger } else { tk.accent }))
+                .corner_radius(crate::theme::CARD_RADIUS)
+                .shadow(ui.visuals().popup_shadow)
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
                     ui.set_max_width(360.0);
-                    ui.label(egui::RichText::new(&t.text).color(theme::TOKENS.text_strong));
+                    ui.label(egui::RichText::new(&t.text).color(tk.text_strong));
                 });
             ui.add_space(4.0);
         }

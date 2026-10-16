@@ -11,7 +11,7 @@ use crate::docking::Panel;
 use crate::i18n::{tr, trf};
 use crate::keymap::tip;
 use crate::state::{Mode, ViewLayout};
-use crate::theme::TOKENS;
+use crate::theme::{Tokens, card};
 use crate::widgets::{bar_slider, icon_button};
 
 pub fn tool_icon(t: Tool) -> &'static str {
@@ -28,107 +28,110 @@ pub fn tool_icon(t: Tool) -> &'static str {
 }
 
 pub fn top_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
-    egui::Panel::top("tool_bar").exact_size(34.0).frame(egui::Frame::NONE.fill(TOKENS.chrome).inner_margin(egui::Margin::symmetric(8, 2))).show(ui, |ui| {
-        ui.horizontal_centered(|ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
-            if app.ui.mode == Mode::Baking {
-                ui.label(RichText::new(tr("Bake Mesh Maps")).color(TOKENS.text_strong));
-                return;
-            }
-            let tool = app.session.tool.tool;
-            ui.label(RichText::new(tool_icon(tool)).size(15.0).color(TOKENS.text_strong)).on_hover_text(tool.label());
-            let b = &mut app.session.tool.brush;
-            match tool {
-                Tool::Paint | Tool::Eraser | Tool::Projection | Tool::Smudge | Tool::Clone | Tool::Path => {
-                    let mut size = b.size / 0.25 * 100.0;
-                    if bar_slider(ui, tr("Size"), &mut size, 0.05..=100.0, 110.0).changed() {
-                        b.size = (size / 100.0 * 0.25).clamp(0.0005, 0.25);
-                    }
-                    let mut flow = b.flow * 100.0;
-                    if bar_slider(ui, tr("Flow"), &mut flow, 0.0..=100.0, 100.0).changed() {
-                        b.flow = flow / 100.0;
-                    }
-                    let mut op = b.opacity * 100.0;
-                    if bar_slider(ui, tr("Stroke opacity"), &mut op, 0.0..=100.0, 110.0).changed() {
-                        b.opacity = op / 100.0;
-                    }
-                    let mut sp = b.spacing * 100.0;
-                    if bar_slider(ui, tr("Spacing"), &mut sp, 1.0..=200.0, 100.0).changed() {
-                        b.spacing = sp / 100.0;
-                    }
-                    ui.separator();
-                    let lazy_on = b.lazy > 0.0;
-                    if icon_button(ui, ic::SCRIBBLE, tr("Lazy mouse"), lazy_on, 24.0).clicked() {
-                        b.lazy = if lazy_on { 0.0 } else { 20.0 };
-                    }
-                    if lazy_on {
-                        let mut d = b.lazy;
-                        if bar_slider(ui, tr("Distance"), &mut d, 1.0..=200.0, 90.0).changed() {
-                            b.lazy = d;
+    let tk = Tokens::get(ui.ctx());
+    egui::Panel::top("tool_bar").exact_size(40.0).frame(egui::Frame::NONE).show(ui, |ui| {
+        card(ui, &tk, egui::Margin { left: 6, right: 6, top: 6, bottom: 0 }, egui::Margin::symmetric(8, 0), |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                if app.ui.mode == Mode::Baking {
+                    ui.label(RichText::new(tr("Bake Mesh Maps")).color(tk.text_strong));
+                    return;
+                }
+                let tool = app.session.tool.tool;
+                ui.label(RichText::new(tool_icon(tool)).size(15.0).color(tk.text_strong)).on_hover_text(tool.label());
+                let b = &mut app.session.tool.brush;
+                match tool {
+                    Tool::Paint | Tool::Eraser | Tool::Projection | Tool::Smudge | Tool::Clone | Tool::Path => {
+                        let mut size = b.size / 0.25 * 100.0;
+                        if bar_slider(ui, tr("Size"), &mut size, 0.05..=100.0, 110.0).changed() {
+                            b.size = (size / 100.0 * 0.25).clamp(0.0005, 0.25);
+                        }
+                        let mut flow = b.flow * 100.0;
+                        if bar_slider(ui, tr("Flow"), &mut flow, 0.0..=100.0, 100.0).changed() {
+                            b.flow = flow / 100.0;
+                        }
+                        let mut op = b.opacity * 100.0;
+                        if bar_slider(ui, tr("Stroke opacity"), &mut op, 0.0..=100.0, 110.0).changed() {
+                            b.opacity = op / 100.0;
+                        }
+                        let mut sp = b.spacing * 100.0;
+                        if bar_slider(ui, tr("Spacing"), &mut sp, 1.0..=200.0, 100.0).changed() {
+                            b.spacing = sp / 100.0;
+                        }
+                        ui.separator();
+                        let lazy_on = b.lazy > 0.0;
+                        if icon_button(ui, ic::SCRIBBLE, tr("Lazy mouse"), lazy_on, 24.0).clicked() {
+                            b.lazy = if lazy_on { 0.0 } else { 20.0 };
+                        }
+                        if lazy_on {
+                            let mut d = b.lazy;
+                            if bar_slider(ui, tr("Distance"), &mut d, 1.0..=200.0, 90.0).changed() {
+                                b.lazy = d;
+                            }
+                        }
+                        ui.separator();
+                        if icon_button(ui, ic::FLIP_HORIZONTAL, tr("Symmetry (X)"), b.symmetry.x, 24.0).clicked() {
+                            b.symmetry.x = !b.symmetry.x;
+                        }
+                        if icon_button(ui, ic::FLIP_VERTICAL, tr("Symmetry (Y)"), b.symmetry.y, 24.0).clicked() {
+                            b.symmetry.y = !b.symmetry.y;
+                        }
+                        if icon_button(ui, ic::CLOUD_RAIN, tr("Particle brush: particles slide down the surface"), b.particles.enabled, 24.0).clicked() {
+                            b.particles.enabled = !b.particles.enabled;
+                        }
+                        if tool == Tool::Smudge {
+                            ui.separator();
+                            let mut st = app.session.tool.smudge_strength * 100.0;
+                            if bar_slider(ui, tr("Strength"), &mut st, 0.0..=100.0, 100.0).changed() {
+                                app.session.tool.smudge_strength = (st / 100.0).clamp(0.0, 1.0);
+                            }
+                        }
+                        if tool == Tool::Clone && app.session.tool.clone_source.is_none() {
+                            ui.separator();
+                            ui.label(RichText::new(tr("Hold V and click the mesh to set the clone source")).color(tk.text_dim));
+                        }
+                        if tool == Tool::Path {
+                            ui.separator();
+                            path_controls(app, ui);
                         }
                     }
-                    ui.separator();
-                    if icon_button(ui, ic::FLIP_HORIZONTAL, tr("Symmetry (X)"), b.symmetry.x, 24.0).clicked() {
-                        b.symmetry.x = !b.symmetry.x;
-                    }
-                    if icon_button(ui, ic::FLIP_VERTICAL, tr("Symmetry (Y)"), b.symmetry.y, 24.0).clicked() {
-                        b.symmetry.y = !b.symmetry.y;
-                    }
-                    if icon_button(ui, ic::CLOUD_RAIN, tr("Particle brush: particles slide down the surface"), b.particles.enabled, 24.0).clicked() {
-                        b.particles.enabled = !b.particles.enabled;
-                    }
-                    if tool == Tool::Smudge {
-                        ui.separator();
-                        let mut st = app.session.tool.smudge_strength * 100.0;
-                        if bar_slider(ui, tr("Strength"), &mut st, 0.0..=100.0, 100.0).changed() {
-                            app.session.tool.smudge_strength = (st / 100.0).clamp(0.0, 1.0);
+                    Tool::PolygonFill => {
+                        use texturecraft_engine::FillMode;
+                        for (m, icon, tip) in [
+                            (FillMode::Triangle, ic::POLYGON, tr("Triangle fill")),
+                            (FillMode::UvIsland, ic::SHAPES, tr("UV island fill")),
+                            (FillMode::Mesh, ic::CUBE, tr("Mesh fill")),
+                        ] {
+                            if icon_button(ui, icon, tip, app.session.tool.fill_mode == m, 24.0).clicked() {
+                                app.session.tool.fill_mode = m;
+                            }
                         }
                     }
-                    if tool == Tool::Clone && app.session.tool.clone_source.is_none() {
-                        ui.separator();
-                        ui.label(RichText::new(tr("Hold V and click the mesh to set the clone source")).color(TOKENS.text_dim));
-                    }
-                    if tool == Tool::Path {
-                        ui.separator();
-                        path_controls(app, ui);
+                    Tool::ColorPicker => {
+                        ui.label(RichText::new(tr("Click the mesh to pick its material into the brush")).color(tk.text_dim));
                     }
                 }
-                Tool::PolygonFill => {
-                    use texturecraft_engine::FillMode;
-                    for (m, icon, tip) in [
-                        (FillMode::Triangle, ic::POLYGON, tr("Triangle fill")),
-                        (FillMode::UvIsland, ic::SHAPES, tr("UV island fill")),
-                        (FillMode::Mesh, ic::CUBE, tr("Mesh fill")),
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if icon_button(ui, ic::CAMERA, tr("Screenshot of the viewport"), false, 24.0).clicked() {
+                        app.toast(tr("Use the control channel or `texturecraft-cli render` for screenshots"), false);
+                    }
+                    ui.separator();
+                    for (l, icon, label, id) in [
+                        (ViewLayout::Only2D, ic::SQUARE, "2D view only", "ui.layout.2d"),
+                        (ViewLayout::Only3D, ic::CUBE, "3D view only", "ui.layout.3d"),
+                        (ViewLayout::Split, ic::COLUMNS, "3D/2D views", "ui.layout.split"),
                     ] {
-                        if icon_button(ui, icon, tip, app.session.tool.fill_mode == m, 24.0).clicked() {
-                            app.session.tool.fill_mode = m;
+                        if icon_button(ui, icon, &tip(&app.ui.keymap, label, id), app.ui.layout == l, 24.0).clicked() {
+                            app.ui.layout = l;
                         }
                     }
-                }
-                Tool::ColorPicker => {
-                    ui.label(RichText::new(tr("Click the mesh to pick its material into the brush")).color(TOKENS.text_dim));
-                }
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if icon_button(ui, ic::CAMERA, tr("Screenshot of the viewport"), false, 24.0).clicked() {
-                    app.toast(tr("Use the control channel or `texturecraft-cli render` for screenshots"), false);
-                }
-                ui.separator();
-                for (l, icon, label, id) in [
-                    (ViewLayout::Only2D, ic::SQUARE, "2D view only", "ui.layout.2d"),
-                    (ViewLayout::Only3D, ic::CUBE, "3D view only", "ui.layout.3d"),
-                    (ViewLayout::Split, ic::COLUMNS, "3D/2D views", "ui.layout.split"),
-                ] {
-                    if icon_button(ui, icon, &tip(&app.ui.keymap, label, id), app.ui.layout == l, 24.0).clicked() {
-                        app.ui.layout = l;
+                    ui.separator();
+                    let checker = app.session.view == texturecraft_engine::ViewMode::UvChecker;
+                    if icon_button(ui, ic::CHECKERBOARD, &tip(&app.ui.keymap, tr("UV checker"), "ui.uvChecker"), checker, 24.0).clicked() {
+                        let mode = if checker { "material" } else { "uvChecker" };
+                        app.run("viewport.view", json!({"mode": mode}));
                     }
-                }
-                ui.separator();
-                let checker = app.session.view == texturecraft_engine::ViewMode::UvChecker;
-                if icon_button(ui, ic::CHECKERBOARD, &tip(&app.ui.keymap, tr("UV checker"), "ui.uvChecker"), checker, 24.0).clicked() {
-                    let mode = if checker { "material" } else { "uvChecker" };
-                    app.run("viewport.view", json!({"mode": mode}));
-                }
+                });
             });
         });
     });
@@ -158,11 +161,9 @@ pub fn path_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
 }
 
 pub fn tool_shelf(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
-    egui::Panel::left("tool_shelf")
-        .resizable(false)
-        .exact_size(34.0)
-        .frame(egui::Frame::NONE.fill(TOKENS.chrome).inner_margin(egui::Margin::symmetric(3, 6)))
-        .show(ui, |ui| {
+    let tk = Tokens::get(ui.ctx());
+    egui::Panel::left("tool_shelf").resizable(false).exact_size(40.0).frame(egui::Frame::NONE).show(ui, |ui| {
+        card(ui, &tk, egui::Margin { left: 6, right: 0, top: 6, bottom: 6 }, egui::Margin::symmetric(3, 6), |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
             let painting = app.ui.mode == Mode::Painting;
             for t in Tool::ALL {
@@ -201,12 +202,13 @@ pub fn tool_shelf(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
                 app.ui.dock.focus(Panel::Assets, ui.ctx().content_rect());
             }
         });
+    });
 }
 
 pub fn rail(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
-    egui::Panel::right("rail").resizable(false).exact_size(32.0).frame(egui::Frame::NONE.fill(TOKENS.chrome).inner_margin(egui::Margin::symmetric(3, 6))).show(
-        ui,
-        |ui| {
+    let tk = Tokens::get(ui.ctx());
+    egui::Panel::right("rail").resizable(false).exact_size(38.0).frame(egui::Frame::NONE).show(ui, |ui| {
+        card(ui, &tk, egui::Margin { left: 0, right: 6, top: 6, bottom: 6 }, egui::Margin::symmetric(3, 6), |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             if icon_button(ui, ic::EXPORT, &tip(&app.ui.keymap, tr("Export textures"), "ui.export"), app.ui.windows.export, 26.0).clicked() {
                 app.ui.windows.export = !app.ui.windows.export;
@@ -222,54 +224,53 @@ pub fn rail(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
                     app.ui.dock.toggle(panel, screen);
                 }
             }
-        },
-    );
+        });
+    });
 }
 
 pub fn status_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
-    egui::Panel::bottom("status_bar").exact_size(22.0).frame(egui::Frame::NONE.fill(TOKENS.chrome).inner_margin(egui::Margin::symmetric(10, 0))).show(
-        ui,
-        |ui| {
-            ui.horizontal_centered(|ui| {
-                if let Some(p) = app.bake_progress() {
-                    ui.add(egui::ProgressBar::new(p).desired_width(160.0).desired_height(10.0).text(RichText::new(tr("Baking")).size(10.0)));
-                    if ui.small_button(tr("Cancel")).clicked() {
-                        app.cancel_bake();
-                    }
-                } else if let Some(job) = &app.resize {
-                    let bar = egui::ProgressBar::new(job.progress.fraction()).desired_width(160.0).desired_height(10.0);
-                    ui.add(bar.animate(true).text(RichText::new(tr("Resizing")).size(10.0)));
-                } else if let Some(p) = app.gpu.as_ref().and_then(|g| g.composite_progress(&app.session)) {
-                    ui.add(egui::ProgressBar::new(p).desired_width(160.0).desired_height(10.0).text(RichText::new(tr("Compositing")).size(10.0)));
-                    ui.ctx().request_repaint();
-                } else if let Some(msg) = app.session.log.last() {
-                    ui.label(RichText::new(msg).size(11.0).color(TOKENS.text_dim));
+    let tk = Tokens::get(ui.ctx());
+    egui::Panel::bottom("status_bar").exact_size(22.0).frame(egui::Frame::NONE.fill(tk.chrome).inner_margin(egui::Margin::symmetric(10, 0))).show(ui, |ui| {
+        ui.horizontal_centered(|ui| {
+            if let Some(p) = app.bake_progress() {
+                ui.add(egui::ProgressBar::new(p).desired_width(160.0).desired_height(10.0).text(RichText::new(tr("Baking")).size(10.0)));
+                if ui.small_button(tr("Cancel")).clicked() {
+                    app.cancel_bake();
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let gpu = app.gpu.as_ref().map(|g| g.adapter.as_str()).unwrap_or(tr("no GPU"));
-                    ui.label(
-                        RichText::new(trf("Version: {version} ({gpu})", &[("version", &texturecraft_engine::VERSION), ("gpu", &gpu)]))
-                            .size(11.0)
-                            .color(TOKENS.text_dim),
-                    );
-                    ui.separator();
-                    let m = app.session.memory();
-                    let mb = |b: usize| b as f64 / (1024.0 * 1024.0);
-                    let total = mb(m.total());
-                    let decimals = if total < 10.0 { 1 } else { 0 };
-                    let mb1 = |b: usize| format!("{:.1}", mb(b));
-                    ui.label(RichText::new(trf("Layer memory: {mb} MB", &[("mb", &format!("{total:.decimals$}"))])).size(11.0).color(TOKENS.text_dim))
-                        .on_hover_ui(|ui| {
-                            ui.label(trf(
-                                "Painted layer pixels {pixels} MB, composited channels {composites} MB, compositing cache {cache} MB",
-                                &[("pixels", &mb1(m.pixels)), ("composites", &mb1(m.composites)), ("cache", &mb1(m.cache))],
-                            ));
-                        });
-                    ui.separator();
-                    ui.label(RichText::new(trf("UI {ms} ms", &[("ms", &format!("{:.1}", app.ui_ms))])).size(11.0).color(TOKENS.text_dim));
-                    ui.add_space(vec2(0.0, 0.0).x);
-                });
+            } else if let Some(job) = &app.resize {
+                let bar = egui::ProgressBar::new(job.progress.fraction()).desired_width(160.0).desired_height(10.0);
+                ui.add(bar.animate(true).text(RichText::new(tr("Resizing")).size(10.0)));
+            } else if let Some(p) = app.gpu.as_ref().and_then(|g| g.composite_progress(&app.session)) {
+                ui.add(egui::ProgressBar::new(p).desired_width(160.0).desired_height(10.0).text(RichText::new(tr("Compositing")).size(10.0)));
+                ui.ctx().request_repaint();
+            } else if let Some(msg) = app.session.log.last() {
+                ui.label(RichText::new(msg).size(11.0).color(tk.text_dim));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let gpu = app.gpu.as_ref().map(|g| g.adapter.as_str()).unwrap_or(tr("no GPU"));
+                ui.label(
+                    RichText::new(trf("Version: {version} ({gpu})", &[("version", &texturecraft_engine::VERSION), ("gpu", &gpu)]))
+                        .size(11.0)
+                        .color(tk.text_dim),
+                );
+                ui.separator();
+                let m = app.session.memory();
+                let mb = |b: usize| b as f64 / (1024.0 * 1024.0);
+                let total = mb(m.total());
+                let decimals = if total < 10.0 { 1 } else { 0 };
+                let mb1 = |b: usize| format!("{:.1}", mb(b));
+                ui.label(RichText::new(trf("Layer memory: {mb} MB", &[("mb", &format!("{total:.decimals$}"))])).size(11.0).color(tk.text_dim)).on_hover_ui(
+                    |ui| {
+                        ui.label(trf(
+                            "Painted layer pixels {pixels} MB, composited channels {composites} MB, compositing cache {cache} MB",
+                            &[("pixels", &mb1(m.pixels)), ("composites", &mb1(m.composites)), ("cache", &mb1(m.cache))],
+                        ));
+                    },
+                );
+                ui.separator();
+                ui.label(RichText::new(trf("UI {ms} ms", &[("ms", &format!("{:.1}", app.ui_ms))])).size(11.0).color(tk.text_dim));
+                ui.add_space(vec2(0.0, 0.0).x);
             });
-        },
-    );
+        });
+    });
 }

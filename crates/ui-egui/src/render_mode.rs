@@ -22,7 +22,7 @@ use texturecraft_render::{Renderer, wgpu};
 
 use crate::TextureCraftApp;
 use crate::i18n::{n_, tr, trf};
-use crate::theme::TOKENS;
+use crate::theme::Tokens;
 
 /// A finished pass, ready to show.
 struct Frame {
@@ -286,14 +286,15 @@ fn show_cpu(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect) {
 
 /// The render, or a placeholder until its first samples.
 fn paint(ui: &Ui, rect: Rect, texture: Option<egui::TextureId>) {
+    let tk = Tokens::get(ui.ctx());
     let p = ui.painter_at(rect);
     match texture {
         Some(t) => {
             p.image(t, rect, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
         }
         None => {
-            p.rect_filled(rect, 0.0, TOKENS.viewport);
-            p.text(rect.center(), egui::Align2::CENTER_CENTER, tr("Starting render..."), egui::FontId::proportional(14.0), TOKENS.text_dim);
+            p.rect_filled(rect, 0.0, tk.viewport);
+            p.text(rect.center(), egui::Align2::CENTER_CENTER, tr("Starting render..."), egui::FontId::proportional(14.0), tk.viewport_text);
         }
     }
 }
@@ -532,6 +533,7 @@ fn drop_gpu(app: &mut TextureCraftApp) {
 
 /// The render status and settings card in the top-left corner.
 fn overlay(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, on_gpu: bool) {
+    let tk = Tokens::get(ui.ctx());
     let card = Rect::from_min_size(rect.min + vec2(12.0, 12.0), vec2(250.0, 200.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card).layout(egui::Layout::top_down(egui::Align::Min)));
     egui::Frame::popup(child.style()).show(&mut child, |ui| {
@@ -548,7 +550,7 @@ fn overlay(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, on_gpu: bool) {
         let line = ui.label(
             RichText::new(trf(template, &[("n", &app.render.samples), ("max", &max), ("s", &format!("{:.1}", app.render.elapsed))]))
                 .size(11.0)
-                .color(TOKENS.text_dim),
+                .color(tk.text_dim),
         );
         if let Some((_, e)) = app.render.gpu_error.as_ref().filter(|_| !on_gpu && !app.ui.render.cpu) {
             line.on_hover_text(trf("The GPU couldn't render this scene: {error}", &[("error", e)]));

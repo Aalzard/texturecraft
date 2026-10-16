@@ -16,7 +16,7 @@ use texturecraft_render::ibl::ENVIRONMENTS;
 
 use crate::TextureCraftApp;
 use crate::i18n::tr;
-use crate::theme::TOKENS;
+use crate::theme::Tokens;
 use crate::widgets::{dnd_release, icon_button};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -97,6 +97,7 @@ pub enum DropZone {
 /// Make `resp` a drop target for shelf assets `zone` accepts: outline it while one hovers,
 /// apply it on release.
 pub fn drop_target(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, zone: DropZone) {
+    let tk = Tokens::get(ui.ctx());
     let accepts = |d: &ShelfDrag| match d.asset {
         Asset::Alpha(_) => true,
         Asset::Material(_) | Asset::Library(_) => zone != DropZone::Brush,
@@ -104,7 +105,7 @@ pub fn drop_target(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, zo
         Asset::SmartMask(_) | Asset::Filter(_) => false,
     };
     if resp.dnd_hover_payload::<ShelfDrag>().is_some_and(|d| accepts(&d)) {
-        ui.painter().rect_stroke(resp.rect.shrink(1.0), 3.0, Stroke::new(2.0, TOKENS.accent), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(resp.rect.shrink(1.0), 3.0, Stroke::new(2.0, tk.accent), egui::StrokeKind::Inside);
     }
     let pointer = ui.input(|i| i.pointer.interact_pos());
     if let Some(d) = dnd_release::<ShelfDrag>(resp)
@@ -122,6 +123,7 @@ pub fn drop_target(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, zo
 
 /// The Assets panel body (a dock tab).
 pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
+    let tk = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
     let mut tab = app.ui.shelf_tab.min(TABS.len() - 1);
     let searching = !app.ui.shelf_filter.is_empty();
@@ -136,7 +138,7 @@ pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
     });
     app.ui.shelf_tab = tab;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(ic::MAGNIFYING_GLASS).color(TOKENS.text_dim));
+        ui.label(RichText::new(ic::MAGNIFYING_GLASS).color(tk.text_dim));
         ui.add(egui::TextEdit::singleline(&mut app.ui.shelf_filter).hint_text(tr("Search all assets")).desired_width(f32::INFINITY));
     });
     ui.add_space(4.0);
@@ -168,13 +170,14 @@ pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
 
 /// The dragged asset's name next to the pointer.
 fn drag_preview(ctx: &egui::Context) {
+    let tk = Tokens::get(ctx);
     let (Some(d), Some(pos)) = (egui::DragAndDrop::payload::<ShelfDrag>(ctx), ctx.input(|i| i.pointer.hover_pos())) else { return };
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("shelf_drag")));
-    let galley = p.layout_no_wrap(d.label.clone(), egui::FontId::proportional(11.0), TOKENS.text_strong);
+    let galley = p.layout_no_wrap(d.label.clone(), egui::FontId::proportional(11.0), tk.text_strong);
     let rect = egui::Rect::from_min_size(pos + vec2(14.0, 12.0), galley.size() + vec2(12.0, 6.0));
-    p.rect_filled(rect, 3.0, TOKENS.row_selected);
-    p.rect_stroke(rect, 3.0, Stroke::new(1.0, TOKENS.accent), egui::StrokeKind::Inside);
-    p.galley(rect.min + vec2(6.0, 3.0), galley, TOKENS.text_strong);
+    p.rect_filled(rect, 3.0, tk.row_selected);
+    p.rect_stroke(rect, 3.0, Stroke::new(1.0, tk.accent), egui::StrokeKind::Inside);
+    p.galley(rect.min + vec2(6.0, 3.0), galley, tk.text_strong);
 }
 
 fn matches(filter: &str, texts: &[&str]) -> bool {
@@ -182,12 +185,14 @@ fn matches(filter: &str, texts: &[&str]) -> bool {
 }
 
 fn title(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).strong().color(TOKENS.text_strong));
+    let tk = Tokens::get(ui.ctx());
+    ui.label(RichText::new(text).strong().color(tk.text_strong));
 }
 
 fn header(ui: &mut Ui, text: &str) {
+    let tk = Tokens::get(ui.ctx());
     ui.add_space(2.0);
-    ui.label(RichText::new(text).size(11.0).color(TOKENS.text_dim));
+    ui.label(RichText::new(text).size(11.0).color(tk.text_dim));
 }
 
 fn tiles(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
@@ -238,6 +243,7 @@ fn materials(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter
 /// The user's saved smart materials (desktop library folder).
 #[cfg(not(target_arch = "wasm32"))]
 fn library(app: &mut TextureCraftApp, ui: &mut Ui, filter: &str) {
+    let tk = Tokens::get(ui.ctx());
     if app.library.is_none() {
         let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(crate::library_dir())
             .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "tcmat")).collect())
@@ -258,7 +264,7 @@ fn library(app: &mut TextureCraftApp, ui: &mut Ui, filter: &str) {
         }
     });
     if files.is_empty() {
-        ui.label(RichText::new(tr("Right-click a layer > Create smart material")).size(10.0).color(TOKENS.text_dim));
+        ui.label(RichText::new(tr("Right-click a layer > Create smart material")).size(10.0).color(tk.text_dim));
     }
     for f in shown {
         let (label, asset) = (name(f), Asset::Library(f.display().to_string()));
@@ -328,6 +334,7 @@ fn filters(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter: 
 
 /// The built-in alpha library, grouped by category; the brush's alpha is outlined.
 fn alpha_library(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter: &str, name: &str) {
+    let tk = Tokens::get(ctx);
     let shown: Vec<&'static alphas::LibraryAlpha> = alphas::library().iter().filter(|a| matches(filter, &[&a.label, a.category, &a.id])).collect();
     if shown.is_empty() {
         return;
@@ -343,7 +350,7 @@ fn alpha_library(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, fi
                 let asset = Asset::Alpha(&a.id);
                 let r = tile(ui, tex.as_ref(), &a.label, tr("Use as the brush alpha (or drag it onto the viewport or brush properties)"), Some(&asset));
                 if current.as_deref() == Some(a.id.as_str()) {
-                    ui.painter().rect_stroke(r.rect, 3.0, Stroke::new(1.0, TOKENS.accent), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(r.rect, 3.0, Stroke::new(1.0, tk.accent), egui::StrokeKind::Inside);
                 }
                 if r.clicked() {
                     apply(app, &asset);
@@ -386,6 +393,7 @@ fn environments(app: &mut TextureCraftApp, ui: &mut Ui, filter: &str, name: &str
 }
 
 fn textures(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter: &str, name: &str) {
+    let tk = Tokens::get(ctx);
     let names: Vec<String> = app.session.doc.resources.keys().filter(|n| matches(filter, &[n])).cloned().collect();
     if !filter.is_empty() && names.is_empty() {
         return;
@@ -397,7 +405,7 @@ fn textures(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter:
         }
     });
     if names.is_empty() {
-        ui.label(RichText::new(tr("Import images to use them in fills and masks")).size(10.0).color(TOKENS.text_dim));
+        ui.label(RichText::new(tr("Import images to use them in fills and masks")).size(10.0).color(tk.text_dim));
     }
     tiles(ui, |ui| {
         for name in names {
@@ -425,6 +433,7 @@ fn textures(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter:
 /// A shelf tile: thumbnail (a placeholder disc while it renders) and a wrapped label; tiles with
 /// a `drag` asset can be dragged.
 fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, hint: &str, drag: Option<&Asset>) -> egui::Response {
+    let tk = Tokens::get(ui.ctx());
     let sense = if drag.is_some() { Sense::click_and_drag() } else { Sense::click() };
     let (rect, resp) = ui.allocate_exact_size(vec2(72.0, 86.0), sense);
     if let Some(asset) = drag
@@ -434,7 +443,7 @@ fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, hint: &str,
     }
     let p = ui.painter();
     if resp.hovered() || resp.dragged() {
-        p.rect_filled(rect, 3.0, TOKENS.row_hover);
+        p.rect_filled(rect, 3.0, tk.row_hover);
     }
     let img = egui::Rect::from_center_size(rect.center_top() + vec2(0.0, 32.0), vec2(56.0, 56.0));
     match tex {
@@ -442,11 +451,11 @@ fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, hint: &str,
             p.image(t.id(), img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
         }
         None => {
-            p.circle_filled(img.center(), img.width() * 0.45, TOKENS.row_hover);
+            p.circle_filled(img.center(), img.width() * 0.45, tk.row_hover);
         }
     }
-    let galley = p.layout(label.to_string(), egui::FontId::proportional(9.5), TOKENS.text, rect.width() - 4.0);
-    p.galley(egui::pos2(rect.center().x - galley.size().x * 0.5, img.bottom() + 3.0), galley, TOKENS.text);
+    let galley = p.layout(label.to_string(), egui::FontId::proportional(9.5), tk.text, rect.width() - 4.0);
+    p.galley(egui::pos2(rect.center().x - galley.size().x * 0.5, img.bottom() + 3.0), galley, tk.text);
     resp.on_hover_ui(|ui| {
         ui.label(format!("{label}: {hint}"));
     })

@@ -15,7 +15,7 @@ use crate::TextureCraftApp;
 use crate::gpu::ViewCallback;
 use crate::i18n::{tr, trf};
 use crate::state::ViewLayout;
-use crate::theme::TOKENS;
+use crate::theme::Tokens;
 
 pub const VIEW_3D: u64 = 1;
 pub const VIEW_2D: u64 = 2;
@@ -35,6 +35,7 @@ pub fn set_focus_picking(ctx: &egui::Context, on: bool) {
 }
 
 pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
+    let tk = Tokens::get(ui.ctx());
     let aux = match app.session.view {
         _ if app.session.quick_mask.editing => Some(crate::gpu::AuxView::QuickMask),
         ViewMode::MeshMap(m) => Some(crate::gpu::AuxView::MeshMap(m)),
@@ -55,7 +56,7 @@ pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
             let right = Rect::from_min_max(pos2(mid + 1.0, full.min.y), full.max);
             view_3d(app, ui, left, &mut sync);
             view_2d(app, ui, right, &mut sync);
-            ui.painter().line_segment([pos2(mid, full.top()), pos2(mid, full.bottom())], Stroke::new(2.0, TOKENS.separator));
+            ui.painter().line_segment([pos2(mid, full.top()), pos2(mid, full.bottom())], Stroke::new(2.0, tk.chrome));
         }
     }
     if mode == crate::state::Mode::Rendering {
@@ -99,6 +100,7 @@ fn shade(app: &TextureCraftApp) -> Shade {
 pub struct PendingSync(Option<Option<crate::gpu::AuxView>>);
 
 fn add_callback(app: &mut TextureCraftApp, ui: &Ui, rect: Rect, frame: Frame, sync: &mut PendingSync) {
+    let tk = Tokens::get(ui.ctx());
     let scene = match (sync.0.take(), app.gpu.as_mut()) {
         (Some(aux), Some(g)) => {
             let t0 = crate::now_ms();
@@ -113,7 +115,7 @@ fn add_callback(app: &mut TextureCraftApp, ui: &Ui, rect: Rect, frame: Frame, sy
         _ => None,
     };
     let Some(gpu) = &app.gpu else {
-        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, tr("No GPU renderer available"), egui::FontId::proportional(14.0), TOKENS.text_dim);
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, tr("No GPU renderer available"), egui::FontId::proportional(14.0), tk.viewport_text);
         return;
     };
     let cb = ViewCallback { frame, sync: Mutex::new(scene), rect, lost: gpu.lost.clone() };
@@ -167,13 +169,14 @@ fn view_header(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, id: &str) {
 }
 
 fn axis_gizmo(ui: &Ui, rect: Rect, app: &TextureCraftApp, uv: bool) {
+    let tk = Tokens::get(ui.ctx());
     let o = pos2(rect.left() + 28.0, rect.bottom() - 28.0);
     let p = ui.painter();
     if uv {
         p.line_segment([o, o + vec2(16.0, 0.0)], Stroke::new(1.5, Color32::from_rgb(0xd8, 0x4a, 0x3a)));
         p.line_segment([o, o - vec2(0.0, 16.0)], Stroke::new(1.5, Color32::from_rgb(0x5c, 0xc0, 0x4a)));
-        p.text(o + vec2(20.0, 0.0), egui::Align2::LEFT_CENTER, "U", egui::FontId::proportional(9.0), TOKENS.text_dim);
-        p.text(o - vec2(0.0, 22.0), egui::Align2::CENTER_CENTER, "V", egui::FontId::proportional(9.0), TOKENS.text_dim);
+        p.text(o + vec2(20.0, 0.0), egui::Align2::LEFT_CENTER, "U", egui::FontId::proportional(9.0), tk.viewport_text);
+        p.text(o - vec2(0.0, 22.0), egui::Align2::CENTER_CENTER, "V", egui::FontId::proportional(9.0), tk.viewport_text);
         return;
     }
     let view = app.session.camera.view();
@@ -185,7 +188,7 @@ fn axis_gizmo(ui: &Ui, rect: Rect, app: &TextureCraftApp, uv: bool) {
         let d = view.transform_vector3(axis);
         let end = o + vec2(d.x, -d.y) * 16.0;
         p.line_segment([o, end], Stroke::new(1.5, color));
-        p.text(end + vec2(d.x, -d.y) * 6.0, egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(9.0), TOKENS.text_dim);
+        p.text(end + vec2(d.x, -d.y) * 6.0, egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(9.0), tk.viewport_text);
     }
 }
 
@@ -543,6 +546,7 @@ fn decal_input(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, rect: 
 /// The frame of the selected decal layer over the 3D view with its handles (and a hint while
 /// placing it): outline, corner handles, the rotation handle and the projection direction.
 fn decal_overlay(app: &mut TextureCraftApp, ui: &Ui, rect: Rect) {
+    let tk = Tokens::get(ui.ctx());
     use texturecraft_engine::core::{Fill, LayerKind, Projection};
     let p = &app.session.doc.project;
     let sel = app.session.selected_layer().and_then(|id| p.content_layer(id));
@@ -555,19 +559,19 @@ fn decal_overlay(app: &mut TextureCraftApp, ui: &Ui, rect: Rect) {
     let hint_at = rect.left_top() + vec2(12.0, 40.0);
     if app.placing_decal.is_some() {
         let hint = tr("Click the mesh to place the decal");
-        painter.text(hint_at, egui::Align2::LEFT_TOP, hint, egui::FontId::proportional(12.0), TOKENS.accent);
+        painter.text(hint_at, egui::Align2::LEFT_TOP, hint, egui::FontId::proportional(12.0), tk.viewport_accent);
     }
     let Some(f) = DecalFrame::of(app, rect) else { return };
     let active = ui.ctx().data(|d| d.get_temp::<DecalDrag>(decal_drag_id())).map(|d| d.grab);
     let hovered = ui.ctx().pointer_hover_pos().filter(|h| rect.contains(*h)).and_then(|h| f.grab(h));
     if app.placing_decal.is_none() && (hovered.is_some() || active.is_some()) {
         let hint = tr("Drag the frame to move the decal, a corner to scale it, the round handle to turn it");
-        painter.text(hint_at, egui::Align2::LEFT_TOP, hint, egui::FontId::proportional(12.0), TOKENS.text_dim);
+        painter.text(hint_at, egui::Align2::LEFT_TOP, hint, egui::FontId::proportional(12.0), tk.viewport_text);
     }
     let shadow = Stroke::new(3.0, Color32::from_black_alpha(140));
     let mut outline = f.corners.to_vec();
     outline.push(f.corners[0]);
-    let frame_color = if active == Some(DecalGrab::Move) || hovered == Some(DecalGrab::Move) { TOKENS.accent } else { Color32::from_white_alpha(220) };
+    let frame_color = if active == Some(DecalGrab::Move) || hovered == Some(DecalGrab::Move) { tk.viewport_accent } else { Color32::from_white_alpha(220) };
     for stroke in [shadow, Stroke::new(1.2, frame_color)] {
         painter.add(egui::Shape::dashed_line(&outline, stroke, 6.0, 4.0));
     }
@@ -576,11 +580,11 @@ fn decal_overlay(app: &mut TextureCraftApp, ui: &Ui, rect: Rect) {
         && let Some(tip) = project(app, rect, o + n * f.decal.size[0].max(f.decal.size[1]) * 0.25)
     {
         painter.line_segment([f.center, tip], shadow);
-        painter.line_segment([f.center, tip], Stroke::new(1.4, TOKENS.accent));
+        painter.line_segment([f.center, tip], Stroke::new(1.4, tk.viewport_accent));
     }
-    painter.circle(f.center, 3.5, TOKENS.accent, Stroke::new(1.0, Color32::from_black_alpha(180)));
+    painter.circle(f.center, 3.5, tk.viewport_accent, Stroke::new(1.0, Color32::from_black_alpha(180)));
     // Handles: white, the one under the pointer or being dragged in the accent color.
-    let fill = |g: DecalGrab| if active == Some(g) || (active.is_none() && hovered == Some(g)) { TOKENS.accent } else { Color32::WHITE };
+    let fill = |g: DecalGrab| if active == Some(g) || (active.is_none() && hovered == Some(g)) { tk.viewport_accent } else { Color32::WHITE };
     let edge = Stroke::new(1.0, Color32::from_black_alpha(200));
     painter.line_segment([f.top, f.knob], shadow);
     painter.line_segment([f.top, f.knob], Stroke::new(1.4, Color32::from_white_alpha(220)));
@@ -697,17 +701,18 @@ fn path_input(
 /// The path being edited: its curve, control points (the first one in the accent color) and,
 /// while open, a dashed preview of the next segment.
 fn path_overlay(app: &TextureCraftApp, ui: &Ui, rect: Rect, resp: &egui::Response, uv: bool, show: impl Fn(&TextureCraftApp, Vec3) -> Option<Pos2>) {
+    let tk = Tokens::get(ui.ctx());
     let p = ui.painter_at(rect);
     let path = &app.session.tool.path;
     let hint = tr("Path: click adds a point, drag moves it, Enter applies, Esc cancels");
-    p.text(rect.left_bottom() + vec2(56.0, -12.0), egui::Align2::LEFT_BOTTOM, hint, egui::FontId::proportional(12.0), TOKENS.text_dim);
+    p.text(rect.left_bottom() + vec2(56.0, -12.0), egui::Align2::LEFT_BOTTOM, hint, egui::FontId::proportional(12.0), tk.viewport_text);
     if path.uv != uv {
         return;
     }
     let handles: Vec<Pos2> = path.points.iter().filter_map(|q| show(app, *q)).collect();
     let pts: Vec<Vec2> = handles.iter().map(|h| Vec2::new(h.x, h.y)).collect();
     let curve: Vec<Pos2> = texturecraft_engine::paint::spline(&pts, path.closed, 3.0).into_iter().map(|v| pos2(v.x, v.y)).collect();
-    let color = if path.closed && path.fill { TOKENS.accent } else { Color32::from_white_alpha(230) };
+    let color = if path.closed && path.fill { tk.viewport_accent } else { Color32::from_white_alpha(230) };
     p.add(egui::Shape::line(curve.clone(), Stroke::new(3.0, Color32::from_black_alpha(140))));
     p.add(egui::Shape::line(curve, Stroke::new(1.4, color)));
     let hover = resp.hover_pos();
@@ -718,7 +723,7 @@ fn path_overlay(app: &TextureCraftApp, ui: &Ui, rect: Rect, resp: &egui::Respons
     }
     for (i, h) in handles.iter().enumerate() {
         let r = if hover.is_some_and(|m| m.distance(*h) < HANDLE_GRAB) { 5.5 } else { 4.0 };
-        p.circle(*h, r, if i == 0 { TOKENS.accent } else { Color32::WHITE }, Stroke::new(1.5, Color32::from_black_alpha(180)));
+        p.circle(*h, r, if i == 0 { tk.viewport_accent } else { Color32::WHITE }, Stroke::new(1.5, Color32::from_black_alpha(180)));
     }
 }
 
@@ -739,9 +744,10 @@ fn clone_source_key(app: &TextureCraftApp, ui: &Ui) -> bool {
 
 /// Crosshair where the Clone tool reads from.
 fn clone_marker(app: &TextureCraftApp, ui: &Ui, rect: Rect, pos: Vec3) {
+    let tk = Tokens::get(ui.ctx());
     let Some(c) = project(app, rect, pos) else { return };
     let p = ui.painter_at(rect);
-    for (w, color) in [(3.0, Color32::from_black_alpha(140)), (1.2, TOKENS.accent)] {
+    for (w, color) in [(3.0, Color32::from_black_alpha(140)), (1.2, tk.viewport_accent)] {
         p.circle_stroke(c, 7.0, Stroke::new(w, color));
         p.line_segment([c - vec2(11.0, 0.0), c + vec2(11.0, 0.0)], Stroke::new(w, color));
         p.line_segment([c - vec2(0.0, 11.0), c + vec2(0.0, 11.0)], Stroke::new(w, color));
@@ -781,6 +787,7 @@ fn brush_cursor(app: &TextureCraftApp, ui: &Ui, rect: Rect, pos: Vec3, nrm: Vec3
 }
 
 fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut PendingSync) {
+    let tk = Tokens::get(ui.ctx());
     let resp = ui.interact(rect, ui.id().with("view2d"), Sense::click_and_drag());
     let size = rect.size();
     let alt = ui.input(|i| i.modifiers.alt);
@@ -881,7 +888,7 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
                 let (u0, v0, k) = (bx as f32 / g.cols as f32, by as f32 / g.rows as f32, t.tile_scale(udim));
                 let r = Rect::from_two_pos(to(u0, v0), to(u0 + k / g.cols as f32, v0 + k / g.rows as f32));
                 outline(r);
-                painter.text(r.left_top() + vec2(6.0, 4.0), egui::Align2::LEFT_TOP, udim.to_string(), egui::FontId::proportional(11.0), TOKENS.text_dim);
+                painter.text(r.left_top() + vec2(6.0, 4.0), egui::Align2::LEFT_TOP, udim.to_string(), egui::FontId::proportional(11.0), tk.viewport_text);
             }
         }
         None => {
@@ -894,6 +901,6 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     view_header(app, ui, rect, "v2d");
     axis_gizmo(ui, rect, app, true);
     let name = app.session.doc.project.texture_sets.get(ts).map(|t| t.name.clone()).unwrap_or_default();
-    ui.painter().text(rect.right_bottom() + vec2(-10.0, -10.0), egui::Align2::RIGHT_BOTTOM, name, egui::FontId::proportional(11.0), TOKENS.text_dim);
+    ui.painter().text(rect.right_bottom() + vec2(-10.0, -10.0), egui::Align2::RIGHT_BOTTOM, name, egui::FontId::proportional(11.0), tk.viewport_text);
     let _ = (RichText::new(""), Channel::BaseColor);
 }
