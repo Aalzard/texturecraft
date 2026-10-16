@@ -12,6 +12,15 @@ struct Img {
     px: Vec<u8>,
 }
 
+/// Two renders of the same image: equal within one 8-bit level per channel (software
+/// adapters such as llvmpipe round some shader paths differently from hardware).
+#[track_caller]
+fn assert_same(a: &Img, b: &Img, msg: &str) {
+    assert_eq!(a.px.len(), b.px.len(), "{msg}: sizes differ");
+    let worst = a.px.iter().zip(&b.px).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+    assert!(worst <= 1, "{msg}: pixels differ by up to {worst} levels");
+}
+
 impl Img {
     fn at(&self, x: u32, y: u32) -> [u8; 3] {
         let i = ((y * self.w + x) * 4) as usize;
@@ -444,7 +453,7 @@ fn lobe_channels_at_their_defaults_change_nothing() {
     for k in [DisplayKind::Lobes, DisplayKind::Sheen, DisplayKind::Emissive, DisplayKind::Extra] {
         fill(&mut h, &[0, 1], k, &k.default_texel());
     }
-    assert_eq!(render(&mut h, &lit, "lobes_defaults").px, base.px);
+    assert_same(&render(&mut h, &lit, "lobes_defaults"), &base, "default lobes change nothing");
 }
 
 #[test]
@@ -566,7 +575,7 @@ fn depth_of_field_blurs_away_from_the_focus_plane() {
     checker(&mut h);
     let sharp = render(&mut h, &frame, "dof_off");
     let dof = |focus: f32, aperture: f32| shaded(&frame, |s| s.dof = Some([focus, aperture]));
-    assert_eq!(render(&mut h, &dof(0.0, 0.0), "dof_pinhole").px, sharp.px, "a pinhole lens changes nothing");
+    assert_same(&render(&mut h, &dof(0.0, 0.0), "dof_pinhole"), &sharp, "a pinhole lens changes nothing");
     let z = center_depth(&frame);
     let focused = render(&mut h, &dof(z, 0.15), "dof_focused");
     let center = (frame.size[0] / 2, frame.size[1] / 2);
@@ -595,7 +604,7 @@ fn subsurface_blur_spreads_only_scattering_light() {
     checker(&mut h);
     let plain = render(&mut h, &lit, "sss_blur_off");
     let blur = shaded(&lit, |s| s.sss_blur = Some([0.06, 0.024, 0.015]));
-    assert_eq!(render(&mut h, &blur, "sss_blur_no_weight").px, plain.px, "nothing scatters without the scattering weight");
+    assert_same(&render(&mut h, &blur, "sss_blur_no_weight"), &plain, "nothing scatters without the scattering weight");
     fill(&mut h, &[0, 1], DisplayKind::Emissive, &[0, 0, 0, 255]);
     let wrap = render(&mut h, &lit, "sss_wrap_only");
     let blurred = render(&mut h, &blur, "sss_blur_on");
@@ -643,7 +652,7 @@ fn coat_normal_turns_the_coat_reflection() {
     fill(&mut h, &[0, 1], DisplayKind::Lobes, &[255, 13, 0, 0]);
     let flat = render(&mut h, &lit, "coat_normal_flat");
     fill(&mut h, &[0, 1], DisplayKind::Extra, &[128, 128, 0, 0]);
-    assert_eq!(render(&mut h, &lit, "coat_normal_default").px, flat.px, "the flat coat normal is exact");
+    assert_same(&render(&mut h, &lit, "coat_normal_default"), &flat, "the flat coat normal changes nothing");
     fill(&mut h, &[0, 1], DisplayKind::Extra, &[230, 128, 0, 0]);
     let tilted = render(&mut h, &lit, "coat_normal_tilted");
     let diff = region_mean(&mask, |x, y| (tilted.luma(x, y) - flat.luma(x, y)).abs());
@@ -684,7 +693,7 @@ fn refraction_shows_the_scene_behind_transmissive_surfaces() {
     let refr = shaded(&frame, |s| s.refraction = true);
     // The ball away from its outline (outline pixels mix in the pedestal behind them).
     let ball = rim(&mesh_mask(&mut h, &frame, &[0]), 2, false);
-    assert_eq!(render(&mut h, &refr, "refr_opaque").px, render(&mut h, &frame, "refr_opaque_off").px, "without transmission nothing changes");
+    assert_same(&render(&mut h, &refr, "refr_opaque"), &render(&mut h, &frame, "refr_opaque_off"), "without transmission nothing changes");
     // A clear glass ball (set 0) on its pedestal (set 1), painted red, then green.
     fill(&mut h, &[0], DisplayKind::BaseColor, &[255, 255, 255, 255]);
     fill(&mut h, &[0], DisplayKind::Orm, &[255, 10, 0, 128]);
