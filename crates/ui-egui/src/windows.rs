@@ -15,7 +15,7 @@ use crate::i18n::LANGUAGES;
 use crate::i18n::{tr, trf};
 use crate::state::Mode;
 use crate::theme::{Accent, Brightness, Tokens, caption};
-use crate::widgets::{color_swatch, icon_button, primary_button, slider};
+use crate::widgets::{color_swatch, combo, icon_button, primary_button, slider};
 
 pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
     new_project(app, ctx);
@@ -55,7 +55,7 @@ pub(crate) fn display(app: &mut TextureCraftApp, ui: &mut Ui) {
     hdrs.sort();
     let mut import_hdr = false;
     let shown = d.environment_resource().unwrap_or(&d.environment).to_string();
-    egui::ComboBox::from_label(tr("Environment map")).selected_text(shown).show_ui(ui, |ui| {
+    combo(ui, tr("Environment map"), shown, |ui| {
         for e in ENVIRONMENTS {
             ui.selectable_value(&mut d.environment, e.to_string(), e);
         }
@@ -570,23 +570,26 @@ fn hint(ui: &mut Ui, text: &str) {
 fn common_params(app: &mut TextureCraftApp, ui: &mut Ui, b: &mut BakeSettings) {
     let tk = Tokens::get(ui.ctx());
     ui.label(caption(tr("Common parameters")));
-    egui::ComboBox::from_label(tr("Output size")).selected_text(format!("{}", b.resolution)).show_ui(ui, |ui| {
+    combo(ui, tr("Output size"), format!("{}", b.resolution), |ui| {
         for r in [256u32, 512, 1024, 2048, 4096, 8192] {
             ui.selectable_value(&mut b.resolution, r, format!("{r}"));
         }
     });
-    egui::ComboBox::from_label(tr("Antialiasing"))
-        .selected_text(match b.antialiasing {
+    combo(
+        ui,
+        tr("Antialiasing"),
+        match b.antialiasing {
             2 => tr("Subsampling 2x2"),
             4 => tr("Subsampling 4x4"),
             8 => tr("Subsampling 8x8"),
             _ => tr("None"),
-        })
-        .show_ui(ui, |ui| {
+        },
+        |ui| {
             for (v, l) in [(1u32, tr("None")), (2, tr("Subsampling 2x2")), (4, tr("Subsampling 4x4")), (8, tr("Subsampling 8x8"))] {
                 ui.selectable_value(&mut b.antialiasing, v, l);
             }
-        });
+        },
+    );
     let mut dil = b.dilation as f32;
     if slider(ui, tr("Dilation width"), &mut dil, 0.0..=64.0, 0).changed() {
         b.dilation = dil as u32;
@@ -659,7 +662,7 @@ fn common_params(app: &mut TextureCraftApp, ui: &mut Ui, b: &mut BakeSettings) {
 /// A combo box picking one of `options` (value, label).
 fn choice<T: Copy + PartialEq>(ui: &mut Ui, label: &str, value: &mut T, options: &[(T, &str)]) {
     let shown = options.iter().find(|(v, _)| v == value).map_or("", |(_, l)| *l);
-    egui::ComboBox::from_label(label).selected_text(shown).show_ui(ui, |ui| {
+    combo(ui, label, shown, |ui| {
         for (v, l) in options {
             ui.selectable_value(value, *v, *l);
         }

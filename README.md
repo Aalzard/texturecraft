@@ -35,7 +35,7 @@
 <br>
 
 <p align="center">
-  <img src="docs/images/texturecraft-workspace.png" alt="The TextureCraft workspace: the material library on the left, the 3D viewport with a material ball wearing a worn painted-steel smart material on a rusted iron base, the 2D UV view, and the texture set list, layer stack and properties on the right" width="100%">
+  <img src="docs/images/texturecraft-workspace.png" alt="The TextureCraft workspace: the material library on the left; the 3D viewport and the 2D UV view of a material ball in chipped red paint with grime and a hand-painted gold stripe, on a rusted iron base; and the texture set list, layer stack and brush properties on the right" width="100%">
   <br>
   <sub>The workspace: asset shelf, 3D viewport, 2D UV view, texture sets, layer stack and properties.</sub>
 </p>
@@ -158,6 +158,11 @@
   and share them as JSON.
 - **Mesh export** to OBJ, textured GLB (with clear coat and sheen) and USD.
 
+<p align="center">
+  <img src="docs/images/texturecraft-bake.png" alt="Bake mode: the texture sets and mesh map bakers on the left, the common bake parameters below them, and the Bake selected textures button under the viewport" width="49%">
+  <img src="docs/images/texturecraft-export.png" alt="The Export textures dialog: texture sets to export, the output directory, an output template, file type, size, padding and normal map format" width="49%">
+</p>
+
 ### The viewport
 
 - Physically based shading (metallic/roughness or specular/glossiness) with clear coat, sheen,
@@ -172,18 +177,24 @@
   wheel to zoom, F to frame, M / C / B to cycle views.
 
 <p align="center">
-  <img src="docs/images/texturecraft-render.png" alt="A path-traced render of the material ball in worn red paint over bare steel, made with texturecraft-cli render --samples 256" width="80%">
+  <img src="docs/images/texturecraft-rendering.png" alt="Rendering mode: the material ball path traced on the GPU at 256 samples with denoising, the gold stripe catching the studio light, and the render settings in a card over the viewport" width="100%">
 </p>
 
 ### Interface
 
-- A Painter-style layout with **dockable, tabbed and floating panels**, saved layouts, and panels
-  that reopen where you closed them.
+- A modern look in **four brightness levels** (dark, medium dark, medium light and light) with
+  **seven accent colors**, set in Settings › Interface.
+- **Dockable, tabbed and floating panels**, saved layouts, and panels that reopen where you closed
+  them.
 - A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.
 - **9 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese and
   Korean, switchable live.
 - **In the browser:** the same app compiled to WebAssembly, on WebGPU or WebGL2, with touch
   navigation and project open, save and download.
+
+<p align="center">
+  <img src="docs/images/texturecraft-light.png" alt="TextureCraft in the light brightness level with the blue accent: the same panels as rounded cards on a light background around the dark 3D viewport" width="100%">
+</p>
 
 ## Built for agents
 

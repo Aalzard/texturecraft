@@ -118,6 +118,19 @@ pub fn primary_button<'a>(ui: &Ui, text: &str) -> egui::Button<'a> {
     egui::Button::new(RichText::new(text).color(Color32::WHITE)).fill(tk.accent_strong).stroke(Stroke::NONE)
 }
 
+/// A labelled dropdown on one row: the label, then the box filling the rest of the row, so a
+/// narrow panel shortens the box (its text truncated) instead of pushing the row past its edge.
+pub fn combo(ui: &mut Ui, label: &str, selected: impl Into<egui::WidgetText>, menu: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        egui::ComboBox::from_id_salt(label)
+            .width(ui.available_width().max(60.0))
+            .wrap_mode(egui::TextWrapMode::Truncate)
+            .selected_text(selected)
+            .show_ui(ui, menu);
+    });
+}
+
 /// A collapsible section header with a chevron ("> Size").
 pub fn section(ui: &mut Ui, id: &str, title: &str, default_open: bool, body: impl FnOnce(&mut Ui)) {
     let tk = Tokens::get(ui.ctx());

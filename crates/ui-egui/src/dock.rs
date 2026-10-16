@@ -16,7 +16,7 @@ use crate::i18n::{n_, tr, trf};
 use crate::shelf::{Asset, ShelfDrag};
 use crate::state::PropsTab;
 use crate::theme::{Tokens, caption};
-use crate::widgets::{chip, color_swatch, dnd_release, elided, icon_button, section, slider};
+use crate::widgets::{chip, color_swatch, combo, dnd_release, elided, icon_button, section, slider};
 
 const TAG_COLORS: [Color32; 8] = [
     Color32::from_rgb(0xc0, 0x40, 0x40),
@@ -989,7 +989,7 @@ fn brush_section(app: &mut TextureCraftApp, ui: &mut Ui) {
         use texturecraft_engine::paint::Alignment;
         let alignments = [(Alignment::Tangent, tr("Tangent | Wrap")), (Alignment::Camera, tr("Camera"))];
         let shown = alignments.iter().find(|(a, _)| *a == b.alignment).map_or("", |(_, l)| l);
-        egui::ComboBox::from_label(tr("Alignment")).selected_text(shown).show_ui(ui, |ui| {
+        combo(ui, tr("Alignment"), shown, |ui| {
             for (a, l) in alignments {
                 ui.selectable_value(&mut b.alignment, a, l);
             }
@@ -1209,7 +1209,7 @@ fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value
 fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value) {
     use texturecraft_engine::core::Projection;
     let proj_label = fill.projection.label();
-    egui::ComboBox::from_label(tr("Projection")).selected_text(tr(proj_label)).show_ui(ui, |ui| {
+    combo(ui, tr("Projection"), tr(proj_label), |ui| {
         for (id, label) in [
             ("uv", n_("UV projection")),
             ("triplanar", n_("Tri-planar projection")),
@@ -1441,7 +1441,7 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
                 Source::Procedural { pattern, .. } => tr(pattern.kind.label()).to_string(),
                 Source::Image { name } => trf("Image: {name}", &[("name", name)]),
             };
-            egui::ComboBox::from_label(tr("Source")).selected_text(current).show_ui(ui, |ui| {
+            combo(ui, tr("Source"), current, |ui| {
                 if ui.selectable_label(matches!(source, Source::Uniform(_)), tr("Uniform value")).clicked() {
                     app.run("effect.set", json!({"effect": id, "value": 1.0}));
                 }
@@ -1460,7 +1460,7 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
                 }
                 Source::Anchor { channel, .. } => {
                     let chans = app.session.doc.project.texture_set(app.session.ts()).map(|t| t.channel_list()).unwrap_or_default();
-                    egui::ComboBox::from_label(tr("Channel")).selected_text(tr(channel.label())).show_ui(ui, |ui| {
+                    combo(ui, tr("Channel"), tr(channel.label()), |ui| {
                         for c in chans {
                             if ui.selectable_label(c == *channel, tr(c.label())).clicked() {
                                 app.run("effect.set", json!({"effect": id, "anchorChannel": c.id()}));

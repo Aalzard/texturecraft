@@ -15,8 +15,11 @@ licensed and keep their license file next to them.
 | `assets/app-icon/texturecraft.icns` | macOS app icon (16-1024 px) | TextureCraft contributors | original | MIT OR Apache-2.0 |
 | `assets/app-icon/hicolor/{16x16,24x24,32x32,48x48,64x64,128x128,256x256,512x512}/apps/ai.storyteller.texturecraft.png` | App icon, hicolor theme PNGs | TextureCraft contributors | original | MIT OR Apache-2.0 |
 | `assets/app-icon/hicolor/scalable/apps/ai.storyteller.texturecraft.svg` | App icon, hicolor scalable (copy of `icon.svg`) | TextureCraft contributors | original | MIT OR Apache-2.0 |
-| `docs/images/texturecraft-workspace.png` | README screenshot: the TextureCraft workspace with procedural materials | TextureCraft contributors | original screenshot of TextureCraft | MIT OR Apache-2.0 |
-| `docs/images/texturecraft-render.png` | README render: worn paint on the material ball (`texturecraft-cli render --samples 256`) | TextureCraft contributors | original render | MIT OR Apache-2.0 |
+| `docs/images/texturecraft-workspace.png` | README screenshot: the TextureCraft workspace (material ball in chipped paint, grime and a gold stripe) | TextureCraft contributors | original screenshot of TextureCraft | MIT OR Apache-2.0 |
+| `docs/images/texturecraft-bake.png` | README screenshot: bake mode | TextureCraft contributors | original screenshot of TextureCraft | MIT OR Apache-2.0 |
+| `docs/images/texturecraft-export.png` | README screenshot: the Export textures dialog | TextureCraft contributors | original screenshot of TextureCraft | MIT OR Apache-2.0 |
+| `docs/images/texturecraft-rendering.png` | README screenshot: Rendering mode, path traced on the GPU | TextureCraft contributors | original screenshot of TextureCraft | MIT OR Apache-2.0 |
+| `docs/images/texturecraft-light.png` | README screenshot: the light brightness level with the blue accent | TextureCraft contributors | original screenshot of TextureCraft | MIT OR Apache-2.0 |
 | `docs/images/texturecraft-materials.png` | README render: car paint, velvet and brushed steel on the material ball (`texturecraft-cli render --samples 256`, three renders side by side) | TextureCraft contributors | original render | MIT OR Apache-2.0 |
 | `docs/brand/artcraft-*.svg`, `docs/brand/artcraft-*.png` | ArtCraft logo and mark | ArtCraft Team | storytold/craftrules `assets/brand/` | ArtCraft brand terms, not open source ([`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt)) |
 
