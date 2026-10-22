@@ -7,6 +7,10 @@
   </a>
 </p>
 
+<p align="center">
+  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.texturecraft.png" width="128" height="128" alt="TextureCraft icon: an octopus on a rust-orange tile">
+</p>
+
 <h1 align="center">TextureCraft</h1>
 
 <p align="center">
