@@ -1,4 +1,4 @@
-//! Orbit camera (Painter-style navigation) and picking rays.
+//! Orbit camera (texture painting navigation) and picking rays.
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use serde::{Deserialize, Serialize};

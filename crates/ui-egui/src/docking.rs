@@ -171,7 +171,7 @@ fn split(vertical: bool, fraction: f32, first: Node, second: Node) -> Node {
 }
 
 impl Default for Layout {
-    /// Painter's default: assets left of the viewport; texture set list, layers (tabbed with the
+    /// The default: assets left of the viewport; texture set list, layers (tabbed with the
     /// texture set settings) and properties down the right. Fractions match the 1600x960 window.
     fn default() -> Self {
         use Panel::*;
@@ -562,7 +562,7 @@ impl TabViewer for Host<'_> {
     fn title(&mut self, tab: &mut Panel) -> WidgetText {
         let text = match tab {
             Panel::Properties => crate::dock::properties_title(self.app),
-            // Bake mode shows its settings where the shelf lives, as Painter does.
+            // Bake mode shows its settings where the shelf lives.
             Panel::Assets if self.app.ui.mode == crate::state::Mode::Baking => tr("Bake Mesh Maps").to_string(),
             p => tr(p.name()).to_string(),
         };
@@ -617,7 +617,7 @@ impl TabViewer for Host<'_> {
 }
 
 /// The dock look: every panel group is a rounded card on the window's frame colour, its tab strip
-/// without hard lines, the shown tab a rounded pill, Painter-style uppercase captions.
+/// without hard lines, the shown tab a rounded pill, uppercase captions.
 fn style(egui_style: &egui::Style, t: &Tokens) -> Style {
     let card = crate::theme::CARD_RADIUS;
     let mut s = Style::from_egui(egui_style);

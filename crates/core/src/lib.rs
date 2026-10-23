@@ -2,7 +2,7 @@
 //!
 //! The TextureCraft document model: a [`Project`] holds texture sets (one per mesh material),
 //! each with a stack of [`Layer`]s (paint, fill, group) whose channels blend with one of
-//! Painter's [`BlendMode`]s. Pure data with serde; pixels live in `texturecraft-texel` images
+//! the [`BlendMode`]s. Pure data with serde; pixels live in `texturecraft-texel` images
 //! owned by the engine. [`blend`] is the CPU reference for every blend mode.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]

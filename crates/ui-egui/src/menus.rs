@@ -32,7 +32,7 @@ const fn sep(menu: &'static str) -> Item {
 
 pub const TOP: [&str; 6] = ["File", "Edit", "Mode", "Window", "Viewport", "Help"];
 
-/// The menu catalog (Painter's menu tree with our ids).
+/// The menu catalog (the target menu tree with our ids).
 pub const CATALOG: &[Item] = &[
     it("File", "New project...", "ui.newProject", Some("Ctrl+N")),
     it("File", "Open...", "file.open", Some("Ctrl+O")),

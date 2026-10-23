@@ -1,4 +1,4 @@
-//! Project templates (Painter's "Template" in the New project dialog): preset channel lists,
+//! Project templates ("Template" in the New project dialog): preset channel lists,
 //! normal format, resolution and shader settings a new project starts from. Built-in templates
 //! are read-only; the user's are saved from the current project and, on the desktop, mirrored
 //! as `<name>.json` files in a library folder (see [`Session::load_templates`]).

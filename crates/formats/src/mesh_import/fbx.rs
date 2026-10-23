@@ -1,4 +1,4 @@
-//! Autodesk FBX 6.x and 7.x, binary (32- and 64-bit node records, zlib-compressed arrays) and
+//! FBX 6.x and 7.x, binary (32- and 64-bit node records, zlib-compressed arrays) and
 //! ASCII: mesh geometry with normals, UVs and per-polygon materials from the layer elements, every
 //! Model's transform and parent hierarchy, and the file's unit and axis system (converted to
 //! meters, Y up, like glTF). FBX 6 keeps the geometry inside its Model, names objects instead of

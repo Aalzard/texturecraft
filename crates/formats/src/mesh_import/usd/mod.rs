@@ -1,4 +1,4 @@
-//! Pixar USD: `.usda` (text), `.usdc` (Crate binary), `.usd` (either, by magic) and `.usdz`
+//! USD: `.usda` (text), `.usdc` (Crate binary), `.usd` (either, by magic) and `.usdz`
 //! (zip package; its first layer is read). Both encodings parse into one [`Layer`]; the stage is
 //! then composed (internal references, prim hierarchy, xform ops) and every `Mesh` prim becomes
 //! polygons in world space: points, faceVertexCounts/Indices (holes skipped), normals

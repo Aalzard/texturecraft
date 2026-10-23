@@ -1,4 +1,4 @@
-//! Menu parity with Painter: which catalog items are live. `cargo test -p texturecraft-ui-egui
+//! Menu parity with the target menu tree: which catalog items are live. `cargo test -p texturecraft-ui-egui
 //! parity` checks the floor; with `TC_UPDATE_PARITY=1` it rewrites `docs/parity.md`.
 
 use crate::menus::{CATALOG, implemented};

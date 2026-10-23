@@ -1,4 +1,4 @@
-//! The asset shelf (the Assets dock tab): Painter-style tabs (materials, smart materials, smart
+//! The asset shelf (the Assets dock tab): tabs (materials, smart materials, smart
 //! masks, filters, alphas, procedurals, environments, textures), all built in and procedural.
 //! Search filters across every tab. Materials (built in and saved), smart masks, filters, alphas
 //! and textures drag onto the layer stack, a layer row, the viewport or the brush properties

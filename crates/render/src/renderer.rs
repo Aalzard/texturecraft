@@ -112,7 +112,7 @@ pub struct Shade {
     pub normal_y: f32,
     /// 0 material, 1 channel, 2 mesh map (aux texture), 3 UV checker.
     pub view_mode: u32,
-    /// Channel index for view mode 1 (Painter channel order, see the shader).
+    /// Channel index for view mode 1 (channel order, see the shader).
     pub channel: u32,
     /// Direction to an optional key light and its intensity (0 = off). The direction is in
     /// environment space: it turns with `env_rotation_deg` like the lights painted into the
@@ -123,7 +123,7 @@ pub struct Shade {
     /// Key-light shadow map (needs `light[3] > 0`; 3D material view only). Shadows dim the key
     /// light, not the image-based lighting.
     pub shadows: bool,
-    /// Master switch of the effects below (Painter's "Post effects"); off costs no extra pass.
+    /// Master switch of the effects below ("Post effects"); off costs no extra pass.
     /// Effects never apply to data views (channels, mesh maps, UV checker, 2D view).
     pub post_effects: bool,
     /// Effect strengths, 0..1.

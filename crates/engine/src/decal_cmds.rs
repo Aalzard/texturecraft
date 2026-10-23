@@ -1,5 +1,5 @@
 //! Geometry decals: an image resource projected onto the surface from a frame placed on it
-//! (Painter's decal fill with a planar projection), as a fill layer with a decal projection.
+//! (a decal fill with a planar projection), as a fill layer with a decal projection.
 
 use serde_json::{Value, json};
 use texturecraft_core::{Channel, Decal, Fill, Layer, LayerId, LayerKind, Projection, Source};

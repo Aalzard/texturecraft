@@ -1,4 +1,4 @@
-//! The camera list (Painter's viewport camera menu: the default camera plus saved and imported
+//! The camera list (the viewport camera menu: the default camera plus saved and imported
 //! cameras, saved with the project) and the depth of field focus pick.
 
 use serde_json::{Value, json};

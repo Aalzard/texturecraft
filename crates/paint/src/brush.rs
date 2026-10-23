@@ -159,7 +159,7 @@ impl Default for Particles {
     }
 }
 
-/// Brush parameters (the Painter "Brush" properties section plus tool-bar values).
+/// Brush parameters (the "Brush" properties section plus tool-bar values).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BrushSettings {
     /// Radius as a fraction of the mesh bounding-box diagonal (the UI shows 0–100).

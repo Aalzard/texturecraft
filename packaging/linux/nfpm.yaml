@@ -17,9 +17,9 @@ vendor: Learning Machines LLC
 homepage: https://getartcraft.com/apps/texturecraft
 license: MIT OR Apache-2.0
 description: |-
-  Open-source, native 3D texture painter that works the way Substance 3D
-  Painter users expect. Paints PBR texture sets directly on glTF, OBJ, PLY and
-  STL meshes with layers, masks, fills and smart materials; bakes mesh maps;
+  Open-source, native 3D texture painter that works the way texture artists
+  expect. Paints PBR texture sets directly on glTF, FBX, COLLADA, USD, Alembic,
+  OBJ, PLY and STL meshes with layers, masks, fills and smart materials; bakes mesh maps;
   exports texture sets for game engines. GPU viewport (wgpu).
   Includes texturecraft-cli, a headless converter and command runner.
 

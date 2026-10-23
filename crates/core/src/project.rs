@@ -107,7 +107,7 @@ impl BakedMap {
     }
 }
 
-/// How low-poly parts find their high-poly counterparts (Painter's "Match").
+/// How low-poly parts find their high-poly counterparts (the bake "Match" option).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BakeMatch {
     /// Every low-poly part sees every high-poly part.
@@ -177,7 +177,7 @@ impl Default for RaySettings {
     }
 }
 
-/// Bake parameters (Painter's "Common parameters" plus the per-map parameters). Fields missing
+/// Bake parameters (the common parameters plus the per-map parameters). Fields missing
 /// from older projects take their defaults.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -300,7 +300,7 @@ pub struct TextureSet {
     pub baked: BTreeSet<BakedMap>,
     #[serde(default = "yes")]
     pub visible: bool,
-    /// UDIM numbers of the UV tiles this set paints, ascending (Painter's "UV Tiles" mode);
+    /// UDIM numbers of the UV tiles this set paints, ascending (UV tiles mode);
     /// empty for a classic set covering UV 0..1. Each tile is one block of an atlas laid out by
     /// [`TileGrid`], [`TextureSet::block_resolution`] texels square.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -483,7 +483,7 @@ pub enum ToneMapping {
     AcesFilmic,
 }
 
-/// Viewport display settings (saved with the project, as Painter does). Fields missing from
+/// Viewport display settings (saved with the project). Fields missing from
 /// older projects take their defaults.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -526,7 +526,7 @@ pub struct DisplaySettings {
     pub dof: DepthOfField,
 }
 
-/// A thin-lens camera's depth of field (Painter's Display settings: focus distance and aperture).
+/// A thin-lens camera's depth of field (Display settings: focus distance and aperture).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DepthOfField {

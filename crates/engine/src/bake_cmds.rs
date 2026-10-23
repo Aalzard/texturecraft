@@ -1,4 +1,4 @@
-//! Mesh-map baking commands (Painter's "Bake Mesh Maps" window): bake settings, the
+//! Mesh-map baking commands (the "Bake Mesh Maps" window): bake settings, the
 //! high-definition mesh list, the cage, and running a bake. Bakes cast their rays on the GPU
 //! tracer the app installs ([`install_gpu_tracer`]) and on the CPU otherwise.
 

@@ -1,4 +1,4 @@
-//! The filter library (Painter's Filters shelf): adjustment, blur and distortion filters for
+//! The filter library (the Filters shelf): adjustment, blur and distortion filters for
 //! layer content and masks, and material finishes (content only). `effect.add.filter` adds one
 //! by id; `filter.list` lists them with their default parameters.
 

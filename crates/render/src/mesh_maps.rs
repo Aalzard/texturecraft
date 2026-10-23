@@ -19,7 +19,7 @@ pub fn mesh_map_rgba(baked: Option<&BakedMaps>, m: BakedMap, size: u32) -> Vec<u
             let v = b.sample(m, x, sy, size).unwrap_or([0.5; 3]);
             let i = ((y * size + x) * 4) as usize;
             for k in 0..3 {
-                // Data maps are shown as stored (like Painter), i.e. treated as display values.
+                // Data maps are shown as stored, i.e. treated as display values.
                 out[i + k] = (v[k].clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
             }
             out[i + 3] = 255;

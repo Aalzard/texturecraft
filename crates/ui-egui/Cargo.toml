@@ -1,6 +1,6 @@
 [package]
 name = "texturecraft-ui-egui"
-description = "TextureCraft's egui shell: Painter-style docks, toolbars, viewports and windows"
+description = "TextureCraft's egui shell: docks, toolbars, viewports and windows"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

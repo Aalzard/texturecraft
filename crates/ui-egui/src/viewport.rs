@@ -215,7 +215,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         if alt {
             app.session.camera.zoom(-delta.y * 0.01);
         } else if shift {
-            // Shift + right drag turns the environment light (Painter's shortcut).
+            // Shift + right drag turns the environment light.
             let d = &mut app.session.doc.project.display;
             d.env_rotation = (d.env_rotation + delta.x * 0.5).rem_euclid(360.0);
         } else {
@@ -361,7 +361,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         visible: app.session.doc.project.texture_sets.iter().map(|t| t.visible).collect(),
     };
     add_callback(app, ui, rect, frame, sync);
-    // Shelf drops: a material goes above the selection (as in Painter), an alpha on the brush.
+    // Shelf drops: a material goes above the selection, an alpha on the brush.
     crate::shelf::drop_target(app, ui, &resp, crate::shelf::DropZone::View3d);
 
     // Brush cursor.

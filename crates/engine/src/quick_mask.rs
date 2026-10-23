@@ -1,4 +1,4 @@
-//! Quick mask (Painter: Y enables, U edits, Ctrl+Shift+I inverts): a temporary texel mask per
+//! Quick mask (Y enables, U edits, Ctrl+Shift+I inverts): a temporary texel mask per
 //! texture set, painted with the normal brush while editing, that limits every paint stroke
 //! while enabled. Session state only: not saved and not in the undo history.
 

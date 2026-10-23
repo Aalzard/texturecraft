@@ -494,7 +494,7 @@ pub(crate) fn log(app: &mut TextureCraftApp, ui: &mut Ui) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Bake mode (Painter's "Bake Mesh Maps": texture sets, bakers, common and per-map parameters)
+// Bake mode ("Bake Mesh Maps": texture sets, bakers, common and per-map parameters)
 
 pub fn bake_left(app: &mut TextureCraftApp, ui: &mut Ui) {
     let tk = Tokens::get(ui.ctx());

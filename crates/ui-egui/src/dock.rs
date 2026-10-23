@@ -620,7 +620,7 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
                 app.run("textureSet.uvTiles", json!({"ts": ts, "enabled": tiled}));
             }
             ui.end_row();
-            // Each tile's own size (Painter's per-tile resolution).
+            // Each tile's own size (per-tile resolution).
             for &udim in &set.uv_tiles {
                 let r = set.tile_resolution(udim);
                 ui.label(RichText::new(format!("   {udim}")).color(tk.text_dim));

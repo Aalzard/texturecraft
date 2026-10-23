@@ -1,6 +1,6 @@
 //! The command registry. Every user-visible action is a command with a stable id; the menus,
 //! shortcuts, CLI, control channel and MCP server all dispatch them by id. Ids follow
-//! Painter's menu structure (see `menu_catalog`).
+//! the menu structure (see `menu_catalog`).
 
 use serde_json::{Value, json};
 use texturecraft_core::{BlendMode, Channel};
