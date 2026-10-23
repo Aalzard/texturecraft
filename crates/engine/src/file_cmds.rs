@@ -373,30 +373,41 @@ fn save_copy(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn reimport(s: &mut Session, p: &Value) -> Result<Value> {
-    // Re-read the mesh and keep the project (texture sets map by material index). Nothing in `s`
-    // changes unless the new mesh fits the project.
-    let (mesh, source, warnings) = match strp(p, "path") {
-        Some(path) => {
-            let f = native::read_mesh("file.reimportMesh", path)?;
-            let m = texturecraft_formats::import_mesh_bytes(&f.name, &f.bytes).map_err(fe)?.mesh;
-            (m, Some((ext_of(&f.name), f.bytes)), f.warnings)
+    let file = strp(p, "path").map(|path| native::read_mesh("file.reimportMesh", path)).transpose()?;
+    s.reimport_mesh(file, crate::commands::boolp(p, "preserveStrokes").unwrap_or(false))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Session {
+    /// Replace the mesh with `file` (or re-read the project's own copy) and keep the project:
+    /// texture sets map by material index. Nothing changes unless the new mesh fits the project.
+    /// With `preserve_strokes`, painted pixels follow the surface where the UVs changed. Replies
+    /// like `file.reimportMesh`: `{preserved?}`.
+    pub fn reimport_mesh(&mut self, file: Option<texturecraft_formats::MeshFile>, preserve_strokes: bool) -> Result<Value> {
+        let (mesh, source, warnings) = match file {
+            Some(f) => {
+                let m = texturecraft_formats::import_mesh_bytes(&f.name, &f.bytes).map_err(fe)?.mesh;
+                (m, Some((ext_of(&f.name), f.bytes)), f.warnings)
+            }
+            None => match &self.mesh_source {
+                Some((ext, bytes)) => {
+                    (texturecraft_formats::import_mesh_bytes(&format!("mesh.{ext}"), bytes).map_err(fe)?.mesh, self.mesh_source.clone(), Vec::new())
+                }
+                None => return Err(bad("file.reimportMesh", "built-in meshes can't be reimported; give `path`")),
+            },
+        };
+        check_materials(&self.doc.project, &mesh)?;
+        let mut doc = self.doc.clone();
+        if let Some((ext, _)) = &source {
+            doc.project.mesh = format!("mesh.{ext}");
         }
-        None => match &s.mesh_source {
-            Some((ext, bytes)) => (texturecraft_formats::import_mesh_bytes(&format!("mesh.{ext}"), bytes).map_err(fe)?.mesh, s.mesh_source.clone(), Vec::new()),
-            None => return Err(bad("file.reimportMesh", "built-in meshes can't be reimported; give `path`")),
-        },
-    };
-    check_materials(&s.doc.project, &mesh)?;
-    let mut doc = s.doc.clone();
-    if let Some((ext, _)) = &source {
-        doc.project.mesh = format!("mesh.{ext}");
+        let mut next = Session::new(doc, mesh, source)?;
+        next.log.extend(warnings);
+        next.path = self.path.clone();
+        let preserved = preserve_strokes.then(|| crate::preserve::preserve_strokes(self, &mut next));
+        self.switch_to(next);
+        Ok(preserved.map_or(Value::Null, |n| json!({ "preserved": n })))
     }
-    let mut next = Session::new(doc, mesh, source)?;
-    next.log.extend(warnings);
-    next.path = s.path.clone();
-    let preserved = crate::commands::boolp(p, "preserveStrokes").unwrap_or(false).then(|| crate::preserve::preserve_strokes(s, &mut next));
-    s.switch_to(next);
-    Ok(preserved.map_or(Value::Null, |n| json!({ "preserved": n })))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -414,33 +425,60 @@ fn export_textures(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn export_mesh(s: &mut Session, p: &Value) -> Result<Value> {
-    const FORMATS: [&str; 5] = ["obj", "glb", "usda", "usdc", "usdz"];
     let path = native::path_param(p, "path", "file.exportMesh")?;
-    let ext = match strp(p, "format") {
-        Some(f) if FORMATS.contains(&f) => f.to_string(),
-        Some(other) => return Err(bad("file.exportMesh", format!("unknown mesh format `{other}` ({})", FORMATS.join(", ")))),
-        None if FORMATS.contains(&ext_of(path).as_str()) => ext_of(path),
-        None => "obj".into(),
-    };
-    let path = if ext_of(path) == ext { path.to_string() } else { format!("{path}.{ext}") };
+    let out = s.mesh_export(path, strp(p, "format"))?;
     let write = |path: &str, bytes: &[u8]| std::fs::write(path, bytes).map_err(|e| bad("file.exportMesh", format!("cannot write {path}: {e}")));
+    let dir = std::path::Path::new(&out.path).parent().unwrap_or(std::path::Path::new(""));
     let mut textures = Vec::new();
-    match (ext.as_str(), texturecraft_formats::UsdFormat::from_ext(&ext)) {
-        ("glb", _) => write(&path, &s.mesh_glb_bytes()?)?,
-        (_, Some(format)) => {
-            let usd = s.mesh_usd(format)?;
-            let dir = std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new(""));
-            for (name, bytes) in &usd.textures {
-                let file = dir.join(name).display().to_string();
-                write(&file, bytes)?;
-                textures.push(file);
-            }
-            write(&path, &usd.bytes)?;
-        }
-        _ => write(&path, &s.mesh_obj_bytes())?,
+    for (name, bytes) in &out.textures {
+        let file = dir.join(name).display().to_string();
+        write(&file, bytes)?;
+        textures.push(file);
     }
-    s.log.push(format!("Exported mesh to {path}"));
-    Ok(if textures.is_empty() { json!({ "path": path }) } else { json!({ "path": path, "textures": textures }) })
+    write(&out.path, &out.bytes)?;
+    s.log.push(format!("Exported mesh to {}", out.path));
+    Ok(out.reply(textures))
+}
+
+/// The mesh formats `file.exportMesh` writes.
+pub const MESH_EXPORT_FORMATS: [&str; 5] = ["obj", "glb", "usda", "usdc", "usdz"];
+
+/// A mesh export: the mesh file's path (with its extension) and bytes, and (usda, usdc) the
+/// textures it references, by file name, to write next to it.
+pub struct MeshExport {
+    pub path: String,
+    pub bytes: Vec<u8>,
+    pub textures: Vec<(String, Vec<u8>)>,
+}
+
+impl MeshExport {
+    /// The `file.exportMesh` reply, given where the textures were written.
+    pub fn reply(&self, textures: Vec<String>) -> Value {
+        if textures.is_empty() { json!({ "path": self.path }) } else { json!({ "path": self.path, "textures": textures }) }
+    }
+}
+
+impl Session {
+    /// The working mesh as a file for `path`, in `format` (obj, glb, usda, usdc, usdz; default:
+    /// from the extension, else OBJ). The extension is appended when it doesn't match.
+    pub fn mesh_export(&mut self, path: &str, format: Option<&str>) -> Result<MeshExport> {
+        let ext = match format {
+            Some(f) if MESH_EXPORT_FORMATS.contains(&f) => f.to_string(),
+            Some(other) => return Err(bad("file.exportMesh", format!("unknown mesh format `{other}` ({})", MESH_EXPORT_FORMATS.join(", ")))),
+            None if MESH_EXPORT_FORMATS.contains(&ext_of(path).as_str()) => ext_of(path),
+            None => "obj".into(),
+        };
+        let path = if ext_of(path) == ext { path.to_string() } else { format!("{path}.{ext}") };
+        let (bytes, textures) = match (ext.as_str(), texturecraft_formats::UsdFormat::from_ext(&ext)) {
+            ("glb", _) => (self.mesh_glb_bytes()?, Vec::new()),
+            (_, Some(format)) => {
+                let usd = self.mesh_usd(format)?;
+                (usd.bytes, usd.textures)
+            }
+            _ => (self.mesh_obj_bytes(), Vec::new()),
+        };
+        Ok(MeshExport { path, bytes, textures })
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

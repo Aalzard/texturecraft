@@ -235,7 +235,10 @@ async fn agent_completes_texturing_tasks() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-const TOOLS: [&str; 19] = [
+const TOOLS: [&str; 22] = [
+    "mesh_reimport",
+    "mesh_export",
+    "bake_mesh_add",
     "resource_import",
     "material_save",
     "material_load",
@@ -274,6 +277,9 @@ async fn paths_outside_the_workspace_are_rejected() {
         tool_err(&c, "material_load", json!({"path": path})).await;
         tool_err(&c, "material_save", json!({"path": path})).await;
         tool_err(&c, "project_save", json!({"path": path})).await;
+        tool_err(&c, "mesh_export", json!({"path": path})).await;
+        tool_err(&c, "mesh_reimport", json!({"path": path})).await;
+        tool_err(&c, "bake_mesh_add", json!({"path": path})).await;
     }
     let e = tool_err(&c, "textures_export", json!({"dir": "../outside/tex"})).await;
     assert!(e.contains("rejected"), "{e}");
@@ -407,6 +413,34 @@ async fn mesh_import_reads_files_next_to_the_mesh() {
     assert_eq!(s["mesh"]["triangles"], 1, "{s}");
     let e = tool_err(&c, "mesh_import", json!({ "path": "meshes/escape.gltf" })).await;
     assert!(e.contains("not found"), "{e}");
+    shutdown(c, server).await;
+    std::fs::remove_dir_all(&base).unwrap();
+}
+
+/// The mesh round trip an agent does over MCP: export the mesh (with its textures) into the
+/// workspace, bake from it as a high poly and a cage, and reimport the project from it.
+#[tokio::test(flavor = "multi_thread")]
+async fn mesh_files_export_bake_and_reimport_in_the_workspace() {
+    let base = tmp("mesh-files");
+    let (c, server) = connect(workspace(&base)).await;
+    run(&c, "layer.add.fill", json!({"color": [0.8, 0.2, 0.1], "roughness": 0.4})).await;
+    let usda = tool(&c, "mesh_export", json!({"path": "out/cube", "format": "usda"})).await;
+    assert_eq!(usda["path"], "out/cube.usda", "{usda}");
+    let textures = usda["textures"].as_array().unwrap();
+    assert!(!textures.is_empty() && textures.iter().all(|t| base.join(t.as_str().unwrap()).is_file()), "{usda}");
+    assert_eq!(tool(&c, "mesh_export", json!({"path": "out/cube.glb"})).await["path"], "out/cube.glb");
+    assert!(base.join("out/cube.usda").is_file() && base.join("out/cube.glb").is_file());
+    // The loose usda arrives packaged with its textures.
+    let high = tool(&c, "bake_mesh_add", json!({"path": "out/cube.usda"})).await;
+    assert_eq!(high["name"], "cube.usdz", "{high}");
+    let cage = tool(&c, "bake_mesh_add", json!({"path": "out/cube.glb", "cage": true})).await;
+    assert_eq!(cage["meshes"]["cage"]["name"], "cube.glb", "{cage}");
+    assert_eq!(inspect(&c).await["bakeMeshes"]["highPoly"][0]["name"], "cube.usdz");
+    // A built-in mesh has no file to re-read; a file does.
+    assert!(tool_err(&c, "mesh_reimport", json!({})).await.contains("built-in"));
+    tool(&c, "mesh_reimport", json!({"path": "out/cube.glb", "preserveStrokes": true})).await;
+    assert_eq!(inspect(&c).await["mesh"]["source"], "mesh.glb");
+    tool(&c, "mesh_reimport", json!({})).await;
     shutdown(c, server).await;
     std::fs::remove_dir_all(&base).unwrap();
 }

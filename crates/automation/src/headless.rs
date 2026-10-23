@@ -188,6 +188,34 @@ impl Headless {
         texturecraft_formats::self_contained_mesh(path, bytes, &mut |rel| self.read(&join(dir, rel)).ok()).map_err(|e| bad(format!("{path}: {e}")))
     }
 
+    /// Add a high-definition mesh for baking from `path` (or, with `cage`, set the bake cage).
+    pub fn add_bake_mesh(&mut self, path: &str, cage: bool) -> Result<Value, AutomationError> {
+        let f = self.read_mesh(path)?;
+        Ok(self.session.add_bake_mesh(f, cage)?)
+    }
+
+    /// Reimport the mesh from `path`, or from the project's own copy, keeping the project.
+    pub fn reimport_mesh(&mut self, path: Option<&str>, preserve_strokes: bool) -> Result<Value, AutomationError> {
+        let file = path.map(|p| self.read_mesh(p)).transpose()?;
+        Ok(self.session.reimport_mesh(file, preserve_strokes)?)
+    }
+
+    /// Export the working mesh to `path` (obj, glb, usda, usdc or usdz, from `format` or the
+    /// extension); usda and usdc write their textures next to it.
+    pub fn export_mesh(&mut self, path: &str, format: Option<&str>) -> Result<Value, AutomationError> {
+        let out = self.session.mesh_export(path, format)?;
+        let dir = Path::new(&out.path).parent().and_then(|d| d.to_str()).filter(|d| !d.is_empty()).unwrap_or(".");
+        self.create_dir_all(dir)?;
+        let mut textures = Vec::new();
+        for (name, bytes) in &out.textures {
+            let file = join(dir, name);
+            self.write(&file, bytes)?;
+            textures.push(file);
+        }
+        self.write(&out.path, &out.bytes)?;
+        Ok(out.reply(textures))
+    }
+
     /// Import an image file as a project resource (for `layer.add.image`, `tool.stencil`).
     pub fn import_resource(&mut self, path: &str) -> Result<Value, AutomationError> {
         let bytes = self.read(path)?;

@@ -4,9 +4,10 @@
 //!
 //! Methods: the app's `ping`, `command.run {id, params?}`, `command.list {filter?}`,
 //! `session.inspect`, plus `command.batch {steps}`, `project.open {path}`,
-//! `project.save {path?}`, `mesh.import {path, resolution?, name?}`, `resource.import {path}`,
-//! `material.save {path, layer?, name?}`, `material.load {path}` (workspace-scoped versions of
-//! the engine commands),
+//! `project.save {path?}`, `mesh.import {path, resolution?, name?}`, `mesh.reimport {path?,
+//! preserveStrokes?}`, `mesh.export {path, format?}`, `bake.mesh.add {path, cage?}`,
+//! `resource.import {path}`, `material.save {path, layer?, name?}`, `material.load {path}`
+//! (workspace-scoped versions of the engine commands),
 //! `textures.export {dir, …}`, `render {view?, width?, height?, yaw?, pitch?}` (PNG base64, the
 //! shape of the app's `viewport.screenshot`) and `methods`.
 
@@ -32,6 +33,9 @@ pub const METHODS: &[&str] = &[
     "project.open",
     "project.save",
     "mesh.import",
+    "mesh.reimport",
+    "mesh.export",
+    "bake.mesh.add",
     "resource.import",
     "material.save",
     "material.load",
@@ -54,6 +58,13 @@ fn f32_of(p: &Value, k: &str) -> Result<Option<f32>, AutomationError> {
     match p.get(k) {
         None | Some(Value::Null) => Ok(None),
         Some(v) => v.as_f64().map(|v| Some(v as f32)).ok_or_else(|| bad(format!("`{k}` must be a number"))),
+    }
+}
+
+fn bool_of(p: &Value, k: &str) -> Result<bool, AutomationError> {
+    match p.get(k) {
+        None | Some(Value::Null) => Ok(false),
+        Some(v) => v.as_bool().ok_or_else(|| bad(format!("`{k}` must be true or false"))),
     }
 }
 
@@ -80,6 +91,9 @@ impl Headless {
             "project.open" => self.open(required(p, "path")?),
             "project.save" => self.save(str_of(p, "path")),
             "mesh.import" => self.import_mesh(required(p, "path")?, u32_of(p, "resolution")?, str_of(p, "name")),
+            "mesh.reimport" => self.reimport_mesh(str_of(p, "path"), bool_of(p, "preserveStrokes")?),
+            "mesh.export" => self.export_mesh(required(p, "path")?, str_of(p, "format")),
+            "bake.mesh.add" => self.add_bake_mesh(required(p, "path")?, bool_of(p, "cage")?),
             "resource.import" => self.import_resource(required(p, "path")?),
             "material.save" => self.material_save(p),
             "material.load" => self.material_load(required(p, "path")?),
@@ -93,10 +107,7 @@ impl Headless {
                     pitch: f32_of(p, "pitch")?,
                     samples: u32_of(p, "samples")?,
                     bounces: u32_of(p, "bounces")?,
-                    cpu: match p.get("cpu") {
-                        None | Some(Value::Null) => false,
-                        Some(v) => v.as_bool().ok_or_else(|| bad("`cpu` must be true or false"))?,
-                    },
+                    cpu: bool_of(p, "cpu")?,
                 };
                 let r = self.render_png(&o)?;
                 Ok(json!({ "width": r.width, "height": r.height, "by": r.by, "png": base64::engine::general_purpose::STANDARD.encode(r.png) }))

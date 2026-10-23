@@ -92,8 +92,8 @@ print(call("command.run", {"id": "layer.add.fill", "params": {"color": [0.8, 0.1
 
 - **Headless** (default): an in-process session that starts on the material ball (1024).
   Files are reachable only below the roots given at launch, as forward-slash paths relative to
-  them: `--read-root <dir>` for `project_open` / `mesh_import`, `--write-root <dir>` for
-  `project_save` / `material_save` / `textures_export`. Without roots there is no file access. `..`, absolute
+  them: `--read-root <dir>` for `project_open` / `mesh_import` / `mesh_reimport` / `bake_mesh_add`,
+  `--write-root <dir>` for `project_save` / `material_save` / `textures_export` / `mesh_export`. Without roots there is no file access. `..`, absolute
   paths, drive letters, device names and symlink or junction escapes are refused.
 - **Bridge**: `--bridge <port>` forwards to a running `texturecraft --control <port>` (token from
   `--token`, `TEXTURECRAFT_CONTROL_TOKEN` or the app's token file). The app reads and writes its
@@ -113,7 +113,10 @@ a `path`) is refused, and so is any command given a `path` or `dir` (`resource.i
 | `project_new` | `{mesh?, resolution?, name?, template?}` | Built-in mesh: material_ball, sphere, cube, rounded_cube, cylinder, torus, plane, crate; `template` names a project template (`project.templates`) |
 | `project_open` | `{path}` | `.tcraft` or a mesh file, relative to the read root |
 | `project_save` | `{path?}` | `.tcraft` (appended if missing), relative to the write root |
-| `mesh_import` | `{path, resolution?}` | New project from .glb/.gltf/.fbx/.dae/.usd/.usda/.usdc/.usdz/.obj/.ply/.stl |
+| `mesh_import` | `{path, resolution?}` | New project from .glb/.gltf/.fbx/.dae/.usd/.usda/.usdc/.usdz/.abc/.obj/.ply/.stl; a .gltf's buffers and images and a loose USD layer's textures are read from its folder |
+| `mesh_reimport` | `{path?, preserveStrokes?}` | Reimport the mesh from a file, or (no path) from the project's own copy; bridge mode supports only the latter |
+| `mesh_export` | `{path, format?}` | The mesh as obj, glb, usda, usdc or usdz below the write root (usda / usdc textures next to it) → `{path, textures?}` |
+| `bake_mesh_add` | `{path, cage?}` | Add a high-definition mesh for baking, or set the cage → `{name, meshes}` |
 | `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil` |
 | `material_save` | `{path, layer?, name?}` | A layer or folder as a `.tcmat` smart material below the write root |
 | `material_load` | `{path}` | Add a `.tcmat` smart material above the selection |
@@ -186,6 +189,9 @@ File access follows `--read-root` / `--write-root` as for MCP.
 | `project.open` | `{path}` |
 | `project.save` | `{path?}` |
 | `mesh.import` | `{path, resolution?, name?}` |
+| `mesh.reimport` | `{path?, preserveStrokes?}` |
+| `mesh.export` | `{path, format?}` |
+| `bake.mesh.add` | `{path, cage?}` |
 | `resource.import` | `{path}` |
 | `material.save` | `{path, layer?, name?}` |
 | `material.load` | `{path}` |
