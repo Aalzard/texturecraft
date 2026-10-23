@@ -1,7 +1,5 @@
 //! glTF 2.0 / GLB: the default scene's node tree, flattened to world space.
 
-use std::path::Path;
-
 use gltf::accessor::{Accessor, DataType, Dimensions};
 use gltf::mesh::Mode;
 use gltf::{Node, Semantic};
@@ -16,15 +14,19 @@ const MAX_DEPTH: usize = 64;
 /// Node instances visited (bounds exponential instancing in shared node graphs).
 const MAX_NODE_VISITS: usize = 1_000_000;
 
-pub(crate) fn read(bytes: &[u8], base: Option<&Path>) -> Result<RawMesh> {
-    crate::guard(KIND, || read_inner(bytes, base))
+/// A glTF or GLB from its bytes alone: buffers and images in other files must already be folded
+/// in as data URIs ([`super::self_contained_mesh`]).
+pub(crate) fn read(bytes: &[u8]) -> Result<RawMesh> {
+    crate::guard(KIND, || read_inner(bytes))
 }
 
-fn read_inner(bytes: &[u8], base: Option<&Path>) -> Result<RawMesh> {
+fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
     let gltf::Gltf { document, blob } = gltf::Gltf::from_slice(bytes).map_err(|e| malformed(KIND, e))?;
-    check_buffer_uris(&document, base)?;
-    let buffers = gltf::import_buffers(&document, base, blob).map_err(|e| match e {
-        gltf::Error::ExternalReferenceInSliceImport => FormatError::Unsupported("this glTF references external files; open it from disk or use a .glb".into()),
+    check_buffer_uris(&document)?;
+    let buffers = gltf::import_buffers(&document, None, blob).map_err(|e| match e {
+        gltf::Error::ExternalReferenceInSliceImport => FormatError::Unsupported(
+            "this glTF's buffers are in files that were not found next to it; keep its .bin files beside the .gltf, or use a .glb".into(),
+        ),
         e => malformed(KIND, e),
     })?;
 
@@ -208,7 +210,7 @@ fn base_color(raw: &mut RawMesh, material: &gltf::Material, name: &str, buffers:
                 let data = buffers.get(view.buffer().index())?;
                 data.0.get(view.offset()..view.offset().checked_add(view.length())?).map(<[u8]>::to_vec)
             }
-            // Only data URIs: external files are not part of the mesh bytes.
+            // Files next to the .gltf arrive as data URIs; anything else can't be read.
             gltf::image::Source::Uri { uri, .. } if uri.starts_with("data:") => {
                 gltf::buffer::Data::from_source(gltf::buffer::Source::Uri(uri), None).ok().map(|d| d.0)
             }
@@ -244,32 +246,20 @@ fn check_accessor(acc: &Accessor, buffers: &[gltf::buffer::Data], dims: Dimensio
 }
 
 /// Check buffer URIs before `gltf` resolves them: percent-decoding must give UTF-8 (`gltf`
-/// panics otherwise), and files read from disk must be regular files of sane size.
-fn check_buffer_uris(doc: &gltf::Document, base: Option<&Path>) -> Result<()> {
+/// panics otherwise).
+fn check_buffer_uris(doc: &gltf::Document) -> Result<()> {
     for buf in doc.buffers() {
-        let gltf::buffer::Source::Uri(uri) = buf.source() else { continue };
-        if uri.starts_with("data:") {
-            continue;
-        }
-        let path = if let Some(rest) = uri.strip_prefix("file://").or_else(|| uri.strip_prefix("file:")) {
-            Some(std::path::PathBuf::from(rest))
-        } else if uri.contains(':') {
-            None
-        } else {
-            let decoded = percent_decode(uri).ok_or_else(|| malformed(KIND, format!("buffer URI \"{uri}\" is not valid UTF-8")))?;
-            base.map(|b| b.join(decoded))
-        };
-        if let (Some(path), Some(_)) = (path, base) {
-            let meta = std::fs::metadata(&path).map_err(|e| malformed(KIND, format!("buffer {}: {e}", path.display())))?;
-            if !meta.is_file() || meta.len() > super::MAX_MESH_FILE_BYTES {
-                return Err(malformed(KIND, format!("buffer {} is not a regular file of acceptable size", path.display())));
-            }
+        if let gltf::buffer::Source::Uri(uri) = buf.source()
+            && !uri.contains(':')
+            && percent_decode(uri).is_none()
+        {
+            return Err(malformed(KIND, format!("buffer URI \"{uri}\" is not valid UTF-8")));
         }
     }
     Ok(())
 }
 
-fn percent_decode(s: &str) -> Option<String> {
+pub(crate) fn percent_decode(s: &str) -> Option<String> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;

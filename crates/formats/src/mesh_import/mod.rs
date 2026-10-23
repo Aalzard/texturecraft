@@ -7,6 +7,7 @@
 
 mod abc;
 mod dae;
+mod external;
 mod fbx;
 mod gltf;
 mod obj;
@@ -26,6 +27,10 @@ use texturecraft_geom::unwrap::{all_triangles_degenerate, auto_unwrap, weld_ids}
 use texturecraft_geom::{BaseColor, MAX_TRIANGLES, Mesh, SubMesh, UvGBuffer};
 
 use crate::{FormatError, Result};
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use external::read_mesh_file;
+pub use external::{MeshFile, self_contained_mesh};
 
 /// Mesh files larger than this are refused before reading.
 pub const MAX_MESH_FILE_BYTES: u64 = 2 << 30;
@@ -215,18 +220,20 @@ fn extension(file_name: &str) -> String {
     std::path::Path::new(file_name).extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase()
 }
 
-/// Import a mesh from bytes; the format comes from `file_name`'s extension. glTF must be GLB or
-/// self-contained (data-URI buffers); OBJ material libraries are not read (usemtl names are).
+/// Import a mesh from bytes; the format comes from `file_name`'s extension. A `.gltf` must be
+/// self-contained (see [`self_contained_mesh`]); OBJ material libraries are not read (usemtl
+/// names are).
 pub fn import_mesh_bytes(file_name: &str, bytes: &[u8]) -> Result<ImportedMesh> {
-    finish(read(file_name, bytes, None)?)
+    finish(read(file_name, bytes)?)
 }
 
-/// Import a mesh file. A `.gltf` may reference external `.bin` buffers next to it.
+/// Import a mesh file with the files it references next to it ([`read_mesh_file`]).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn import_mesh(path: &std::path::Path) -> Result<ImportedMesh> {
-    let bytes = crate::read_capped(path, MAX_MESH_FILE_BYTES)?;
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-    finish(read(name, &bytes, path.parent())?)
+    let f = read_mesh_file(path)?;
+    let mut imported = import_mesh_bytes(&f.name, &f.bytes)?;
+    imported.report.warnings.splice(0..0, f.warnings);
+    Ok(imported)
 }
 
 /// Largest side of a base color texture kept for color-map bakes (larger ones are downscaled),
@@ -245,10 +252,11 @@ pub struct HighPolyMesh {
 
 /// Import a high-poly (or cage) mesh for baking: like [`import_mesh_bytes`], but missing UVs stay
 /// at 0 and no tangents are generated (bakers read positions, normals, colors, UVs and part
-/// names), so million-triangle meshes import quickly. Base color factors and embedded textures
-/// (glTF) come along for the color map, textures downscaled to [`BASE_COLOR_SIDE`].
+/// names), so million-triangle meshes import quickly. Base color factors and textures (glTF,
+/// FBX media, usdz packages, and files [`self_contained_mesh`] folded in) come along for the
+/// color map, textures downscaled to [`BASE_COLOR_SIDE`].
 pub fn import_high_poly_bytes(file_name: &str, bytes: &[u8]) -> Result<HighPolyMesh> {
-    let mut raw = read(file_name, bytes, None)?;
+    let mut raw = read(file_name, bytes)?;
     let colors = std::mem::take(&mut raw.base_colors);
     let (mut mesh, mut warnings, uvs) = geometry(raw)?;
     let n = mesh.positions.len();
@@ -297,9 +305,9 @@ fn decode_base_color(bytes: &[u8], budget: &mut u64) -> Result<(u32, u32, Vec<[u
     Ok((w, h, rgba.pixels().map(|p| p.0).collect()))
 }
 
-fn read(file_name: &str, bytes: &[u8], base: Option<&std::path::Path>) -> Result<RawMesh> {
+fn read(file_name: &str, bytes: &[u8]) -> Result<RawMesh> {
     let mut raw = match extension(file_name).as_str() {
-        "gltf" | "glb" => gltf::read(bytes, base)?,
+        "gltf" | "glb" => gltf::read(bytes)?,
         "fbx" => fbx::read(bytes)?,
         "dae" => dae::read(bytes)?,
         "usd" | "usda" | "usdc" | "usdz" => usd::read(file_name, bytes)?,

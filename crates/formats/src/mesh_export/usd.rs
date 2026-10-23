@@ -311,7 +311,7 @@ pub fn usd_bytes(mesh: &Mesh, name: &str, textures: &[Vec<ExportedFile>], format
 }
 
 /// A usdz package: the layer first, every entry stored uncompressed at a 64-byte aligned offset.
-fn usdz(layer_name: &str, layer: &[u8], files: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
+pub(crate) fn usdz(layer_name: &str, layer: &[u8], files: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).with_alignment(64);
     let err = |e: zip::result::ZipError| FormatError::Invalid(format!("usdz package: {e}"));

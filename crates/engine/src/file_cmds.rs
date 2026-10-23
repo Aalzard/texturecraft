@@ -288,6 +288,12 @@ mod native {
         strp(p, key).filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(cmd, format!("`{key}` is required")))
     }
 
+    /// Mesh file `path` with the files it references next to it folded in (a `.gltf`'s buffers
+    /// and images, a loose USD layer's textures), ready to import and store in the project.
+    pub fn read_mesh(cmd: &str, path: &str) -> Result<texturecraft_formats::MeshFile> {
+        texturecraft_formats::read_mesh_file(Path::new(path)).map_err(|e| bad(cmd, format!("cannot read {path}: {e}")))
+    }
+
     /// Open a project or a mesh file.
     pub fn open_path(path: &str) -> Result<Session> {
         let p = Path::new(path);
@@ -298,8 +304,10 @@ mod native {
             s.modified = false;
             Ok(s)
         } else {
-            let bytes = std::fs::read(p).map_err(|e| EngineError::Other(format!("cannot read {path}: {e}")))?;
-            Session::from_mesh_bytes(path, &bytes, 2048, &stem_of(path))
+            let f = read_mesh("file.open", path)?;
+            let mut s = Session::from_mesh_bytes(&f.name, &f.bytes, 2048, &stem_of(path))?;
+            s.log.extend(f.warnings);
+            Ok(s)
         }
     }
 
@@ -316,16 +324,17 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::open_path;
+pub use native::{open_path, read_mesh};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn new_from_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let path = native::path_param(p, "mesh", "file.new")?;
-    let bytes = std::fs::read(path).map_err(|e| bad("file.new", format!("cannot read {path}: {e}")))?;
+    let f = native::read_mesh("file.new", path)?;
     let template = crate::template_cmds::template_param(s, p, "file.new")?;
     let res = u64p(p, "resolution").or(template.as_ref().map(|t| u64::from(t.resolution))).unwrap_or(2048);
     let name = strp(p, "name").map(str::to_string).unwrap_or_else(|| stem_of(path));
-    let mut next = Session::from_mesh_bytes_tiled(path, &bytes, u32::try_from(res).unwrap_or(0), &name, crate::commands::boolp(p, "uvTiles"))?;
+    let mut next = Session::from_mesh_bytes_tiled(&f.name, &f.bytes, u32::try_from(res).unwrap_or(0), &name, crate::commands::boolp(p, "uvTiles"))?;
+    next.log.extend(f.warnings);
     if let Some(t) = &template {
         next.apply_template(t);
     }
@@ -364,24 +373,26 @@ fn save_copy(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn reimport(s: &mut Session, p: &Value) -> Result<Value> {
-    // Re-read the mesh and keep the project (texture sets map by material index).
-    let mesh = match strp(p, "path") {
+    // Re-read the mesh and keep the project (texture sets map by material index). Nothing in `s`
+    // changes unless the new mesh fits the project.
+    let (mesh, source, warnings) = match strp(p, "path") {
         Some(path) => {
-            let bytes = std::fs::read(path).map_err(|e| bad("file.reimportMesh", format!("cannot read {path}: {e}")))?;
-            let m = texturecraft_formats::import_mesh_bytes(path, &bytes).map_err(fe)?.mesh;
-            s.mesh_source = Some((ext_of(path), bytes));
-            s.doc.project.mesh = format!("mesh.{}", ext_of(path));
-            m
+            let f = native::read_mesh("file.reimportMesh", path)?;
+            let m = texturecraft_formats::import_mesh_bytes(&f.name, &f.bytes).map_err(fe)?.mesh;
+            (m, Some((ext_of(&f.name), f.bytes)), f.warnings)
         }
         None => match &s.mesh_source {
-            Some((ext, bytes)) => texturecraft_formats::import_mesh_bytes(&format!("mesh.{ext}"), bytes).map_err(fe)?.mesh,
+            Some((ext, bytes)) => (texturecraft_formats::import_mesh_bytes(&format!("mesh.{ext}"), bytes).map_err(fe)?.mesh, s.mesh_source.clone(), Vec::new()),
             None => return Err(bad("file.reimportMesh", "built-in meshes can't be reimported; give `path`")),
         },
     };
     check_materials(&s.doc.project, &mesh)?;
-    let doc = s.doc.clone();
-    let source = s.mesh_source.clone();
+    let mut doc = s.doc.clone();
+    if let Some((ext, _)) = &source {
+        doc.project.mesh = format!("mesh.{ext}");
+    }
     let mut next = Session::new(doc, mesh, source)?;
+    next.log.extend(warnings);
     next.path = s.path.clone();
     let preserved = crate::commands::boolp(p, "preserveStrokes").unwrap_or(false).then(|| crate::preserve::preserve_strokes(s, &mut next));
     s.switch_to(next);

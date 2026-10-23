@@ -158,6 +158,33 @@ fn gltf_external_buffer_from_disk() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A .gltf whose buffer and base color image are files next to it becomes one self-contained
+/// file that imports with its texture.
+#[test]
+fn gltf_external_files_are_folded_in() {
+    let g = glb(true, true);
+    let jlen = u32::from_le_bytes(g[12..16].try_into().unwrap()) as usize;
+    let mut json: serde_json::Value = serde_json::from_slice(&g[20..20 + jlen]).unwrap();
+    json["buffers"][0]["uri"] = "scene.bin".into();
+    json["images"] = serde_json::json!([{ "uri": "tex/base%20color.png" }]);
+    json["textures"] = serde_json::json!([{ "source": 0 }]);
+    json["materials"][0]["pbrMetallicRoughness"] = serde_json::json!({ "baseColorTexture": { "index": 0 } });
+    let gltf = serde_json::to_vec(&json).unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::write_buffer_with_format(&mut png, &[10u8, 200, 30].repeat(4), 2, 2, image::ColorType::Rgb8, image::ImageFormat::Png).unwrap();
+    let files = [("scene.bin", g[20 + jlen + 8..].to_vec()), ("tex/base color.png", png.into_inner())];
+    let mut read = |p: &str| files.iter().find(|(n, _)| *n == p).map(|(_, b)| b.clone());
+    let f = self_contained_mesh("dir/scene.gltf", gltf.clone(), &mut read).unwrap();
+    assert_eq!((f.name.as_str(), f.warnings.len()), ("dir/scene.gltf", 0));
+    let hp = import_high_poly_bytes(&f.name, &f.bytes).unwrap();
+    let red = hp.mesh.materials.iter().position(|m| m == "Red").unwrap();
+    assert_eq!(hp.base_color[red].as_ref().map(|c| (c.width, c.texels[0])), Some((2, [10, 200, 30, 255])));
+    // A missing image is named; the mesh still imports, untextured.
+    let f = self_contained_mesh("scene.gltf", gltf, &mut |p: &str| (p == "scene.bin").then(|| files[0].1.clone())).unwrap();
+    assert_eq!(f.warnings, vec!["scene.gltf: tex/base color.png was not found next to the mesh".to_string()]);
+    assert!(import_high_poly_bytes(&f.name, &f.bytes).unwrap().base_color[red].is_none());
+}
+
 const OBJ: &str = "mtllib missing.mtl
 o quad
 v 0 0 0

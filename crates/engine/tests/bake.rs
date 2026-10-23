@@ -169,6 +169,25 @@ fn per_map_ray_settings_round_trip() {
     assert_eq!(r["tracer"], json!(["CPU"]));
 }
 
+/// A 4×4 PNG in quadrants: red, green / blue, mid grey (top row = v 0).
+fn quadrants_png() -> Vec<u8> {
+    let quadrant = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [128, 128, 128, 255]];
+    let img = image::RgbaImage::from_fn(4, 4, |x, y| image::Rgba(quadrant[(y / 2 * 2 + x / 2) as usize]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png
+}
+
+/// The baked 128 px color map of set 0 shows [`quadrants_png`] on the plane.
+fn assert_quadrants(s: &Session) {
+    let color = &s.doc.baked[&0].maps[&BakedMap::ColorMap];
+    let at = |x: usize, y: usize| &color[(y * 128 + x) * 3..(y * 128 + x) * 3 + 3];
+    let grey = 128.0 / 255.0;
+    for ((x, y), want) in [((32, 32), [1.0, 0.0, 0.0]), ((96, 32), [0.0, 1.0, 0.0]), ((32, 96), [0.0, 0.0, 1.0]), ((96, 96), [grey; 3])] {
+        assert!(at(x, y).iter().zip(want).all(|(a, b)| (a - b).abs() < 2e-3), "texel {x},{y}: {:?} vs {want:?}", at(x, y));
+    }
+}
+
 /// A GLB of `mesh` lifted by `dy`: one part `Part_high` whose material's base color is `png`.
 fn textured_glb(mesh: &Mesh, dy: f32, png: &[u8]) -> Vec<u8> {
     let mut bin = Vec::new();
@@ -221,20 +240,11 @@ fn textured_glb(mesh: &Mesh, dy: f32, png: &[u8]) -> Vec<u8> {
 fn color_map_samples_a_textured_gltf_high_poly() {
     let mut s = plane_session();
     let low = s.mesh.as_ref().clone();
-    // A 4×4 texture in quadrants: red, green / blue, mid grey (top row = v 0).
-    let quadrant = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [128, 128, 128, 255]];
-    let img = image::RgbaImage::from_fn(4, 4, |x, y| image::Rgba(quadrant[(y / 2 * 2 + x / 2) as usize]));
-    let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let png = quadrants_png();
     s.add_high_poly_bytes("painted.glb", textured_glb(&low, 0.002, &png)).unwrap();
     assert!(s.log.iter().any(|l| l.contains("1 base color textures")), "{:?}", s.log);
     execute(&mut s, "bake.run", &json!({ "resolution": 128, "maps": ["color_map", "opacity"], "dilation": 0 })).unwrap();
-    let color = &s.doc.baked[&0].maps[&BakedMap::ColorMap];
-    let at = |x: usize, y: usize| &color[(y * 128 + x) * 3..(y * 128 + x) * 3 + 3];
-    let grey = 128.0 / 255.0;
-    for ((x, y), want) in [((32, 32), [1.0, 0.0, 0.0]), ((96, 32), [0.0, 1.0, 0.0]), ((32, 96), [0.0, 0.0, 1.0]), ((96, 96), [grey; 3])] {
-        assert!(at(x, y).iter().zip(want).all(|(a, b)| (a - b).abs() < 2e-3), "texel {x},{y}: {:?} vs {want:?}", at(x, y));
-    }
+    assert_quadrants(&s);
     assert!(s.doc.baked[&0].maps[&BakedMap::Opacity].iter().all(|o| *o > 0.99), "the high poly covers the plane");
     // The textures come back with the project.
     let back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
@@ -250,18 +260,57 @@ fn color_map_samples_a_textured_usdz_high_poly() {
     for p in &mut high.positions {
         p.y += 0.002;
     }
-    let quadrant = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [128, 128, 128, 255]];
-    let img = image::RgbaImage::from_fn(4, 4, |x, y| image::Rgba(quadrant[(y / 2 * 2 + x / 2) as usize]));
-    let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let png = quadrants_png();
     let texture = ExportedFile { name: "BaseColor.png".into(), bytes: png, width: 4, height: 4, warnings: vec![] };
     let usdz = usd_bytes(&high, "painted", &[vec![texture]], UsdFormat::Usdz).unwrap().bytes;
     s.add_high_poly_bytes("painted.usdz", usdz).unwrap();
     execute(&mut s, "bake.run", &json!({ "resolution": 128, "maps": ["color_map"], "dilation": 0 })).unwrap();
-    let color = &s.doc.baked[&0].maps[&BakedMap::ColorMap];
-    let at = |x: usize, y: usize| &color[(y * 128 + x) * 3..(y * 128 + x) * 3 + 3];
-    let grey = 128.0 / 255.0;
-    for ((x, y), want) in [((32, 32), [1.0, 0.0, 0.0]), ((96, 32), [0.0, 1.0, 0.0]), ((32, 96), [0.0, 0.0, 1.0]), ((96, 96), [grey; 3])] {
-        assert!(at(x, y).iter().zip(want).all(|(a, b)| (a - b).abs() < 2e-3), "texel {x},{y}: {:?} vs {want:?}", at(x, y));
+    assert_quadrants(&s);
+}
+
+/// High polys whose textures are files next to them (a `.gltf` with its `.bin` and image, a loose
+/// usda) are folded into one file on add, bake their color map, and come back with the project.
+#[test]
+fn color_map_samples_textures_next_to_a_high_poly() {
+    use texturecraft_engine::formats::{ExportedFile, UsdFormat, usd_bytes};
+    let dir = std::env::temp_dir().join(format!("texturecraft-bake-external-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("tex")).unwrap();
+    let low = plane_session().mesh.as_ref().clone();
+    // The textured GLB taken apart: JSON, its .bin and the image as files.
+    let glb = textured_glb(&low, 0.002, &quadrants_png());
+    let jlen = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+    let mut doc: Value = serde_json::from_slice(&glb[20..20 + jlen]).unwrap();
+    doc["buffers"][0]["uri"] = "painted.bin".into();
+    doc["images"] = json!([{ "uri": "tex/painted%20color.png" }]);
+    std::fs::write(dir.join("painted.bin"), &glb[20 + jlen + 8..]).unwrap();
+    std::fs::write(dir.join("tex/painted color.png"), quadrants_png()).unwrap();
+    std::fs::write(dir.join("painted.gltf"), serde_json::to_vec(&doc).unwrap()).unwrap();
+    // The same high poly as a usda with its texture beside it.
+    let mut high = low.clone();
+    for p in &mut high.positions {
+        p.y += 0.002;
     }
+    let texture = ExportedFile { name: "BaseColor.png".into(), bytes: quadrants_png(), width: 4, height: 4, warnings: vec![] };
+    let usda = usd_bytes(&high, "painted", &[vec![texture]], UsdFormat::Usda).unwrap();
+    for (name, bytes) in &usda.textures {
+        std::fs::write(dir.join(name), bytes).unwrap();
+    }
+    std::fs::write(dir.join("painted.usda"), &usda.bytes).unwrap();
+    for (file, stored) in [("painted.gltf", "painted.gltf"), ("painted.usda", "painted.usdz")] {
+        let mut s = plane_session();
+        let r = execute(&mut s, "bake.highPoly.add", &json!({ "path": dir.join(file).display().to_string() })).unwrap();
+        assert_eq!(r["name"], stored);
+        assert!(s.log.iter().any(|l| l.contains("1 base color textures")), "{file}: {:?}", s.log);
+        execute(&mut s, "bake.run", &json!({ "resolution": 128, "maps": ["color_map"], "dilation": 0 })).unwrap();
+        assert_quadrants(&s);
+        // The project holds the folded file: the textures come back without the folder.
+        let back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
+        assert_eq!(back.bake_meshes.high[0].base_color, s.bake_meshes.high[0].base_color, "{file}");
+    }
+    // A missing image is named in the log; the high poly still loads, untextured.
+    std::fs::remove_file(dir.join("tex/painted color.png")).unwrap();
+    let mut s = plane_session();
+    execute(&mut s, "bake.highPoly.add", &json!({ "path": dir.join("painted.gltf").display().to_string() })).unwrap();
+    assert!(s.log.iter().any(|l| l.contains("tex/painted color.png was not found")), "{:?}", s.log);
+    std::fs::remove_dir_all(&dir).unwrap();
 }

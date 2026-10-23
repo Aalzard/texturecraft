@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use texturecraft_automation::security::{client_token, server_token};
 use texturecraft_automation::{AuthorizedWorkspace, BridgeClient, Filesystem, Headless, RenderOptions, TexturecraftMcp, rpc};
 use texturecraft_engine::core::PROJECT_EXT;
-use texturecraft_engine::formats::{MeshReport, import_mesh_bytes};
+use texturecraft_engine::formats::{MeshReport, import_mesh, import_mesh_bytes};
 
 const USAGE: &str = "\
 texturecraft-cli: headless TextureCraft
@@ -218,8 +218,7 @@ fn report_json(r: &MeshReport) -> Value {
 fn info(a: &Args) -> R {
     let file = a.pos(0, "<file>")?;
     if !is_project(file) {
-        let bytes = std::fs::read(file).map_err(|e| format!("cannot read {file}: {e}"))?;
-        let m = import_mesh_bytes(file, &bytes).map_err(s)?;
+        let m = import_mesh(Path::new(file)).map_err(|e| format!("cannot read {file}: {e}"))?;
         return print_json(&json!({
             "file": file, "kind": "mesh", "triangles": m.mesh.triangle_count(), "vertices": m.mesh.vertex_count(),
             "materials": m.mesh.materials, "textureSets": m.mesh.materials, "uv": report_json(&m.report),

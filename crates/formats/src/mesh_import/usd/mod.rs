@@ -7,7 +7,8 @@
 //! from `material:binding` (inherited down the hierarchy) and `materialBind` GeomSubsets. Stage
 //! `metersPerUnit` (USD's fallback is 0.01) and `upAxis` become meters, Y up. A material's
 //! UsdPreviewSurface gives its base color: the `diffuseColor` value, or the UsdUVTexture it is
-//! connected to when the texture file is inside the `.usdz` package (for color map bakes).
+//! connected to when the texture file is inside the `.usdz` package (for color map bakes). A loose
+//! layer is packaged with its texture files first ([`package`]).
 //!
 //! Not composed: external references, payloads, sublayers and variant sets (each warns once),
 //! inherits and specializes. Time-sampled values use their first sample.
@@ -23,6 +24,7 @@ use std::io::Read as _;
 
 use texturecraft_geom::glam::{DMat4, DQuat, DVec3, DVec4, Mat3, Mat4, Vec2, Vec3, Vec4};
 
+use super::external::below;
 use super::{Corner, MAX_MESH_FILE_BYTES, PolygonSink, RawBaseColor, RawMesh};
 use crate::{FormatError, Result, malformed};
 
@@ -134,7 +136,7 @@ pub(crate) fn read(file_name: &str, bytes: &[u8]) -> Result<RawMesh> {
     crate::guard(KIND, || {
         if super::extension(file_name) == "usdz" {
             let (layer, mut package) = read_usdz(bytes)?;
-            compose(&layer, Some(&mut package))
+            compose(&layer, Some(&mut package as &mut dyn Assets))
         } else {
             compose(&read_layer(bytes)?, None)
         }
@@ -168,13 +170,63 @@ impl Package<'_> {
         f.take(cap + 1).read_to_end(&mut data).ok()?;
         (data.len() as u64 <= cap).then_some(data)
     }
+}
 
-    /// The package file asset path `asset` names (relative to the layer's folder).
+/// Where a stage's texture files come from.
+trait Assets {
+    /// The file asset path `asset` names (relative to the layer's folder), at most
+    /// [`MAX_TEXTURE_BYTES`].
+    fn asset(&mut self, asset: &str) -> Option<Vec<u8>>;
+}
+
+impl Assets for Package<'_> {
     fn asset(&mut self, asset: &str) -> Option<Vec<u8>> {
         let rel = asset.trim_start_matches("./").trim_start_matches('/');
         let path = if self.dir.is_empty() { rel.to_string() } else { format!("{}/{rel}", self.dir) };
-        self.read(&path, MAX_TEXTURE_BYTES).or_else(|| self.read(rel, MAX_TEXTURE_BYTES))
+        self.read(&path, MAX_TEXTURE_BYTES)
+            .or_else(|| self.read(rel, MAX_TEXTURE_BYTES))
+            .or_else(|| self.read(&below(&format!("{}/{asset}", self.dir))?, MAX_TEXTURE_BYTES))
     }
+}
+
+/// The texture files next to a loose layer, kept under their paths below its folder.
+struct Loose<'f> {
+    found: &'f mut dyn FnMut(&str) -> Option<Vec<u8>>,
+    files: Vec<(String, Vec<u8>)>,
+}
+
+impl Assets for Loose<'_> {
+    fn asset(&mut self, asset: &str) -> Option<Vec<u8>> {
+        let name = below(asset);
+        if let Some((_, data)) = self.files.iter().find(|(n, _)| Some(n) == name.as_ref()) {
+            return Some(data.clone());
+        }
+        let data = (self.found)(asset).filter(|d| d.len() as u64 <= MAX_TEXTURE_BYTES)?;
+        self.files.push((name?, data.clone()));
+        Some(data)
+    }
+}
+
+/// A loose layer whose materials use texture files, as a `.usdz` package holding it (first) and
+/// those files under their paths below its folder; None when `found` has none of them.
+pub(crate) fn package(file_name: &str, bytes: &[u8], found: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Result<Option<Vec<u8>>> {
+    crate::guard(KIND, || {
+        let layer = read_layer(bytes)?;
+        let mut loose = Loose { found, files: Vec::new() };
+        let mut stage = Stage::new(&layer);
+        for p in layer.prims.iter().filter(|p| p.type_name == "Material") {
+            stage.base_color(&p.name, Some(&mut loose));
+        }
+        if loose.files.is_empty() {
+            return Ok(None);
+        }
+        let total = loose.files.iter().fold(bytes.len() as u64, |t, (_, d)| t.saturating_add(d.len() as u64));
+        if total > MAX_MESH_FILE_BYTES {
+            return Err(FormatError::TooLarge("the USD layer and its textures exceed 2 GiB".into()));
+        }
+        let leaf = std::path::Path::new(file_name).file_name().and_then(|n| n.to_str()).unwrap_or("layer.usd");
+        crate::mesh_export::usd::usdz(leaf, bytes, &loose.files).map(Some)
+    })
 }
 
 /// The first USD layer of a `.usdz` package, and the package.
@@ -204,14 +256,8 @@ struct Stage<'a> {
 /// A composed prim: its specs, strongest first (the prim, then what it references).
 type Composed = Vec<usize>;
 
-fn compose(layer: &Layer, mut package: Option<&mut Package>) -> Result<RawMesh> {
-    let mpu = layer.meters_per_unit.filter(|m| m.is_finite() && *m > 0.0).unwrap_or(0.01) as f32;
-    let up = match layer.up_axis.as_deref() {
-        Some("Z" | "z") => Mat4::from_cols(Vec4::X, -Vec4::Z, Vec4::Y, Vec4::W),
-        _ => Mat4::IDENTITY,
-    };
-    let by_path = layer.prims.iter().enumerate().map(|(i, p)| (p.path.as_str(), i)).collect();
-    let mut stage = Stage { layer, by_path, sink: PolygonSink::default(), global: up * Mat4::from_scale(Vec3::splat(mpu)), visits: 0 };
+fn compose(layer: &Layer, mut assets: Option<&mut (dyn Assets + '_)>) -> Result<RawMesh> {
+    let mut stage = Stage::new(layer);
     for w in &layer.warnings {
         stage.sink.warn(w.clone());
     }
@@ -221,7 +267,7 @@ fn compose(layer: &Layer, mut package: Option<&mut Package>) -> Result<RawMesh> 
     names.sort();
     names.dedup();
     let mut stage = Stage { sink: PolygonSink::default(), ..stage };
-    raw.base_colors = names.iter().filter_map(|n| stage.base_color(n, package.as_deref_mut())).collect();
+    raw.base_colors = names.iter().filter_map(|n| stage.base_color(n, assets.as_deref_mut())).collect();
     Ok(raw)
 }
 
@@ -231,6 +277,16 @@ fn leaf(path: &str) -> &str {
 }
 
 impl<'a> Stage<'a> {
+    fn new(layer: &'a Layer) -> Stage<'a> {
+        let mpu = layer.meters_per_unit.filter(|m| m.is_finite() && *m > 0.0).unwrap_or(0.01) as f32;
+        let up = match layer.up_axis.as_deref() {
+            Some("Z" | "z") => Mat4::from_cols(Vec4::X, -Vec4::Z, Vec4::Y, Vec4::W),
+            _ => Mat4::IDENTITY,
+        };
+        let by_path = layer.prims.iter().enumerate().map(|(i, p)| (p.path.as_str(), i)).collect();
+        Stage { layer, by_path, sink: PolygonSink::default(), global: up * Mat4::from_scale(Vec3::splat(mpu)), visits: 0 }
+    }
+
     fn spec(&self, i: usize) -> Option<&'a PrimSpec> {
         self.layer.prims.get(i)
     }
@@ -289,8 +345,8 @@ impl<'a> Stage<'a> {
 
     /// Base color of the Material prim named `name` (bindings name materials by their last path
     /// element): its UsdPreviewSurface's `diffuseColor` value, or the texture of the UsdUVTexture
-    /// connected to it when `package` holds the file (white × the texture's `scale`).
-    fn base_color(&mut self, name: &str, package: Option<&mut Package>) -> Option<RawBaseColor> {
+    /// connected to it when `assets` holds the file (white × the texture's `scale`).
+    fn base_color(&mut self, name: &str, assets: Option<&mut (dyn Assets + '_)>) -> Option<RawBaseColor> {
         let path = self.layer.prims.iter().find(|p| p.type_name == "Material" && p.name == name)?.path.clone();
         let material = self.prim_at(&path)?;
         let surface = self.connected_prim(&material, "outputs:surface").filter(|s| self.token(s, "info:id") == Some("UsdPreviewSurface"))?;
@@ -299,7 +355,7 @@ impl<'a> Stage<'a> {
             _ => None,
         };
         let texture = self.connected_prim(&surface, "inputs:diffuseColor").filter(|t| self.token(t, "info:id") == Some("UsdUVTexture"));
-        let image = texture.as_ref().and_then(|t| package?.asset(self.token(t, "inputs:file")?));
+        let image = texture.as_ref().and_then(|t| assets?.asset(self.token(t, "inputs:file")?));
         let factor = match (&image, texture) {
             (Some(_), Some(t)) => self.nums(&t, "inputs:scale").and_then(rgb).unwrap_or(Vec4::ONE),
             _ => self.nums(&surface, "inputs:diffuseColor").and_then(rgb).unwrap_or(Vec4::ONE),
