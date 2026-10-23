@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add high definition mesh",
             [],
             None,
-            "{path} — a mesh file (glb, gltf, fbx, dae, usd, usda, usdc, usdz, abc, obj, ply, stl; base color textures from glb, embedded FBX media and usdz packages feed the color map)",
+            "{path} — a mesh file (glb, gltf, fbx, dae, usd, usda, usdc, usdz, abc, obj, ply, stl; base color textures from glTF, embedded FBX media, usdz packages and image files next to a .gltf or USD layer feed the color map)",
             always,
             high_add
         ),
@@ -278,24 +278,20 @@ pub fn meshes_json(s: &Session) -> Value {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_mesh_file(cmd: &str, p: &Value) -> Result<(String, Vec<u8>)> {
+fn read_mesh_file(cmd: &str, p: &Value) -> Result<texturecraft_formats::MeshFile> {
     let path = strp(p, "path").ok_or_else(|| bad(cmd, "`path` is required"))?;
-    let meta = std::fs::metadata(path).map_err(|e| bad(cmd, format!("cannot read {path}: {e}")))?;
-    if meta.len() > texturecraft_formats::mesh_import::MAX_MESH_FILE_BYTES {
-        return Err(bad(cmd, format!("{path} is too large")));
-    }
-    let bytes = std::fs::read(path).map_err(|e| bad(cmd, format!("cannot read {path}: {e}")))?;
-    Ok((path.to_string(), bytes))
+    crate::file_cmds::read_mesh(cmd, path)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_mesh_file(_: &str, _: &Value) -> Result<(String, Vec<u8>)> {
+fn read_mesh_file(_: &str, _: &Value) -> Result<texturecraft_formats::MeshFile> {
     Err(EngineError::Other("file paths are not available in the browser; use the bake panel's file picker".into()))
 }
 
 fn high_add(s: &mut Session, p: &Value) -> Result<Value> {
-    let (path, bytes) = read_mesh_file("bake.highPoly.add", p)?;
-    let name = s.add_high_poly_bytes(&path, bytes)?;
+    let f = read_mesh_file("bake.highPoly.add", p)?;
+    let name = s.add_high_poly_bytes(&f.name, f.bytes)?;
+    s.log.extend(f.warnings);
     Ok(json!({ "name": name, "meshes": meshes_json(s) }))
 }
 
@@ -316,8 +312,8 @@ fn high_remove(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn cage_set(s: &mut Session, p: &Value) -> Result<Value> {
-    let (path, bytes) = read_mesh_file("bake.cage.set", p)?;
-    let name = s.set_cage_bytes(&path, bytes)?;
+    let f = read_mesh_file("bake.cage.set", p)?;
+    let name = s.set_cage_bytes(&f.name, f.bytes)?;
     Ok(json!({ "name": name, "meshes": meshes_json(s) }))
 }
 

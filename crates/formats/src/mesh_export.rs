@@ -2,7 +2,7 @@
 //! submesh), binary glTF (one primitive per submesh, a metallic-roughness material per
 //! material with its textures embedded) and USD (usda / usdc / usdz, see [`usd`]).
 
-mod usd;
+pub(crate) mod usd;
 mod usdc;
 
 use std::collections::BTreeSet;

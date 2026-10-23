@@ -375,3 +375,38 @@ async fn bridge_mode_forwards_to_a_control_server() {
     assert!(tool_err(&c, "session_inspect", json!({})).await.contains("authentication failed"));
     shutdown(c, server).await;
 }
+
+/// A one-triangle .gltf whose buffer is the file `bin_uri`, and that buffer's bytes.
+fn split_gltf(bin_uri: &str) -> (Vec<u8>, Vec<u8>) {
+    let bin: Vec<u8> = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let doc = json!({
+        "asset": { "version": "2.0" },
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "mesh": 0 }],
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 } }] }],
+        "buffers": [{ "uri": bin_uri, "byteLength": bin.len() }],
+        "bufferViews": [{ "buffer": 0, "byteLength": bin.len() }],
+        "accessors": [{ "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 0.0] }]
+    });
+    (serde_json::to_vec(&doc).unwrap(), bin)
+}
+
+/// A .gltf's buffer beside it in the workspace is read with it; a file outside the mesh's folder
+/// is not, even inside the workspace.
+#[tokio::test(flavor = "multi_thread")]
+async fn mesh_import_reads_files_next_to_the_mesh() {
+    let base = tmp("external");
+    std::fs::create_dir_all(base.join("meshes")).unwrap();
+    let (gltf, bin) = split_gltf("scene.bin");
+    std::fs::write(base.join("meshes/scene.gltf"), gltf).unwrap();
+    std::fs::write(base.join("meshes/scene.bin"), &bin).unwrap();
+    std::fs::write(base.join("secret.bin"), &bin).unwrap();
+    std::fs::write(base.join("meshes/escape.gltf"), split_gltf("../secret.bin").0).unwrap();
+    let (c, server) = connect(workspace(&base)).await;
+    let s = tool(&c, "mesh_import", json!({ "path": "meshes/scene.gltf", "resolution": 128 })).await;
+    assert_eq!(s["mesh"]["triangles"], 1, "{s}");
+    let e = tool_err(&c, "mesh_import", json!({ "path": "meshes/escape.gltf" })).await;
+    assert!(e.contains("not found"), "{e}");
+    shutdown(c, server).await;
+    std::fs::remove_dir_all(&base).unwrap();
+}

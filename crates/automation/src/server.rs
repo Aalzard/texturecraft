@@ -101,7 +101,8 @@ pub struct MaterialSaveParams {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ImportParams {
-    /// Mesh file relative to the read root: .glb, .gltf (self-contained), .fbx, .dae, .usd, .usda, .usdc, .usdz, .obj, .ply, .stl.
+    /// Mesh file relative to the read root: .glb, .gltf (with its .bin files and images beside it), .fbx, .dae, .usd, .usda, .usdc,
+    /// .usdz, .abc, .obj, .ply, .stl.
     pub path: String,
     /// Texture set resolution (default 2048).
     #[serde(default, skip_serializing_if = "Option::is_none")]

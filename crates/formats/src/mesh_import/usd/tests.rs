@@ -7,7 +7,7 @@ use texturecraft_geom::glam::{Vec2, Vec3};
 
 use super::codec;
 use crate::mesh_import::tests::hammer;
-use crate::{ExportedFile, UsdFormat, import_high_poly_bytes, import_mesh_bytes, usd_bytes};
+use crate::{ExportedFile, UsdFormat, import_high_poly_bytes, import_mesh_bytes, self_contained_mesh, usd_bytes};
 
 /// Two meshes in a Z-up, centimeter stage: a quad + triangle (`Red`, with a `Blue` subset on
 /// the triangle; faceVarying indexed st and normals) under a translated root, and a triangle
@@ -410,5 +410,24 @@ def Mesh "M" {
         "#usda 1.0\ndef X \"a\" { int[] b = [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[ }",
     ] {
         assert!(import_mesh_bytes("bad.usda", bad.as_bytes()).is_err());
+    }
+}
+
+/// A loose usda or usdc whose texture files sit next to it becomes a usdz package holding them,
+/// so its base color reaches high-poly bakes.
+#[test]
+fn loose_layer_textures_are_packaged() {
+    let m = import_mesh_bytes("scene.usda", SCENE.as_bytes()).unwrap().mesh;
+    let textures = vec![vec![file("BaseColor.png", png([200, 10, 10]))], vec![], vec![]];
+    for (format, ext) in [(UsdFormat::Usda, "usda"), (UsdFormat::Usdc, "usdc")] {
+        let out = usd_bytes(&m, "Test scene", &textures, format).unwrap();
+        let mut read = |p: &str| out.textures.iter().find(|(n, _)| n == p).map(|(_, b)| b.clone());
+        let f = self_contained_mesh(&format!("dir/t.{ext}"), out.bytes.clone(), &mut read).unwrap();
+        assert_eq!((f.name.as_str(), f.warnings.len()), ("dir/t.usdz", 0), "{ext}");
+        let hp = import_high_poly_bytes(&f.name, &f.bytes).unwrap();
+        assert_eq!(hp.base_color[0].as_ref().map(|c| c.texels[0]), Some([200, 10, 10, 255]), "{ext}");
+        // Without the texture file the layer stays as it was, and the file is named.
+        let f = self_contained_mesh(&format!("t.{ext}"), out.bytes.clone(), &mut |_: &str| None).unwrap();
+        assert_eq!((f.name, f.bytes == out.bytes, f.warnings.len()), (format!("t.{ext}"), true, 1), "{ext}");
     }
 }

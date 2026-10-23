@@ -173,10 +173,19 @@ impl Headless {
 
     /// A new project from a mesh file: one texture set per material.
     pub fn import_mesh(&mut self, path: &str, resolution: Option<u32>, name: Option<&str>) -> Result<Value, AutomationError> {
-        let bytes = self.read(path)?;
+        let f = self.read_mesh(path)?;
         let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
-        let next = Session::from_mesh_bytes(path, &bytes, resolution.unwrap_or(2048), name.unwrap_or(stem))?;
+        let mut next = Session::from_mesh_bytes(&f.name, &f.bytes, resolution.unwrap_or(2048), name.unwrap_or(stem))?;
+        next.log.extend(f.warnings);
         Ok(self.replace(next))
+    }
+
+    /// Mesh file `path` with the files it references next to it (a `.gltf`'s buffers and images, a
+    /// loose USD layer's textures), read under the same access rules.
+    fn read_mesh(&self, path: &str) -> Result<texturecraft_formats::MeshFile, AutomationError> {
+        let bytes = self.read(path)?;
+        let dir = Path::new(path).parent().and_then(|d| d.to_str()).filter(|d| !d.is_empty()).unwrap_or(".");
+        texturecraft_formats::self_contained_mesh(path, bytes, &mut |rel| self.read(&join(dir, rel)).ok()).map_err(|e| bad(format!("{path}: {e}")))
     }
 
     /// Import an image file as a project resource (for `layer.add.image`, `tool.stencil`).
