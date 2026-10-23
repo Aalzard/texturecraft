@@ -1,14 +1,14 @@
 <p align="center">
   <a href="https://getartcraft.com/">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
-      <img alt="ArtCraft" src="docs/brand/artcraft-logo.svg" width="200">
+      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.png">
+      <img alt="ArtCraft" src="docs/brand/artcraft-logo.png" width="200">
     </picture>
   </a>
 </p>
 
 <p align="center">
-  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.texturecraft.png" width="128" height="128" alt="TextureCraft icon: an octopus on a rust-orange tile">
+  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.texturecraft.png" width="128" height="128" alt="TextureCraft icon: an engraved zebra on a copper tile">
 </p>
 
 <h1 align="center">TextureCraft</h1>
@@ -329,6 +329,6 @@ Forks and modified versions must remove them.
 <sub>Adobe, Substance 3D Painter, Photoshop, Illustrator, Premiere Pro, Lightroom, Acrobat, After Effects and InDesign are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. TextureCraft is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Adobe Inc.; these names are used only to describe the workflows it is compatible with.</sub>
 
 <p align="center">
-  <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
+  <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.png" width="28"></a><br>
   <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
 </p>

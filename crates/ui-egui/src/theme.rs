@@ -73,7 +73,7 @@ impl Accent {
     /// with white lettering. The values other than Copper's are VectorCraft's.
     pub(crate) fn colors(self, dark: bool) -> (Color32, Color32) {
         let (a, strong) = match (self, dark) {
-            // The app icon's copper (#c2672b, assets/app-icon/icon.py).
+            // The app icon's copper (#c2672b, assets/app-icon/texturecraft.svg).
             (Accent::Copper, true) => (0xe58a4e, 0xc2672b),
             (Accent::Copper, false) => (0xae5419, 0xb85c22),
             (Accent::Coral, true) => (0xf06a52, 0xe8573f),
