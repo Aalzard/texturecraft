@@ -190,16 +190,14 @@ from our code against public documentation.
 **What's missing:**
 - hardware ray tracing in Rendering mode;
 - pen tilt (the windowing layer doesn't report it yet);
-- high-poly base color textures kept in separate files (a `.gltf`'s image files, a loose USD
-  layer's textures);
 - cameras from FBX, COLLADA and USD files (glTF cameras are imported), and clear coat in USD export;
 - Alembic files in the older HDF5 container, and Alembic animation (the first sample is read);
 - displacement in shadows and the path tracer (the viewport displaces);
 - a native-speaker review of the translations;
 - the first signed release on every platform.
 
-**Where we're going:** the first release on every platform, then the remaining rendering and file
-format gaps. The ranked list is in [`ROADMAP.md`](ROADMAP.md).
+**Where we're going:** the first release, v0.1.0, on every platform; then the remaining rendering
+and file format gaps. The ranked list is in [`ROADMAP.md`](ROADMAP.md).
 
 **Workspace:** `crates/{core, texel, geom, compose, bake, paint, formats, engine, render, automation, ui-egui}`
 and `apps/{texturecraft, texturecraft-cli, texturecraft-web}`. The egui frontend is its own crate, so
