@@ -11,9 +11,10 @@ GitHub Releases. The shared runbook with copy-paste `gh` commands is craftrules
 
 ### 1. One-time repository setup (org admin)
 
-Status on 2026-10-16: `storytold/texturecraft` has no `release` environment, no ruleset, no
-secrets and no `release` branch yet. An org admin runs craftrules `release/signing-setup.md` steps
-1-2 for this repo:
+Status on 2026-10-23: `storytold/texturecraft` has the `release` environment (deployable from
+`release` only) and the `release` ruleset (steps 1 and 2 below). Still to do before the first run:
+the secrets (step 3) and the runner group (step 4); the `release` branch is created by the first
+release push. An org admin runs craftrules `release/signing-setup.md` steps 1-2 for this repo:
 
 1. Create the **`release` environment**, with deployment branches limited to `release`.
 2. Add the **ruleset on `refs/heads/release`** (restrict creations, updates and deletions, block

@@ -47,8 +47,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 ## Files and texture sets
 
 - **Open** glTF/GLB, FBX (binary and ASCII), COLLADA, **USD** (usda, usdc, usdz), **Alembic**,
-  OBJ, PLY and STL, or a built-in mesh; UVs are generated when a mesh has none. Reimport a changed
-  mesh and your painted strokes stay on the surface.
+  OBJ, PLY and STL, or a built-in mesh; UVs are generated when a mesh has none. A `.gltf`'s buffers
+  and images and a loose USD layer's textures are read from its folder and kept in the project.
+  Reimport a changed mesh and your painted strokes stay on the surface.
 - **UDIM / UV tiles:** detected on import or switched on later, with a resolution per tile and one
   texture per tile on export (`$udim`).
 - **Texture sets** from 128 to 8192 px per material, resampled when you change them, with 21
@@ -102,8 +103,9 @@ Everything you can do in the window, an agent can do too:
 - **CLI:** `texturecraft-cli new builtin:material_ball out.tcraft`, `bake`, `export`, `render`,
   `run <command> <params>`, `batch`, `commands`, `info`.
 - **MCP server:** `texturecraft-cli mcp` gives Claude and other agents tools to create projects,
-  add layers and masks, paint strokes, bake, export, render previews and inspect everything they
-  changed.
+  add layers and masks, paint strokes, add high polys and a cage, bake, export textures and the
+  mesh, reimport a changed mesh, render previews and inspect everything they changed, with file
+  access limited to the folders you give it.
 - **Control channel:** launch the app with `--control <port>` to drive the running UI: run any
   command, invoke menu items, paint, and take screenshots.
 
