@@ -110,6 +110,36 @@ pub struct ImportParams {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct BakeMeshParams {
+    /// High-definition mesh file relative to the read root (any format `mesh_import` reads; base
+    /// color textures feed the color map).
+    pub path: String,
+    /// Set the bake cage (a mesh with the low poly's triangles) instead of adding a high poly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cage: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
+pub struct ReimportParams {
+    /// Mesh file relative to the read root; omit to re-read the project's own copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Painted pixels follow the surface where the new mesh's UVs changed.
+    #[serde(default, rename = "preserveStrokes", skip_serializing_if = "Option::is_none")]
+    pub preserve_strokes: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MeshExportParams {
+    /// Output file relative to the write root; the format's extension is appended if missing.
+    pub path: String,
+    /// obj, glb (textures embedded), usda, usdc (textures written next to it) or usdz (textures
+    /// packaged); default: from the extension, else obj.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ExportParams {
     /// Output folder relative to the write root (created if missing; `.` = the root).
     pub dir: String,
@@ -299,8 +329,11 @@ impl TexturecraftMcp {
                     b.call(method, p).await
                 }
                 "project.save" if p.get("path").is_none() => b.call("ui.menu.invoke", json!({"id": "file.save"})).await,
-                "project.save" | "project.open" | "mesh.import" | "resource.import" | "material.save" | "material.load" | "textures.export"
-                | "command.batch" | "render" => {
+                "mesh.reimport" if p.get("path").is_none() => {
+                    b.call("command.run", json!({"id": "file.reimportMesh", "params": {"preserveStrokes": p.get("preserveStrokes")}})).await
+                }
+                "project.save" | "project.open" | "mesh.import" | "mesh.reimport" | "mesh.export" | "bake.mesh.add" | "resource.import" | "material.save"
+                | "material.load" | "textures.export" | "command.batch" | "render" => {
                     Err(bad(format!("`{method}` with paths works in headless mode only: the running app reads and writes its own files (use ui_menu_invoke)")))
                 }
                 _ => b.call(method, p).await,
@@ -357,7 +390,8 @@ impl TexturecraftMcp {
 
     #[tool(description = "Run an engine command by id with JSON params (see command_list). Runs with defaults, never opens a \
         dialog. Commands given host paths (file.open, file.save, resource.import, material.save, …) are disabled: use the \
-        workspace tools (project_open, project_save, mesh_import, resource_import, material_save, material_load, textures_export).")]
+        workspace tools (project_open, project_save, mesh_import, mesh_reimport, mesh_export, bake_mesh_add, resource_import, \
+        material_save, material_load, textures_export).")]
     async fn command_run(&self, Parameters(p): Parameters<RunParams>) -> Result<CallToolResult, McpError> {
         to_result(self.call("command.run", params(&p)).await)
     }
@@ -410,6 +444,26 @@ impl TexturecraftMcp {
         the session; import warnings are in the session log.")]
     async fn mesh_import(&self, Parameters(p): Parameters<ImportParams>) -> Result<CallToolResult, McpError> {
         to_result(self.call("mesh.import", params(&p)).await)
+    }
+
+    #[tool(description = "Reimport the project's mesh from a file (path relative to the read root) or, without a path, from \
+        the project's own copy. Texture sets map by material index; `preserveStrokes` re-projects painted pixels where the UVs \
+        changed. Returns {preserved?}.")]
+    async fn mesh_reimport(&self, Parameters(p): Parameters<ReimportParams>) -> Result<CallToolResult, McpError> {
+        to_result(self.call("mesh.reimport", params(&p)).await)
+    }
+
+    #[tool(description = "Export the mesh with its textures (obj, glb, usda, usdc or usdz; path relative to the write root). \
+        Returns {path, textures?}.")]
+    async fn mesh_export(&self, Parameters(p): Parameters<MeshExportParams>) -> Result<CallToolResult, McpError> {
+        to_result(self.call("mesh.export", params(&p)).await)
+    }
+
+    #[tool(description = "Add a high-definition mesh for baking (path relative to the read root), or with `cage: true` set the \
+        bake cage. Files next to a .gltf or USD layer (buffers, base color textures) come along. Returns {name, meshes}; bake \
+        with `bake`.")]
+    async fn bake_mesh_add(&self, Parameters(p): Parameters<BakeMeshParams>) -> Result<CallToolResult, McpError> {
+        to_result(self.call("bake.mesh.add", params(&p)).await)
     }
 
     #[tool(description = "Import an image (png, jpg, tga, tif, bmp, webp, exr, hdr; path relative to the read root) as a project \
@@ -481,7 +535,8 @@ impl TexturecraftMcp {
     instructions = "TextureCraft 3D texture painter. Every edit is an engine command: `command_list` shows ids and params, \
         `command_run`/`command_batch` run them. Start with `project_new` (built-in mesh) or `project_open`/`mesh_import` (files \
         relative to the workspace root), check your work with `session_inspect` and `viewport_render`, paint with `paint_stroke`, \
-        bake with `bake`, then `project_save` (.tcraft) and `textures_export`. Undo: command_run edit.undo."
+        bake with `bake` (high polys and the cage: `bake_mesh_add`), then `project_save` (.tcraft), `textures_export` and \
+        `mesh_export`. Undo: command_run edit.undo."
 )]
 impl ServerHandler for TexturecraftMcp {}
 

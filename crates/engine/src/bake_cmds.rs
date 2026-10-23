@@ -248,6 +248,14 @@ impl Session {
         Ok(name)
     }
 
+    /// Add mesh file `f` as a high-definition mesh, or set it as the cage, logging what it could
+    /// not fold in. Replies like `bake.highPoly.add` / `bake.cage.set`: `{name, meshes}`.
+    pub fn add_bake_mesh(&mut self, f: texturecraft_formats::MeshFile, cage: bool) -> Result<Value> {
+        let name = if cage { self.set_cage_bytes(&f.name, f.bytes)? } else { self.add_high_poly_bytes(&f.name, f.bytes)? };
+        self.log.extend(f.warnings);
+        Ok(json!({ "name": name, "meshes": meshes_json(self) }))
+    }
+
     /// Restore the bake meshes saved in a project file; unreadable ones are logged and skipped.
     pub(crate) fn load_bake_meshes(&mut self, high: Vec<MeshFile>, cage: Option<MeshFile>) {
         for (name, bytes) in high {
@@ -289,10 +297,7 @@ fn read_mesh_file(_: &str, _: &Value) -> Result<texturecraft_formats::MeshFile> 
 }
 
 fn high_add(s: &mut Session, p: &Value) -> Result<Value> {
-    let f = read_mesh_file("bake.highPoly.add", p)?;
-    let name = s.add_high_poly_bytes(&f.name, f.bytes)?;
-    s.log.extend(f.warnings);
-    Ok(json!({ "name": name, "meshes": meshes_json(s) }))
+    s.add_bake_mesh(read_mesh_file("bake.highPoly.add", p)?, false)
 }
 
 fn high_remove(s: &mut Session, p: &Value) -> Result<Value> {
@@ -312,9 +317,7 @@ fn high_remove(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn cage_set(s: &mut Session, p: &Value) -> Result<Value> {
-    let f = read_mesh_file("bake.cage.set", p)?;
-    let name = s.set_cage_bytes(&f.name, f.bytes)?;
-    Ok(json!({ "name": name, "meshes": meshes_json(s) }))
+    s.add_bake_mesh(read_mesh_file("bake.cage.set", p)?, true)
 }
 
 /// Texture sets named by `ts` (default: the active one).
