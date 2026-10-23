@@ -164,7 +164,7 @@ pub struct StrokeParams {
     /// -1..1
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<f64>,
-    /// Brush size 0..100 (Painter's scale).
+    /// Brush size 0..100 (percent of the largest brush).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<f64>,
     /// Brush hardness 0..100.

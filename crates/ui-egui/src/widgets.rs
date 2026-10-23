@@ -153,7 +153,7 @@ pub fn section(ui: &mut Ui, id: &str, title: &str, default_open: bool, body: imp
     });
 }
 
-/// A Painter-style channel chip ("color", "metal", "rough"…): toggled = the accent-tinted well.
+/// A channel chip ("color", "metal", "rough"…): toggled = the accent-tinted well.
 pub fn chip(ui: &mut Ui, text: &str, on: bool) -> Response {
     let tk = Tokens::get(ui.ctx());
     let galley = ui.painter().layout_no_wrap(text.into(), egui::FontId::proportional(11.0), tk.text);

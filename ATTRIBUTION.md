@@ -21,6 +21,7 @@ licensed and keep their license file next to them.
 | `docs/images/texturecraft-rendering.png` | README screenshot: Rendering mode, path traced on the GPU | TextureCraft contributors | original screenshot of TextureCraft | MIT OR Apache-2.0 |
 | `docs/images/texturecraft-light.png` | README screenshot: the light brightness level with the blue accent | TextureCraft contributors | original screenshot of TextureCraft | MIT OR Apache-2.0 |
 | `docs/images/texturecraft-materials.png` | README render: car paint, velvet and brushed steel on the material ball (`texturecraft-cli render --samples 256`, three renders side by side) | TextureCraft contributors | original render | MIT OR Apache-2.0 |
+| `docs/images/texturecraft-crate.png` | README render: the built-in crate with chipped paint on wood, rusted iron and tarnished brass smart materials (`texturecraft-cli render --samples 512`, cropped) | TextureCraft contributors | original render by TextureCraft | MIT OR Apache-2.0 |
 | `docs/brand/artcraft-*.svg`, `docs/brand/artcraft-*.png` | ArtCraft logo and mark | ArtCraft Team | storytold/craftrules `assets/brand/` | ArtCraft brand terms, not open source ([`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt)) |
 
 ## Third-party assets compiled into the binary

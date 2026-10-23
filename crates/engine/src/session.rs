@@ -138,7 +138,7 @@ pub enum ViewMode {
     MeshMap(texturecraft_core::BakedMap),
     /// UV checker (texel density and seams).
     UvChecker,
-    /// One layer's mask, in grayscale (Painter: Alt+click a mask).
+    /// One layer's mask, in grayscale (Alt+click a mask).
     Mask(LayerId),
 }
 
@@ -163,7 +163,7 @@ pub enum FillMode {
     Mesh,
 }
 
-/// A screen-pinned image for the Projection tool (Painter's stencil).
+/// A screen-pinned image for the Projection tool (a stencil).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StencilState {
     /// Image resource name.
@@ -210,7 +210,7 @@ pub struct ToolState {
     /// Smudge tool: how much of the picked-up values each stamp deposits (0..1).
     #[serde(default = "default_smudge_strength")]
     pub smudge_strength: f32,
-    /// Clone tool source (Painter: V + click).
+    /// Clone tool source (V + click).
     #[serde(default)]
     pub clone_source: Option<CloneSource>,
     /// What the Clone tool copies: the composite or the selected layer alone.
@@ -225,7 +225,7 @@ fn default_smudge_strength() -> f32 {
     0.5
 }
 
-/// What the Clone tool copies (Painter's clone source modes).
+/// What the Clone tool copies (the clone source modes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CloneFrom {
     /// Everything the texture set shows.
@@ -409,7 +409,7 @@ impl Session {
         Session::new_project_tiled(name, mesh, mesh_ref, mesh_source, resolution, None)
     }
 
-    /// [`Session::new_project`] choosing Painter's UV tile (UDIM) mode: `Some(true)` for every
+    /// [`Session::new_project`] choosing the UV tile (UDIM) mode: `Some(true)` for every
     /// set, `Some(false)` for none, `None` for the sets whose UVs leave tile 1001.
     pub fn new_project_tiled(
         name: &str,

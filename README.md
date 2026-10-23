@@ -7,23 +7,32 @@
   </a>
 </p>
 
+
 <p align="center">
-  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.texturecraft.png" width="128" height="128" alt="TextureCraft icon: an octopus on a rust-orange tile">
+  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.texturecraft.png" width="128" height="128" alt="TextureCraft icon: an engraved zebra on a copper tile">
 </p>
 
 <h1 align="center">TextureCraft</h1>
 
 <p align="center">
-  <b>3D texture painting; an open-source, clean-room reimplementation of Adobe Substance 3D Painter, rebuilt in pure Rust.</b><br>
-  Paint PBR materials straight onto your models in layers with masks, bake mesh maps,<br>
-  drive smart materials from them, and export textures for any engine. Open source, offline, and yours.
+  <b>3D texture painting; an open-source, modern texture painting application, built in pure Rust.</b>
 </p>
 
 <p align="center">
-  <img alt="100% Rust" src="https://img.shields.io/badge/100%25-Rust-b7410e?style=flat-square&logo=rust">
-  <img alt="macOS · Windows · Linux · FreeBSD · Web" src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20FreeBSD%20%C2%B7%20Web-native-c2672b?style=flat-square">
-  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-3a3a3a?style=flat-square">
-  <img alt="Status: early alpha" src="https://img.shields.io/badge/status-early%20alpha-d69e2e?style=flat-square">
+  A fast, open-source 3D texture painting workflow: paint PBR materials straight onto your models in
+  layers with masks, bake mesh maps, drive smart materials from them and export textures for any
+  engine. It runs natively on macOS, Windows, Linux and FreeBSD, and in the browser via WebAssembly.
+  Built by the ArtCraft team.
+</p>
+
+<p align="center">
+  <img alt="Status: in active development" src="https://img.shields.io/badge/status-in%20active%20development-c2672b?style=flat-square">
+  <img alt="Written in pure Rust" src="https://img.shields.io/badge/pure-Rust-b83a24?style=flat-square&logo=rust&logoColor=white">
+  <img alt="Runs on macOS, Windows, Linux, FreeBSD and the web" src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20FreeBSD%20%C2%B7%20Web-555555?style=flat-square">
+  <img alt="MCP server for agents" src="https://img.shields.io/badge/agents-MCP%20server-555555?style=flat-square">
+  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-555555?style=flat-square">
+  <br>
+  <a href="https://coderabbit.ai"><img alt="Reviewed by CodeRabbit" src="https://img.shields.io/coderabbit/prs/github/storytold/texturecraft?style=flat-square&label=Reviewed%20by%20CodeRabbit&logo=coderabbit"></a>
 </p>
 
 <p align="center">
@@ -40,8 +49,7 @@
 
 <p align="center">
   <img src="docs/images/texturecraft-workspace.png" alt="The TextureCraft workspace: the material library on the left; the 3D viewport and the 2D UV view of a material ball in chipped red paint with grime and a hand-painted gold stripe, on a rusted iron base; and the texture set list, layer stack and brush properties on the right" width="100%">
-  <br>
-  <sub>The workspace: asset shelf, 3D viewport, 2D UV view, texture sets, layer stack and properties.</sub>
+  <br><sub><b>The workspace</b>: asset shelf, 3D viewport, 2D UV view, texture sets, layer stack and properties</sub>
 </p>
 
 > [!NOTE]
@@ -50,223 +58,201 @@
 > a stylus last week. If you make things, you belong here. **[Come say hi on Discord](https://discord.gg/artcraft).**
 
 <p align="center">
-  <a href="#features">Features</a> ·
-  <a href="#paint-in-3d">Painting</a> ·
-  <a href="#layers-masks-and-smart-materials">Layers</a> ·
-  <a href="#files-and-texture-sets">Files</a> ·
-  <a href="#bake-and-export">Bake and export</a> ·
-  <a href="#the-viewport">Viewport</a> ·
-  <a href="#built-for-agents">Agents</a> ·
-  <a href="#get-started">Get started</a> ·
+  <a href="#a-look-around">A look around</a> ·
+  <a href="#made-in-texturecraft">Made in TextureCraft</a> ·
+  <a href="#why-texturecraft">Why TextureCraft</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#status">Status</a> ·
   <a href="#downloads">Downloads</a> ·
-  <a href="#the-crafting-apps">Crafting Apps</a> ·
-  <a href="https://discord.gg/artcraft">Discord</a>
+  <a href="#the-crafting-apps">The Crafting Apps</a> ·
+  <a href="#license-and-credits">License</a>
 </p>
 
-<br>
+## A look around
 
 <table>
-  <tr>
-    <td width="25%" valign="top">
-      <h3>🎨 Familiar by design</h3>
-      Texture sets, a layer stack with per-channel blending, masks and generators, the tool shelf, the 3D and 2D views: everything sits where a Painter user expects it.
-    </td>
-    <td width="25%" valign="top">
-      <h3>⚡ Native and fast</h3>
-      A tiled, copy-on-write texel engine on every CPU core and a wgpu viewport (Vulkan, Metal, DX12, WebGPU). No Electron, no web view, no waiting.
-    </td>
-    <td width="25%" valign="top">
-      <h3>🧵 Seamless by construction</h3>
-      Brush stamps live on the 3D surface, so strokes flow across UV seams, and the camera's visibility keeps paint off the back of your model.
-    </td>
-    <td width="25%" valign="top">
-      <h3>🤖 Agent-ready</h3>
-      Every action is a command, so you can drive the same engine from the UI, the CLI, a JSON control channel or an MCP server.
-    </td>
-  </tr>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/images/texturecraft-bake.png" alt="Bake mode: the texture sets and mesh map bakers on the left, the common bake parameters below them, and the Bake selected textures button under the viewport" width="100%">
+  <p align="center"><sub><b>Bake mesh maps</b>: ambient occlusion, curvature, thickness and more, ray traced on the GPU</sub></p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/images/texturecraft-export.png" alt="The Export textures dialog: texture sets to export, the output directory, an output template, file type, size, padding and normal map format" width="100%">
+  <p align="center"><sub><b>Export textures</b>: presets for common engines, or your own output templates with channel packing</sub></p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/images/texturecraft-rendering.png" alt="Rendering mode: the material ball path traced on the GPU at 256 samples with denoising, the gold stripe catching the studio light, and the render settings in a card over the viewport" width="100%">
+  <p align="center"><sub><b>Rendering mode</b> (F10): your textures path traced on the GPU, with a denoiser</sub></p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/images/texturecraft-light.png" alt="TextureCraft in the light brightness level with the blue accent: the same panels as rounded cards on a light background around the dark 3D viewport" width="100%">
+  <p align="center"><sub><b>Light theme</b>: four brightness levels and seven accent colours</sub></p>
+</td>
+</tr>
 </table>
 
-## Features
+## Made in TextureCraft
 
-### Paint in 3D
+Both pieces below were textured with TextureCraft's procedural materials and smart materials (no
+textures or models from anywhere else) and path traced on the GPU by `texturecraft-cli render`.
 
-- **Brushes** with size, flow, stroke opacity, spacing, hardness, angle and follow path; size,
-  angle, flow and position jitter; tangent or camera alignment, angle fade, backface culling, lazy
-  mouse, X/Y/Z mirror symmetry and pen pressure. **67 procedural brush alphas** in their own shelf
-  tab, or any imported image as the alpha.
-- **Tools:** paint, eraser, **projection** with image stencils (hold S to move, turn and scale the
-  stencil), polygon fill (triangle, UV island or the whole mesh), **path** and **lasso fill**, a
-  **particle brush**, **smudge**, **clone** (V + click sets the source), color picker, Shift+click
-  straight lines, and painting directly in the **2D UV view**.
-- **Geometry decals:** drop an image on the surface, then move, scale and turn its frame; it stays
-  an editable fill layer.
-- **Quick mask** (Y): paint a temporary mask (U to edit, Ctrl+Shift+I to invert) that protects
-  everything outside it while you paint.
-- **Every channel at once:** base color, metallic, roughness, height, normal, emissive, opacity,
-  ambient occlusion and specular level, plus clear coat, sheen, anisotropy, subsurface scattering
-  and transmission, each toggled per stroke, the way Painter's material properties work.
+<table>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/images/texturecraft-crate.png" alt="A path-traced crate: teal paint chipping off wooden planks, a rusted iron lid and a tarnished brass handle" width="100%">
+  <p align="center"><sub><b>Crate</b>: chipped paint on wood, rusted iron and tarnished brass smart materials, one per texture set</sub></p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/images/texturecraft-materials.png" alt="Three path-traced material balls: glossy red car paint with a clear coat, purple velvet with sheen, and brushed steel with anisotropic highlights" width="100%">
+  <p align="center"><sub><b>Shading lobes</b>: car paint (clear coat), velvet (sheen) and brushed steel (anisotropy)</sub></p>
+</td>
+</tr>
+</table>
 
-### Layers, masks and smart materials
+## Why TextureCraft
 
-- **Paint, fill, folder and instance layers** with **32 blend modes per channel** (Normal through
-  Normal map detail), per-channel opacity, visibility, color tags, drag-and-drop reordering,
-  duplicate, group, flatten, cut, copy and paste across texture sets.
-- **Filters and content effects** on any layer or mask: **18 filters** (HSL, levels,
-  contrast/luminosity, color balance, gradient map, posterize, clamp, invert, threshold, blur,
-  directional and slope blur, sharpen, warp and four material finishes), fills and paint.
-  **Anchor points** record the stack at a layer so masks and fills higher up can react to it.
-- **Masks** with a white or black background and a stack of effects: painted strokes, fills,
-  **mesh-map generators** (edge wear, dirt, thin areas, curvature, AO, position and direction
-  gradients, all with world-space noise), filters, ID color selection and compare. Alt+click a
-  mask to view it alone.
-- **Fill layers** take uniform values, **22 procedurals** (clouds, cells, grunge, scratches, wood
-  grain, bricks, fabric weave, leather grain, marble veins, Voronoi, paint chips…) or your own
-  **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.
-- **48 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
-  velvet, skin, wax, glass, woods, stone, plastics, fabric, leather, ceramic), **17 smart
-  materials** (rusted iron, worn paint, oxidized copper, bronze statue, weathered wood, mossy
-  brick…) and **10 smart masks**, all procedural, so they work at any resolution. Drag them from
-  the tabbed, searchable shelf onto the layer stack or straight onto the model.
-- **Your own library:** right-click a layer or folder, choose *Create smart material*, and it
-  appears under *My smart materials*, pixels and images included.
+- **Familiar.** The layout, tools, menus, panels and shortcuts texture artists already know: texture
+  sets, a layer stack with per-channel blending, masks and generators, smart materials, the tool
+  shelf, the 3D and 2D views. You already know how to use it.
+- **Fast.** A tiled, copy-on-write texel engine on every CPU core and a wgpu viewport (Vulkan,
+  Metal, DX12, WebGPU). Mesh maps bake on the GPU about 12× faster than on the CPU, Rendering mode
+  path traces about 25× faster, and 8K texture sets stay responsive while you paint.
+- **Seamless.** Brush stamps live on the 3D surface, so strokes flow across UV seams, and the
+  camera's visibility keeps paint off the back of your model.
+- **Robust.** No panics in shipped code, every command tested with hostile input, unlimited undo
+  from copy-on-write snapshots, and lossless `.tcraft` projects.
+- **Open.** glTF/GLB, FBX, COLLADA, USD, Alembic, OBJ, PLY and STL in; PNG, JPEG, TGA, TIFF, BMP,
+  WEBP, EXR and HDR textures out at 8, 16 or 32 bits, with UDIM tiles; OBJ, textured GLB and USD
+  mesh export. Every material, environment, brush alpha and built-in mesh is procedural.
+- **Agent-native.** Every menu item and tool is a command you can drive from the CLI, a JSON
+  control channel or an **MCP server**, so Claude and other agents can paint, bake and export the
+  way a person does.
+- **Everywhere.** One codebase for the desktop apps and the same UI in the browser.
 
-<p align="center">
-  <img src="docs/images/texturecraft-materials.png" alt="Three path-traced material balls: glossy red car paint with a clear coat, purple velvet with sheen, and brushed steel with anisotropic highlights, rendered with texturecraft-cli render --samples 256" width="100%">
-  <br>
-  <sub>Car paint (clear coat), velvet (sheen) and brushed steel (anisotropy), path traced on the GPU by <code>texturecraft-cli render</code>.</sub>
-</p>
+The full list of what's in it is in [`docs/features.md`](docs/features.md).
 
-### Files and texture sets
-
-- **Open** glTF/GLB, FBX (binary and ASCII), COLLADA, **USD** (usda, usdc, usdz), **Alembic**,
-  OBJ, PLY and STL, or a built-in mesh; UVs are generated when a mesh has none. Reimport a changed
-  mesh and your painted strokes stay on the surface.
-- **UDIM / UV tiles:** detected on import or switched on later, with a resolution per tile and one
-  texture per tile on export (`$udim`).
-- **Texture sets** from 128 to 8192 px per material, resampled when you change them, with 21
-  channel types to add or remove.
-- **Projects** are a single `.tcraft` file: the mesh, every layer (sparse and lossless), baked maps
-  and imported images. **Project templates** start new work from a saved setup.
-
-### Bake and export
-
-- **Bake mesh maps** on the GPU (ray traced, about 12× the CPU path) or on every CPU core: ambient
-  occlusion, curvature, thickness, world-space normal, position, ID, bent normals, opacity, color
-  and direction maps, and normal and height maps from high-poly meshes, with a cage, ray distances
-  and matching by mesh name.
-- **Export presets** for glTF PBR Metal Roughness, Unreal Engine (packed), Unity HDRP (mask map),
-  Unity Standard, Blender (Principled BSDF), separate maps, mesh maps and document channels, in
-  PNG, JPEG, TGA, TIFF, BMP, WEBP, EXR or HDR at 8, 16 or 32 bits, with UV padding, size
-  override and OpenGL or DirectX normals.
-- **Output template editor:** build your own presets with per-channel packing and converted maps,
-  and share them as JSON.
-- **Mesh export** to OBJ, textured GLB (with clear coat and sheen) and USD.
-
-<p align="center">
-  <img src="docs/images/texturecraft-bake.png" alt="Bake mode: the texture sets and mesh map bakers on the left, the common bake parameters below them, and the Bake selected textures button under the viewport" width="49%">
-  <img src="docs/images/texturecraft-export.png" alt="The Export textures dialog: texture sets to export, the output directory, an output template, file type, size, padding and normal map format" width="49%">
-</p>
-
-### The viewport
-
-- Physically based shading (metallic/roughness or specular/glossiness) with clear coat, sheen,
-  anisotropy, subsurface scattering, transmission and parallax occlusion; image-based lighting from
-  six procedural studio and outdoor environments or **your own HDR/EXR panoramas**; ACES or linear
-  tone mapping, key-light shadows, bloom, vignette, sharpen, grain, **depth of field** and
-  **saved cameras** (also imported from glTF).
-- **Rendering mode** (F10): a progressive, **path-traced** view of your textures with multi-bounce
-  light, environment importance sampling, a denoiser and one-click PNG save, traced on the GPU
-  (compute shaders, about 25× the CPU tracer, desktop and WebGPU) or on the CPU.
-- View any channel, any baked mesh map, or a UV checker; Alt+drag to orbit, middle-drag to pan,
-  wheel to zoom, F to frame, M / C / B to cycle views.
-
-<p align="center">
-  <img src="docs/images/texturecraft-rendering.png" alt="Rendering mode: the material ball path traced on the GPU at 256 samples with denoising, the gold stripe catching the studio light, and the render settings in a card over the viewport" width="100%">
-</p>
-
-### Interface
-
-- A modern look in **four brightness levels** (dark, medium dark, medium light and light) with
-  **seven accent colors**, set in Settings › Interface.
-- **Dockable, tabbed and floating panels**, saved layouts, and panels that reopen where you closed
-  them.
-- A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.
-- **9 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese and
-  Korean, switchable live.
-- **In the browser:** the same app compiled to WebAssembly, on WebGPU or WebGL2, with touch
-  navigation and project open, save and download.
-
-<p align="center">
-  <img src="docs/images/texturecraft-light.png" alt="TextureCraft in the light brightness level with the blue accent: the same panels as rounded cards on a light background around the dark 3D viewport" width="100%">
-</p>
-
-## Built for agents
-
-Everything you can do in the window, an agent can do too:
-
-- **CLI:** `texturecraft-cli new builtin:material_ball out.tcraft`, `bake`, `export`, `render`,
-  `run <command> <params>`, `commands`.
-- **MCP server:** `texturecraft-cli mcp` gives Claude and other agents tools to create projects,
-  add layers and masks, paint strokes, bake, export, render previews and inspect everything they
-  changed.
-- **Control channel:** launch the app with `--control <port>` to drive the running UI: run any
-  command, invoke menu items, paint, and take screenshots.
-
-See [`docs/control-protocol.md`](docs/control-protocol.md) for the full protocol and examples.
-
-## Get started
-
-You need a recent stable Rust toolchain (1.95 or newer).
+## Quick start
 
 ```sh
 git clone https://github.com/storytold/texturecraft
 cd texturecraft
-cargo run --release -p texturecraft
+
+cargo run --release -p texturecraft                          # desktop app (opens a sample project)
+cargo run --release -p texturecraft -- model.glb             # a new project from a mesh
+cargo run --release -p texturecraft -- --control 7878        # + JSON control channel
+cargo run --release -p texturecraft-cli -- mcp               # MCP server (stdio)
+cargo run --release -p texturecraft-cli -- new builtin:crate crate.tcraft --sample
+cargo run --release -p texturecraft-cli -- render crate.tcraft crate.png --samples 256   # path traced
+cargo run --release -p texturecraft-cli -- export crate.tcraft textures                 # headless export
+cd apps/texturecraft-web && trunk serve                      # web build
+cargo xtask ci                                               # fmt, clippy, tests, layering, wasm
 ```
 
-The app opens with a baked sample project. **File ▸ New project** starts from one of the built-in
-meshes, a project template, or your own glTF, GLB, FBX, COLLADA, USD, Alembic, OBJ, PLY or STL
-file (UVs are generated if the mesh has none). For the browser build, run `trunk serve` in
-`apps/texturecraft-web`.
+You need Rust 1.95 or newer. The app opens with a baked sample project; **File ▸ New project** starts
+from a built-in mesh, a project template or your own mesh file (UVs are generated if it has none).
 
-Run the tests with `cargo test --workspace --release`. The architecture is described in
-[`docs/architecture.md`](docs/architecture.md), the plan and parity estimate in
-[`ROADMAP.md`](ROADMAP.md), and contributor rules in [`AGENTS.md`](AGENTS.md).
+Japanese, Chinese and Korean interface text uses the fonts of
+[storytold/craft-fonts](https://github.com/storytold/craft-fonts) where it has them, an optional
+build input (releases always use it): `CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p texturecraft`
+(an absolute path). Without it, the desktop app uses the installed system fonts.
+
+### Use it from Claude Code and other agents
+
+Register the MCP server with Claude Code, giving it the folders it may read and write:
+
+```sh
+claude mcp add texturecraft -- /path/to/texturecraft-cli mcp --read-root /work/project --write-root /work/project
+```
+
+To drive the running app instead, start it with `--control 7878` and bridge to it:
+
+```sh
+claude mcp add texturecraft-app -- /path/to/texturecraft-cli mcp --bridge 7878
+```
+
+The details are in [`docs/control-protocol.md`](docs/control-protocol.md).
+
+## Status
+
+TextureCraft is under active development. [**ROADMAP.md**](ROADMAP.md) has the parity estimate by
+area, the remaining work and what's next.
+
+**Where we are (2026-10-23):** we estimate about 91% of a texture artist's daily workflow works end
+to end, weighted by how much of the day each area carries: importing meshes, texture sets and UDIM
+tiles, the layer stack with masks, effects and smart materials, every painting tool, baking, the PBR
+viewport and Rendering mode, export presets and templates, and the full menu set. The interface
+speaks English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese and Korean;
+[localization-parity.md](docs/localization-parity.md) has the details. The scores are self-assessed
+from our code against public documentation.
+
+**What's missing:**
+- hardware ray tracing in Rendering mode;
+- pen tilt (the windowing layer doesn't report it yet);
+- high-poly base color textures kept in separate files (a `.gltf`'s image files, a loose USD
+  layer's textures);
+- cameras from FBX, COLLADA and USD files (glTF cameras are imported), and clear coat in USD export;
+- Alembic files in the older HDF5 container, and Alembic animation (the first sample is read);
+- displacement in shadows and the path tracer (the viewport displaces);
+- a native-speaker review of the translations;
+- the first signed release on every platform.
+
+**Where we're going:** the first release on every platform, then the remaining rendering and file
+format gaps. The ranked list is in [`ROADMAP.md`](ROADMAP.md).
+
+**Workspace:** `crates/{core, texel, geom, compose, bake, paint, formats, engine, render, automation, ui-egui}`
+and `apps/{texturecraft, texturecraft-cli, texturecraft-web}`. The egui frontend is its own crate, so
+the UI can be swapped without touching the engine; [`docs/architecture.md`](docs/architecture.md)
+explains how it fits together.
+
+Agent and contributor rules (clean room, the asset policy, no panics in shipped code, quality gates)
+are in [`AGENTS.md`](AGENTS.md), and [`docs/releasing.md`](docs/releasing.md) explains how releases
+are built, signed and published. Every bundled asset is listed with its licence in
+[`ATTRIBUTION.md`](ATTRIBUTION.md).
 
 ## Downloads
 
-The easiest way to install TextureCraft is from its page on the ArtCraft website:
-**[getartcraft.com/apps/texturecraft](https://getartcraft.com/apps/texturecraft)**.
+**New to TextureCraft?** Download it from the [TextureCraft page on getartcraft.com](https://getartcraft.com/apps/texturecraft). That's the easiest way to install it.
 
-Technical users can grab builds from GitHub: the
-[latest release](https://github.com/storytold/texturecraft/releases/latest) or
-[all releases](https://github.com/storytold/texturecraft/releases).
+**Want a specific build or format?** On GitHub, the [latest release](https://github.com/storytold/texturecraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/texturecraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
 
-| Windows | File |
+### Windows
+
+| Build | Installer | Portable |
+|---|---|---|
+| x64 (64-bit Intel/AMD) | `texturecraft-<ver>-windows-x64.msi` | `texturecraft-<ver>-windows-x64-portable.zip` |
+| arm64 (Snapdragon and other ARM PCs) | `texturecraft-<ver>-windows-arm64.msi` | `texturecraft-<ver>-windows-arm64-portable.zip` |
+| x86 (32-bit) | `texturecraft-<ver>-windows-x86.msi` | `texturecraft-<ver>-windows-x86-portable.zip` |
+
+### macOS
+
+| Build | File | Notes |
+|---|---|---|
+| App, universal (Apple silicon + Intel) | `texturecraft-<ver>-macos-universal.dmg` | Signed and notarized |
+| Command-line tool, universal | `texturecraft-cli-<ver>-macos-universal.zip` | Signed and notarized |
+
+### Linux
+
+| Format | x86_64 | aarch64 (ARM64) | Notes |
+|---|---|---|---|
+| AppImage | `texturecraft-<ver>-linux-x86_64.AppImage` | `texturecraft-<ver>-linux-aarch64.AppImage` | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
+| Flatpak | `texturecraft-<ver>-linux-x86_64.flatpak` | `texturecraft-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
+| Debian/Ubuntu | `texturecraft-<ver>-linux-x86_64.deb` | `texturecraft-<ver>-linux-aarch64.deb` | |
+| Fedora/RHEL/openSUSE | `texturecraft-<ver>-linux-x86_64.rpm` | `texturecraft-<ver>-linux-aarch64.rpm` | |
+| Tarball | `texturecraft-<ver>-linux-x86_64.tar.gz` | `texturecraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
+
+### FreeBSD
+
+| Build | File |
 |---|---|
-| Installer (x64, x86, arm64) | `texturecraft-<version>-windows-<arch>.msi` |
-| Portable (x64, x86, arm64) | `texturecraft-<version>-windows-<arch>-portable.zip` |
+| x86_64 | `texturecraft-<ver>-freebsd-x86_64.tar.gz` |
 
-| macOS | File |
-|---|---|
-| Universal app (Apple silicon and Intel), signed and notarized | `texturecraft-<version>-macos-universal.dmg` |
-| Command-line tools | `texturecraft-cli-<version>-macos-universal.zip` |
+### Web (WebAssembly)
 
-| Linux (x86_64, aarch64) | File |
-|---|---|
-| AppImage (any distribution) | `texturecraft-<version>-linux-<arch>.AppImage` |
-| Debian, Ubuntu, Mint, Pop!_OS | `texturecraft-<version>-linux-<arch>.deb` |
-| Fedora, openSUSE, RHEL | `texturecraft-<version>-linux-<arch>.rpm` |
-| Flatpak bundle | `texturecraft-<version>-linux-<arch>.flatpak` |
-| Plain archive | `texturecraft-<version>-linux-<arch>.tar.gz` |
-
-| FreeBSD | File |
-|---|---|
-| x86_64 | `texturecraft-<version>-freebsd-x86_64.tar.gz` |
-
-| Web (WebAssembly) | File |
-|---|---|
-| Static site to host or embed | `texturecraft-web-<version>.zip` |
+| Build | File | Notes |
+|---|---|---|
+| Static site | `texturecraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
 
 ## The Crafting Apps
 
@@ -276,9 +262,9 @@ stand on its own.
 
 | | App | What it's for | Code | Learn more |
 |:-:|---|---|---|---|
-| <img src="https://raw.githubusercontent.com/storytold/texturecraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.texturecraft.png" alt="" width="32" height="32"> | **TextureCraft** | **3D texture painting · you are here** | [GitHub](https://github.com/storytold/texturecraft) | [Website](https://getartcraft.com/apps/texturecraft) |
 | <img src="https://raw.githubusercontent.com/storytold/photocraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.photocraft.png" alt="" width="32" height="32"> | **PhotoCraft** | Image editing: layers, masks, type and real PSD files | [GitHub](https://github.com/storytold/photocraft) | [Website](https://getartcraft.com/apps/photocraft) |
 | <img src="https://raw.githubusercontent.com/storytold/vectorcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.vectorcraft.png" alt="" width="32" height="32"> | **VectorCraft** | Vector illustration | [GitHub](https://github.com/storytold/vectorcraft) | [Website](https://getartcraft.com/apps/vectorcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/texturecraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.texturecraft.png" alt="" width="32" height="32"> | **TextureCraft** | **3D texture painting · you are here** | [GitHub](https://github.com/storytold/texturecraft) | [Website](https://getartcraft.com/apps/texturecraft) |
 | <img src="https://raw.githubusercontent.com/storytold/filmcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.filmcraft.png" alt="" width="32" height="32"> | **FilmCraft** | Video editing, color and sound | [GitHub](https://github.com/storytold/filmcraft) | [Website](https://getartcraft.com/apps/filmcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/lightcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.lightcraft.png" alt="" width="32" height="32"> | **LightCraft** | Photo library and raw development | [GitHub](https://github.com/storytold/lightcraft) | [Website](https://getartcraft.com/apps/lightcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/pdfcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.pdfcraft.png" alt="" width="32" height="32"> | **PdfCraft** | Reading, organizing and protecting PDFs | [GitHub](https://github.com/storytold/pdfcraft) | [Website](https://getartcraft.com/apps/pdfcraft) |
@@ -310,23 +296,30 @@ And [**ArtCraft**](https://getartcraft.com/) itself, our AI image and video stud
   <a href="https://getartcraft.com/apps/texturecraft">TextureCraft</a>
 </p>
 
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=storytold/texturecraft&type=Date&legend=top-left)](https://www.star-history.com/?repos=storytold%2Ftexturecraft&type=date&legend=top-left)
+
 ## License and credits
 
 TextureCraft is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
 Copyright (c) 2026 ArtCraft Team and the TextureCraft contributors. Required notices are in [NOTICE](NOTICE).
 
 Bundled fonts, icons, images and other assets keep their own open licenses; each one is listed
-with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md).
+with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md). Release builds also embed
+the fonts of [craft-fonts](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md)
+(Japanese and Simplified Chinese faces; SIL Open Font License 1.1).
 
 Every material, environment, brush alpha and mesh shown is generated procedurally by TextureCraft
 itself; no third-party textures or models appear in the screenshots.
+
+The app icon (an engraved zebra on TextureCraft copper, `#c2672b`) is the owner's original artwork;
+its files are in [`assets/app-icon/`](assets/app-icon/).
 
 The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
 ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
 part of this repository and TextureCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
 Forks and modified versions must remove them.
-
-<sub>Adobe, Substance 3D Painter, Photoshop, Illustrator, Premiere Pro, Lightroom, Acrobat, After Effects and InDesign are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. TextureCraft is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Adobe Inc.; these names are used only to describe the workflows it is compatible with.</sub>
 
 <p align="center">
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>

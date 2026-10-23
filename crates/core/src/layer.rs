@@ -36,7 +36,7 @@ pub struct Layer {
     /// Effects applied to the layer's content, bottom → top.
     #[serde(default)]
     pub content_effects: Vec<Effect>,
-    /// Painter-style color tag (0..8), shown as a stripe on the layer row.
+    /// Color tag (0..8), shown as a stripe on the layer row.
     #[serde(default)]
     pub color_tag: Option<u8>,
     /// Combine the mask with the layer's height ("mask with height").

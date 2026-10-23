@@ -346,7 +346,7 @@ pub fn apply(ctx: &egui::Context, b: Brightness, accent: Accent) {
     });
 }
 
-/// Painter-style uppercase panel caption (the strong text colour).
+/// Uppercase panel caption (the strong text colour).
 pub fn caption(text: &str) -> egui::RichText {
     egui::RichText::new(text.to_uppercase()).size(10.5).strong()
 }

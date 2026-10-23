@@ -1,4 +1,4 @@
-//! Preserve strokes on mesh reimport (Painter's "Preserve strokes positions on mesh"): when the
+//! Preserve strokes on mesh reimport ("Preserve strokes positions on mesh"): when the
 //! reimported mesh's UVs differ, painted pixels follow the surface instead of the UV layout.
 //! Each covered texel of the new layout finds the nearest point of the old surface (same
 //! material, facing the same way when there is one) and reads the old texel there. Fills and

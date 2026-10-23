@@ -345,8 +345,8 @@ fn schema_compound<'p>(props: &'p [Prop], schema: &str, name: &str) -> Option<&'
 
 impl Walk<'_, '_> {
     /// The children of object group `r`, placed by `parent` (world matrix); `xform` names the
-    /// Xform object `r` is (empty otherwise): meshes take their transform's name, as in Maya
-    /// (`pCube1` / `pCubeShape1`) and Blender (object / mesh data).
+    /// Xform object `r` is (empty otherwise): meshes take their transform's name, as DCC
+    /// exports expect (`pCube1` / `pCubeShape1`, object / mesh data).
     fn object(&mut self, r: u64, parent: Mat4, xform: &str, depth: usize) -> Result<()> {
         self.visits += 1;
         if depth > MAX_DEPTH || self.visits > MAX_OBJECT_VISITS {
