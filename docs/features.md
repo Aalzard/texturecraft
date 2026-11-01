@@ -28,8 +28,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   show a layer only on the mesh parts you pick (right-click a layer).
 - **Filters and content effects** on any layer or mask: **27 filters** (HSL, levels,
   contrast/luminosity, color balance, gradient map, posterize, clamp, invert, threshold,
-  grayscale, edge detect, normal invert, baked lighting, blur, directional and slope blur, sharpen, high pass,
-  bevel, glow, warp, directional warp, mosaic and four material finishes), fills and paint.
+  grayscale, edge detect, normal invert, baked lighting, blur, directional and slope blur,
+  sharpen, high pass, bevel, glow, warp, directional warp, mosaic and four material finishes),
+  fills and paint.
   **Anchor points** record the stack at a layer so masks and fills higher up can react to it.
 - **Masks** with a white or black background and a stack of effects: painted strokes, fills,
   **mesh-map generators** (edge wear, dirt, thin areas, curvature, AO, position and direction
@@ -41,8 +42,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **48 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
   velvet, skin, wax, glass, woods, stone, plastics, fabric, leather, ceramic), **21 smart
   materials** (rusted iron, worn paint, oxidized copper, bronze statue, weathered wood, mossy
-  brick and stone, sun-faded paint…) and **18 smart masks**, all procedural, so they work at any resolution. Drag them from
-  the tabbed, searchable shelf onto the layer stack or straight onto the model.
+  brick and stone, sun-faded paint…) and **18 smart masks**, all procedural, so they work at any
+  resolution. Drag them from the tabbed, searchable shelf onto the layer stack or straight onto
+  the model.
 - **Your own library:** right-click a layer or folder, choose *Create smart material*, and it
   appears under *My smart materials*, pixels and images included.
 
@@ -77,11 +79,11 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 ## The viewport
 
 - Physically based shading (metallic/roughness or specular/glossiness) with clear coat, sheen,
-  anisotropy, subsurface scattering, transmission, parallax occlusion and **displacement** (with its own shadows) from the
-  height channel; image-based lighting from
-  six procedural studio and outdoor environments or **your own HDR/EXR panoramas**; ACES or linear
-  tone mapping, key-light shadows, bloom, vignette, sharpen, grain, **depth of field** and
-  **saved cameras** (also imported from glTF, FBX, COLLADA and USD files).
+  anisotropy, subsurface scattering, transmission, parallax occlusion and **displacement** (with
+  its own shadows) from the height channel; image-based lighting from six procedural studio and
+  outdoor environments or **your own HDR/EXR panoramas**; ACES or linear tone mapping, key-light
+  shadows, bloom, vignette, sharpen, grain, **depth of field** and **saved cameras** (also imported
+  from glTF, FBX, COLLADA and USD files).
 - **Rendering mode** (F10): a progressive, **path-traced** view of your textures with multi-bounce
   light, environment importance sampling, displaced geometry, a denoiser and one-click PNG save,
   traced on the GPU
