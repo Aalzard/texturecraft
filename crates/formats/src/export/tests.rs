@@ -509,3 +509,82 @@ fn lobe_channels_export_as_document_maps_and_gltf_extension_maps() {
     let plain = Fx::new(&default_channels()).render_preset("glTF PBR Metal Roughness");
     assert!(!plain.iter().any(|f| f.name.contains("Clearcoat") || f.name.contains("Sheen")), "sets without the lobes export no extension maps");
 }
+
+#[test]
+fn colour_space_converts_colour_maps_only() {
+    let fx = Fx::new(&default_channels());
+    let preset = builtin_preset("glTF PBR Metal Roughness").unwrap();
+    let want_at = |space: ColorSpace, x, y| space.from_linear_rec709(fx.comp.value(Channel::BaseColor, x, y));
+    // ACEScg in a float EXR: the base colour is the converted triple, above-1 values aside.
+    let mut exr = ExportOptions::new(preset.clone());
+    exr.format_override = Some(FileFormat::Exr);
+    exr.bit_depth_override = Some(32);
+    exr.color_space = Some(ColorSpace::AcesCg);
+    let files = fx.render(&exr);
+    let img = decode(find(&files, "_BaseColor.exr")).to_rgb32f();
+    for (x, y) in [(0, 0), (10, 40), (63, 63)] {
+        let (px, want) = (img.get_pixel(x, y), want_at(ColorSpace::AcesCg, x, y));
+        assert!((0..3).all(|k| (px[k] - want[k]).abs() < 1e-4), "({x},{y}) {px:?} vs {want:?}");
+    }
+    // Data maps are never converted: roughness and metalness (packed in the ORM map) are as before.
+    let default_files =
+        fx.render(&ExportOptions { format_override: Some(FileFormat::Exr), bit_depth_override: Some(32), ..ExportOptions::new(preset.clone()) });
+    assert_eq!(find(&files, "OcclusionRoughnessMetallic").bytes, find(&default_files, "OcclusionRoughnessMetallic").bytes);
+    assert_eq!(find(&files, "_Normal").bytes, find(&default_files, "_Normal").bytes);
+    assert_ne!(find(&files, "_BaseColor").bytes, find(&default_files, "_BaseColor").bytes);
+
+    // Linear Rec.709 in an 8-bit PNG: the values are written without the sRGB curve.
+    let mut lin = ExportOptions::new(preset.clone());
+    lin.color_space = Some(ColorSpace::LinearRec709);
+    let png = decode(find(&fx.render(&lin), "_BaseColor.png"));
+    let v = fx.comp.value(Channel::BaseColor, 10, 40);
+    for k in 0..3 {
+        assert!((png.get_pixel(10, 40)[k] as f32 - v[k] * 255.0).abs() <= 1.0, "[{k}]");
+    }
+    // The default is unchanged: sRGB for integer files (None and explicit sRGB agree).
+    let default_png = fx.render(&ExportOptions::new(preset.clone()));
+    let mut srgb = ExportOptions::new(preset.clone());
+    srgb.color_space = Some(ColorSpace::Srgb);
+    assert_eq!(find(&default_png, "_BaseColor.png").bytes, find(&fx.render(&srgb), "_BaseColor.png").bytes);
+    // An explicit sRGB in a float file is encoded once, not twice.
+    let mut float_srgb = ExportOptions::new(preset);
+    float_srgb.format_override = Some(FileFormat::Exr);
+    float_srgb.bit_depth_override = Some(32);
+    float_srgb.color_space = Some(ColorSpace::Srgb);
+    let px = *decode(find(&fx.render(&float_srgb), "_BaseColor.exr")).to_rgb32f().get_pixel(10, 40);
+    assert!((px[0] - linear_to_srgb(v[0])).abs() < 1e-4, "{px:?}");
+}
+
+#[test]
+fn colour_space_names_the_files_and_warns_when_integer_files_clamp() {
+    let fx = Fx::new(&default_channels());
+    let named = ExportPreset {
+        name: "named".into(),
+        maps: vec![MapSpec {
+            file: "$textureSet_$channel_$colorSpace".into(),
+            format: FileFormat::Png,
+            bit_depth: 8,
+            channels: vec![
+                (Dest::R, SourceRef::Channel { channel: Channel::BaseColor, component: 0 }),
+                (Dest::G, SourceRef::Channel { channel: Channel::BaseColor, component: 1 }),
+                (Dest::B, SourceRef::Channel { channel: Channel::BaseColor, component: 2 }),
+            ],
+        }],
+    };
+    let plan = |space: Option<ColorSpace>, format: Option<FileFormat>| {
+        let opts = ExportOptions { color_space: space, format_override: format, ..ExportOptions::new(named.clone()) };
+        list_outputs(&fx.project, 0, "sphere", &opts).unwrap().remove(0)
+    };
+    assert!(plan(None, None).name.ends_with("_sRGB.png") && plan(None, Some(FileFormat::Exr)).name.ends_with("_linear.exr"), "defaults keep their names");
+    assert!(plan(Some(ColorSpace::LinearRec709), None).name.ends_with("_linear.png"));
+    let aces = plan(Some(ColorSpace::AcesCg), None);
+    assert!(aces.name.ends_with("_ACEScg.png"), "{}", aces.name);
+    assert!(aces.warnings.iter().any(|w| w.contains("clamped")), "{:?}", aces.warnings);
+    assert!(plan(Some(ColorSpace::AcesCg), Some(FileFormat::Exr)).warnings.is_empty(), "float files keep the values");
+    assert!(plan(None, None).warnings.is_empty() && plan(Some(ColorSpace::LinearRec709), None).warnings.is_empty());
+    // The planned names are the rendered names.
+    let opts = ExportOptions { color_space: Some(ColorSpace::Aces2065), ..ExportOptions::new(named) };
+    let names: Vec<String> = fx.render(&opts).into_iter().map(|f| f.name).collect();
+    assert_eq!(names, list_outputs(&fx.project, 0, "sphere", &opts).unwrap().into_iter().map(|p| p.name).collect::<Vec<_>>());
+    assert!(names[0].ends_with("_ACES2065-1.png"), "{names:?}");
+}

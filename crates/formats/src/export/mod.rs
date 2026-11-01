@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use texturecraft_compose::{BakedMaps, Composite};
 use texturecraft_core::{AoMixing, BakedMap, Channel, ChannelKind, NormalFormat, NormalMixing, Project, TextureSet};
 use texturecraft_geom::glam::Vec3;
-use texturecraft_texel::{DilationMap, linear_to_srgb};
+use texturecraft_texel::{ColorSpace, DilationMap, linear_to_srgb};
 
 use crate::{FormatError, MAX_IMAGE_SIZE, Result};
 
@@ -323,11 +323,31 @@ pub struct ExportOptions {
     /// UV-tiled sets: one image of the whole tile atlas per map instead of a file per tile
     /// (for formats without UDIM support, with the mesh's UVs in atlas space).
     pub atlas: bool,
+    /// The colour space of the colour maps (data maps are never converted); None writes sRGB
+    /// into 8/16-bit files and linear Rec.709 into float files (EXR, HDR).
+    #[serde(skip)]
+    pub color_space: Option<ColorSpace>,
+}
+
+impl ExportOptions {
+    /// The colour space colour maps are written in when `format` is used.
+    pub fn space_for(&self, format: FileFormat) -> ColorSpace {
+        self.color_space.unwrap_or(if format.is_float() { ColorSpace::LinearRec709 } else { ColorSpace::Srgb })
+    }
 }
 
 impl ExportOptions {
     pub fn new(preset: ExportPreset) -> ExportOptions {
-        ExportOptions { preset, format_override: None, bit_depth_override: None, padding: Padding::Infinite, size: None, normal_format: None, atlas: false }
+        ExportOptions {
+            preset,
+            format_override: None,
+            bit_depth_override: None,
+            padding: Padding::Infinite,
+            size: None,
+            normal_format: None,
+            atlas: false,
+            color_space: None,
+        }
     }
 }
 
@@ -462,7 +482,14 @@ pub fn list_outputs(project: &Project, ts: usize, mesh_name: &str, opts: &Export
         }
         let format = opts.format_override.unwrap_or(map.format);
         let bit_depth = format.depth(opts.bit_depth_override.unwrap_or(map.bit_depth));
-        let color_space = if is_color(map) && !format.is_float() { "sRGB" } else { "linear" };
+        let space = opts.space_for(format);
+        let color_space = match (is_color(map), space) {
+            (false, _) | (true, ColorSpace::LinearRec709) => "linear",
+            (true, ColorSpace::Srgb) => "sRGB",
+            (true, other) => other.name(),
+        };
+        // Integer files clamp to 0-1, which wide-gamut linear colour can leave.
+        let clamps = is_color(map) && !format.is_float() && matches!(space, ColorSpace::AcesCg | ColorSpace::Aces2065);
         // One file per UV tile: names without `$udim` get it appended.
         let template = if tiles.iter().any(Option::is_some) && !map.file.contains("$udim") { format!("{}.$udim", map.file) } else { map.file.clone() };
         for &tile in &tiles {
@@ -477,6 +504,13 @@ pub fn list_outputs(project: &Project, ts: usize, mesh_name: &str, opts: &Export
             let ext = format.extension();
             let mut name = format!("{stem}.{ext}");
             let mut warnings = Vec::new();
+            if clamps {
+                warnings.push(format!(
+                    "{} colours outside 0-1 are clamped in {} files; use EXR or HDR to keep them",
+                    space.name(),
+                    format.extension().to_uppercase()
+                ));
+            }
             // Case-insensitive: Windows and macOS file systems are.
             let mut k = 2;
             while used.contains(&name.to_ascii_lowercase()) {
@@ -697,7 +731,19 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
             let scale = |v: u32| (u64::from(v) * u64::from(opts.size.unwrap_or(tile_res)) / u64::from(tile_res)) as u32;
             let size = (scale(w), scale(h));
             let data = resize(data, (w, h), n, size);
-            let srgb: Vec<bool> = lay.iter().map(|(d, _)| *d != Dest::A && is_color(map) && !p.format.is_float()).collect();
+            // Colour maps leave linear Rec.709 for the chosen space. sRGB in integer files is
+            // encoded by `encode`; every other case is converted here (float sRGB included).
+            let space = opts.space_for(p.format);
+            let rgb = lay.len() >= 3 && lay.iter().take(3).map(|(d, _)| *d).eq([Dest::R, Dest::G, Dest::B]);
+            let mut data = data;
+            if is_color(map) && rgb && (space != ColorSpace::Srgb || p.format.is_float()) && space != ColorSpace::LinearRec709 {
+                data.par_chunks_mut(n).for_each(|px| {
+                    if let [r, g, b, ..] = px {
+                        [*r, *g, *b] = space.from_linear_rec709([*r, *g, *b]);
+                    }
+                });
+            }
+            let srgb: Vec<bool> = lay.iter().map(|(d, _)| *d != Dest::A && is_color(map) && !p.format.is_float() && space == ColorSpace::Srgb).collect();
             let mut warnings = p.warnings;
             let bytes = encode(p.format, p.bit_depth, size, n, &data, &srgb, &mut warnings)?;
             Ok(ExportedFile { name: p.name, bytes, width: size.0, height: size.1, warnings })

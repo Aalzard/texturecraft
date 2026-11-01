@@ -42,7 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export textures",
             ["File"],
             None,
-            "{dir, preset?: built-in or user preset name, or a preset object {name, maps}, ts?: index|\"all\", format?: png|jpg|tga|tif|exr|..., bitDepth?, padding?: none|dilation|dilationDefault|infinite, dilation?: px, size?: px, normalFormat?: openGl|directX}",
+            "{dir, preset?: built-in or user preset name, or a preset object {name, maps}, ts?: index|\"all\", format?: png|jpg|tga|tif|exr|..., bitDepth?, padding?: none|dilation|dilationDefault|infinite, dilation?: px, size?: px, normalFormat?: openGl|directX, colorSpace?: sRGB (default for 8/16-bit files)|Linear Rec.709 (default for exr, hdr)|ACEScg|ACES2065-1 (colour maps are converted, data maps never are; 8/16-bit files clamp to 0-1)}",
             always,
             export_textures
         ),
@@ -60,7 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "List export outputs",
             [],
             None,
-            "{preset?: name or preset object, ts?, format?, bitDepth?, size?} → [{ts, map, file, format, bitDepth, warnings}]",
+            "{preset?: name or preset object, ts?, format?, bitDepth?, size?, colorSpace?} → [{ts, map, file, format, bitDepth, warnings}]",
             always,
             plan
         ),
@@ -256,6 +256,12 @@ pub fn export_options(s: &Session, p: &Value, cmd: &str) -> Result<ExportOptions
         Some(other) => return Err(bad(cmd, format!("unknown normal format `{other}`"))),
         None => None,
     };
+    if let Some(name) = strp(p, "colorSpace") {
+        o.color_space = Some(
+            texturecraft_texel::ColorSpace::from_name(name)
+                .ok_or_else(|| bad(cmd, format!("unknown colorSpace `{name}` (sRGB, Linear Rec.709, ACEScg or ACES2065-1)")))?,
+        );
+    }
     Ok(o)
 }
 

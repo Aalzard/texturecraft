@@ -482,6 +482,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal from height", "由高度生成法线"),
     ("Normal map combine", "法线贴图合并"),
     ("Normal map detail", "法线贴图细节"),
+    ("Color space", "色彩空间"),
     ("Normal map format", "法线贴图格式"),
     ("Normal map inverse detail", "法线贴图反向细节"),
     ("Normal: painting uses the flat normal", "法线：绘画使用平坦法线"),

@@ -521,6 +521,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal from height", "ناظم من الارتفاع"),
     ("Normal map combine", "دمج خرائط النواظم"),
     ("Normal map detail", "تفاصيل خريطة النواظم"),
+    ("Color space", "فضاء الألوان"),
     ("Normal map format", "صيغة خريطة النواظم"),
     ("Normal map inverse detail", "عكس تفاصيل خريطة النواظم"),
     ("Normal: painting uses the flat normal", "عادي: يستخدم الرسم الناظم المسطح"),

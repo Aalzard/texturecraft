@@ -533,6 +533,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal from height", "ハイトからノーマル"),
     ("Normal map combine", "ノーマルマップ合成"),
     ("Normal map detail", "ノーマルマップ ディテール"),
+    ("Color space", "カラースペース"),
     ("Normal map format", "ノーマルマップ形式"),
     ("Normal map inverse detail", "ノーマルマップ 逆ディテール"),
     ("Normal: painting uses the flat normal", "ノーマル: ペイントにはフラットな法線を使用"),
