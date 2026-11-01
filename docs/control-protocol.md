@@ -218,7 +218,7 @@ texturecraft-cli --version                                   # TextureCraft 0.1.
 texturecraft-cli info model.glb                              # triangles, materials, UV report
 texturecraft-cli info project.tcraft                         # texture sets, layers, baked maps
 texturecraft-cli commands --filter mask
-texturecraft-cli new builtin:material_ball ball.tcraft --resolution 1024 --sample
+texturecraft-cli new builtin:material_ball ball.tcraft --resolution 1024 --sample   # mesh maps baked at ≤ 1024 px
 texturecraft-cli new model.glb model.tcraft --resolution 2048
 texturecraft-cli run ball.tcraft layer.add.fill '{"color":"#c08040","metallic":1}' -o ball.tcraft
 texturecraft-cli batch script.json
