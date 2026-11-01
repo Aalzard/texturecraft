@@ -924,4 +924,5 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "استخدام إطار وأزرار نافذة نظام التشغيل بدلاً من شريط عنوان TextureCraft الخاص",
     ),
+    ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "لا يوجد رسم على \"{layer}\" بعد: يغيّر المرشح ما ترسمه عليها."),
 ];
