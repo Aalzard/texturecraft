@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::i18n::n_;
 
 /// Settings › Interface › Brightness: the greys of the interface. The 3D and 2D views keep their
-/// studio grey in every level (they show a render, not chrome).
+/// studio slate in every level (they show a render, not chrome).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Brightness {
@@ -135,9 +135,10 @@ pub struct Tokens {
     pub danger: Color32,
     /// Warnings and the mask-view marker.
     pub warning: Color32,
-    /// The 3D and 2D views' background: a neutral studio grey in every brightness.
+    /// The 3D and 2D views' background (the middle of the renderer's studio backdrop): a dark,
+    /// faintly cool slate in every brightness, so colors are judged against the same ground.
     pub viewport: Color32,
-    /// Lettering drawn over the views (always on their dark grey).
+    /// Lettering drawn over the views (always on their dark slate).
     pub viewport_text: Color32,
     /// The accent drawn over the views (its dark-panel shade, whatever the brightness).
     pub viewport_accent: Color32,
@@ -175,8 +176,8 @@ impl Tokens {
             tool_active: hex(0x2f3541),
             danger: hex(0xe0554a),
             warning: hex(0xe0b040),
-            viewport: hex(0x2a2a2a),
-            viewport_text: hex(0x969696),
+            viewport: hex(0x272b31),
+            viewport_text: hex(0x9aa1ad),
             viewport_accent: hex(0xe58a4e),
             radius: 5,
         };
@@ -447,7 +448,7 @@ mod tests {
                 assert!(contrast(t.button_border, t.panel) >= 1.6, "{b:?}: rail on panel");
             }
         }
-        // The views keep their studio grey.
+        // The views keep their studio slate.
         assert_eq!(Tokens::for_brightness(Brightness::Light).viewport, Tokens::for_brightness(Brightness::Dark).viewport);
     }
 }

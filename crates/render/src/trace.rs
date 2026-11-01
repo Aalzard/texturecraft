@@ -441,10 +441,10 @@ impl Tracer {
     }
 }
 
-/// The viewport's flat studio gray with a gentle falloff (matches the post pass).
+/// The viewport's studio backdrop: a cool slate, lighter at the top (matches the post pass).
 fn backdrop(uv: Vec2) -> Vec3 {
-    let r = (uv * 2.0 - Vec2::ONE).length() * 0.35;
-    Vec3::splat(0.0232 * (1.06 - r * r))
+    let d = uv * 2.0 - Vec2::ONE;
+    Vec3::new(0.0295, 0.0343, 0.0437).lerp(Vec3::new(0.0110, 0.0130, 0.0168), uv.y) * (1.0 - 0.09 * d.length_squared())
 }
 
 fn tonemap(hdr: Vec3, d: &TraceDisplay) -> Vec3 {
