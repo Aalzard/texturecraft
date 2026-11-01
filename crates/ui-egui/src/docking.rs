@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn unreadable_layouts_become_the_default() {
         for text in [
-            // The layout of the earlier dock.
+            // A layout in another shape.
             r#"{"main":{"tabs":{"tabs":["Viewport"]}},"windows":[]}"#,
             // Not a layout.
             r#"[1,2]"#,
