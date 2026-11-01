@@ -360,6 +360,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Import an image (File > Import resources) to project it onto the mesh.", "导入图像（文件 > 导入资源）以将其投影到网格上。"),
     ("Import images to use them in fills and masks", "导入图像以在填充和遮罩中使用"),
     ("Import resources...", "导入资源..."),
+    ("Import MaterialX material...", "导入 MaterialX 材质..."),
+    ("MaterialX materials", "MaterialX 材质"),
     ("Import...", "导入..."),
     ("Imported template \"{name}\"", "已导入模板“{name}”"),
     ("Imported {name}", "已导入 {name}"),

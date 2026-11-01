@@ -417,6 +417,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Import images to use them in fills and masks", "Importar imágenes para usarlas en rellenos y máscaras"),
     ("Import resources...", "Importar recursos..."),
+    ("Import MaterialX material...", "Importar material MaterialX..."),
+    ("MaterialX materials", "Materiales MaterialX"),
     ("Import...", "Importar..."),
     ("Imported template \"{name}\"", "Plantilla \"{name}\" importada"),
     ("Imported {name}", "{name} importado"),

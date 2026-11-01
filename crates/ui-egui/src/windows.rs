@@ -963,6 +963,19 @@ pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) ->
             app.ui.dock.focus(crate::docking::Panel::Assets);
             true
         }
+        "file.importMaterialX" => {
+            if let Some(p) = rfd::FileDialog::new().add_filter(tr("MaterialX materials"), &["mtlx"]).pick_file()
+                && let Some(r) = app.run("file.importMaterialX", json!({"path": p.display().to_string()}))
+            {
+                let name = r.get("material").and_then(|n| n.as_str()).unwrap_or_default().to_string();
+                for w in r.get("warnings").and_then(|w| w.as_array()).into_iter().flatten().filter_map(|w| w.as_str()) {
+                    app.session.log.push(format!("MaterialX {name}: {w}"));
+                }
+                app.toast(trf("Imported {name}", &[("name", &name)]), false);
+                app.ui.dock.focus(crate::docking::Panel::Layers);
+            }
+            true
+        }
         "file.exportMesh" => {
             let name = format!("{}.obj", texturecraft_engine::formats::export::sanitize_file_stem(&app.session.doc.project.name));
             if let Some(p) = rfd::FileDialog::new()

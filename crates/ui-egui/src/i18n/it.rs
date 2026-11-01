@@ -420,6 +420,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Import an image (File > Import resources) to project it onto the mesh.", "Importa un'immagine (File > Importa risorse) per proiettarla sulla mesh."),
     ("Import images to use them in fills and masks", "Importa immagini per usarle in riempimenti e maschere"),
     ("Import resources...", "Importa risorse..."),
+    ("Import MaterialX material...", "Importa materiale MaterialX..."),
+    ("MaterialX materials", "Materiali MaterialX"),
     ("Import...", "Importa..."),
     ("Imported template \"{name}\"", "Modello \"{name}\" importato"),
     ("Imported {name}", "{name} importato"),
