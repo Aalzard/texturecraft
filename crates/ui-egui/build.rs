@@ -1,21 +1,30 @@
-//! Embeds the optional craft-fonts CJK UI fonts (storytold/craft-fonts) when `CRAFT_FONTS_DIR`
-//! points at a checkout; without it `CRAFT_FONTS` is empty and the UI uses system fonts. The
+//! Embeds the optional craft-fonts UI fonts (storytold/craft-fonts) when `CRAFT_FONTS_DIR` points
+//! at a checkout: IBM Plex Sans and Mono for the interface (from its Latin catalog) and the CJK
+//! faces; without it `CRAFT_FONTS` is empty and the UI uses egui's and the system's fonts. The
 //! recipe follows craft-fonts' `docs/integration.md`; no font file is committed here.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-/// The UI faces TextureCraft embeds (family, style): one sans font per script.
-const UI_FONTS: &[(&str, &str)] = &[("BIZ UDPGothic", "Regular"), ("Noto Sans CJK SC", "Regular")];
-/// The web build has a download budget: only the Japanese UI font (~4.5 MB).
-const WEB_FONTS: &[(&str, &str)] = &[("BIZ UDPGothic", "Regular")];
+/// The UI faces TextureCraft embeds (family, style) per manifest: desktop, then web (the web build
+/// has a download budget: of the CJK faces only the Japanese one, ~4.5 MB).
+const MANIFESTS: &[(&str, Faces, Faces)] = &[
+    ("fonts/manifest.txt", &[("BIZ UDPGothic", "Regular"), ("Noto Sans CJK SC", "Regular")], &[("BIZ UDPGothic", "Regular")]),
+    // The interface font: one variable file for every weight (0.5 MB), and the numbers' face.
+    (LATIN_MANIFEST, LATIN, LATIN),
+];
+/// Newer than the core catalog: a checkout without it keeps the default interface font.
+const LATIN_MANIFEST: &str = "fonts/latin-manifest.txt";
+const LATIN: Faces = &[("IBM Plex Sans", "Variable"), ("IBM Plex Mono", "Regular")];
+/// (family, style) pairs of a manifest.
+type Faces = &'static [(&'static str, &'static str)];
 
 fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
     let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
     if let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from) {
-        match craft_fonts(&dir) {
+        match MANIFESTS.iter().map(|(rel, desktop, web)| craft_fonts(&dir, rel, desktop, web)).collect::<Result<String, String>>() {
             Ok(entries) => src.push_str(&entries),
             Err(e) if std::env::var_os("CRAFT_FONTS_REQUIRED").is_some() => {
                 println!("cargo::error=CRAFT_FONTS_DIR={}: {e}", dir.display());
@@ -30,13 +39,16 @@ fn main() {
     }
 }
 
-/// One `CraftFont { .. }` initialiser per wanted manifest line.
-fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
-    let manifest = dir.join("fonts/manifest.txt");
+/// One `CraftFont { .. }` initialiser per wanted line of manifest `rel`.
+fn craft_fonts(dir: &std::path::Path, rel: &str, desktop: &[(&str, &str)], web: &[(&str, &str)]) -> Result<String, String> {
+    let manifest = dir.join(rel);
     println!("cargo::rerun-if-changed={}", manifest.display());
+    if rel == LATIN_MANIFEST && !manifest.exists() {
+        return Ok(String::new());
+    }
     let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
     let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
-    let wanted = if wasm { WEB_FONTS } else { UI_FONTS };
+    let wanted = if wasm { web } else { desktop };
     let mut out = String::new();
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
         let f: Vec<&str> = line.split(" | ").map(str::trim).collect();

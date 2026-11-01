@@ -40,3 +40,6 @@ web-sys = { version = "0.3", features = ["Window", "Document", "HtmlElement", "H
 # winit needs a window system on Linux, so the crate's own tests build with X11.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 eframe = { workspace = true, features = ["x11"] }
+# Offscreen pictures of the whole window (tests/ui_snapshots.rs).
+egui_kittest = { version = "0.37", features = ["wgpu", "eframe"] }
+image = { workspace = true }

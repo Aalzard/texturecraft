@@ -281,10 +281,55 @@ pub fn card<R>(ui: &mut egui::Ui, t: &Tokens, margin: egui::Margin, padding: egu
         .inner
 }
 
-/// The app's fonts: egui's defaults and the Phosphor icon font (`fonts::UiFonts` adds CJK).
+/// Interface text in the medium weight (500): titles of panels, sections and dialogs.
+pub fn medium(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(MEDIUM.into()))
+}
+
+/// Interface text in the semibold weight (600): headings and emphasis.
+pub fn semibold(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(SEMIBOLD.into()))
+}
+
+/// The weight families: the interface font at 500 and 600, the regular font without it.
+pub(crate) const MEDIUM: &str = "ui-medium";
+pub(crate) const SEMIBOLD: &str = "ui-semibold";
+
+/// The app's fonts: IBM Plex Sans (regular, medium, semibold from one variable file) and Plex Mono
+/// when built with craft-fonts, egui's defaults otherwise, and the Phosphor icon font
+/// (`fonts::UiFonts` adds CJK).
 pub fn font_definitions() -> egui::FontDefinitions {
+    use std::sync::Arc;
     let mut fonts = egui::FontDefinitions::default();
+    let face = |family: &str, style: &str| crate::fonts::CRAFT_FONTS.iter().find(|f| f.family == family && f.style == style && !f.bytes.is_empty());
+    let mut weights: Vec<&str> = Vec::new();
+    if let Some(sans) = face("IBM Plex Sans", "Variable") {
+        for (name, wght) in [("plex-sans", 400.0), ("plex-sans-500", 500.0), ("plex-sans-600", 600.0)] {
+            let mut data = egui::FontData::from_static(sans.bytes);
+            data.tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", wght)]);
+            fonts.font_data.insert(name.into(), Arc::new(data));
+            weights.push(name);
+        }
+        if let Some(list) = fonts.families.get_mut(&FontFamily::Proportional) {
+            list.insert(0, "plex-sans".into());
+        }
+    }
+    if let Some(mono) = face("IBM Plex Mono", "Regular") {
+        fonts.font_data.insert("plex-mono".into(), Arc::new(egui::FontData::from_static(mono.bytes)));
+        if let Some(list) = fonts.families.get_mut(&FontFamily::Monospace) {
+            list.insert(0, "plex-mono".into());
+        }
+    }
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    // The weight families: the regular family with its first face swapped for the weight.
+    let regular = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    for (family, weight) in [(MEDIUM, weights.get(1)), (SEMIBOLD, weights.get(2))] {
+        let mut list = regular.clone();
+        if let (Some(w), Some(first)) = (weight, list.first_mut()) {
+            *first = (*w).to_string();
+        }
+        fonts.families.insert(FontFamily::Name(family.into()), list);
+    }
     fonts
 }
 
@@ -299,20 +344,23 @@ pub fn apply(ctx: &egui::Context, b: Brightness, accent: Accent) {
     let t = Tokens::for_brightness(b).with_accent(accent);
     ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, t));
     ctx.all_styles_mut(|s| {
+        // One type scale: 11 small print, 12.5 body and controls, 14 headings (semibold), and
+        // values in the monospace face.
         s.text_styles = [
-            (TextStyle::Small, FontId::new(10.0, FontFamily::Proportional)),
-            (TextStyle::Body, FontId::new(12.0, FontFamily::Proportional)),
-            (TextStyle::Button, FontId::new(12.0, FontFamily::Proportional)),
-            (TextStyle::Heading, FontId::new(14.0, FontFamily::Proportional)),
-            (TextStyle::Monospace, FontId::new(11.5, FontFamily::Monospace)),
+            (TextStyle::Small, FontId::new(11.0, FontFamily::Proportional)),
+            (TextStyle::Body, FontId::new(12.5, FontFamily::Proportional)),
+            (TextStyle::Button, FontId::new(12.5, FontFamily::Proportional)),
+            (TextStyle::Heading, semibold(14.0)),
+            (TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace)),
         ]
         .into();
-        s.spacing.item_spacing = egui::vec2(6.0, 5.0);
-        s.spacing.button_padding = egui::vec2(6.0, 2.0);
+        // A 2-4-6-8-12 spacing scale: 6 between items, 4 between rows, controls 24 high.
+        s.spacing.item_spacing = egui::vec2(6.0, 4.0);
+        s.spacing.button_padding = egui::vec2(8.0, 3.0);
         s.spacing.interact_size = egui::vec2(24.0, 24.0);
         s.spacing.slider_width = 120.0;
         s.spacing.menu_margin = egui::Margin::same(6);
-        s.spacing.window_margin = egui::Margin::same(8);
+        s.spacing.window_margin = egui::Margin::same(12);
         s.animation_time = 0.08;
         let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
         v.panel_fill = t.panel;
@@ -322,7 +370,7 @@ pub fn apply(ctx: &egui::Context, b: Brightness, accent: Accent) {
         v.faint_bg_color = t.row;
         v.code_bg_color = t.field;
         v.window_stroke = Stroke::new(1.0, t.separator);
-        v.window_corner_radius = CornerRadius::same(10);
+        v.window_corner_radius = CornerRadius::same(CARD_RADIUS);
         v.menu_corner_radius = CornerRadius::same(CARD_RADIUS);
         v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if t.dark { 120 } else { 60 }) };
         v.window_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(if t.dark { 140 } else { 70 }) };
@@ -346,9 +394,9 @@ pub fn apply(ctx: &egui::Context, b: Brightness, accent: Accent) {
     });
 }
 
-/// Uppercase panel caption (the strong text colour).
+/// A section caption inside a panel: medium weight, strong colour, as written (no capitals).
 pub fn caption(text: &str) -> egui::RichText {
-    egui::RichText::new(text.to_uppercase()).size(10.5).strong()
+    egui::RichText::new(text).font(medium(12.5)).strong()
 }
 
 #[cfg(test)]
