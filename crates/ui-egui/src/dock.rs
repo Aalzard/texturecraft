@@ -99,6 +99,9 @@ pub(crate) fn layers(app: &mut TextureCraftApp, ui: &mut Ui) {
     let tk = Tokens::get(ui.ctx());
     // Wraps in a narrow column instead of widening the rows below past the panel.
     ui.horizontal_wrapped(|ui| {
+        // The menu buttons as compact as the icon buttons beside them.
+        ui.spacing_mut().button_padding.x = 4.0;
+        ui.spacing_mut().item_spacing.x = 4.0;
         let chans = app.session.doc.project.texture_set(app.session.ts()).map(|t| t.channel_list()).unwrap_or_default();
         egui::ComboBox::from_id_salt("layer_channel").width(86.0).selected_text(tr(app.ui.layer_channel.label())).show_ui(ui, |ui| {
             for c in chans {

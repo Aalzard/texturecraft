@@ -280,10 +280,10 @@ fn area_id() -> Id {
 }
 
 /// The dock look: every panel group is a card on the window's frame colour, its tab strip
-/// without hard lines, the shown tab a pill, titles in the medium weight.
+/// without hard lines, the shown tab a pill.
 fn style(ui: &Ui, t: &Tokens) -> DockStyle {
     let mut s = DockStyle::from_ui(ui);
-    s.gap = 6.0;
+    s.gap = f32::from(crate::theme::GUTTER);
     // Smallest panel extent a divider drag leaves.
     s.min_pane = 60.0;
     s.background = t.panel;
@@ -295,7 +295,7 @@ fn style(ui: &Ui, t: &Tokens) -> DockStyle {
     s.accent = t.accent;
     s.floating_background = t.panel;
     s.floating_stroke = egui::Stroke::new(1.0, t.button_border);
-    s.font = crate::theme::medium(12.5);
+    s.font = egui::FontId::proportional(12.5);
     s.min_tab_width = 54.0;
     s.tab_height = 30.0;
     // Panels arrange in a split tree around the viewport; floating title bars only move windows.

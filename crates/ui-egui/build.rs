@@ -1,7 +1,8 @@
 //! Embeds the optional craft-fonts UI fonts (storytold/craft-fonts) when `CRAFT_FONTS_DIR` points
-//! at a checkout: IBM Plex Sans and Mono for the interface (from its Latin catalog) and the CJK
+//! at a checkout: Inter for the interface (from its Latin catalog) and the CJK
 //! faces; without it `CRAFT_FONTS` is empty and the UI uses egui's and the system's fonts. The
-//! recipe follows craft-fonts' `docs/integration.md`; no font file is committed here.
+//! recipe follows craft-fonts' `docs/integration.md`; no font file is committed here. The Latin
+//! faces are embedded without their Private Use Area ([`without_private_use`]).
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -10,12 +11,12 @@ use std::path::PathBuf;
 /// has a download budget: of the CJK faces only the Japanese one, ~4.5 MB).
 const MANIFESTS: &[(&str, Faces, Faces)] = &[
     ("fonts/manifest.txt", &[("BIZ UDPGothic", "Regular"), ("Noto Sans CJK SC", "Regular")], &[("BIZ UDPGothic", "Regular")]),
-    // The interface font: one variable file for every weight (0.5 MB), and the numbers' face.
+    // The interface font, regular and semibold (0.8 MB).
     (LATIN_MANIFEST, LATIN, LATIN),
 ];
 /// Newer than the core catalog: a checkout without it keeps the default interface font.
 const LATIN_MANIFEST: &str = "fonts/latin-manifest.txt";
-const LATIN: Faces = &[("IBM Plex Sans", "Variable"), ("IBM Plex Mono", "Regular")];
+const LATIN: Faces = &[("Inter", "Regular"), ("Inter", "SemiBold")];
 /// (family, style) pairs of a manifest.
 type Faces = &'static [(&'static str, &'static str)];
 
@@ -58,8 +59,14 @@ fn craft_fonts(dir: &std::path::Path, rel: &str, desktop: &[(&str, &str)], web: 
         if !wanted.contains(&(*family, *style)) {
             continue;
         }
-        let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
+        let mut path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
         println!("cargo::rerun-if-changed={}", path.display());
+        if rel == LATIN_MANIFEST {
+            let bytes = std::fs::read(&path).map_err(|e| format!("{file}: {e}"))?;
+            let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join(path.file_name().unwrap_or_default());
+            std::fs::write(&out, without_private_use(&bytes).map_err(|e| format!("{file}: {e}"))?).map_err(|e| format!("{}: {e}", out.display()))?;
+            path = out;
+        }
         let scripts: Vec<String> = scripts.split(',').map(|s| format!("{:?}", s.trim())).collect();
         let _ = writeln!(
             out,
@@ -69,4 +76,34 @@ fn craft_fonts(dir: &std::path::Path, rel: &str, desktop: &[(&str, &str)], web: 
         );
     }
     Ok(out)
+}
+
+/// `font` without the characters of the Private Use Area (U+E000–U+F8FF): the icon font (Phosphor)
+/// draws there, and Inter, ahead of it in the fallback list, has alternates of its own there that
+/// would show instead of the icons. Everything else (layout features, hinting) is kept, as
+/// craft-libs' `craft-fonts-build` subsets.
+fn without_private_use(font: &[u8]) -> Result<Vec<u8>, String> {
+    use skera::{Plan, SubsetFlags, subset_font};
+    use skrifa::raw::collections::IntSet;
+    use skrifa::raw::types::NameId;
+    use skrifa::{FontRef, GlyphId, MetadataProvider, Tag};
+    let font = FontRef::new(font).map_err(|e| e.to_string())?;
+    let mut unicodes = IntSet::<u32>::empty();
+    unicodes.extend(font.charmap().mappings().map(|(c, _)| c).filter(|c| !(0xE000..=0xF8FF).contains(c)));
+    let mut name_ids = IntSet::<NameId>::empty();
+    name_ids.insert_range(NameId::new(0)..=NameId::new(6));
+    let mut languages = IntSet::<u16>::empty();
+    languages.insert(0x0409);
+    let plan = Plan::new(
+        &IntSet::<GlyphId>::empty(),
+        &unicodes,
+        &font,
+        SubsetFlags::default(),
+        &IntSet::<Tag>::empty(),
+        &IntSet::<Tag>::all(),
+        &IntSet::<Tag>::all(),
+        &name_ids,
+        &languages,
+    );
+    subset_font(&font, &plan).map_err(|e| e.to_string())
 }

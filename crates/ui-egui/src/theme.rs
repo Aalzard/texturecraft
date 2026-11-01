@@ -259,11 +259,15 @@ impl Tokens {
     }
 }
 
-/// The corner radius of [`card`]s.
+/// The corner radius of floating windows and menus.
 pub const CARD_RADIUS: u8 = 8;
 
+/// The window-frame gap between neighbouring cards and dock groups (the dock's own gap).
+pub const GUTTER: i8 = 6;
+
 /// The tool bar, the tool shelf, the rail and side panels are cards: `body` drawn `padding` inside
-/// the panel colour with soft corners, `margin` of the window's frame colour around it.
+/// the panel colour, `margin` of the window's frame colour around it. Square like the dock's
+/// groups, so the frame reads as one set of tiles with even gutters.
 pub fn card<R>(ui: &mut egui::Ui, t: &Tokens, margin: egui::Margin, padding: egui::Margin, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::Frame::NONE
         .fill(t.chrome)
@@ -271,7 +275,6 @@ pub fn card<R>(ui: &mut egui::Ui, t: &Tokens, margin: egui::Margin, padding: egu
         .show(ui, |ui| {
             egui::Frame::NONE
                 .fill(t.panel)
-                .corner_radius(CARD_RADIUS)
                 .inner_margin(padding)
                 .show(ui, |ui| {
                     ui.set_min_size(ui.available_size());
@@ -282,55 +285,39 @@ pub fn card<R>(ui: &mut egui::Ui, t: &Tokens, margin: egui::Margin, padding: egu
         .inner
 }
 
-/// Interface text in the medium weight (500): titles of panels, sections and dialogs.
-pub fn medium(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(MEDIUM.into()))
-}
-
-/// Interface text in the semibold weight (600): headings and emphasis.
+/// Interface text in the semibold weight: headings and window titles.
 pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(SEMIBOLD.into()))
 }
 
-/// The weight families: the interface font at 500 and 600, the regular font without it.
-pub(crate) const MEDIUM: &str = "ui-medium";
+/// The semibold family: Inter SemiBold, the regular font without it.
 pub(crate) const SEMIBOLD: &str = "ui-semibold";
 
-/// The app's fonts: IBM Plex Sans (regular, medium, semibold from one variable file) and Plex Mono
-/// when built with craft-fonts, egui's defaults otherwise, and the Phosphor icon font
-/// (`fonts::UiFonts` adds CJK).
+/// The app's fonts: Inter (regular and semibold) when built with craft-fonts, egui's defaults
+/// otherwise, egui's monospace face for values, and the Phosphor icon font (`fonts::UiFonts`
+/// adds CJK).
 pub fn font_definitions() -> egui::FontDefinitions {
     use std::sync::Arc;
     let mut fonts = egui::FontDefinitions::default();
-    let face = |family: &str, style: &str| crate::fonts::CRAFT_FONTS.iter().find(|f| f.family == family && f.style == style && !f.bytes.is_empty());
-    let mut weights: Vec<&str> = Vec::new();
-    if let Some(sans) = face("IBM Plex Sans", "Variable") {
-        for (name, wght) in [("plex-sans", 400.0), ("plex-sans-500", 500.0), ("plex-sans-600", 600.0)] {
-            let mut data = egui::FontData::from_static(sans.bytes);
-            data.tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", wght)]);
-            fonts.font_data.insert(name.into(), Arc::new(data));
-            weights.push(name);
-        }
+    let face = |style: &str| crate::fonts::CRAFT_FONTS.iter().find(|f| f.family == "Inter" && f.style == style && !f.bytes.is_empty());
+    // Inter is drawn a little under its size, as in VectorCraft: its letters are wide.
+    let inter = |bytes: &'static [u8]| Arc::new(egui::FontData::from_static(bytes).tweak(egui::FontTweak { scale: 0.92, ..Default::default() }));
+    let mut semibold = None;
+    if let (Some(regular), Some(bold)) = (face("Regular"), face("SemiBold")) {
+        fonts.font_data.insert("inter".into(), inter(regular.bytes));
+        fonts.font_data.insert("inter-semibold".into(), inter(bold.bytes));
         if let Some(list) = fonts.families.get_mut(&FontFamily::Proportional) {
-            list.insert(0, "plex-sans".into());
+            list.insert(0, "inter".into());
         }
-    }
-    if let Some(mono) = face("IBM Plex Mono", "Regular") {
-        fonts.font_data.insert("plex-mono".into(), Arc::new(egui::FontData::from_static(mono.bytes)));
-        if let Some(list) = fonts.families.get_mut(&FontFamily::Monospace) {
-            list.insert(0, "plex-mono".into());
-        }
+        semibold = Some("inter-semibold");
     }
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-    // The weight families: the regular family with its first face swapped for the weight.
-    let regular = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    for (family, weight) in [(MEDIUM, weights.get(1)), (SEMIBOLD, weights.get(2))] {
-        let mut list = regular.clone();
-        if let (Some(w), Some(first)) = (weight, list.first_mut()) {
-            *first = (*w).to_string();
-        }
-        fonts.families.insert(FontFamily::Name(family.into()), list);
+    // The semibold family: the regular family with its first face swapped for the weight.
+    let mut list = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    if let (Some(w), Some(first)) = (semibold, list.first_mut()) {
+        *first = w.to_string();
     }
+    fonts.families.insert(FontFamily::Name(SEMIBOLD.into()), list);
     fonts
 }
 
@@ -345,14 +332,14 @@ pub fn apply(ctx: &egui::Context, b: Brightness, accent: Accent) {
     let t = Tokens::for_brightness(b).with_accent(accent);
     ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, t));
     ctx.all_styles_mut(|s| {
-        // One type scale: 11 small print, 12.5 body and controls, 14 headings (semibold), and
-        // values in the monospace face.
+        // VectorCraft's type scale: 11 small print, 13 body and controls, 15 headings (semibold),
+        // 11.5 values in the monospace face.
         s.text_styles = [
             (TextStyle::Small, FontId::new(11.0, FontFamily::Proportional)),
-            (TextStyle::Body, FontId::new(12.5, FontFamily::Proportional)),
-            (TextStyle::Button, FontId::new(12.5, FontFamily::Proportional)),
-            (TextStyle::Heading, semibold(14.0)),
-            (TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace)),
+            (TextStyle::Body, FontId::new(13.0, FontFamily::Proportional)),
+            (TextStyle::Button, FontId::new(13.0, FontFamily::Proportional)),
+            (TextStyle::Heading, semibold(15.0)),
+            (TextStyle::Monospace, FontId::new(11.5, FontFamily::Monospace)),
         ]
         .into();
         // A 2-4-6-8-12 spacing scale: 6 between items, 4 between rows, controls 24 high.
@@ -376,7 +363,9 @@ pub fn apply(ctx: &egui::Context, b: Brightness, accent: Accent) {
         v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if t.dark { 120 } else { 60 }) };
         v.window_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(if t.dark { 140 } else { 70 }) };
         v.selection.bg_fill = t.accent_dim;
-        v.selection.stroke = Stroke::new(1.0, t.accent);
+        // Selected options and selected text are lettered in the strong colour: the accent on its
+        // own tint is hard to read.
+        v.selection.stroke = Stroke::new(1.0, t.text_strong);
         v.hyperlink_color = t.accent;
         let w = &mut v.widgets;
         craft_ui::theme::WidgetPalette { noninteractive: t.panel, inactive: t.button, hovered: t.row_hover, active: t.tool_active, open: t.row_hover }
@@ -395,9 +384,9 @@ pub fn apply(ctx: &egui::Context, b: Brightness, accent: Accent) {
     });
 }
 
-/// A section caption inside a panel: medium weight, strong colour, as written (no capitals).
+/// A section caption inside a panel: semibold in the strong colour, as written (no capitals).
 pub fn caption(text: &str) -> egui::RichText {
-    egui::RichText::new(text).font(medium(12.5)).strong()
+    egui::RichText::new(text).font(semibold(12.5)).strong()
 }
 
 #[cfg(test)]
@@ -440,6 +429,7 @@ mod tests {
                 assert!(contrast(t.text, t.panel) >= 7.0, "{b:?}: text on panel");
                 assert!(contrast(t.text_dim, t.panel) >= 4.5, "{b:?}: dim text on panel");
                 assert!(contrast(t.text, t.row_selected) >= 4.5, "{b:?} {a:?}: text on a selected row");
+                assert!(contrast(t.text_strong, t.accent_dim) >= 4.5, "{b:?} {a:?}: a selected option's lettering");
                 assert!(contrast(t.danger, t.panel) >= 3.0 && contrast(t.warning, t.panel) >= 3.0, "{b:?}: warnings on panel");
                 assert!(contrast(t.accent, t.panel) >= 2.5, "{b:?} {a:?}: accent on panel");
                 assert!(contrast(Color32::WHITE, t.accent_strong) >= 2.5, "{b:?} {a:?}: white on accent button");
