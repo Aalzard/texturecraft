@@ -235,6 +235,22 @@ fn obj_without_uvs_or_normals_is_completed() {
     assert!(n0.len() > 1 && n0.iter().all(|n| (*n - n0[0]).length() < 1e-5));
 }
 
+#[test]
+fn polygons_keep_their_edges_for_the_wireframe() {
+    // An OBJ quad and pentagon (with UVs, so no unwrap splits them), a triangle, and a PLY quad.
+    let obj = "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nv 2 0 0\nv 3 0 0\nv 3 1 0\nv 2.5 2 0\nv 2 1 0\nvt 0 0\n\
+               f 1/1 2/1 3/1 4/1\nf 5/1 6/1 7/1 8/1 9/1\nf 1/1 2/1 5/1\n";
+    let m = import_mesh_bytes("p.obj", obj.as_bytes()).unwrap().mesh;
+    assert_eq!(m.triangle_count(), 2 + 3 + 1);
+    assert_eq!(m.wire_edges()[0].len(), 4 + 5 + 2, "the triangle adds edges 1-5 and 2-5");
+    let ply = import_mesh_bytes("a.ply", ply_ascii().as_bytes()).unwrap().mesh;
+    assert_eq!(ply.wire_edges()[0].len(), 4);
+    // Triangles alone keep every edge.
+    let tris = import_mesh_bytes("t.obj", b"v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvt 0 0\nf 1/1 2/1 3/1\nf 1/1 3/1 4/1\n").unwrap().mesh;
+    assert!(tris.diagonals.is_empty());
+    assert_eq!(tris.wire_edges()[0].len(), 5);
+}
+
 fn ply_ascii() -> String {
     "ply\nformat ascii 1.0\ncomment test\nelement vertex 4\nproperty float x\nproperty float y\nproperty float z\nproperty float s\nproperty float t\n\
      element face 1\nproperty list uchar int vertex_indices\nend_header\n\

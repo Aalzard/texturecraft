@@ -94,6 +94,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   (compute shaders, about 25× the CPU tracer, desktop and WebGPU) or on the CPU.
 - View any channel, any baked mesh map, or a UV checker; Alt+drag to orbit, middle-drag to pan,
   wheel to zoom, F to frame, M / C / B to cycle views.
+- **3D and UV wireframes** that show the mesh's own polygons: quads and n-gons from OBJ, FBX,
+  COLLADA, USD, Alembic and PLY files keep their edges, without the triangulation's diagonals.
 
 ## Interface
 
@@ -105,8 +107,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Dockable, tabbed and floating panels**, saved layouts, and panels that reopen where you closed
   them.
 - A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.
-- **9 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese and
-  Korean, switchable live.
+- **10 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese,
+  Korean and Arabic, switchable live.
 - **In the browser:** the same app compiled to WebAssembly, on WebGPU or WebGL2, with touch
   navigation and project open, save and download.
 

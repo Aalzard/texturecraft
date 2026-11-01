@@ -30,6 +30,8 @@ struct Builder {
     n: Vec<Vec3>,
     uv: Vec<Vec2>,
     idx: Vec<u32>,
+    /// Per triangle: its [`Mesh::diagonals`] bits.
+    diag: Vec<u8>,
 }
 
 impl Builder {
@@ -55,6 +57,8 @@ impl Builder {
                 let a = base + i * w + j;
                 let (b, c, d) = (a + 1, a + w, a + w + 1);
                 self.idx.extend_from_slice(&[a, c, d, a, d, b]);
+                // Edge d-a of the first triangle and a-d of the second split the quad.
+                self.diag.extend_from_slice(&[0b100, 0b001]);
             }
         }
     }
@@ -70,6 +74,7 @@ impl Builder {
             colors: Vec::new(),
             submeshes: vec![SubMesh { name: material.into(), material: 0, start: 0, count }],
             materials: vec![material.into()],
+            diagonals: self.diag,
         };
         m.compute_tangents();
         m
@@ -203,6 +208,7 @@ fn disk_into(b: &mut Builder, center: Vec3, radius: f32, up: bool, segs: usize, 
         } else {
             b.idx.extend_from_slice(&[c, a, bb]);
         }
+        b.diag.push(0);
     }
 }
 

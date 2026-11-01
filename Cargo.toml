@@ -45,7 +45,7 @@ eframe = { version = "0.37", default-features = false }
 egui = "0.37"
 wgpu = "30"
 rfd = "0.17"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names", "KHR_materials_emissive_strength"] }
 tobj = { version = "4", default-features = false }
 flate2 = "1"

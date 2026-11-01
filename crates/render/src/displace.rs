@@ -72,6 +72,7 @@ pub fn displaced(mesh: &Mesh, sets: &[TraceSet]) -> Option<Mesh> {
         },
         indices,
         materials: mesh.materials.clone(),
+        diagonals: Vec::new(),
     })
 }
 

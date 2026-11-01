@@ -20,8 +20,8 @@ mod stl;
 pub(crate) mod tests;
 pub(crate) mod usd;
 
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 
 use texturecraft_geom::glam::{Mat4, Vec2, Vec3, Vec4};
 use texturecraft_geom::unwrap::{all_triangles_degenerate, auto_unwrap, weld_ids};
@@ -134,6 +134,8 @@ pub(crate) struct RawMesh {
     pub cameras: Vec<RawCamera>,
     /// Materials whose base color is not plain white (glTF).
     pub base_colors: Vec<RawBaseColor>,
+    /// Vertex pairs (smaller first) that [`RawMesh::polygon`] added to split polygons.
+    pub diagonals: HashSet<(u32, u32)>,
 }
 
 /// A material's base color as a file gives it: the linear factor and the encoded texture.
@@ -158,6 +160,19 @@ impl RawMesh {
 
     pub fn triangle_count(&self) -> usize {
         self.groups.iter().map(|(_, _, g)| g.len() / 3).sum()
+    }
+
+    /// Fan-triangulate polygon `corners` (vertex indices) into `material`'s triangles in `part`,
+    /// remembering the diagonals so wireframes can show the polygon.
+    pub fn polygon(&mut self, material: &str, part: &str, corners: &[u32]) {
+        let Some((&first, rest)) = corners.split_first() else { return };
+        let group = self.group(material, part);
+        for w in rest.windows(2) {
+            group.extend_from_slice(&[first, w[0], w[1]]);
+        }
+        for &v in rest.iter().skip(1).take(rest.len().saturating_sub(2)) {
+            self.diagonals.insert((first.min(v), first.max(v)));
+        }
     }
 }
 
@@ -213,11 +228,7 @@ impl PolygonSink {
             };
             self.polygon.push(id);
         }
-        let group = self.raw.group(material, &self.part);
-        let (first, rest) = self.polygon.split_first().unwrap_or((&0, &[]));
-        for w in rest.windows(2) {
-            group.extend_from_slice(&[*first, w[0], w[1]]);
-        }
+        self.raw.polygon(material, &self.part, &self.polygon);
         Ok(())
     }
 
@@ -365,7 +376,7 @@ fn read(file_name: &str, bytes: &[u8]) -> Result<RawMesh> {
 /// Positions, submeshes (materials contiguous), normals and colors of a raw mesh, validated;
 /// plus its warnings and UVs (the mesh's UVs and tangents are left empty).
 fn geometry(raw: RawMesh) -> Result<(Mesh, Vec<String>, Option<Vec<Vec2>>)> {
-    let RawMesh { positions, normals, uvs, colors, groups, warnings, .. } = raw;
+    let RawMesh { positions, normals, uvs, colors, groups, warnings, diagonals, .. } = raw;
     check_vertices(positions.len())?;
     check_triangles(0, groups.iter().map(|(_, _, g)| g.len() / 3).sum())?;
     let mut mesh = Mesh { positions, ..Mesh::default() };
@@ -389,6 +400,10 @@ fn geometry(raw: RawMesh) -> Result<(Mesh, Vec<String>, Option<Vec<Vec2>>)> {
     }
     if mesh.indices.is_empty() {
         return Err(FormatError::Invalid("the file contains no triangles".into()));
+    }
+    if !diagonals.is_empty() {
+        let diagonal = |a: u32, b: u32| diagonals.contains(&(a.min(b), a.max(b)));
+        mesh.diagonals = mesh.indices.chunks_exact(3).map(|t| (0..3).map(|i| u8::from(diagonal(t[i], t[(i + 1) % 3])) << i).sum()).collect();
     }
     if let Some(bad) = mesh.indices.iter().find(|i| **i as usize >= mesh.positions.len()) {
         return Err(FormatError::Invalid(format!("vertex index {bad} out of range ({} vertices)", mesh.positions.len())));
