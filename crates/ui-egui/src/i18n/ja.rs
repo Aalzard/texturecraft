@@ -332,6 +332,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "テンプレートから"),
     ("From template / project", "テンプレート / プロジェクトから"),
     ("Full", "フル"),
+    ("Geometry mask", "ジオメトリマスク"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
         "GGXスペキュラー (高さ相関Smithビジビリティ)、Lambertディフューズ、球面調和関数による放射照度とホライズンフェードを用いたスプリットサムのイメージベースドライティング。",
@@ -705,6 +706,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Sheen weight", "シーンウェイト"),
     ("Shift + wheel", "Shift + ホイール"),
     ("Shortcuts list...", "ショートカット一覧..."),
+    ("Show on all parts", "すべてのパーツに表示"),
     ("Show UV wireframe in the 2D view", "2DビューにUVワイヤーフレームを表示"),
     ("Show entire mesh", "メッシュ全体を表示"),
     ("Show log...", "ログを表示..."),

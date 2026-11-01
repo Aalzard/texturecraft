@@ -521,6 +521,33 @@ fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid: LayerI
     });
 }
 
+/// Geometry mask: the mesh parts of the layer's texture set it shows on (when the set has
+/// several parts).
+fn geometry_mask_menu(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
+    let ts = app.session.doc.project.locate(layer.id).map_or(app.session.ts(), |(ts, _, _)| ts);
+    let parts = texturecraft_engine::set_cmds::parts(&app.session, ts);
+    if parts.len() < 2 {
+        return;
+    }
+    let lid = layer.id.0;
+    let shown = layer.geometry_mask.clone().unwrap_or_else(|| parts.clone());
+    ui.menu_button(tr("Geometry mask"), |ui| {
+        for part in &parts {
+            let mut on = shown.contains(part);
+            if ui.checkbox(&mut on, part.as_str()).changed() {
+                let next: Vec<&String> = parts.iter().filter(|q| if *q == part { on } else { shown.contains(q) }).collect();
+                let value = if next.len() == parts.len() { Value::Null } else { json!(next) };
+                app.run("layer.set", json!({"layer": lid, "geometryMask": value}));
+            }
+        }
+        ui.separator();
+        if ui.add_enabled(layer.geometry_mask.is_some(), egui::Button::new(tr("Show on all parts"))).clicked() {
+            app.run("layer.set", json!({"layer": lid, "geometryMask": null}));
+            ui.close();
+        }
+    });
+}
+
 fn layer_context_menu(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
     let tk = Tokens::get(ui.ctx());
     ui.set_min_width(230.0);
@@ -549,6 +576,7 @@ fn layer_context_menu(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
     run(app, ui, tr("Invert mask"), "mask.invert", json!({"layer": lid}), has_mask);
     run(app, ui, tr("Clear mask"), "mask.clear", json!({"layer": lid}), has_mask);
     run(app, ui, tr("Remove mask"), "mask.remove", json!({"layer": lid}), has_mask);
+    geometry_mask_menu(app, ui, layer);
     ui.separator();
     run(app, ui, tr("Flatten layer"), "layer.flatten", json!({"layer": lid}), !layer.is_group());
     #[cfg(not(target_arch = "wasm32"))]
