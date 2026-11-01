@@ -891,4 +891,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Style", "样式"),
     ("Use as brush alpha", "用作笔刷 Alpha"),
     ("Place as decal", "作为贴花放置"),
+    ("Click: turn this channel on or off. Alt+click: this channel only", "单击：打开或关闭此通道。Alt+单击：仅此通道"),
 ];

@@ -153,6 +153,19 @@ fn geometry_masks_limit_layers_to_mesh_parts() {
 }
 
 #[test]
+fn solo_keeps_one_material_channel() {
+    let mut s = session();
+    let r = execute(&mut s, "tool.material", &json!({"channel": "roughness", "solo": true})).unwrap();
+    assert_eq!(r["enabled"], json!(["roughness"]), "the brush paints roughness only");
+    let fill = id(execute(&mut s, "layer.add.fill", &Value::Null).unwrap(), "layer");
+    assert!(s.doc.project.layer(fill).unwrap().channels.len() > 1);
+    execute(&mut s, "layer.fill.set", &json!({"channel": "metallic", "solo": true})).unwrap();
+    assert_eq!(s.doc.project.layer(fill).unwrap().channels.keys().copied().collect::<Vec<_>>(), [Channel::Metallic]);
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert!(s.doc.project.layer(fill).unwrap().channels.len() > 1, "one undo step");
+}
+
+#[test]
 fn decals_project_an_image_from_a_frame_placed_on_the_surface() {
     let mut s = session();
     // A red disc on a transparent background.

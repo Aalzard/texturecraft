@@ -45,6 +45,7 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Fill layers** take uniform values, **22 procedurals** (clouds, cells, grunge, scratches, wood
   grain, bricks, fabric weave, leather grain, marble veins, Voronoi, paint chips…) or your own
   **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.
+  Alt+click a material channel (of a fill or the brush) to keep that channel alone.
 - **54 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
   velvet, skin, wax, glass, woods, stone, plastics, fabric, leather, ceramic, rust, cork, paper), **21 smart
   materials** (rusted iron, worn paint, oxidized copper, bronze statue, weathered wood, mossy

@@ -960,4 +960,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Style", "スタイル"),
     ("Use as brush alpha", "ブラシのアルファとして使用"),
     ("Place as decal", "デカールとして配置"),
+    ("Click: turn this channel on or off. Alt+click: this channel only", "クリック: このチャンネルのオン/オフ。Alt+クリック: このチャンネルのみ"),
 ];

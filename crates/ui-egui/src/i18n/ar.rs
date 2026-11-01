@@ -938,4 +938,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Style", "النمط"),
     ("Use as brush alpha", "استخدام كألفا للفرشاة"),
     ("Place as decal", "وضع كملصق"),
+    ("Click: turn this channel on or off. Alt+click: this channel only", "انقر: تشغيل هذه القناة أو إيقافها. Alt+نقر: هذه القناة فقط"),
 ];
