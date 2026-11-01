@@ -1410,6 +1410,15 @@ impl<'a, 'b> Texel<'a, 'b> {
                 None => (v, cov),
             },
             EffectKind::Levels(l) => (mix3(v, per_unit(c.kind, v, |x| l.apply(x)), o), cov),
+            // Baked lighting reads the texel's normal and occlusion, and lights the base color only.
+            EffectKind::Filter(f @ Filter::BakedLighting { .. }) => match Channel::ALL.get(c.ch) {
+                Some(Channel::BaseColor) => {
+                    let nrm = self.coords().nrm.to_array();
+                    let k = f.baked_light(nrm, self.baked(BakedMap::AmbientOcclusion).unwrap_or(1.0)).unwrap_or(1.0);
+                    (mix3(v, v.map(|x| (x * k).clamp(0.0, 1.0)), o), cov)
+                }
+                _ => (v, cov),
+            },
             // Neighbourhood filters come precomputed through `ChanPlan::start`.
             EffectKind::Filter(f) => (f.point(c.kind, v).map_or(v, |out| mix3(v, out, o)), cov),
             // Anchors are recorded by `eval`; mask-only effects leave content as it is.
@@ -2185,6 +2194,27 @@ soft {soft:?}"
         let id = fill_layer(&mut f.project, [0.1; 3], 0.2);
         content_fx(&mut f, id, EffectKind::Filter(Filter::Glow { radius: 32.0, amount: 1.0 }));
         assert!(close(run(&f, None).value(Channel::Roughness, 30, 30), [0.4; 3]));
+    }
+
+    #[test]
+    fn baked_lighting_lights_the_base_color_by_the_normal() {
+        let lit = |elevation: f32| {
+            let mut f = fixture();
+            let id = fill_layer(&mut f.project, [0.5; 3], 0.3);
+            let fx = Filter::BakedLighting { azimuth: 0.0, elevation, light: 0.6, ambient: 0.4, occlusion: 1.0 };
+            content_fx(&mut f, id, EffectKind::Filter(fx));
+            let out = run(&f, None);
+            (out.value(Channel::BaseColor, 30, 30), out.value(Channel::Roughness, 30, 30))
+        };
+        let n = primitives::plane(2.0, 2).normals[0];
+        // Facing the light: ambient + light = 1 (unchanged); facing away: ambient only.
+        let (toward, rough) = lit(if n.y > 0.0 { 90.0 } else { -90.0 });
+        assert!(close(toward, [0.5; 3]) && close(rough, [0.3; 3]), "{toward:?} {rough:?}");
+        let (away, _) = lit(if n.y > 0.0 { -90.0 } else { 90.0 });
+        assert!(close(away, [0.2; 3]), "{away:?}");
+        let f = Filter::BakedLighting { azimuth: 0.0, elevation: 0.0, light: 0.0, ambient: 1.0, occlusion: 0.5 };
+        assert_eq!(f.baked_light([0.0, 1.0, 0.0], 0.2), Some(0.6), "half the occlusion");
+        assert_eq!(Filter::Invert.baked_light([0.0; 3], 1.0), None);
     }
 
     #[test]

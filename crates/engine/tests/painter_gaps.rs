@@ -66,6 +66,7 @@ fn filter_library_adds_every_filter_and_edits_its_parameters() {
         "bevel",
         "mosaic",
         "glow",
+        "bakedLighting",
     ] {
         assert!(ids.contains(&want), "{want} missing from {ids:?}");
     }
