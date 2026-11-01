@@ -107,8 +107,8 @@ print(call("command.run", {"id": "layer.add.fill", "params": {"color": [0.8, 0.1
   own files, so the path tools are unavailable there; `project_save` without a path invokes
   File › Save.
 
-Through `command_run`, every `file.*` command but `file.close` (and `file.reimportMesh` without
-a `path`) is refused, and so is any command given a `path` or `dir` (`resource.import`,
+Through `command_run`, every `file.*` command but `file.close` and `file.removeUnused` (and
+`file.reimportMesh` without a `path`) is refused, and so is any command given a `path` or `dir` (`resource.import`,
 `material.save`, `material.load`, …), in both modes: use the workspace tools below. `resource.text`
 takes a font family, not a path: it reads only the system's font folders.
 
