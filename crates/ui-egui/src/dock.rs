@@ -382,12 +382,24 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     if renaming {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(name_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
         if let Some((_, buf)) = app.ui.rename.as_mut() {
-            let r = child.add(egui::TextEdit::singleline(buf).desired_width(name_rect.width()));
-            r.request_focus();
-            if r.lost_focus() {
-                let name = buf.clone();
+            let edit_id = ui.scope_id().with(("layer_rename", layer.id.0));
+            let r = child.add(egui::TextEdit::singleline(buf).id(edit_id).desired_width(name_rect.width()));
+            if !r.has_focus() && ui.data(|d| d.get_temp::<bool>(edit_id)).unwrap_or(true) {
+                r.request_focus();
+                ui.data_mut(|d| d.insert_temp(edit_id, false));
+            }
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if esc {
+                ui.data_mut(|d| d.remove::<bool>(edit_id));
                 app.ui.rename = None;
-                app.run("layer.rename", json!({"layer": layer.id.0, "name": name}));
+            } else if enter || r.lost_focus() {
+                ui.data_mut(|d| d.remove::<bool>(edit_id));
+                let name = buf.trim().to_string();
+                app.ui.rename = None;
+                if !name.is_empty() && name != layer.name {
+                    app.run("layer.rename", json!({"layer": layer.id.0, "name": name}));
+                }
             }
         }
     } else {
@@ -437,13 +449,15 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
         p.text(blend_rect.right_center(), egui::Align2::RIGHT_CENTER, tr("off"), egui::FontId::proportional(11.0), tk.text_dim);
     }
     // Interaction: select, rename, drag & drop, context menu.
-    if resp.clicked() && !eye_resp.clicked() {
+    if resp.clicked() && !eye_resp.clicked() && !renaming {
         app.run("layer.select", json!({"layer": layer.id.0}));
     }
-    if resp.double_clicked() {
+    if resp.double_clicked() && !eye_resp.clicked() && !renaming {
+        let edit_id = ui.scope_id().with(("layer_rename", layer.id.0));
         app.ui.rename = Some((layer.id.0, layer.name.clone()));
+        ui.ctx().memory_mut(|m| m.request_focus(edit_id));
     }
-    if resp.drag_started() {
+    if resp.drag_started() && !renaming {
         resp.dnd_set_drag_payload(layer.id.0);
     }
     // Drops: a layer or a shelf material lands above this row (inside a folder when dropped on
