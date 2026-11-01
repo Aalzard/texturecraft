@@ -106,7 +106,7 @@ traced on the GPU by `texturecraft-cli render`.
   <p align="center"><sub><b>Storm lantern</b>: chipped enamel, rust, soot and a lit flame over eight texture sets</sub></p>
 </td>
 <td width="50%" valign="top">
-  <img src="docs/images/texturecraft-camera.png" alt="A path-traced vintage rangefinder camera: black enamel worn through to brass on the top plate, cognac leatherette, knurled chrome dials, a black lens barrel with an engraved distance scale and a coated front element" width="100%">
+  <img src="docs/images/texturecraft-camera.png" alt="A path-traced vintage rangefinder camera: black enamel worn through to brass along the edges and corners of the top plate, cognac leatherette, knurled chrome dials, a black lens barrel with an engraved distance scale and a coated front element" width="100%">
   <p align="center"><sub><b>Rangefinder camera</b>: black paint brassing, leatherette, chrome and coated glass</sub></p>
 </td>
 </tr>
