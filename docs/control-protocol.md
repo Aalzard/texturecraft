@@ -217,6 +217,7 @@ texturecraft-cli batch script.json
 texturecraft-cli bake model.tcraft --resolution 2048 --maps ambientOcclusion,curvature,thickness
 texturecraft-cli export model.tcraft out/ --preset "Unreal Engine (Packed)" --format png --size 2048
 texturecraft-cli render ball.tcraft ball.png --size 1280x800 --view 3d --yaw 30 --pitch 15
+texturecraft-cli render scene.tcraft hero.png --size 1200x900 --camera Hero --samples 2048   # a saved camera (camera.add), path traced
 ```
 
 `<input>` is a `.tcraft` project, a mesh file or `builtin:<id>`. A batch script is a list of
