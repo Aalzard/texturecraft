@@ -31,7 +31,7 @@ These come from Rust crate dependencies (not files in this repository) and keep 
 
 | Asset | Used for | Author | Source | License |
 |---|---|---|---|---|
-| Phosphor Icons (regular), via the `egui-phosphor` crate | Every UI icon (tools, layers, panels) | Phosphor Icons (Helena Zhang, Tobias Fried) | https://phosphoricons.com, https://github.com/amPerl/egui-phosphor | MIT (icons); crate MIT OR Apache-2.0 |
+| Phosphor Icons (regular), via the `egui-phosphor` crate (vendored in `vendor/egui-phosphor` for egui 0.37) | Every UI icon (tools, layers, panels) | Phosphor Icons (Helena Zhang, Tobias Fried) | https://phosphoricons.com, https://github.com/amPerl/egui-phosphor | MIT (icons); crate MIT OR Apache-2.0 |
 | egui default fonts (Ubuntu-Light, Hack, Noto Emoji, emoji-icon-font), via `epaint_default_fonts` | UI text | Canonical / Source Foundry / Google / Jessie Jung | https://github.com/emilk/egui | Ubuntu Font Licence 1.0, MIT + Bitstream Vera License, OFL 1.1, MIT |
 | Only in builds made with `CRAFT_FONTS_DIR`: BIZ UDPGothic Regular (desktop and web) and Noto Sans CJK SC Regular (desktop), from storytold/craft-fonts (`crates/ui-egui/build.rs`) | Japanese and Chinese UI text | The BIZ UDGothic Project Authors (Morisawa Inc.); The Noto Project Authors | https://github.com/storytold/craft-fonts (pinned sources in its `fonts/manifest.txt` and `ATTRIBUTION.md`) | OFL 1.1 |
 

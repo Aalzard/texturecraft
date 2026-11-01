@@ -113,7 +113,7 @@ pub fn load(app: &mut TextureCraftApp, name: &str, bytes: &[u8]) {
     if IMAGE_EXTS.contains(&ext.as_str()) {
         match app.session.import_resource_bytes(name, bytes.to_vec()) {
             Ok(res) => {
-                app.ui.dock.focus(crate::docking::Panel::Assets, egui::Rect::ZERO);
+                app.ui.dock.focus(crate::docking::Panel::Assets);
                 app.toast(trf("Imported {name}", &[("name", &res)]), false);
             }
             Err(e) => app.toast(trf("Couldn't import {name}: {error}", &[("name", &name), ("error", &e)]), true),
@@ -142,7 +142,7 @@ pub fn dropped(app: &mut TextureCraftApp, ctx: &egui::Context, file: &egui::Drop
         if IMAGE_EXTS.contains(&ext.as_str()) {
             if let Some(r) = app.run("resource.import", serde_json::json!({ "path": path })) {
                 let name = r.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
-                app.ui.dock.focus(crate::docking::Panel::Assets, egui::Rect::ZERO);
+                app.ui.dock.focus(crate::docking::Panel::Assets);
                 app.toast(trf("Imported {name}", &[("name", &name)]), false);
             }
         } else {

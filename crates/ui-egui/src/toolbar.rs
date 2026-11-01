@@ -199,7 +199,7 @@ pub fn tool_shelf(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
                 app.ui.mode = if app.ui.mode == Mode::Rendering { Mode::Painting } else { Mode::Rendering };
             }
             if icon_button(ui, ic::SPHERE, tr("Add smart material from the shelf"), false, 28.0).clicked() {
-                app.ui.dock.focus(Panel::Assets, ui.ctx().content_rect());
+                app.ui.dock.focus(Panel::Assets);
             }
         });
     });
@@ -213,7 +213,6 @@ pub fn rail(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
             if icon_button(ui, ic::EXPORT, &tip(&app.ui.keymap, tr("Export textures"), "ui.export"), app.ui.windows.export, 26.0).clicked() {
                 app.ui.windows.export = !app.ui.windows.export;
             }
-            let screen = ui.ctx().content_rect();
             for (panel, icon, id) in [
                 (Panel::TextureSetSettings, ic::STACK, "ui.view.textureSetSettings"),
                 (Panel::Display, ic::MONITOR, "ui.view.display"),
@@ -221,7 +220,7 @@ pub fn rail(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
                 (Panel::History, ic::CLOCK_COUNTER_CLOCKWISE, "ui.view.history"),
             ] {
                 if icon_button(ui, icon, &tip(&app.ui.keymap, tr(panel.name()), id), app.ui.dock.is_visible(panel), 26.0).clicked() {
-                    app.ui.dock.toggle(panel, screen);
+                    app.ui.dock.toggle(panel);
                 }
             }
         });

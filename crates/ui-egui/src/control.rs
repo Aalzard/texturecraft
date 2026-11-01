@@ -41,27 +41,21 @@ fn err(e: impl std::fmt::Display) -> Value {
 }
 
 pub fn poll(app: &mut TextureCraftApp, ctx: &egui::Context) {
-    // Finished window screenshots.
-    let shots: Vec<std::sync::Arc<egui::ColorImage>> =
-        ctx.input(|i| i.raw.events.iter().filter_map(|e| if let egui::Event::Screenshot { image, .. } = e { Some(image.clone()) } else { None }).collect());
-    for img in shots {
-        let reply = encode_png(img.size[0] as u32, img.size[1] as u32, img.pixels.iter().flat_map(|c| c.to_array()).collect())
-            .map(|(w, h, png)| ok(json!({ "width": w, "height": h, "png": base64::engine::general_purpose::STANDARD.encode(png) })))
-            .unwrap_or_else(|| err("could not encode the screenshot"));
-        for w in app.screenshot_waiters.drain(..) {
-            let _ = w.send(reply.clone());
-        }
-    }
-    if !app.screenshot_waiters.is_empty() {
-        ctx.request_repaint();
-    }
     let Some(rx) = app.control.as_ref() else { return };
     let reqs: Vec<ControlRequest> = rx.try_iter().collect();
     for r in reqs {
         if r.method == "ui.screenshot" {
             // Replies when the next frame has been captured.
-            app.screenshot_waiters.push(r.reply);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            let reply = r.reply;
+            let repaint = ctx.clone();
+            let callback = egui::ScreenshotCallback::new(move |img| {
+                let answer = encode_png(img.size[0] as u32, img.size[1] as u32, img.pixels.iter().flat_map(|c| c.to_array()).collect())
+                    .map(|(w, h, png)| ok(json!({ "width": w, "height": h, "png": base64::engine::general_purpose::STANDARD.encode(png) })))
+                    .unwrap_or_else(|| err("could not encode the screenshot"));
+                let _ = reply.send(answer);
+                repaint.request_repaint();
+            });
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(callback));
             ctx.request_repaint();
             continue;
         }
