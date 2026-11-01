@@ -112,12 +112,15 @@ impl Shape<'_> {
     }
 }
 
-/// An image as a brush alpha: luminance × alpha over the stamp square (−1..1, y up), 0 outside.
+/// An image as a brush alpha: luminance × alpha, its longer side across the stamp square (−1..1,
+/// y up) so it keeps its proportions (a line of text stays a line), 0 outside.
 pub fn image_alpha(img: &ImageRes, lx: f32, ly: f32) -> f32 {
-    if !(lx.abs() <= 1.0 && ly.abs() <= 1.0) {
+    let aspect = img.width as f32 / img.height.max(1) as f32;
+    let (x, y) = if aspect >= 1.0 { (lx, ly * aspect) } else { (lx / aspect.max(1e-6), ly) };
+    if !(x.abs() <= 1.0 && y.abs() <= 1.0) {
         return 0.0;
     }
-    let [r, g, b, a] = img.sample(lx * 0.5 + 0.5, 0.5 - ly * 0.5);
+    let [r, g, b, a] = img.sample(x * 0.5 + 0.5, 0.5 - y * 0.5);
     ((0.2126 * r + 0.7152 * g + 0.0722 * b) * a).clamp(0.0, 1.0)
 }
 

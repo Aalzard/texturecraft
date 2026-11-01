@@ -964,4 +964,9 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "Usar el marco y los botones de ventana del sistema operativo en lugar de la barra de título propia de TextureCraft",
     ),
+    ("Text", "Texto"),
+    ("Font", "Fuente"),
+    ("Style", "Estilo"),
+    ("Use as brush alpha", "Usar como alfa del pincel"),
+    ("Place as decal", "Colocar como calcomanía"),
 ];
