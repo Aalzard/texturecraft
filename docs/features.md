@@ -75,12 +75,14 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 ## The viewport
 
 - Physically based shading (metallic/roughness or specular/glossiness) with clear coat, sheen,
-  anisotropy, subsurface scattering, transmission and parallax occlusion; image-based lighting from
+  anisotropy, subsurface scattering, transmission, parallax occlusion and **displacement** (with its own shadows) from the
+  height channel; image-based lighting from
   six procedural studio and outdoor environments or **your own HDR/EXR panoramas**; ACES or linear
   tone mapping, key-light shadows, bloom, vignette, sharpen, grain, **depth of field** and
   **saved cameras** (also imported from glTF, FBX, COLLADA and USD files).
 - **Rendering mode** (F10): a progressive, **path-traced** view of your textures with multi-bounce
-  light, environment importance sampling, a denoiser and one-click PNG save, traced on the GPU
+  light, environment importance sampling, displaced geometry, a denoiser and one-click PNG save,
+  traced on the GPU
   (compute shaders, about 25× the CPU tracer, desktop and WebGPU) or on the CPU.
 - View any channel, any baked mesh map, or a UV checker; Alt+drag to orbit, middle-drag to pan,
   wheel to zoom, F to frame, M / C / B to cycle views.

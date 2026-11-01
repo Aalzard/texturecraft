@@ -61,16 +61,12 @@ struct VOut {
     @location(3) uv: vec2<f32>,
 };
 
-// The vertex moved along its normal by the height channel (displacement), at the mip whose texels
-// match the vertex spacing.
+// The vertex moved along its normal by the height channel (displacement).
 fn displaced(v: VIn) -> vec3<f32> {
     if (g.disp.x < 0.5) {
         return v.pos;
     }
-    let dims = vec2<f32>(textureDimensions(t_height));
-    let h = textureSampleLevel(t_height, samp, v.uv, max(log2(dims.x * g.disp.z), 0.0)).r;
-    let n = v.nrm * inverseSqrt(max(dot(v.nrm, v.nrm), 1e-12));
-    return v.pos + n * (h * g.mode.z * g.disp.y);
+    return displace_by_height(v.pos, v.nrm, v.uv, t_height, samp, g.mode.z * g.disp.y, g.disp.z);
 }
 
 @vertex

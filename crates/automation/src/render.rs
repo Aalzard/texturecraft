@@ -4,6 +4,7 @@
 use rayon::prelude::*;
 use texturecraft_engine::compose::{DisplayKind, all_tiles, tile_bytes};
 use texturecraft_engine::{Session, ViewMode};
+use texturecraft_render::displace::trace_geometry;
 use texturecraft_render::gpu_trace::GpuTracer;
 use texturecraft_render::trace::{TraceDisplay, TraceScene, TraceSet, TraceSettings, Tracer};
 use texturecraft_render::{Frame, Shade, ViewKind};
@@ -112,7 +113,7 @@ impl Gpu {
 /// The session's 3D view as the path tracers see it, and how Rendering mode shows it (denoised).
 fn trace_inputs(s: &mut Session) -> (TraceScene, TraceDisplay) {
     s.update();
-    let sets = s
+    let sets: Vec<TraceSet> = s
         .doc
         .project
         .texture_sets
@@ -122,7 +123,8 @@ fn trace_inputs(s: &mut Session) -> (TraceScene, TraceDisplay) {
         .collect();
     let d = &s.doc.project.display;
     let env_image = d.environment_resource().and_then(|n| s.images.get(n));
-    let scene = TraceScene::for_display(s.mesh.clone(), s.bvh.clone(), sets, d, env_image.map(|i| i.as_ref()));
+    let (mesh, bvh) = trace_geometry(&s.mesh, &s.bvh, &sets, d);
+    let scene = TraceScene::for_display(mesh, bvh, sets, d, env_image.map(|i| i.as_ref()));
     (scene, TraceDisplay { denoise: true, ..TraceDisplay::from_display(d) })
 }
 

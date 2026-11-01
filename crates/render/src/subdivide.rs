@@ -23,6 +23,20 @@ pub(crate) const DENSE_TRIANGLES: usize = 1 << 19;
 /// Finest split: 64 × 64 segments per edge (for very coarse meshes such as a cube).
 const MAX_LEVEL: u32 = 6;
 
+/// The vertices of `mesh` as the viewport draws them (missing attributes get defaults).
+pub(crate) fn vertices(mesh: &texturecraft_geom::Mesh) -> Vec<Vertex> {
+    mesh.positions
+        .iter()
+        .enumerate()
+        .map(|(i, p)| Vertex {
+            pos: p.to_array(),
+            nrm: mesh.normals.get(i).map(|n| n.to_array()).unwrap_or([0.0, 1.0, 0.0]),
+            tan: mesh.tangents.get(i).map(|t| t.to_array()).unwrap_or([1.0, 0.0, 0.0, 1.0]),
+            uv: mesh.uvs.get(i).map(|u| u.to_array()).unwrap_or([0.0, 0.0]),
+        })
+        .collect()
+}
+
 /// Subdivision level for a mesh of `triangles` (0: dense enough as it is).
 pub(crate) fn level_for(triangles: usize) -> u32 {
     (0..=MAX_LEVEL).rev().find(|l| triangles.saturating_mul(1 << (2 * l)) <= DENSE_TRIANGLES).unwrap_or(0)

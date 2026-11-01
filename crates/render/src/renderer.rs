@@ -427,8 +427,9 @@ struct ViewTargets {
 struct ShadowMap {
     view: wgpu::TextureView,
     size: u32,
-    /// What the map was rendered for: mesh id, light direction bits, visible sets.
-    key: Option<(u64, [u32; 3])>,
+    /// What the map was rendered for: mesh id, light direction bits, displacement (its
+    /// parameters' bits and, when on, the content revision), visible sets.
+    key: Option<(u64, [u32; 3], [u32; 4], u64)>,
     visible: Vec<bool>,
     vp: Mat4,
     buf: wgpu::Buffer,
@@ -730,10 +731,10 @@ impl Renderer {
         let shader = |label: &str, source: &str| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) })
         };
-        let module = shader("tc_mesh", include_str!("shaders/mesh.wgsl"));
+        let module = shader("tc_mesh", concat!(include_str!("shaders/displace.wgsl"), include_str!("shaders/mesh.wgsl")));
         let util_module = shader("tc_util", include_str!("shaders/util.wgsl"));
         let post_module = shader("tc_post", concat!(include_str!("shaders/util.wgsl"), include_str!("shaders/post.wgsl"), include_str!("shaders/fx.wgsl")));
-        let shadow_module = shader("tc_shadow", include_str!("shaders/shadow.wgsl"));
+        let shadow_module = shader("tc_shadow", concat!(include_str!("shaders/displace.wgsl"), include_str!("shaders/shadow.wgsl")));
         let bgl = |label: &str, entries: &[wgpu::BindGroupLayoutEntry]| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(label), entries })
         };
@@ -782,7 +783,7 @@ impl Renderer {
         let bg_layout = pl("tc_bg", &[Some(&globals_bgl)]);
         let blit_layout = pl("tc_blit", &[Some(&blit_bgl)]);
         let fx_layout = pl("tc_fx", &[Some(&fx_bgl)]);
-        let shadow_layout = pl("tc_shadow", &[Some(&shadow_bgl)]);
+        let shadow_layout = pl("tc_shadow", &[Some(&shadow_bgl), Some(&set_bgl)]);
         let vb = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -888,7 +889,7 @@ impl Renderer {
         });
         let shadow_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tc_shadow"),
-            size: std::mem::size_of::<[[f32; 4]; 4]>() as u64,
+            size: std::mem::size_of::<[[f32; 4]; 5]>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1010,14 +1011,7 @@ impl Renderer {
         if self.mesh.as_ref().is_some_and(|m| m.id == id) {
             return;
         }
-        let verts: Vec<Vertex> = (0..mesh.positions.len())
-            .map(|i| Vertex {
-                pos: mesh.positions[i].to_array(),
-                nrm: mesh.normals.get(i).map(|n| n.to_array()).unwrap_or([0.0, 1.0, 0.0]),
-                tan: mesh.tangents.get(i).map(|t| t.to_array()).unwrap_or([1.0, 0.0, 0.0, 1.0]),
-                uv: mesh.uvs.get(i).map(|u| u.to_array()).unwrap_or([0.0, 0.0]),
-            })
-            .collect();
+        let verts = subdivide::vertices(mesh);
         let mk = |label: &str, data: &[u8], usage: wgpu::BufferUsages| upload_buffer(device, queue, label, data, usage);
         let mut idx_bytes = bytemuck::cast_slice::<u32, u8>(&mesh.indices).to_vec();
         idx_bytes.resize(idx_bytes.len().next_multiple_of(4), 0);
@@ -1427,11 +1421,22 @@ impl Renderer {
     }
 
     /// Keep the key-light shadow map current; returns its view-projection. `light` points to
-    /// the light (world space). Re-renders only when the mesh, light or visible sets changed.
+    /// the light (world space), `disp` is the shadow pass's displacement (see shadow.wgsl).
+    /// Re-renders only when the mesh, light, displacement or visible sets changed (and, when it
+    /// displaces, the set textures).
     /// shortcut: casters are fully opaque (the dithered opacity cut-out is ignored) and the map is
     /// one shared buffer, so two 3D views with different lights in one frame would share the last
     /// light; upgrade to a per-view map if split 3D views get their own lights.
-    fn update_shadow(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, light: Vec3, visible: &[bool]) -> Option<Mat4> {
+    #[allow(clippy::too_many_arguments)]
+    fn update_shadow(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        light: Vec3,
+        disp: [f32; 4],
+        visible: &[bool],
+    ) -> Option<Mat4> {
         let l = light.try_normalize()?;
         let (id, center, radius) = self.mesh.as_ref().map(|m| (m.id, m.center, m.radius))?;
         if self.shadow.size != SHADOW_SIZE {
@@ -1442,14 +1447,18 @@ impl Renderer {
                 v.globals_bg = None;
             }
         }
-        let key = (id, l.to_array().map(f32::to_bits));
+        let displacing = disp[0] > 0.5;
+        let key = (id, l.to_array().map(f32::to_bits), disp.map(f32::to_bits), if displacing { self.content_rev } else { 0 });
         if self.shadow.key == Some(key) && self.shadow.visible == visible {
             return Some(self.shadow.vp);
         }
         // An orthographic light frustum around the mesh's bounding sphere.
         let up = if l.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
         let vp = Mat4::orthographic_rh(-radius, radius, -radius, radius, radius * 0.5, radius * 3.5) * Mat4::look_at_rh(center + l * radius * 2.0, center, up);
-        queue.write_buffer(&self.shadow.buf, 0, bytemuck::bytes_of(&vp.to_cols_array_2d()));
+        let mut raw = [[0.0f32; 4]; 5];
+        raw[..4].copy_from_slice(&vp.to_cols_array_2d());
+        raw[4] = disp;
+        queue.write_buffer(&self.shadow.buf, 0, bytemuck::bytes_of(&raw));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("tc_shadow"),
             color_attachments: &[],
@@ -1464,12 +1473,12 @@ impl Renderer {
         });
         pass.set_pipeline(&self.shadow_pipeline);
         pass.set_bind_group(0, &self.shadow.bg, &[]);
-        // shortcut: casters are the base mesh (not displaced); a displaced shadow pass would
-        // need the set textures in shadow.wgsl.
         if let Some(m) = &self.mesh {
-            pass.set_vertex_buffer(0, m.geo.vb.slice(..));
-            pass.set_index_buffer(m.geo.ib.slice(..), wgpu::IndexFormat::Uint32);
-            for (range, _) in self.drawable(&m.geo.draws, visible, None) {
+            let geo = m.dense.as_ref().filter(|_| displacing).unwrap_or(&m.geo);
+            pass.set_vertex_buffer(0, geo.vb.slice(..));
+            pass.set_index_buffer(geo.ib.slice(..), wgpu::IndexFormat::Uint32);
+            for (range, set) in self.drawable(&geo.draws, visible, None) {
+                pass.set_bind_group(1, &set.bind_group, &[]);
                 pass.draw_indexed(range, 0, 0..1);
             }
         }
@@ -1524,7 +1533,18 @@ impl Renderer {
         let (sin, cos) = s.env_rotation_deg.to_radians().sin_cos();
         let [lx, ly, lz, lw] = s.light;
         let light = Vec3::new(cos * lx + sin * lz, ly, cos * lz - sin * lx);
-        let shadow_vp = if !data && s.shadows && lw > 0.0 { self.update_shadow(device, queue, encoder, light, &frame.visible) } else { None };
+        let displace = s.displacement && frame.kind == ViewKind::Scene;
+        if displace {
+            self.ensure_dense(device, queue);
+        }
+        let disp = match self.mesh.as_ref().filter(|_| displace) {
+            // Height-to-normal's slope: strength 1 tilts 45° for a height change of 1 over 1/16 of
+            // the UV square; the vertex shader samples the mip whose texels match the vertex spacing.
+            Some(m) => [1.0, m.world_per_uv / 16.0, 1.0 / (m.dense.as_ref().unwrap_or(&m.geo).triangles.max(1) as f32 * 0.5).sqrt(), 0.0],
+            None => [0.0; 4],
+        };
+        let shadow_disp = [disp[0], disp[1] * s.height_strength, disp[2], 0.0];
+        let shadow_vp = if !data && s.shadows && lw > 0.0 { self.update_shadow(device, queue, encoder, light, shadow_disp, &frame.visible) } else { None };
         let radius = self.mesh.as_ref().map_or(1.0, |m| m.radius);
         // Background rays come from a perspective camera even in orthographic views (an ortho
         // ray grid would show a single flat environment color).
@@ -1536,16 +1556,6 @@ impl Renderer {
         let sss = s.sss_blur.filter(|m| scene_fx && m.iter().any(|v| *v > 0.0));
         let fx_on = dof.is_some() || sss.is_some();
         let refraction = s.refraction && !data && frame.kind == ViewKind::Scene && self.mesh.is_some();
-        let displace = s.displacement && frame.kind == ViewKind::Scene;
-        if displace {
-            self.ensure_dense(device, queue);
-        }
-        let disp = match self.mesh.as_ref().filter(|_| displace) {
-            // Height-to-normal's slope: strength 1 tilts 45° for a height change of 1 over 1/16 of
-            // the UV square; the vertex shader samples the mip whose texels match the vertex spacing.
-            Some(m) => [1.0, m.world_per_uv / 16.0, 1.0 / (m.dense.as_ref().unwrap_or(&m.geo).triangles.max(1) as f32 * 0.5).sqrt(), 0.0],
-            None => [0.0; 4],
-        };
         let cam = &frame.camera;
         let half_h = (cam.fov.clamp(5.0, 150.0).to_radians() * 0.5).tan();
         let height = frame.size[1].max(1) as f32;

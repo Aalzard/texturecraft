@@ -14,7 +14,8 @@ use std::sync::{Mutex, PoisonError};
 
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait, ScreenDescriptor};
 use egui::{Color32, ColorImage, Rect, RichText, TextureHandle, TextureOptions, Ui, vec2};
-use texturecraft_engine::geom::OrbitCamera;
+use texturecraft_engine::geom::{Bvh, Mesh, OrbitCamera};
+use texturecraft_render::displace::trace_geometry;
 use texturecraft_render::gpu_trace::GpuTracer;
 use texturecraft_render::readback::Readback;
 use texturecraft_render::trace::{TraceDisplay, TraceScene, TraceSet, TraceSettings, Tracer};
@@ -145,6 +146,9 @@ struct TraceState {
     resolved: Option<u32>,
 }
 
+/// Traced geometry and the key of what it was built from.
+type Geometry = (String, Arc<Mesh>, Arc<Bvh>);
+
 /// Rendering mode state kept by the app.
 #[derive(Default)]
 pub struct RenderView {
@@ -156,6 +160,9 @@ pub struct RenderView {
     shown: Option<(u32, u32, Vec<u8>)>,
     samples: u32,
     elapsed: f64,
+    /// The traced geometry (displaced or not) and what it was built from: changes to the display
+    /// alone don't rebuild it.
+    geometry: Mutex<Option<Geometry>>,
 }
 
 /// Viewport resolution of a CPU render (the web renders at half size: it has one thread).
@@ -167,7 +174,7 @@ fn render_size(rect: Rect) -> (u32, u32) {
 fn trace_scene(app: &TextureCraftApp) -> TraceScene {
     let s = &app.session;
     let d = &s.doc.project.display;
-    let sets = s
+    let sets: Vec<TraceSet> = s
         .doc
         .project
         .texture_sets
@@ -176,7 +183,19 @@ fn trace_scene(app: &TextureCraftApp) -> TraceScene {
         .map(|(ts, c)| TraceSet { material: ts.material, composite: c.composite.clone(), height_strength: ts.atlas_height_strength() })
         .collect();
     let env_image = d.environment_resource().and_then(|n| s.images.get(n));
-    TraceScene::for_display(s.mesh.clone(), s.bvh.clone(), sets, d, env_image.map(|i| i.as_ref()))
+    let revisions: Vec<u64> = s.caches.iter().map(|c| c.revision).collect();
+    let strengths: Vec<f32> = sets.iter().map(|t| t.height_strength).collect();
+    let key = format!("{}|{revisions:?}|{strengths:?}|{}", s.mesh_id, d.displacement);
+    let mut cached = app.render.geometry.lock().unwrap_or_else(PoisonError::into_inner);
+    let (mesh, bvh) = match cached.as_ref() {
+        Some((k, m, b)) if *k == key => (m.clone(), b.clone()),
+        _ => {
+            let (m, b) = trace_geometry(&s.mesh, &s.bvh, &sets, d);
+            *cached = Some((key, m.clone(), b.clone()));
+            (m, b)
+        }
+    };
+    TraceScene::for_display(mesh, bvh, sets, d, env_image.map(|i| i.as_ref()))
 }
 
 fn settings(app: &TextureCraftApp) -> TraceSettings {
