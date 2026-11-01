@@ -344,6 +344,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "Selon le modèle"),
     ("From template / project", "Selon le modèle / projet"),
     ("Full", "Pleine"),
+    ("Geometry mask", "Masque de géométrie"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
         "Spéculaire GGX avec visibilité de Smith corrélée à la hauteur, diffus Lambert, éclairage basé sur l'image en split-sum avec irradiance en harmoniques sphériques et atténuation à l'horizon.",
@@ -729,6 +730,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Sheen weight", "Poids du lustre"),
     ("Shift + wheel", "Shift + molette"),
     ("Shortcuts list...", "Liste des raccourcis..."),
+    ("Show on all parts", "Afficher sur toutes les parties"),
     ("Show UV wireframe in the 2D view", "Afficher le filaire UV dans la vue 2D"),
     ("Show entire mesh", "Afficher tout le maillage"),
     ("Show log...", "Afficher le journal..."),

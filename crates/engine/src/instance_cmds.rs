@@ -33,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set layer properties",
             [],
             None,
-            "{layer?, heightMask?: {enabled?, contrast?: 0..64, offset?: -1..1} | bool} — mask with height: m' = saturate(m + contrast·4m(1−m)·(height + offset))",
+            "{layer?, heightMask?: {enabled?, contrast?: 0..64, offset?: -1..1} | bool, geometryMask?: [part names] | null} — mask with height: m' = saturate(m + contrast·4m(1−m)·(height + offset)); geometry mask: the mesh parts (textureSet.parts) the layer shows on, null for all",
             has_layer,
             set
         ),
@@ -138,26 +138,53 @@ pub(crate) fn prune_pixels(doc: &mut Document) {
 }
 
 fn set(s: &mut Session, p: &Value) -> Result<Value> {
-    // Linked properties live on an instance's source.
-    let id = content_param(s, "layer.set", p)?;
+    let cmd = "layer.set";
+    // Linked properties live on an instance's source; the geometry mask is the layer's own
+    // (an instance in another texture set has other parts).
+    let (own, id) = (layer_param(s, cmd, p)?, content_param(s, cmd, p)?);
     let hm = match p.get("heightMask") {
-        Some(Value::Bool(on)) => json!({ "enabled": on }),
-        Some(v @ Value::Object(_)) => v.clone(),
-        Some(_) => return Err(bad("layer.set", "`heightMask` must be an object {enabled?, contrast?, offset?} or a bool")),
-        None => return Err(bad("layer.set", "give `heightMask`")),
+        Some(Value::Bool(on)) => Some(json!({ "enabled": on })),
+        Some(v @ Value::Object(_)) => Some(v.clone()),
+        Some(_) => return Err(bad(cmd, "`heightMask` must be an object {enabled?, contrast?, offset?} or a bool")),
+        None => None,
     };
+    let geometry = match p.get("geometryMask") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::Array(a)) => {
+            let names: Option<Vec<String>> = a.iter().map(|v| v.as_str().map(str::to_string)).collect();
+            let names = names.ok_or_else(|| bad(cmd, "`geometryMask` must be a list of part names or null"))?;
+            let ts = s.doc.project.locate(own).map_or(s.ts(), |(ts, _, _)| ts);
+            let known = crate::set_cmds::parts(s, ts);
+            if let Some(unknown) = names.iter().find(|n| !known.contains(n)) {
+                return Err(bad(cmd, format!("unknown mesh part `{unknown}` (parts: {})", known.join(", "))));
+            }
+            Some(Some(names))
+        }
+        Some(_) => return Err(bad(cmd, "`geometryMask` must be a list of part names or null")),
+    };
+    if hm.is_none() && geometry.is_none() {
+        return Err(bad(cmd, "give `heightMask` or `geometryMask`"));
+    }
     let out = s.edit("Layer properties", |s| {
+        if let Some(g) = geometry {
+            s.doc.project.layer_mut(own)?.geometry_mask = g;
+        }
         let h = &mut s.doc.project.layer_mut(id)?.height_mask;
-        if let Some(on) = boolp(&hm, "enabled") {
-            h.enabled = on;
+        if let Some(hm) = &hm {
+            if let Some(on) = boolp(hm, "enabled") {
+                h.enabled = on;
+            }
+            if let Some(c) = f32p(hm, "contrast") {
+                h.contrast = c.clamp(0.0, 64.0);
+            }
+            if let Some(o) = f32p(hm, "offset") {
+                h.offset = o.clamp(-1.0, 1.0);
+            }
         }
-        if let Some(c) = f32p(&hm, "contrast") {
-            h.contrast = c.clamp(0.0, 64.0);
-        }
-        if let Some(o) = f32p(&hm, "offset") {
-            h.offset = o.clamp(-1.0, 1.0);
-        }
-        Ok(json!({ "layer": id.0, "heightMask": { "enabled": h.enabled, "contrast": h.contrast, "offset": h.offset } }))
+        let h = *h;
+        let g = s.doc.project.layers.get(&own).and_then(|l| l.geometry_mask.clone());
+        Ok(json!({ "layer": own.0, "heightMask": { "enabled": h.enabled, "contrast": h.contrast, "offset": h.offset }, "geometryMask": g }))
     })?;
     Ok(out)
 }

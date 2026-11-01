@@ -711,6 +711,8 @@ struct Node<'a> {
     /// The node or one of its children records an anchor.
     has_anchor: bool,
     height_mask: HeightMask,
+    /// Geometry mask: whether the layer shows on each mesh submesh (None: everywhere).
+    parts: Option<Vec<bool>>,
 }
 
 /// Plans of the visible effects of a stack: mask effects (`channel` None) or the content
@@ -830,7 +832,9 @@ fn plan_node<'a>(
     let mask = layer_mask(inp.project, id).and_then(|m| mask_plan(inp, id, m, tx, ty, fields));
     let anchors = if fx { anchor_cuts(&layer.content_effects) } else { Vec::new() };
     let has_anchor = !anchors.is_empty() || matches!(&content, Content::Group(nodes) if nodes.iter().any(|n| n.has_anchor));
-    Some(Node { id, content, chans, mask, anchors, has_anchor, height_mask: layer.height_mask })
+    // The geometry mask is the layer's own (an instance in another set has other parts).
+    let parts = own.geometry_mask.as_ref().map(|names| inp.mesh.submeshes.iter().map(|s| names.contains(&s.name)).collect());
+    Some(Node { id, content, chans, mask, anchors, has_anchor, height_mask: layer.height_mask, parts })
 }
 
 /// The visible anchor points of a content stack with where they cut it: after their index among
@@ -1278,6 +1282,9 @@ impl<'a, 'b> Texel<'a, 'b> {
     /// The mask of node `n` at this texel, combined with the layer's height when it masks with
     /// height.
     fn node_mask(&mut self, n: &Node) -> f32 {
+        if n.parts.as_ref().is_some_and(|p| !self.in_parts(p)) {
+            return 0.0;
+        }
         let m = match &n.mask {
             Some(mp) => self.mask(mp),
             None => 1.0,
@@ -1288,6 +1295,22 @@ impl<'a, 'b> Texel<'a, 'b> {
         let height = Channel::Height.index();
         let h = n.chans.iter().find(|c| c.ch == height).and_then(|c| self.content(&n.content, c)).map_or(0.0, |(v, _)| v[0]);
         n.height_mask.apply(m, h)
+    }
+
+    /// Whether this texel's triangle lies in a submesh `allowed` marks (uncovered texels and
+    /// meshes without submeshes count as inside).
+    fn in_parts(&self, allowed: &[bool]) -> bool {
+        let g = self.inp.gbuf;
+        let tri = g.tri.get((self.y * g.width + self.x) as usize).copied().unwrap_or(NO_TRI);
+        if tri == NO_TRI {
+            return true;
+        }
+        let first = tri.saturating_mul(3);
+        let subs = &self.inp.mesh.submeshes;
+        let holds = |k: usize| subs.get(k).is_some_and(|s| s.start <= first && first < s.start.saturating_add(s.count));
+        // Submeshes are in index order; anything else is searched.
+        let k = subs.partition_point(|s| s.start <= first).checked_sub(1).filter(|k| holds(*k)).or_else(|| (0..subs.len()).find(|k| holds(*k)));
+        k.and_then(|k| allowed.get(k).copied()).unwrap_or(true)
     }
 
     /// Record the anchors of the stack below layer `id` (`full` is the planned stack), to
@@ -2215,6 +2238,30 @@ soft {soft:?}"
         let f = Filter::BakedLighting { azimuth: 0.0, elevation: 0.0, light: 0.0, ambient: 1.0, occlusion: 0.5 };
         assert_eq!(f.baked_light([0.0, 1.0, 0.0], 0.2), Some(0.6), "half the occlusion");
         assert_eq!(Filter::Invert.baked_light([0.0; 3], 1.0), None);
+    }
+
+    #[test]
+    fn geometry_masks_show_layers_on_chosen_parts_only() {
+        let mut f = fixture();
+        // Two parts of the plane's one material: the first half of its triangles and the rest.
+        let n = f.mesh.indices.len() as u32 / 6 * 3;
+        f.mesh.submeshes = vec![
+            texturecraft_geom::SubMesh { name: "Lid".into(), material: 0, start: 0, count: n },
+            texturecraft_geom::SubMesh { name: "Body".into(), material: 0, start: n, count: f.mesh.indices.len() as u32 - n },
+        ];
+        let id = fill_layer(&mut f.project, [1.0, 0.0, 0.0], 0.2);
+        let red = |f: &Fixture| {
+            let out = run(f, None);
+            (0..64 * 64).filter(|i| close(out.value(Channel::BaseColor, i % 64, i / 64), [1.0, 0.0, 0.0])).count()
+        };
+        let all = red(&f);
+        f.project.layer_mut(id).unwrap().geometry_mask = Some(vec!["Lid".into()]);
+        let lid = red(&f);
+        f.project.layer_mut(id).unwrap().geometry_mask = Some(vec!["Body".into()]);
+        let body = red(&f);
+        assert!(lid > 0 && body > 0 && lid + body == all, "{lid} + {body} of {all}");
+        f.project.layer_mut(id).unwrap().geometry_mask = Some(Vec::new());
+        assert_eq!(red(&f), 0, "no parts: hidden everywhere");
     }
 
     #[test]

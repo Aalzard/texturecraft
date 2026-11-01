@@ -329,6 +329,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "템플릿 기준"),
     ("From template / project", "템플릿 / 프로젝트 기준"),
     ("Full", "전체"),
+    ("Geometry mask", "지오메트리 마스크"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
         "높이 상관 Smith 가시성을 사용하는 GGX 스페큘러, Lambert 디퓨즈, 구면 조화 함수 조도와 수평선 페이딩을 적용한 분할 합 이미지 기반 라이팅.",
@@ -699,6 +700,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Sheen weight", "쉰 가중치"),
     ("Shift + wheel", "Shift + 휠"),
     ("Shortcuts list...", "단축키 목록..."),
+    ("Show on all parts", "모든 파트에 표시"),
     ("Show UV wireframe in the 2D view", "2D 뷰에 UV 와이어프레임 표시"),
     ("Show entire mesh", "전체 메시 표시"),
     ("Show log...", "로그 표시..."),

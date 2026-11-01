@@ -42,6 +42,9 @@ pub struct Layer {
     /// Combine the mask with the layer's height ("mask with height").
     #[serde(default)]
     pub height_mask: HeightMask,
+    /// Geometry mask: the mesh parts (submesh names) the layer shows on; None shows it on all.
+    #[serde(default)]
+    pub geometry_mask: Option<Vec<String>>,
 }
 
 /// Mask with height: partial mask values follow the layer's own height, so a transition
@@ -112,6 +115,7 @@ impl Layer {
             content_effects: Vec::new(),
             color_tag: None,
             height_mask: HeightMask::default(),
+            geometry_mask: None,
         }
     }
 

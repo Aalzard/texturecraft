@@ -30,7 +30,31 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("textureSet.visible", "Toggle texture set visibility", [], None, "{ts?, visible?}", always, visible),
         cmd!("textureSet.rename", "Rename texture set", [], None, "{ts?, name}", always, rename),
         cmd!("textureSet.settings", "Texture set settings", [], None, "{ts?, description?, heightStrength?, normalFormat?: openGl|directX}", always, settings),
+        cmd!(
+            "textureSet.parts",
+            "List mesh parts",
+            [],
+            None,
+            "{ts?} — the mesh parts (submesh names) of a texture set, for geometry masks",
+            always,
+            |s, p| {
+                let ts = ts_param(s, p, "textureSet.parts")?;
+                Ok(json!(parts(s, ts)))
+            }
+        ),
     ]
+}
+
+/// The mesh parts (submesh names, in mesh order, each once) of texture set `ts`.
+pub fn parts(s: &Session, ts: usize) -> Vec<String> {
+    let Some(material) = s.doc.project.texture_sets.get(ts).map(|t| t.material) else { return Vec::new() };
+    let mut out: Vec<String> = Vec::new();
+    for sm in s.mesh.submeshes.iter().filter(|sm| sm.material == material) {
+        if !out.contains(&sm.name) {
+            out.push(sm.name.clone());
+        }
+    }
+    out
 }
 
 pub(crate) fn ts_param(s: &Session, p: &Value, cmd: &str) -> Result<usize> {

@@ -121,6 +121,36 @@ fn filter_library_adds_every_filter_and_edits_its_parameters() {
     assert!(at(&mut s, Channel::BaseColor, 200.0, 200.0).iter().all(|v| v.is_finite()));
 }
 
+/// Two OBJ objects in one texture set: a fill shows on the parts its geometry mask names.
+#[test]
+fn geometry_masks_limit_layers_to_mesh_parts() {
+    let obj = "o Lid\nv 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 0.5 0\nvt 0 0.5\nf 1/1 2/2 3/3\n\
+               o Body\nv 1 1 0\nv 2 1 0\nv 1 2 0\nvt 0.5 0.5\nvt 1 0.5\nvt 0.5 1\nf 4/4 5/5 6/6\n";
+    let mut s = Session::from_mesh_bytes("parts.obj", obj.as_bytes(), 256, "parts").unwrap();
+    assert_eq!(execute(&mut s, "textureSet.parts", &Value::Null).unwrap(), json!(["Lid", "Body"]));
+    let layer = id(execute(&mut s, "layer.add.fill", &json!({"color": [1, 0, 0]})).unwrap(), "layer");
+    // Texels inside each triangle (OBJ v is flipped to the top-left origin).
+    let texel = |s: &mut Session, u: f32, v: f32| {
+        s.update();
+        let (w, h) = s.caches[0].size;
+        red(s.caches[0].composite.value(Channel::BaseColor, (u * w as f32) as u32, (v * h as f32) as u32))
+    };
+    assert!(texel(&mut s, 0.1, 0.9) && texel(&mut s, 0.6, 0.4));
+    let r = execute(&mut s, "layer.set", &json!({"layer": layer.0, "geometryMask": ["Body"]})).unwrap();
+    assert_eq!(r["geometryMask"], json!(["Body"]));
+    assert!(!texel(&mut s, 0.1, 0.9) && texel(&mut s, 0.6, 0.4), "only on Body");
+    assert!(execute(&mut s, "project.inspect", &Value::Null).unwrap().to_string().contains("geometryMask"));
+    assert!(execute(&mut s, "layer.set", &json!({"layer": layer.0, "geometryMask": ["Nope"]})).is_err());
+    assert!(execute(&mut s, "layer.set", &json!({"layer": layer.0, "geometryMask": "Body"})).is_err());
+    assert!(execute(&mut s, "layer.set", &json!({"layer": layer.0})).is_err());
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert!(texel(&mut s, 0.1, 0.9), "undone");
+    execute(&mut s, "layer.set", &json!({"layer": layer.0, "geometryMask": []})).unwrap();
+    assert!(!texel(&mut s, 0.1, 0.9) && !texel(&mut s, 0.6, 0.4), "no parts: hidden");
+    execute(&mut s, "layer.set", &json!({"layer": layer.0, "geometryMask": null})).unwrap();
+    assert!(texel(&mut s, 0.1, 0.9) && texel(&mut s, 0.6, 0.4));
+}
+
 #[test]
 fn decals_project_an_image_from_a_frame_placed_on_the_surface() {
     let mut s = session();

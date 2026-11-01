@@ -78,6 +78,9 @@ fn layer_json(s: &Session, l: &Layer, depth: usize) -> Value {
     if l.height_mask.enabled {
         v["heightMask"] = json!({ "contrast": l.height_mask.contrast, "offset": l.height_mask.offset });
     }
+    if let Some(parts) = &l.geometry_mask {
+        v["geometryMask"] = json!(parts);
+    }
     if matches!(l.kind, LayerKind::Paint) {
         // Sorted: the store is a hash map, and inspect output must be stable.
         let mut painted: Vec<(&str, usize)> =
@@ -130,6 +133,7 @@ pub fn texture_set(s: &Session, i: usize) -> Value {
         "tiles": tiles,
         "channels": t.channels.iter().map(|(c, f)| json!({ "channel": c.id(), "format": f.label() })).collect::<Vec<_>>(),
         "layers": s.doc.project.walk(i).len(),
+        "parts": crate::set_cmds::parts(s, i),
         "baked": crate::project_cmds::baked_json(s.doc.baked.get(&i)),
         "visible": t.visible,
         "active": i == s.ts(),

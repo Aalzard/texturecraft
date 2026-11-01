@@ -296,6 +296,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "基于模板"),
     ("From template / project", "基于模板 / 项目"),
     ("Full", "完整"),
+    ("Geometry mask", "几何遮罩"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
         "GGX 高光与高度相关的 Smith 可见性项、Lambert 漫反射、拆分求和的基于图像的光照，以及球谐辐照度与地平线衰减。",
@@ -648,6 +649,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Sheen weight", "绒光权重"),
     ("Shift + wheel", "Shift + 滚轮"),
     ("Shortcuts list...", "快捷键列表..."),
+    ("Show on all parts", "在所有部件上显示"),
     ("Show UV wireframe in the 2D view", "在 2D 视图中显示 UV 线框"),
     ("Show entire mesh", "显示整个网格"),
     ("Show log...", "显示日志..."),
