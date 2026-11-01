@@ -979,4 +979,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Use as brush alpha", "Usar como alfa del pincel"),
     ("Place as decal", "Colocar como calcomanía"),
     ("Click: turn this channel on or off. Alt+click: this channel only", "Clic: activa o desactiva este canal. Alt+clic: solo este canal"),
+    ("Show all", "Mostrar todo"),
+    ("Hide all", "Ocultar todo"),
+    ("Invert show/hide", "Invertir mostrar/ocultar"),
+    ("Show or hide texture sets", "Mostrar u ocultar conjuntos de texturas"),
+    ("Focus: show only the active texture set", "Enfoque: mostrar solo el conjunto de texturas activo"),
 ];
