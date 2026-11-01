@@ -24,5 +24,8 @@ base64 = { workspace = true }
 cap-std = { workspace = true }
 getrandom = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+
 [dev-dependencies]
 rmcp = { workspace = true, features = ["client"] }
