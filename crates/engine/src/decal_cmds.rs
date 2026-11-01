@@ -16,7 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add decal",
             [],
             None,
-            "{image: resource name, x?, y?: viewport pixels (default: the view center), viewport?: [w,h] | position?: [x,y,z], normal?: [x,y,z], size?: height | [w,h] (world units; default a quarter of the mesh), rotation?: degrees, depth?, name?} — a fill layer projecting the image from a frame placed on the surface",
+            "{image: resource name, x?, y?: viewport pixels (default: the view center), viewport?: [w,h] | position?: [x,y,z], normal?: [x,y,z], up?: [x,y,z] (the image's up; default the view's up, or the view direction when that is along the normal), size?: height | [w,h] (world units; default a quarter of the mesh), rotation?: degrees, depth?, name?} — a fill layer projecting the image from a frame placed on the surface; seen from the front, the image reads the right way round",
             always,
             add
         ),
@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit decal",
             [],
             None,
-            "{layer?, x?, y?, viewport? | position?, normal? (re-place it), size?: height | [w,h], rotation?: degrees, offset?: [right, up] (world units from where it was placed), depth?, image?, merge?: true continues the previous Edit decal undo step (drags)}",
+            "{layer?, x?, y?, viewport? | position?, normal? (re-place it), up?: [x,y,z], size?: height | [w,h], rotation?: degrees, offset?: [right, up] (world units from where it was placed), depth?, image?, merge?: true continues the previous Edit decal undo step (drags)}",
             has_layer,
             set
         ),
@@ -81,9 +81,16 @@ fn size_param(p: &Value, aspect: f32, diag: f32) -> Option<[f32; 2]> {
     size.iter().all(|x| x.is_finite()).then(|| size.map(|x| x.clamp(diag * 1e-4, diag * 10.0)))
 }
 
-/// The camera's up direction (decals are placed upright on screen).
-fn screen_up(s: &Session) -> Vec3 {
-    s.camera.view().inverse().transform_vector3(Vec3::Y)
+/// The decal's up direction: `up` when given, else the camera's (decals are placed upright on
+/// screen), or where the camera looks when that is along `normal` (a top face seen from the
+/// front: its far edge is up, as on a table).
+fn decal_up(s: &Session, cmd: &str, p: &Value, normal: Vec3) -> Result<Vec3> {
+    if p.get("up").is_some() {
+        return vec3(p, "up").filter(|u| u.cross(normal).length_squared() > 1e-8).ok_or_else(|| bad(cmd, "`up` must be [x, y, z], not along the normal"));
+    }
+    let to_world = s.camera.view().inverse();
+    let up = to_world.transform_vector3(Vec3::Y);
+    Ok(if up.normalize_or_zero().cross(normal).length_squared() > 1e-4 { up } else { to_world.transform_vector3(Vec3::NEG_Z) })
 }
 
 fn add(s: &mut Session, p: &Value) -> Result<Value> {
@@ -97,7 +104,7 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     let decal = Decal {
         center: center.to_array(),
         normal: normal.to_array(),
-        up: screen_up(s).to_array(),
+        up: decal_up(s, cmd, p, normal)?.to_array(),
         size,
         rotation: f32p(p, "rotation").unwrap_or(0.0).rem_euclid(360.0),
         offset: [0.0; 2],
@@ -131,6 +138,9 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let diag = mesh_size(s);
     if let Some((center, normal)) = placement(s, cmd, p, true)? {
         (d.center, d.normal, d.offset) = (center.to_array(), normal.to_array(), [0.0; 2]);
+    }
+    if p.get("up").is_some() {
+        d.up = decal_up(s, cmd, p, Vec3::from(d.normal))?.to_array();
     }
     if let Some(size) = size_param(p, d.size[0] / d.size[1].max(1e-6), diag) {
         d.size = size;
