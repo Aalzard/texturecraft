@@ -70,6 +70,18 @@ assess() {
   return 1
 }
 
+# Validation fetches the ticket from Apple's CloudKit and can fail on a dropped connection.
+stapler_validate() {
+  local target="$1" try
+  for try in 1 2 3 4; do
+    xcrun stapler validate "$target" && return 0
+    [ "$try" = 4 ] && break
+    echo "stapler validate failed (try $try of 4); retrying in $((try * 20)) s" >&2
+    sleep $((try * 20))
+  done
+  return 1
+}
+
 for f in "$DMG" "$CLI_ZIP"; do
   if [ ! -f "$f" ]; then
     echo "error: missing $f" >&2
@@ -126,7 +138,7 @@ fi
 echo "==> $(basename "$DMG")"
 codesign --verify --strict --verbose=2 "$DMG"
 if [ "$STRICT" = 1 ]; then
-  xcrun stapler validate "$DMG" || fail "no notarization ticket stapled to the DMG"
+  stapler_validate "$DMG" || fail "no notarization ticket stapled to the DMG"
   assess --assess --type open --context context:primary-signature -vv "$DMG" \
     || fail "Gatekeeper rejects the DMG"
 fi
