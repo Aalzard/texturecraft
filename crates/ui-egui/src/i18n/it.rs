@@ -974,8 +974,12 @@ pub const TABLE: &[(&str, &str)] = &[
         "Usa la cornice e i pulsanti della finestra del sistema operativo invece della barra del titolo di TextureCraft",
     ),
     (
-        "Not enough GPU memory to show texture set \"{name}\" fully: lower Settings ▸ Viewport ▸ Texture resolution. Painting and export are not affected.",
-        "Memoria GPU insufficiente per mostrare per intero il set di texture \"{name}\": riduci Impostazioni ▸ Viewport ▸ Risoluzione texture. Pittura ed esportazione non sono interessate.",
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "Memoria GPU insufficiente per mostrare per intero il set di texture \"{name}\": riduci nelle Impostazioni la risoluzione texture della viewport. Pittura ed esportazione non sono interessate.",
     ),
     ("GPU error: {error}", "Errore GPU: {error}"),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "Memoria GPU insufficiente per mostrare per intero {count} set di texture ({names}): riduci nelle Impostazioni la risoluzione texture della viewport. Pittura ed esportazione non sono interessate.",
+    ),
 ];

@@ -980,8 +980,12 @@ pub const TABLE: &[(&str, &str)] = &[
         "Fensterrahmen und Fenstertasten des Betriebssystems statt der eigenen Titelleiste von TextureCraft verwenden",
     ),
     (
-        "Not enough GPU memory to show texture set \"{name}\" fully: lower Settings ▸ Viewport ▸ Texture resolution. Painting and export are not affected.",
-        "Nicht genug GPU-Speicher, um das Texturset \"{name}\" vollständig anzuzeigen: Einstellungen ▸ Ansichtsfenster ▸ Texturauflösung verringern. Malen und Export sind nicht betroffen.",
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "Nicht genug GPU-Speicher, um das Texturset \"{name}\" vollständig anzuzeigen: Verringere in den Einstellungen die Texturauflösung des Ansichtsfensters. Malen und Export sind nicht betroffen.",
     ),
     ("GPU error: {error}", "GPU-Fehler: {error}"),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "Nicht genug GPU-Speicher, um {count} Texturesets vollständig anzuzeigen ({names}): Verringere in den Einstellungen die Texturauflösung des Ansichtsfensters. Malen und Export sind nicht betroffen.",
+    ),
 ];

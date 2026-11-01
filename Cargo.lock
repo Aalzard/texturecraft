@@ -3978,6 +3978,7 @@ dependencies = [
  "texturecraft-core",
  "texturecraft-geom",
  "texturecraft-texel",
+ "wasm-bindgen-futures",
  "wgpu",
 ]
 

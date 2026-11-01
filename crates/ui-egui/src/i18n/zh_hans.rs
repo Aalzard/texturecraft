@@ -878,8 +878,12 @@ pub const TABLE: &[(&str, &str)] = &[
         "使用操作系统的窗口边框和按钮，而不是 TextureCraft 自己的标题栏",
     ),
     (
-        "Not enough GPU memory to show texture set \"{name}\" fully: lower Settings ▸ Viewport ▸ Texture resolution. Painting and export are not affected.",
-        "GPU 内存不足，无法完整显示纹理集“{name}”：请降低 设置 ▸ 视口 ▸ 纹理分辨率。绘制和导出不受影响。",
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU 内存不足，无法完整显示纹理集“{name}”：请在设置中降低视口的纹理分辨率。绘制和导出不受影响。",
     ),
     ("GPU error: {error}", "GPU 错误：{error}"),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU 内存不足，无法完整显示 {count} 个纹理集（{names}）：请在设置中降低视口的纹理分辨率。绘制和导出不受影响。",
+    ),
 ];

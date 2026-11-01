@@ -140,6 +140,54 @@ pub(crate) fn scoped<T>(device: &wgpu::Device, what: &str, f: impl FnOnce() -> T
     }
 }
 
+/// What [`checked`] knows right after the call.
+pub(crate) enum Checked<T> {
+    /// wgpu answered at once (native backends, WebGL): the value, or what went wrong.
+    Done(Result<T, String>),
+    /// The browser's WebGPU answers later: the value, possibly invalid, and where the answer
+    /// arrives (`None` for success). Don't use the value until it arrives. (Native backends
+    /// never answer late; the renderer's tests build this variant by hand.)
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    Later(T, std::sync::mpsc::Receiver<Option<String>>),
+}
+
+/// [`scoped`] for work whose errors may arrive later: never takes an unanswered scope as success.
+pub(crate) fn checked<T>(device: &wgpu::Device, what: &str, f: impl FnOnce() -> T) -> Checked<T> {
+    let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let invalid = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let out = f();
+    let (invalid, oom) = (invalid.pop(), oom.pop());
+    let what = what.to_string();
+    let mut answer = Box::pin(async move {
+        let invalid = invalid.await;
+        let oom = oom.await;
+        // An allocation that ran out of memory also makes later calls on it invalid: the
+        // out-of-memory error is the cause.
+        oom.or(invalid).map(|e| format!("{what}: {e}"))
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Checked::Done(match pollster::block_on(answer.as_mut()) {
+            Some(e) => Err(e),
+            None => Ok(out),
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        match answer.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(Some(e)) => Checked::Done(Err(e)),
+            Poll::Ready(None) => Checked::Done(Ok(out)),
+            Poll::Pending => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let _ = tx.send(answer.await);
+                });
+                Checked::Later(out, rx)
+            }
+        }
+    }
+}
+
 pub(crate) fn entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::COMPUTE, ty, count: None }
 }

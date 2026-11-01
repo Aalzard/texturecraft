@@ -98,16 +98,49 @@ fn shade(app: &TextureCraftApp) -> Shade {
 /// Show what the GPU side reported (each message once while its toast is up).
 fn gpu_report_toasts(app: &mut TextureCraftApp, reports: crate::gpu::GpuReports) {
     let names: Vec<String> = reports.memory.iter().filter_map(|ts| app.session.doc.project.texture_sets.get(*ts).map(|t| t.name.clone())).collect();
-    let texts = names
-        .iter()
-        .map(|name| trf("Not enough GPU memory to show texture set \"{name}\" fully: lower Settings ▸ Viewport ▸ Texture resolution. Painting and export are not affected.", &[("name", name)]))
-        .chain(reports.errors.iter().map(|e| trf("GPU error: {error}", &[("error", e)])));
-    for text in texts.collect::<Vec<_>>() {
+    if !names.is_empty() {
+        // One sticky notice for every set the GPU could not hold (they are not retried, so the
+        // notice stays until dismissed); after a dismissal, a new one names only the new sets.
+        let (sets, shown) = &mut app.gpu_memory;
+        let current = shown.take().filter(|text| app.toasts.iter().any(|t| &t.text == text));
+        match &current {
+            Some(text) => app.toasts.retain(|t| &t.text != text),
+            None => sets.clear(),
+        }
+        for n in names {
+            if !sets.contains(&n) {
+                sets.push(n);
+            }
+        }
+        let text = match sets.as_slice() {
+            [one] => trf(
+                "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+                &[("name", one)],
+            ),
+            many => {
+                let mut list = many.iter().take(MAX_NAMED_SETS).map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ");
+                if many.len() > MAX_NAMED_SETS {
+                    list.push_str(", ...");
+                }
+                trf(
+                    "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+                    &[("count", &many.len()), ("names", &list)],
+                )
+            }
+        };
+        app.gpu_memory.1 = Some(text.clone());
+        app.toast_sticky(text);
+    }
+    for e in &reports.errors {
+        let text = trf("GPU error: {error}", &[("error", e)]);
         if !app.toasts.iter().any(|t| t.text == text) {
             app.toast(text, true);
         }
     }
 }
+
+/// Texture sets a GPU memory notice names before "...".
+const MAX_NAMED_SETS: usize = 5;
 
 /// This frame's scene sync (compositing and GPU uploads), run by the first view drawn, after
 /// that view handled its input: a stroke shows in the frame it is painted, not the next.

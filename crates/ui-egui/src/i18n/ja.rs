@@ -947,8 +947,12 @@ pub const TABLE: &[(&str, &str)] = &[
         "TextureCraft 独自のタイトルバーの代わりに、OS のウィンドウ枠とボタンを使います",
     ),
     (
-        "Not enough GPU memory to show texture set \"{name}\" fully: lower Settings ▸ Viewport ▸ Texture resolution. Painting and export are not affected.",
-        "GPU メモリが不足しているため、テクスチャセット「{name}」を完全には表示できません：設定 ▸ ビューポート ▸ テクスチャ解像度 を下げてください。ペイントと書き出しには影響しません。",
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU メモリが不足しているため、テクスチャセット「{name}」を完全には表示できません：設定でビューポートのテクスチャ解像度を下げてください。ペイントと書き出しには影響しません。",
     ),
     ("GPU error: {error}", "GPU エラー: {error}"),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU メモリが不足しているため、{count} 個のテクスチャセット（{names}）を完全には表示できません：設定でビューポートのテクスチャ解像度を下げてください。ペイントと書き出しには影響しません。",
+    ),
 ];

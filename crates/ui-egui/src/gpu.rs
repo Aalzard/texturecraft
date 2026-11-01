@@ -44,6 +44,8 @@ pub struct GpuState {
     /// Raised when texture-set textures were recreated: the UI must upload every tile again.
     pub reset: Arc<AtomicBool>,
     pub reports: Arc<Mutex<GpuReports>>,
+    /// Wakes the UI when the GPU side has something to report.
+    pub ctx: egui::Context,
 }
 
 /// Problems the GPU side hands to the UI, which shows them as toasts.
@@ -92,12 +94,12 @@ const UPLOAD_CHUNK: usize = 64;
 /// display kind, measured at ~5.5 µs on a desktop GPU), counted against the frame budget.
 const UPLOAD_MS_PER_TILE: f64 = 0.006;
 
-pub fn init(rs: &egui_wgpu::RenderState) -> GpuLink {
+pub fn init(rs: &egui_wgpu::RenderState, ctx: &egui::Context) -> GpuLink {
     let reset = Arc::new(AtomicBool::new(false));
     let reports = Arc::new(Mutex::new(GpuReports::default()));
     // wgpu's default handler panics on any error no scope caught (an out-of-memory texture, a
     // driver hiccup): report it instead, so the user keeps the session.
-    let sink = reports.clone();
+    let (sink, wake) = (reports.clone(), ctx.clone());
     rs.device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
         log::error!("GPU error: {e}");
         let mut r = sink.lock().unwrap_or_else(PoisonError::into_inner);
@@ -105,9 +107,11 @@ pub fn init(rs: &egui_wgpu::RenderState) -> GpuLink {
         if r.errors.len() < MAX_GPU_ERRORS && !r.errors.contains(&text) {
             r.errors.push(text);
         }
+        // The UI may be idle: draw a frame to show it.
+        wake.request_repaint();
     }));
     let renderer = Renderer::new(&rs.device, &rs.queue, rs.target_format);
-    rs.renderer.write().callback_resources.insert(GpuState { renderer, reset: reset.clone(), reports: reports.clone() });
+    rs.renderer.write().callback_resources.insert(GpuState { renderer, reset: reset.clone(), reports: reports.clone(), ctx: ctx.clone() });
     let info = rs.adapter.get_info();
     GpuLink {
         reset,
@@ -298,17 +302,23 @@ impl CallbackTrait for ViewCallback {
             for (ts, size, bytes) in &sync.aux {
                 gpu.renderer.upload_aux(device, queue, *ts, *size, bytes);
             }
-            let failed = gpu.renderer.take_memory_failures();
-            if !failed.is_empty() {
-                let mut r = gpu.reports.lock().unwrap_or_else(PoisonError::into_inner);
-                for ts in failed {
-                    if !r.memory.contains(&ts) {
-                        r.memory.push(ts);
-                    }
+        }
+        // Also installs (or rejects) full-size textures WebGPU answered for since last frame.
+        gpu.renderer.prepare(device, queue, encoder, &self.frame);
+        let failed = gpu.renderer.take_memory_failures();
+        if !failed.is_empty() {
+            let mut r = gpu.reports.lock().unwrap_or_else(PoisonError::into_inner);
+            for ts in failed {
+                if !r.memory.contains(&ts) {
+                    r.memory.push(ts);
                 }
             }
+            // This frame's report drain already ran: the next frame shows the toast.
+            gpu.ctx.request_repaint();
         }
-        gpu.renderer.prepare(device, queue, encoder, &self.frame);
+        if gpu.renderer.awaiting_gpu() {
+            gpu.ctx.request_repaint();
+        }
         let ppp = screen.pixels_per_point;
         let r = self.rect;
         gpu.renderer.set_blit_rect(queue, self.frame.view_id, [r.min.x * ppp, r.min.y * ppp, r.width() * ppp, r.height() * ppp], screen.size_in_pixels);

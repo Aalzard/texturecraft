@@ -965,8 +965,12 @@ pub const TABLE: &[(&str, &str)] = &[
         "Usar el marco y los botones de ventana del sistema operativo en lugar de la barra de título propia de TextureCraft",
     ),
     (
-        "Not enough GPU memory to show texture set \"{name}\" fully: lower Settings ▸ Viewport ▸ Texture resolution. Painting and export are not affected.",
-        "No hay suficiente memoria de GPU para mostrar el conjunto de texturas \"{name}\" por completo: reduce Ajustes ▸ Ventana gráfica ▸ Resolución de texturas. La pintura y la exportación no se ven afectadas.",
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "No hay suficiente memoria de GPU para mostrar el conjunto de texturas \"{name}\" por completo: reduce en Ajustes la resolución de texturas de la ventana gráfica. La pintura y la exportación no se ven afectadas.",
     ),
     ("GPU error: {error}", "Error de GPU: {error}"),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "No hay suficiente memoria de GPU para mostrar por completo {count} conjuntos de texturas ({names}): reduce en Ajustes la resolución de texturas de la ventana gráfica. La pintura y la exportación no se ven afectadas.",
+    ),
 ];
