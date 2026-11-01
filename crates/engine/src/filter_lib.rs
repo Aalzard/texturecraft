@@ -33,11 +33,16 @@ pub const FILTERS: &[FilterDef] = &[
     def("clamp", "Clamp", "Adjustments", true),
     def("invert", "Invert", "Adjustments", true),
     def("threshold", "Threshold", "Adjustments", true),
+    def("grayscale", "Grayscale", "Adjustments", false),
+    def("edgeDetect", "Edge Detect", "Adjustments", true),
+    def("normalInvert", "Normal Invert", "Adjustments", false),
     def("blur", "Blur", "Blur and sharpen", true),
     def("blurDirectional", "Blur Directional", "Blur and sharpen", true),
     def("slopeBlur", "Slope Blur", "Blur and sharpen", true),
     def("sharpen", "Sharpen", "Blur and sharpen", true),
+    def("highPass", "High Pass", "Blur and sharpen", true),
     def("warp", "Warp", "Distort", true),
+    def("warpDirectional", "Warp Directional", "Distort", true),
     def("matFinishGrind", "MatFinish Grind", "Material finish", false),
     def("matFinishRaw", "MatFinish Raw", "Material finish", false),
     def("matFinishSanded", "MatFinish Sanded", "Material finish", false),
@@ -89,6 +94,11 @@ pub fn build(id: &str, p: &Value) -> Result<EffectKind> {
         "warp" => Filter::Warp { intensity: 16.0, scale: 4.0, seed: 1 },
         "blurDirectional" => Filter::DirectionalBlur { radius: 16.0, angle: 0.0 },
         "slopeBlur" => Filter::SlopeBlur { radius: 16.0, scale: 4.0, seed: 1 },
+        "highPass" => Filter::HighPass { radius: 8.0 },
+        "edgeDetect" => Filter::EdgeDetect { width: 2.0 },
+        "warpDirectional" => Filter::DirectionalWarp { intensity: 16.0, angle: 0.0, scale: 4.0, seed: 1 },
+        "grayscale" => Filter::Grayscale,
+        "normalInvert" => Filter::NormalInvert,
         "levels" => {
             let mut l = Levels::default();
             crate::mask_cmds::levels_from(p, &mut l);
@@ -148,7 +158,17 @@ pub fn scalar_params(f: &Filter) -> Vec<(&'static str, &'static str, f32, f32, f
                 ("seed", "Seed", *seed as f32, 0.0, 999.0),
             ]
         }
-        Filter::Invert | Filter::ColorBalance { .. } | Filter::GradientMap { .. } => Vec::new(),
+        Filter::HighPass { radius } => vec![("radius", "Intensity (texels at 2K)", *radius, 0.0, 128.0)],
+        Filter::EdgeDetect { width } => vec![("width", "Width (texels at 2K)", *width, 0.0, 64.0)],
+        Filter::DirectionalWarp { intensity, angle, scale, seed } => {
+            vec![
+                ("intensity", "Intensity (texels at 2K)", *intensity, 0.0, 128.0),
+                ("angle", "Angle (degrees)", *angle, 0.0, 360.0),
+                ("scale", "Noise scale", *scale, 0.5, 64.0),
+                ("seed", "Seed", *seed as f32, 0.0, 999.0),
+            ]
+        }
+        Filter::Invert | Filter::ColorBalance { .. } | Filter::GradientMap { .. } | Filter::Grayscale | Filter::NormalInvert => Vec::new(),
     }
 }
 
@@ -164,8 +184,13 @@ pub(crate) fn apply(p: &Value, f: &mut Filter, cmd: &str) -> Result<()> {
             *slot = u32::try_from(v).unwrap_or(u32::MAX);
         }
     };
+    let angle = |slot: &mut f32| {
+        if let Some(v) = f32p(p, "angle") {
+            *slot = v.rem_euclid(360.0);
+        }
+    };
     match f {
-        Filter::Invert => {}
+        Filter::Invert | Filter::Grayscale | Filter::NormalInvert => {}
         Filter::Threshold { level } => set(level, "level", 0.0, 1.0),
         Filter::Blur { radius } => set(radius, "radius", 0.0, 256.0),
         Filter::Sharpen { amount } => set(amount, "amount", 0.0, 10.0),
@@ -205,14 +230,20 @@ pub(crate) fn apply(p: &Value, f: &mut Filter, cmd: &str) -> Result<()> {
             set(scale, "scale", 0.01, 1000.0);
             seed(s);
         }
-        Filter::DirectionalBlur { radius, angle } => {
+        Filter::DirectionalBlur { radius, angle: a } => {
             set(radius, "radius", 0.0, 256.0);
-            if let Some(v) = f32p(p, "angle") {
-                *angle = v.rem_euclid(360.0);
-            }
+            angle(a);
         }
         Filter::SlopeBlur { radius, scale, seed: s } => {
             set(radius, "radius", 0.0, 256.0);
+            set(scale, "scale", 0.01, 1000.0);
+            seed(s);
+        }
+        Filter::HighPass { radius } => set(radius, "radius", 0.0, 256.0),
+        Filter::EdgeDetect { width } => set(width, "width", 0.0, 256.0),
+        Filter::DirectionalWarp { intensity, angle: a, scale, seed: s } => {
+            set(intensity, "intensity", 0.0, 256.0);
+            angle(a);
             set(scale, "scale", 0.01, 1000.0);
             seed(s);
         }
@@ -228,7 +259,9 @@ mod tests {
     fn every_filter_builds_and_finds_by_id_or_label() {
         for f in FILTERS {
             let kind = build(f.id, &Value::Null).unwrap_or_else(|e| panic!("{}: {e}", f.id));
-            assert_eq!(kind.content_only().is_none(), f.mask, "{}", f.id);
+            // Material finishes are content only; other filters also run on masks, where some
+            // (grayscale, normal invert) change nothing and are not offered.
+            assert_eq!(kind.content_only().is_none(), f.mask || matches!(kind, EffectKind::Filter(_)), "{}", f.id);
             assert_eq!(find(f.label).map(|d| d.id), Some(f.id));
         }
         assert!(build("nope", &Value::Null).is_err());

@@ -1568,7 +1568,12 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
             }
             ui.label(RichText::new(tr("Dark to light: the content's luminance picks a color along these stops.")).size(10.5).color(tk.text_dim));
         }
-        Filter::Warp { .. } | Filter::DirectionalBlur { .. } | Filter::SlopeBlur { .. } => {
+        Filter::Warp { .. }
+        | Filter::DirectionalBlur { .. }
+        | Filter::SlopeBlur { .. }
+        | Filter::DirectionalWarp { .. }
+        | Filter::HighPass { .. }
+        | Filter::EdgeDetect { .. } => {
             ui.label(RichText::new(tr("Works in texture space, like the blur: it does not cross UV seams.")).size(10.5).color(tk.text_dim));
         }
         _ => {}

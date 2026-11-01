@@ -546,6 +546,25 @@ pub enum Filter {
         scale: f32,
         seed: u32,
     },
+    /// The detail finer than `radius` (texels at 2K) around mid gray: the value minus its blur.
+    HighPass {
+        radius: f32,
+    },
+    /// Gradient magnitude across `width` texels at 2K: edges light, flat areas black.
+    EdgeDetect {
+        width: f32,
+    },
+    /// Like [`Filter::Warp`], but every texel moves along one direction (`angle` in degrees).
+    DirectionalWarp {
+        intensity: f32,
+        angle: f32,
+        scale: f32,
+        seed: u32,
+    },
+    /// Colors to their luminance (scalars and masks unchanged).
+    Grayscale,
+    /// Flip the green component of normal maps (OpenGL ↔ DirectX); other channels unchanged.
+    NormalInvert,
 }
 
 /// Push `x` (0..1) towards 1 (`amount` > 0) or 0 (`amount` < 0); `amount` in −1..1.
@@ -621,7 +640,17 @@ pub fn gradient(colors: &[[f32; 3]], t: f32) -> Option<[f32; 3]> {
 impl Filter {
     /// Whether the filter reads neighbouring texels (the compositor runs it over a region).
     pub fn is_neighbourhood(&self) -> bool {
-        matches!(self, Filter::Blur { .. } | Filter::Sharpen { .. } | Filter::Warp { .. } | Filter::DirectionalBlur { .. } | Filter::SlopeBlur { .. })
+        matches!(
+            self,
+            Filter::Blur { .. }
+                | Filter::Sharpen { .. }
+                | Filter::Warp { .. }
+                | Filter::DirectionalBlur { .. }
+                | Filter::SlopeBlur { .. }
+                | Filter::HighPass { .. }
+                | Filter::EdgeDetect { .. }
+                | Filter::DirectionalWarp { .. }
+        )
     }
 
     /// The filter applied to one value of a channel of `kind` (masks are scalars). None for
@@ -669,7 +698,22 @@ impl Filter {
                 let (lo, hi) = (min.min(*max), min.max(*max));
                 per_unit(kind, v, |x| x.max(lo).min(hi))
             }
-            Filter::Blur { .. } | Filter::Sharpen { .. } | Filter::Warp { .. } | Filter::DirectionalBlur { .. } | Filter::SlopeBlur { .. } => return None,
+            Filter::Grayscale => match kind {
+                ChannelKind::Color => [lum(v); 3],
+                _ => v,
+            },
+            Filter::NormalInvert => match kind {
+                ChannelKind::NormalMap => [v[0], 1.0 - v[1], v[2]],
+                _ => v,
+            },
+            Filter::Blur { .. }
+            | Filter::Sharpen { .. }
+            | Filter::Warp { .. }
+            | Filter::DirectionalBlur { .. }
+            | Filter::SlopeBlur { .. }
+            | Filter::HighPass { .. }
+            | Filter::EdgeDetect { .. }
+            | Filter::DirectionalWarp { .. } => return None,
         })
     }
 
@@ -688,6 +732,11 @@ impl Filter {
             Filter::Warp { .. } => "Warp",
             Filter::DirectionalBlur { .. } => "Blur Directional",
             Filter::SlopeBlur { .. } => "Slope Blur",
+            Filter::HighPass { .. } => "High Pass",
+            Filter::EdgeDetect { .. } => "Edge Detect",
+            Filter::DirectionalWarp { .. } => "Warp Directional",
+            Filter::Grayscale => "Grayscale",
+            Filter::NormalInvert => "Normal Invert",
         }
     }
 }

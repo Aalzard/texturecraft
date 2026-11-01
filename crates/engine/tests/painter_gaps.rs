@@ -58,6 +58,11 @@ fn filter_library_adds_every_filter_and_edits_its_parameters() {
         "clamp",
         "slopeBlur",
         "matFinishGrind",
+        "highPass",
+        "edgeDetect",
+        "warpDirectional",
+        "grayscale",
+        "normalInvert",
     ] {
         assert!(ids.contains(&want), "{want} missing from {ids:?}");
     }
@@ -94,7 +99,14 @@ fn filter_library_adds_every_filter_and_edits_its_parameters() {
     assert!(matches!(&s.doc.project.effect(fin).unwrap().1.kind, EffectKind::Material(f) if f.sources.contains_key(&Channel::Height)));
     assert!(execute(&mut s, "effect.add.filter", &json!({"filter": "nope"})).is_err());
     // A directional blur, slope blur and warp composite without trouble on a sphere.
-    for (fid, extra) in [("blurDirectional", json!({"radius": 40, "angle": 45})), ("slopeBlur", json!({"radius": 30})), ("warp", json!({"intensity": 50}))] {
+    for (fid, extra) in [
+        ("blurDirectional", json!({"radius": 40, "angle": 45})),
+        ("slopeBlur", json!({"radius": 30})),
+        ("warp", json!({"intensity": 50})),
+        ("warpDirectional", json!({"intensity": 50, "angle": 30})),
+        ("highPass", json!({"radius": 20})),
+        ("edgeDetect", json!({"width": 4})),
+    ] {
         let mut p = json!({"filter": fid, "target": "content"});
         p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
         execute(&mut s, "effect.add.filter", &p).unwrap();

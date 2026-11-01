@@ -241,10 +241,14 @@ pub type Fields = HashMap<FieldKey, Field>;
 enum Op {
     /// Box blurs (≈ Gaussian), sharpening by the amount when given.
     Blur(Option<f32>),
+    /// The value minus its box blur, around the channel's mid value.
+    HighPass,
     /// Average along a direction (unit vector in texels).
     Line([f32; 2]),
-    /// Read at an offset given by a noise vector field.
-    Warp { scale: f32, seed: u32 },
+    /// Read at an offset given by a noise vector field, or by noise along a direction.
+    Warp { scale: f32, seed: u32, dir: Option<[f32; 2]> },
+    /// Gradient magnitude from central differences.
+    Edge,
     /// Average downhill along a noise height field.
     Slope { scale: f32, seed: u32 },
 }
@@ -260,20 +264,28 @@ fn neighbourhood(effects: &[Effect], res: u32) -> Option<(usize, f32, Op)> {
         .filter_map(|(i, e)| match &e.kind {
             EffectKind::Filter(Filter::Blur { radius }) if *radius > 0.0 => Some((i, texels(*radius), Op::Blur(None))),
             EffectKind::Filter(Filter::Sharpen { amount }) => Some((i, (1.5 * res as f32 / 2048.0).max(0.75), Op::Blur(Some(*amount)))),
-            EffectKind::Filter(Filter::DirectionalBlur { radius, angle }) if *radius > 0.0 => {
-                let (sn, cs) = angle.to_radians().sin_cos();
-                // Texel rows run down: positive angles turn counterclockwise on screen.
-                Some((i, texels(*radius), Op::Line([cs, -sn])))
-            }
+            EffectKind::Filter(Filter::DirectionalBlur { radius, angle }) if *radius > 0.0 => Some((i, texels(*radius), Op::Line(direction(*angle)))),
             EffectKind::Filter(Filter::Warp { intensity, scale, seed }) if *intensity > 0.0 => {
-                Some((i, texels(*intensity), Op::Warp { scale: *scale, seed: *seed }))
+                Some((i, texels(*intensity), Op::Warp { scale: *scale, seed: *seed, dir: None }))
             }
+            EffectKind::Filter(Filter::DirectionalWarp { intensity, angle, scale, seed }) if *intensity > 0.0 => {
+                Some((i, texels(*intensity), Op::Warp { scale: *scale, seed: *seed, dir: Some(direction(*angle)) }))
+            }
+            EffectKind::Filter(Filter::HighPass { radius }) => Some((i, texels(*radius), Op::HighPass)),
+            EffectKind::Filter(Filter::EdgeDetect { width }) => Some((i, texels(*width), Op::Edge)),
             EffectKind::Filter(Filter::SlopeBlur { radius, scale, seed }) if *radius > 0.0 => {
                 Some((i, texels(*radius), Op::Slope { scale: *scale, seed: *seed }))
             }
             _ => None,
         })
         .last()
+}
+
+/// Unit texel-space vector of `angle` degrees. Texel rows run down: positive angles turn
+/// counterclockwise on screen.
+fn direction(angle: f32) -> [f32; 2] {
+    let (sn, cs) = angle.to_radians().sin_cos();
+    [cs, -sn]
 }
 
 /// Samples along a directional or slope blur at most (beyond, samples spread out).
@@ -330,9 +342,36 @@ fn gather(op: Op, orig: &[f32], cover: &[f32], comps: usize, (x0, y0, w, h): (u3
                         sample(x + d[0] * t, y + d[1] * t, &mut acc);
                     }
                 }
-                Op::Warp { scale, seed } => {
+                Op::Warp { scale, seed, dir } => {
                     let off = |salt: u32| ((texel_noise(x, y, [0.0; 2], res, scale, seed ^ salt) - 0.5) * 3.0).clamp(-1.0, 1.0) * r;
-                    sample(x + off(0), y + off(0x5BD1_E995), &mut acc);
+                    match dir {
+                        Some(d) => {
+                            let t = off(0);
+                            sample(x + d[0] * t, y + d[1] * t, &mut acc);
+                        }
+                        None => sample(x + off(0), y + off(0x5BD1_E995), &mut acc),
+                    }
+                }
+                Op::Edge => {
+                    let center = orig.get((row * wu + col) * comps..(row * wu + col + 1) * comps).unwrap_or(&[]);
+                    let at = |dx: f32, dy: f32| {
+                        let mut a = [0.0f32; 5];
+                        sample(x + dx, y + dy, &mut a);
+                        a
+                    };
+                    let (l, rt, u, d) = (at(-r, 0.0), at(r, 0.0), at(0.0, -r), at(0.0, r));
+                    // A side outside the UV island reads the texel itself: seams are not edges.
+                    let val = |a: &[f32; 5], k: usize| if a[4] > 1e-6 { a[k] / a[4] } else { center.get(k).copied().unwrap_or(0.0) };
+                    let mag = |k: usize| (val(&rt, k) - val(&l, k)).hypot(val(&d, k) - val(&u, k)).min(1.0);
+                    // Content stays premultiplied by its own coverage; masks are one value.
+                    let cov = if comps == 4 { center.get(3).copied().unwrap_or(0.0) } else { 1.0 };
+                    for (k, a) in acc.iter_mut().enumerate().take(comps.min(3)) {
+                        *a = mag(k) * cov;
+                    }
+                    if comps == 4 {
+                        acc[3] = cov;
+                    }
+                    acc[4] = 1.0;
                 }
                 Op::Slope { scale, seed } => {
                     let e = 0.01;
@@ -344,7 +383,7 @@ fn gather(op: Op, orig: &[f32], cover: &[f32], comps: usize, (x0, y0, w, h): (u3
                         sample(x + d.x * t, y + d.y * t, &mut acc);
                     }
                 }
-                Op::Blur(_) => {}
+                Op::Blur(_) | Op::HighPass => {}
             }
             if acc[4] > 1e-6
                 && let Some(px) = line.get_mut(col * comps..(col + 1) * comps)
@@ -482,7 +521,7 @@ fn field(inp: &Inputs, channels: &[Channel], below: &Fields, id: LayerId, job: J
     // Clamped: a hostile radius must not overflow the halo and window arithmetic.
     let r = radius.round().clamp(1.0, gw.max(gh) as f32) as u32;
     // Three box passes reach 3r texels, the other filters r (and a texel for bilinear samples).
-    let reach = if let Op::Blur(_) = op { 3 * r } else { r + 1 };
+    let reach = if matches!(op, Op::Blur(_) | Op::HighPass) { 3 * r } else { r + 1 };
     let halo = reach.div_ceil(TILE);
     let (tx0, ty0) = tiles.iter().fold((u32::MAX, u32::MAX), |(a, b), t| (a.min(t.0), b.min(t.1)));
     let (tx1, ty1) = tiles.iter().fold((0, 0), |(a, b), t| (a.max(t.0), b.max(t.1)));
@@ -553,8 +592,13 @@ fn field(inp: &Inputs, channels: &[Channel], below: &Fields, id: LayerId, job: J
             }
         }
     });
-    let sharpen = match op {
-        Op::Blur(sharpen) => sharpen,
+    // High pass centers on the channel's mid value (0 for signed channels like height).
+    let mid = match job {
+        Job::Content(ch) if ch.kind() == ChannelKind::Signed => 0.0,
+        _ => 0.5,
+    };
+    match op {
+        Op::Blur(_) | Op::HighPass => {}
         _ => {
             let mut data = gather(op, &orig, &cover, comps, (rx0, ry0, w, h), r as f32, inp.tile_res(), opacity);
             unpremultiply(&mut data, comps);
@@ -570,13 +614,17 @@ fn field(inp: &Inputs, channels: &[Channel], below: &Fields, id: LayerId, job: J
         let mut vals: Vec<f32> = orig.par_chunks(comps).map(|px| px.get(p).copied().unwrap_or(0.0)).collect();
         blur(&mut vals, wu, hu, ru);
         data.par_chunks_mut(comps).zip(vals.par_iter()).zip(weights.par_iter()).for_each(|((px, v), wt)| {
+            // Content is premultiplied, so the mid value is too (coverage itself is kept).
+            let cov = if comps == 4 { px.get(3).copied().unwrap_or(0.0) } else { 1.0 };
             if *wt > 1e-6
                 && let Some(slot) = px.get_mut(p)
             {
                 let (o, blurred) = (*slot, v / wt);
-                let filtered = match sharpen {
-                    Some(amount) => o + amount * (o - blurred),
-                    None => blurred,
+                let filtered = match op {
+                    Op::Blur(Some(amount)) => o + amount * (o - blurred),
+                    Op::HighPass if p < 3 => o - blurred + mid * cov,
+                    Op::HighPass => o,
+                    _ => blurred,
                 };
                 *slot = o + (filtered - o) * opacity;
             }
@@ -2049,6 +2097,42 @@ soft {soft:?}"
         let mids = |v: &[f32]| v.iter().filter(|x| **x > 0.05 && **x < 0.95).count();
         assert!(mids(&soft) > mids(&hard) + 4, "hard {hard:?}\nsoft {soft:?}");
         assert!(soft.iter().all(|v| (0.0..=1.0).contains(v)));
+    }
+
+    #[test]
+    fn high_pass_edge_detect_directional_warp_grayscale_and_normal_invert() {
+        // Uniform content: high pass is mid gray (0 for height), edge detect black.
+        let mut f = fixture();
+        let id = fill_layer(&mut f.project, [1.0, 0.0, 0.0], 0.2);
+        let hp = content_fx(&mut f, id, EffectKind::Filter(Filter::HighPass { radius: 64.0 }));
+        let out = run(&f, None);
+        assert!(close(out.value(Channel::BaseColor, 30, 30), [0.5; 3]), "{:?}", out.value(Channel::BaseColor, 30, 30));
+        assert!(close(out.value(Channel::Roughness, 30, 30), [0.5; 3]));
+        f.project.layer_mut(id).unwrap().content_effects.retain(|e| e.id != hp);
+        content_fx(&mut f, id, EffectKind::Filter(Filter::EdgeDetect { width: 64.0 }));
+        assert!(close(run(&f, None).value(Channel::Roughness, 30, 30), [0.0; 3]));
+        // A checker: its borders light up, the middle of its cells stays black.
+        let mut f = fixture();
+        let id = f.project.alloc_id();
+        let mut fill = Fill::default();
+        fill.sources.insert(Channel::Roughness, Source::Procedural { pattern: Procedural::new(ProceduralKind::Checker), low: [0.0; 3], high: [1.0; 3] });
+        f.project.insert_layer(0, Layer::new(id, "F", LayerKind::Fill(fill), &[Channel::Roughness]), None, false).unwrap();
+        let plain = run(&f, None);
+        let edges = content_fx(&mut f, id, EffectKind::Filter(Filter::EdgeDetect { width: 32.0 }));
+        let out = run(&f, None);
+        let vals: Vec<f32> = (0..64).flat_map(|y| (0..64).map(move |x| (x, y))).map(|(x, y)| out.value(Channel::Roughness, x, y)[0]).collect();
+        assert!(vals.iter().all(|v| (0.0..=1.0).contains(v)));
+        assert!(vals.iter().filter(|v| **v > 0.5).count() > 64 && vals.iter().filter(|v| **v < 0.01).count() > 64, "{vals:?}");
+        f.project.layer_mut(id).unwrap().content_effects.retain(|e| e.id != edges);
+        content_fx(&mut f, id, EffectKind::Filter(Filter::DirectionalWarp { intensity: 256.0, angle: 90.0, scale: 4.0, seed: 3 }));
+        let warped = run(&f, None);
+        let differs = (0..64).any(|y| (0..64).any(|x| (warped.value(Channel::Roughness, x, y)[0] - plain.value(Channel::Roughness, x, y)[0]).abs() > 0.2));
+        assert!(differs, "the warp moves the checker");
+        // Point filters.
+        assert!(close(Filter::Grayscale.point(ChannelKind::Color, [1.0, 0.0, 0.0]).unwrap(), [lum([1.0, 0.0, 0.0]); 3]));
+        assert_eq!(Filter::Grayscale.point(ChannelKind::Scalar, [0.3; 3]), Some([0.3; 3]));
+        assert_eq!(Filter::NormalInvert.point(ChannelKind::NormalMap, [0.5, 0.25, 1.0]), Some([0.5, 0.75, 1.0]));
+        assert_eq!(Filter::NormalInvert.point(ChannelKind::Color, [0.5, 0.25, 1.0]), Some([0.5, 0.25, 1.0]));
     }
 
     #[test]
