@@ -689,6 +689,11 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "Redimensionnement"),
     ("Restore every default shortcut", "Restaurer tous les raccourcis par défaut"),
     ("Return to painting mode", "Revenir au mode peinture"),
+    ("Auto-rebake", "Précalcul automatique"),
+    (
+        "Bake this map again by itself when its bake settings, the low poly or the high polys change",
+        "Précalcule à nouveau cette carte automatiquement quand ses réglages de précalcul, le maillage low poly ou les maillages high poly changent",
+    ),
     ("Right-click a layer > Create smart material", "Clic droit sur un calque > Créer un matériau intelligent"),
     ("Rotation", "Rotation"),
     ("Rotation (degrees)", "Rotation (degrés)"),

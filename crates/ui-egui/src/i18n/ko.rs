@@ -659,6 +659,11 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "크기 조정 중"),
     ("Restore every default shortcut", "모든 기본 단축키를 복원합니다"),
     ("Return to painting mode", "페인팅 모드로 돌아가기"),
+    ("Auto-rebake", "자동 다시 베이크"),
+    (
+        "Bake this map again by itself when its bake settings, the low poly or the high polys change",
+        "베이크 설정, 로우 폴리 또는 하이 폴리가 바뀌면 이 맵을 자동으로 다시 베이크합니다",
+    ),
     ("Right-click a layer > Create smart material", "레이어 마우스 오른쪽 클릭 > 스마트 머티리얼 만들기"),
     ("Rotation", "회전"),
     ("Rotation (degrees)", "회전 (도)"),

@@ -608,6 +608,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "正在调整大小"),
     ("Restore every default shortcut", "恢复所有默认快捷键"),
     ("Return to painting mode", "返回绘画模式"),
+    ("Auto-rebake", "自动重新烘焙"),
+    ("Bake this map again by itself when its bake settings, the low poly or the high polys change", "当烘焙设置、低模或高模发生变化时，自动重新烘焙此贴图"),
     ("Right-click a layer > Create smart material", "右键单击图层 > 创建智能材质"),
     ("Rotation", "旋转"),
     ("Rotation (degrees)", "旋转（度）"),

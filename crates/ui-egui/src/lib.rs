@@ -51,6 +51,8 @@ pub struct BakeJob {
     pub queue: Vec<usize>,
     pub current: Option<(usize, Arc<Progress>, std::sync::mpsc::Receiver<texturecraft_engine::Result<texturecraft_engine::bake::BakeOutput>>)>,
     pub total: usize,
+    /// Bake only this map (an Auto-rebake); None bakes every ticked map.
+    pub only: Option<texturecraft_engine::core::BakedMap>,
 }
 
 /// The browser build's notice when WebGPU is unavailable and wgpu fell back to WebGL2.
@@ -176,7 +178,7 @@ impl TextureCraftApp {
             return;
         }
         let total = sets.len();
-        self.bake = Some(BakeJob { queue: sets, current: None, total });
+        self.bake = Some(BakeJob { queue: sets, current: None, total, only: None });
     }
 
     fn poll_bake(&mut self, ctx: &egui::Context) {
@@ -213,8 +215,9 @@ impl TextureCraftApp {
                 self.toast(i18n::tr("Mesh maps baked"), false);
                 return;
             }
-            let ts = job.queue.remove(0);
-            match self.session.bake_task(ts) {
+            let (ts, only) = (job.queue.remove(0), job.only);
+            self.session.begin_bake(ts);
+            match self.session.bake_task_for(ts, only) {
                 Ok(task) => {
                     let progress = Arc::new(Progress::new());
                     let p = progress.clone();
@@ -225,6 +228,19 @@ impl TextureCraftApp {
                 }
                 Err(e) => self.toast(e.to_string(), true),
             }
+        }
+    }
+
+    /// Auto-rebake: when the chosen map's bake inputs changed, bake it again in the background
+    /// (one set after another, only that map), unless a bake or a stroke is running.
+    fn drive_auto_rebake(&mut self) {
+        if self.bake.is_some() || self.session.stroke_active() || self.session.auto_rebake.map.is_none() {
+            return;
+        }
+        let due = self.session.auto_rebake_due();
+        if !due.is_empty() {
+            let total = due.len();
+            self.bake = Some(BakeJob { queue: due, current: None, total, only: self.session.auto_rebake.map });
         }
     }
 
@@ -369,6 +385,7 @@ impl eframe::App for TextureCraftApp {
             web_files::dropped(self, ctx, f);
         }
         self.poll_bake(ctx);
+        self.drive_auto_rebake();
         self.poll_resize(ctx);
         let scale = self.ui.prefs.ui_scale.clamp(0.5, 3.0);
         if (ctx.zoom_factor() - scale).abs() > 1e-3 {

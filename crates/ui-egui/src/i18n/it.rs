@@ -689,6 +689,11 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "Ridimensionamento"),
     ("Restore every default shortcut", "Ripristina tutte le scorciatoie predefinite"),
     ("Return to painting mode", "Torna alla modalità pittura"),
+    ("Auto-rebake", "Bake automatico"),
+    (
+        "Bake this map again by itself when its bake settings, the low poly or the high polys change",
+        "Esegue di nuovo il bake di questa mappa quando cambiano le sue impostazioni di bake, la mesh low poly o le mesh high poly",
+    ),
     ("Right-click a layer > Create smart material", "Clic destro su un livello > Crea materiale intelligente"),
     ("Rotation", "Rotazione"),
     ("Rotation (degrees)", "Rotazione (gradi)"),
