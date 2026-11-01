@@ -1603,6 +1603,18 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
                 }
             }
         }
+        Filter::ReplaceColor { from, to, .. } => {
+            for (key, label, rgb) in [("from", tr("Color to replace"), from), ("to", tr("Replacement color"), to)] {
+                let mut v = *rgb;
+                ui.horizontal(|ui| {
+                    if color_swatch(ui, &format!("replace_{key}_{id}"), &mut v, 36.0) {
+                        set(app, key, json!(v));
+                    }
+                    ui.label(label);
+                });
+            }
+            ui.label(RichText::new(tr("Colors near the first shift towards the second, keeping their shading.")).size(10.5).color(tk.text_dim));
+        }
         Filter::GradientMap { colors } => {
             let mut c = colors.clone();
             let mut changed = false;

@@ -67,6 +67,7 @@ fn filter_library_adds_every_filter_and_edits_its_parameters() {
         "mosaic",
         "glow",
         "bakedLighting",
+        "replaceColor",
     ] {
         assert!(ids.contains(&want), "{want} missing from {ids:?}");
     }

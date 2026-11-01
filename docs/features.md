@@ -27,11 +27,11 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   duplicate, group, flatten, cut, copy and paste across texture sets, and **geometry masks** that
   show a layer only on the mesh parts you pick (right-click a layer, or click parts with the
   **Geometry mask** tool, 8).
-- **Filters and content effects** on any layer or mask: **27 filters** (HSL, levels,
+- **Filters and content effects** on any layer or mask: **28 filters** (HSL, levels,
   contrast/luminosity, color balance, gradient map, posterize, clamp, invert, threshold,
-  grayscale, edge detect, normal invert, baked lighting, blur, directional and slope blur,
-  sharpen, high pass, bevel, glow, warp, directional warp, mosaic and four material finishes),
-  fills and paint.
+  grayscale, replace color, edge detect, normal invert, baked lighting, blur, directional and
+  slope blur, sharpen, high pass, bevel, glow, warp, directional warp, mosaic and four material
+  finishes), fills and paint.
   **Anchor points** record the stack at a layer so masks and fills higher up can react to it.
 - **Masks** with a white or black background and a stack of effects: painted strokes, fills,
   **mesh-map generators** (edge wear, dirt, thin areas, curvature, AO, position and direction

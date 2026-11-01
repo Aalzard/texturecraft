@@ -37,6 +37,7 @@ pub const FILTERS: &[FilterDef] = &[
     def("edgeDetect", "Edge Detect", "Adjustments", true),
     def("normalInvert", "Normal Invert", "Adjustments", false),
     def("bakedLighting", "Baked Lighting", "Adjustments", false),
+    def("replaceColor", "Replace Color", "Adjustments", false),
     def("blur", "Blur", "Blur and sharpen", true),
     def("blurDirectional", "Blur Directional", "Blur and sharpen", true),
     def("slopeBlur", "Slope Blur", "Blur and sharpen", true),
@@ -106,6 +107,7 @@ pub fn build(id: &str, p: &Value) -> Result<EffectKind> {
         "bevel" => Filter::Bevel { width: 16.0 },
         "mosaic" => Filter::Mosaic { size: 32.0 },
         "glow" => Filter::Glow { radius: 16.0, amount: 1.0 },
+        "replaceColor" => Filter::ReplaceColor { from: [0.5, 0.05, 0.05], to: [0.05, 0.15, 0.5], tolerance: 0.2, softness: 0.15 },
         "bakedLighting" => Filter::BakedLighting { azimuth: 45.0, elevation: 45.0, light: 0.8, ambient: 0.4, occlusion: 1.0 },
         "levels" => {
             let mut l = Levels::default();
@@ -188,6 +190,9 @@ pub fn scalar_params(f: &Filter) -> Vec<(&'static str, &'static str, f32, f32, f
             ("ambient", "Ambient", *ambient, 0.0, 2.0),
             ("occlusion", "Ambient occlusion", *occlusion, 0.0, 1.0),
         ],
+        Filter::ReplaceColor { tolerance, softness, .. } => {
+            vec![("tolerance", "Tolerance", *tolerance, 0.0, 1.0), ("softness", "Softness", *softness, 0.0, 1.0)]
+        }
         Filter::Invert | Filter::ColorBalance { .. } | Filter::GradientMap { .. } | Filter::Grayscale | Filter::NormalInvert => Vec::new(),
     }
 }
@@ -265,6 +270,16 @@ pub(crate) fn apply(p: &Value, f: &mut Filter, cmd: &str) -> Result<()> {
         Filter::Glow { radius, amount } => {
             set(radius, "radius", 0.0, 256.0);
             set(amount, "amount", 0.0, 10.0);
+        }
+        Filter::ReplaceColor { from, to, tolerance, softness } => {
+            for (key, slot) in [("from", from), ("to", to)] {
+                if p.get(key).is_some() {
+                    let v = color_param(p, key).ok_or_else(|| bad(cmd, format!("`{key}` must be a color ([r, g, b] linear or \"#rrggbb\")")))?;
+                    *slot = v.map(|x| x.clamp(0.0, 1.0));
+                }
+            }
+            set(tolerance, "tolerance", 0.0, 1.0);
+            set(softness, "softness", 0.0, 1.0);
         }
         Filter::BakedLighting { azimuth, elevation, light, ambient, occlusion } => {
             if let Some(v) = f32p(p, "azimuth") {

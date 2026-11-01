@@ -2180,6 +2180,13 @@ soft {soft:?}"
         assert_eq!(Filter::Grayscale.point(ChannelKind::Scalar, [0.3; 3]), Some([0.3; 3]));
         assert_eq!(Filter::NormalInvert.point(ChannelKind::NormalMap, [0.5, 0.25, 1.0]), Some([0.5, 0.75, 1.0]));
         assert_eq!(Filter::NormalInvert.point(ChannelKind::Color, [0.5, 0.25, 1.0]), Some([0.5, 0.25, 1.0]));
+        // Replace color: near colors shift (keeping their offset), far ones and scalars stay.
+        let rc = Filter::ReplaceColor { from: [0.8, 0.1, 0.1], to: [0.1, 0.1, 0.8], tolerance: 0.1, softness: 0.1 };
+        assert!(close(rc.point(ChannelKind::Color, [0.85, 0.1, 0.1]).unwrap(), [0.15, 0.1, 0.8]));
+        assert!(close(rc.point(ChannelKind::Color, [0.1, 0.8, 0.1]).unwrap(), [0.1, 0.8, 0.1]));
+        let half = rc.point(ChannelKind::Color, [0.8, 0.1 + 0.15 * 3f32.sqrt(), 0.1]).unwrap();
+        assert!((half[2] - 0.45).abs() < 0.02, "halfway through the softness: {half:?}");
+        assert_eq!(rc.point(ChannelKind::Scalar, [0.8; 3]), Some([0.8; 3]));
     }
 
     #[test]
