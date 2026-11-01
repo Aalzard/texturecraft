@@ -100,7 +100,9 @@ print(call("command.run", {"id": "layer.add.fill", "params": {"color": [0.8, 0.1
 - **Headless** (default): an in-process session that starts on the material ball (1024).
   Files are reachable only below the roots given at launch, as forward-slash paths relative to
   them: `--read-root <dir>` for `project_open` / `mesh_import` / `mesh_reimport` / `bake_mesh_add`,
-  `--write-root <dir>` for `project_save` / `material_save` / `textures_export` / `mesh_export`. Without roots there is no file access. `..`, absolute
+  `--write-root <dir>` for `project_save` / `material_save` / `textures_export` / `mesh_export`
+  (`--automation-read-root` / `--automation-write-root`, as in the other crafting apps, are the
+  same flags). Without roots there is no file access. `..`, absolute
   paths, drive letters, device names and symlink or junction escapes are refused.
 - **Bridge**: `--bridge <port>` forwards to a running `texturecraft --control <port>` (token from
   `--token`, `TEXTURECRAFT_CONTROL_TOKEN` or the app's token file). The app reads and writes its
