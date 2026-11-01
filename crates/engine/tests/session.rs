@@ -55,6 +55,21 @@ fn layers_masks_materials_and_bake() {
 }
 
 #[test]
+fn layer_rename_and_undo() {
+    let mut s = session();
+    let layer_id = s.selected_layer().unwrap();
+    let orig_name = s.doc.project.layer(layer_id).unwrap().name.clone();
+    execute(&mut s, "layer.rename", &json!({"name": "Custom Paint"})).unwrap();
+    assert_eq!(s.doc.project.layer(layer_id).unwrap().name, "Custom Paint");
+
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.doc.project.layer(layer_id).unwrap().name, orig_name);
+
+    execute(&mut s, "edit.redo", &Value::Null).unwrap();
+    assert_eq!(s.doc.project.layer(layer_id).unwrap().name, "Custom Paint");
+}
+
+#[test]
 fn polygon_fill_and_color_picker() {
     let mut s = session();
     execute(&mut s, "tool.material", &json!({"channel": "roughness", "value": 0.9})).unwrap();
