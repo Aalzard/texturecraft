@@ -931,4 +931,8 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "TextureCraft 자체 제목 표시줄 대신 운영 체제의 창 테두리와 버튼을 사용합니다",
     ),
+    (
+        "\"{layer}\" has no paint yet: the filter changes what you paint on it.",
+        "\"{layer}\"에 아직 페인트가 없습니다: 필터는 이 레이어에 칠하는 내용을 바꿉니다.",
+    ),
 ];

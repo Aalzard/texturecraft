@@ -979,4 +979,5 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "Fensterrahmen und Fenstertasten des Betriebssystems statt der eigenen Titelleiste von TextureCraft verwenden",
     ),
+    ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "\"{layer}\" ist noch nicht bemalt: Der Filter verändert, was du darauf malst."),
 ];
