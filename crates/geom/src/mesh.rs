@@ -40,6 +40,9 @@ pub struct Mesh {
     /// Index ranges per material and part (node / object); `name` is the part name.
     pub submeshes: Vec<SubMesh>,
     pub materials: Vec<String>,
+    /// Per triangle, bit `i` set when edge `i` (corner `i` to corner `i + 1`) is a diagonal the
+    /// importer added to split a polygon, which wireframes leave out. Empty: every edge is real.
+    pub diagonals: Vec<u8>,
 }
 
 /// Hard cap on mesh size accepted from files (triangles).
@@ -72,6 +75,36 @@ impl Mesh {
     pub fn tri(&self, t: usize) -> Option<[usize; 3]> {
         let i = self.indices.get(t * 3..t * 3 + 3)?;
         Some([i[0] as usize, i[1] as usize, i[2] as usize])
+    }
+
+    /// The edges wireframes draw: each vertex pair once (smaller index first), leaving out
+    /// polygon diagonals ([`Mesh::diagonals`]) unless only one triangle has the edge (a UV seam
+    /// split it from its twin), per material in `0..materials.len().max(1)`.
+    pub fn wire_edges(&self) -> Vec<Vec<(u32, u32)>> {
+        (0..self.materials.len().max(1))
+            .map(|m| {
+                // Edge → (real in some triangle, triangles using it), in first-seen order.
+                let mut edges: Vec<((u32, u32), bool, u8)> = Vec::new();
+                let mut at: std::collections::HashMap<(u32, u32), usize> = std::collections::HashMap::new();
+                for t in self.triangles_of(m) {
+                    let Some(v) = self.indices.get(t * 3..t * 3 + 3) else { continue };
+                    let hidden = self.diagonals.get(t).copied().unwrap_or(0);
+                    for (i, (a, b)) in [(v[0], v[1]), (v[1], v[2]), (v[2], v[0])].into_iter().enumerate() {
+                        let key = (a.min(b), a.max(b));
+                        let real = hidden >> i & 1 == 0;
+                        let e = *at.entry(key).or_insert_with(|| {
+                            edges.push((key, false, 0));
+                            edges.len() - 1
+                        });
+                        if let Some((_, r, n)) = edges.get_mut(e) {
+                            *r |= real;
+                            *n = n.saturating_add(1);
+                        }
+                    }
+                }
+                edges.into_iter().filter(|(_, real, n)| *real || *n == 1).map(|(k, ..)| k).collect()
+            })
+            .collect()
     }
 
     /// Material of triangle `t`.
@@ -270,6 +303,10 @@ impl Mesh {
             self.colors.resize(base as usize, Vec4::ONE);
             self.colors.extend(other.colors.iter().copied().chain(std::iter::repeat(Vec4::ONE)).take(other.positions.len()));
         }
+        if !(self.diagonals.is_empty() && other.diagonals.is_empty()) {
+            self.diagonals.resize(ibase as usize / 3, 0);
+            self.diagonals.extend(other.diagonals.iter().copied().chain(std::iter::repeat(0)).take(other.triangle_count()));
+        }
         self.indices.extend(other.indices.iter().map(|i| i + base));
         self.materials.extend(other.materials.iter().cloned());
         self.submeshes.extend(other.submeshes.iter().map(|s| SubMesh {
@@ -302,6 +339,7 @@ impl Mesh {
             colors: Vec::new(),
             submeshes: vec![SubMesh { name: material.into(), material: 0, start: 0, count }],
             materials: vec![material.into()],
+            diagonals: Vec::new(),
         };
         if m.normals.len() != m.positions.len() {
             m.compute_normals();
@@ -375,6 +413,24 @@ mod tests {
         }
         assert_eq!(m.material_of(1), Some(0));
         assert_eq!(m.triangles_of(0).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn wire_edges_leave_out_polygon_diagonals() {
+        let mut m = quad();
+        assert_eq!(m.wire_edges(), vec![vec![(0, 1), (1, 2), (0, 2), (2, 3), (0, 3)]], "triangles show every edge");
+        // Edge 2 of (0, 1, 2) and edge 0 of (0, 2, 3) split the quad.
+        m.diagonals = vec![0b100, 0b001];
+        assert_eq!(m.wire_edges(), vec![vec![(0, 1), (1, 2), (2, 3), (0, 3)]]);
+        // A diagonal whose twin a seam split off (vertex 4 copies vertex 0) stays.
+        let mut seam = m.clone();
+        seam.indices[3] = 4;
+        assert_eq!(seam.wire_edges()[0].len(), 6);
+        // Appending keeps each side's diagonals on its own triangles.
+        let mut a = Mesh::from_parts(m.positions.clone(), None, m.uvs.clone(), vec![0, 1, 2], "A").unwrap();
+        a.append(&m);
+        assert_eq!(a.diagonals, vec![0, 0b100, 0b001]);
+        assert_eq!(crate::primitives::plane(1.0, 2).wire_edges()[0].len(), 12, "a 2×2 grid of quads has 12 edges");
     }
 
     #[test]

@@ -117,7 +117,6 @@ pub(crate) fn read(bytes: &[u8]) -> Result<RawMesh> {
     let mut body = Body { data: bytes.get(body_start..).unwrap_or_default(), pos: 0, enc };
     let mut raw = RawMesh::default();
     let (mut normals, mut uvs, mut colors) = (Vec::new(), Vec::new(), Vec::new());
-    let mut faces: Vec<u32> = Vec::new();
     let mut nverts = 0usize;
     for el in &elements {
         // Every item takes at least one byte, so the count can never exceed what is left.
@@ -169,10 +168,8 @@ pub(crate) fn read(bytes: &[u8]) -> Result<RawMesh> {
                             }
                         }
                         if face_list == Some(k) && poly.len() >= 3 {
-                            check_triangles(faces.len() / 3, poly.len() - 2)?;
-                            for i in 1..poly.len() - 1 {
-                                faces.extend_from_slice(&[poly[0], poly[i], poly[i + 1]]);
-                            }
+                            check_triangles(raw.triangle_count(), poly.len() - 2)?;
+                            raw.polygon("Default", "", &poly);
                         }
                     }
                 }
@@ -202,7 +199,6 @@ pub(crate) fn read(bytes: &[u8]) -> Result<RawMesh> {
     raw.normals = (normals.len() == n).then_some(normals);
     raw.uvs = (uvs.len() == n).then_some(uvs);
     raw.colors = (colors.len() == n).then_some(colors);
-    raw.groups.push(("Default".into(), String::new(), faces));
     Ok(raw)
 }
 

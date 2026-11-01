@@ -333,7 +333,7 @@ fn load<R: Read + Seek>(reader: R) -> Result<ProjectFile> {
     };
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).map_err(zip_err)?;
-        let name = f.name().to_string();
+        let name = f.name().map_err(zip_err)?.into_owned();
         let size_of = |id: LayerId| texture_set_of(&pf.project, id).and_then(|ts| pf.project.texture_sets.get(ts)).map(|t| t.size());
         if name == "thumbnail.png" {
             pf.thumbnail = Some(read_all(&mut f, MAX_THUMBNAIL, &mut budget, &name)?);
