@@ -66,7 +66,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   and direction maps, and normal and height maps from high-poly meshes, with a cage, ray distances
   and matching by mesh name.
 - **Export presets** for glTF PBR Metal Roughness, Unreal Engine (packed), Unity HDRP (mask map),
-  Unity Standard, Blender (Principled BSDF), separate maps, mesh maps and document channels, in
+  Unity Standard, Blender (Principled BSDF), Godot 4 (ORM), OpenPBR (with the coat, fuzz,
+  anisotropy, transmission and subsurface maps), separate maps, mesh maps and document channels, in
   PNG, JPEG, TGA, TIFF, BMP, WEBP, EXR or HDR at 8, 16 or 32 bits, with UV padding, size
   override and OpenGL or DirectX normals.
 - **Output template editor:** build your own presets with per-channel packing and converted maps,
