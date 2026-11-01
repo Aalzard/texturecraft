@@ -16,6 +16,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   straight lines, and painting directly in the **2D UV view**.
 - **Geometry decals:** drop an image on the surface, then move, scale and turn its frame; it stays
   an editable fill layer.
+- **Text** in any installed font (or the built-in ones), shaped for every script with kerning and
+  ligatures, one or more lines: stamp it with the brush as its alpha, or place it as a decal in the
+  tool's base color (Properties › Alpha › Text).
 - **Quick mask** (Y): paint a temporary mask (U to edit, Ctrl+Shift+I to invert) that protects
   everything outside it while you paint.
 - **Every channel at once:** base color, metallic, roughness, height, normal, emissive, opacity,
@@ -105,6 +108,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   strip, and Settings › Interface › System title bar for the system's frame instead.
 - **Dockable, tabbed and floating panels**, saved layouts, and panels that reopen where you closed
   them.
+- A **start window** at launch: a new project, a project file, a recent project or the sample
+  (Settings › Interface › Start window).
 - A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.
 - **10 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese,
   Korean and Arabic, switchable live.

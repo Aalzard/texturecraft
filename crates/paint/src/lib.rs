@@ -7,7 +7,7 @@
 //! strokes carry channel values ([`pickup`]) instead of painting the tool's material.
 //! [`path`] samples the Path tool's curves and lasso coverage; [`particles`] runs the particle
 //! brush; [`alphas`] is the built-in library of procedural brush alphas and [`presets`] the built-in
-//! brush presets.
+//! brush presets; [`text`] draws text for text alphas and decals.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -20,6 +20,7 @@ pub mod pickup;
 pub mod presets;
 pub mod raster;
 pub mod stroke;
+pub mod text;
 pub mod visibility;
 
 pub use brush::{Alignment, BrushAlpha, BrushSettings, Particles, Shape, Symmetry, image_alpha};

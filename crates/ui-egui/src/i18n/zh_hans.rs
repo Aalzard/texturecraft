@@ -882,4 +882,13 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Use this brush (keeps its size)", "使用此笔刷（保留大小）"),
     ("Brush name", "笔刷名称"),
     ("Save current brush", "保存当前笔刷"),
+    ("Start window", "启动窗口"),
+    ("Show at startup", "启动时显示"),
+    ("Continue with the sample project", "继续使用示例项目"),
+    ("No recent projects yet", "暂无最近的项目"),
+    ("Text", "文字"),
+    ("Font", "字体"),
+    ("Style", "样式"),
+    ("Use as brush alpha", "用作笔刷 Alpha"),
+    ("Place as decal", "作为贴花放置"),
 ];

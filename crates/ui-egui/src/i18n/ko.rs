@@ -936,4 +936,13 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Use this brush (keeps its size)", "이 브러시 사용 (크기 유지)"),
     ("Brush name", "브러시 이름"),
     ("Save current brush", "현재 브러시 저장"),
+    ("Start window", "시작 창"),
+    ("Show at startup", "시작 시 표시"),
+    ("Continue with the sample project", "샘플 프로젝트로 계속"),
+    ("No recent projects yet", "아직 최근 프로젝트가 없습니다"),
+    ("Text", "텍스트"),
+    ("Font", "글꼴"),
+    ("Style", "스타일"),
+    ("Use as brush alpha", "브러시 알파로 사용"),
+    ("Place as decal", "데칼로 배치"),
 ];

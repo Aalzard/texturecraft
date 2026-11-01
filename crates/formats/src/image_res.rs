@@ -29,6 +29,17 @@ pub fn decode_image(bytes: &[u8]) -> Result<DecodedImage> {
     Ok(DecodedImage { width, height, rgba, srgb })
 }
 
+/// PNG bytes of an `rgb` (sRGB) image whose alpha is `coverage` (`width × height`, top row first):
+/// drawn text as an image resource.
+pub fn coverage_png(width: u32, height: u32, coverage: &[u8], rgb: [u8; 3]) -> Result<Vec<u8>> {
+    let rgba: Vec<u8> = coverage.iter().flat_map(|a| [rgb[0], rgb[1], rgb[2], *a]).collect();
+    let img = image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or_else(|| FormatError::Invalid(format!("{} coverage values for {width}x{height}", coverage.len())))?;
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| FormatError::Invalid(e.to_string()))?;
+    Ok(png)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -44,5 +55,8 @@ mod tests {
         assert!((d.rgba[1][0] - 60.0 / 255.0).abs() < 1e-3);
         assert!(decode_image(b"not an image").is_err());
         assert!(decode_image(&png[..png.len() / 2]).is_err());
+        let text = decode_image(&coverage_png(2, 1, &[0, 255], [255; 3]).unwrap()).unwrap();
+        assert_eq!(text.rgba, vec![[1.0, 1.0, 1.0, 0.0], [1.0; 4]]);
+        assert!(coverage_png(2, 2, &[0], [255; 3]).is_err());
     }
 }

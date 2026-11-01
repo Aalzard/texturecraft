@@ -929,4 +929,13 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Use this brush (keeps its size)", "استخدام هذه الفرشاة (مع الحفاظ على حجمها)"),
     ("Brush name", "اسم الفرشاة"),
     ("Save current brush", "حفظ الفرشاة الحالية"),
+    ("Start window", "نافذة البدء"),
+    ("Show at startup", "إظهار عند بدء التشغيل"),
+    ("Continue with the sample project", "المتابعة مع المشروع النموذجي"),
+    ("No recent projects yet", "لا توجد مشاريع حديثة بعد"),
+    ("Text", "نص"),
+    ("Font", "الخط"),
+    ("Style", "النمط"),
+    ("Use as brush alpha", "استخدام كألفا للفرشاة"),
+    ("Place as decal", "وضع كملصق"),
 ];

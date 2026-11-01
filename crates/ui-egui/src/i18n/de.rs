@@ -984,4 +984,13 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Use this brush (keeps its size)", "Diesen Pinsel verwenden (Größe bleibt)"),
     ("Brush name", "Pinselname"),
     ("Save current brush", "Aktuellen Pinsel speichern"),
+    ("Start window", "Startfenster"),
+    ("Show at startup", "Beim Start anzeigen"),
+    ("Continue with the sample project", "Mit dem Beispielprojekt fortfahren"),
+    ("No recent projects yet", "Noch keine zuletzt geöffneten Projekte"),
+    ("Text", "Text"),
+    ("Font", "Schrift"),
+    ("Style", "Schnitt"),
+    ("Use as brush alpha", "Als Pinsel-Alpha verwenden"),
+    ("Place as decal", "Als Decal platzieren"),
 ];
