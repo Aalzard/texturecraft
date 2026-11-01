@@ -568,6 +568,9 @@ impl Default for Camera {
     }
 }
 
+/// Built-in environments, in menu order.
+pub const ENVIRONMENTS: [&str; 6] = ["Studio Soft", "Studio Contrast", "Overcast", "Sunset", "Warehouse", "Night"];
+
 /// Prefix of [`DisplaySettings::environment`] naming an image resource.
 pub const ENV_RESOURCE_PREFIX: &str = "resource:";
 
