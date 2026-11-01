@@ -961,6 +961,11 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "Usar a moldura e os botões de janela do sistema operacional em vez da barra de título própria do TextureCraft",
     ),
+    ("Text", "Texto"),
+    ("Font", "Fonte"),
+    ("Style", "Estilo"),
+    ("Use as brush alpha", "Usar como alpha do pincel"),
+    ("Place as decal", "Colocar como decalque"),
     (
         "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
         "Memória de GPU insuficiente para mostrar o conjunto de texturas \"{name}\" por completo: reduza nas Configurações a resolução das texturas da viewport. A pintura e a exportação não são afetadas.",
