@@ -118,14 +118,14 @@ pub fn implemented(id: &str) -> bool {
 /// Invoke a menu item (menus, shortcuts, palette, control channel `ui.menu.invoke`).
 pub fn invoke(app: &mut TextureCraftApp, ctx: &egui::Context, id: &str) {
     if let Some(panel) = crate::docking::view_panel(id) {
-        app.ui.dock.toggle(panel, ctx.content_rect());
+        app.ui.dock.toggle(panel);
         return;
     }
     match id {
         "ui.newProject" => app.ui.windows.new_project = true,
         "ui.export" => app.ui.windows.export = true,
         "ui.quit" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-        "ui.projectConfig" => app.ui.dock.focus(crate::docking::Panel::Display, ctx.content_rect()),
+        "ui.projectConfig" => app.ui.dock.focus(crate::docking::Panel::Display),
         "ui.settings" => app.ui.windows.settings = true,
         "ui.mode.bake" => app.ui.mode = Mode::Baking,
         "ui.mode.paint" => app.ui.mode = Mode::Painting,
@@ -254,6 +254,20 @@ fn menu_item(app: &mut TextureCraftApp, ctx: &egui::Context, ui: &mut egui::Ui, 
 
 /// Global shortcuts: the catalog's and every engine command's (defaults or the user's keymap),
 /// plus the fixed brush keys.
+/// Keys pressed in a floating panel's own OS window run the shortcuts the main window's keys do.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn forwarded_shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context, events: Vec<egui::Event>, _modifiers: Modifiers) {
+    if crate::keymap::capturing(ctx) {
+        return;
+    }
+    let active = crate::keymap::active(&app.ui.keymap);
+    for event in events {
+        let egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } = event else { continue };
+        let Some((id, _)) = active.iter().find(|(_, sc)| sc.logical_key == key && modifiers.matches_logically(sc.modifiers)) else { continue };
+        invoke(app, ctx, id);
+    }
+}
+
 pub fn shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context) {
     if crate::keymap::capturing(ctx) || (ctx.memory(|m| m.focused().is_some()) && ctx.egui_wants_keyboard_input()) {
         return;

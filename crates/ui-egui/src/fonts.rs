@@ -190,7 +190,9 @@ fn load(script: Script) -> Option<FontData> {
 fn aligned(mut data: FontData) -> FontData {
     let defs = egui::FontDefinitions::default();
     let primary = defs.families.get(&FontFamily::Proportional).and_then(|f| f.first()).and_then(|n| defs.font_data.get(n));
-    if let (Some((pa, pd, pg)), Some((ca, cd, cg))) = (primary.and_then(|p| line_metrics(&p.font, p.index)), line_metrics(&data.font, data.index)) {
+    if let (Some((pa, pd, pg)), Some((ca, cd, cg))) =
+        (primary.and_then(|p| line_metrics(p.font.as_ref().as_ref(), p.index)), line_metrics(data.font.as_ref().as_ref(), data.index))
+    {
         // Baseline of a fallback glyph: its ascent plus half the difference of the line boxes.
         let drift = ca + 0.5 * ((pa - pd + pg) - (ca - cd + cg)) - pa;
         if drift.is_finite() && drift.abs() < 1.0 {
@@ -238,10 +240,10 @@ mod tests {
     fn line_metrics_read_the_default_font_and_reject_garbage() {
         let defs = egui::FontDefinitions::default();
         let ubuntu = defs.font_data.get("Ubuntu-Light").unwrap();
-        let (a, d, g) = line_metrics(&ubuntu.font, 0).unwrap();
+        let (a, d, g) = line_metrics(ubuntu.font.as_ref().as_ref(), 0).unwrap();
         assert!(a > 0.5 && a < 1.5 && d < 0.0 && d > -0.6 && g >= 0.0, "{a} {d} {g}");
         // The primary font needs no shift against itself.
-        assert_eq!(aligned(FontData::from_owned(ubuntu.font.to_vec())).tweak.y_offset_factor, 0.0);
+        assert_eq!(aligned(FontData::from_owned(ubuntu.font.as_ref().as_ref().to_vec())).tweak.y_offset_factor, 0.0);
         for junk in [&b""[..], b"ttcf", b"\0\x01\0\0\0\x09", &[0xff; 64]] {
             assert!(line_metrics(junk, 0).is_none());
             assert!(line_metrics(junk, 7).is_none());

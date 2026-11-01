@@ -147,7 +147,7 @@ const CAPTURE: &str = "keymap_capture";
 
 /// Whether the editor is waiting for a key combination (global shortcuts pause meanwhile).
 pub fn capturing(ctx: &egui::Context) -> bool {
-    ctx.data(|d| d.get_temp::<usize>(Id::new(CAPTURE))).is_some()
+    ctx.data(|d| d.get_temp::<usize>(Id::unique(CAPTURE))).is_some()
 }
 
 /// The first key press this frame as a shortcut.
@@ -166,8 +166,8 @@ pub fn window(app: &mut TextureCraftApp, ctx: &egui::Context) {
     if !app.ui.windows.shortcuts {
         return;
     }
-    let capture_id = Id::new(CAPTURE);
-    let filter_id = Id::new("keymap_filter");
+    let capture_id = Id::unique(CAPTURE);
+    let filter_id = Id::unique("keymap_filter");
     let mut capture: Option<usize> = ctx.data(|d| d.get_temp(capture_id));
     if let (Some(i), Some(sc)) = (capture, pressed(ctx)) {
         if (sc.logical_key != Key::Escape || !sc.modifiers.is_none())

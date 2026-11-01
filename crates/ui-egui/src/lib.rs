@@ -74,8 +74,6 @@ pub struct TextureCraftApp {
     pub thumbs: thumbs::Thumbs,
     /// Last frame's viewport rect (logical points), for scripted input.
     pub viewport_rect: egui::Rect,
-    /// Pending screenshot requests from the control channel.
-    pub screenshot_waiters: Vec<std::sync::mpsc::Sender<Value>>,
     pub fps: f32,
     /// User smart materials found in the library folder (refreshed on demand).
     pub library: Option<Vec<std::path::PathBuf>>,
@@ -127,7 +125,6 @@ impl TextureCraftApp {
             resize: None,
             thumbs: thumbs::Thumbs::default(),
             viewport_rect: egui::Rect::NOTHING,
-            screenshot_waiters: Vec::new(),
             fps: 0.0,
             ui_ms: 0.0,
             profiler: profile::Profiler::default(),
@@ -465,7 +462,7 @@ fn toasts(app: &mut TextureCraftApp, ctx: &egui::Context) {
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(250));
     let tk = theme::Tokens::get(ctx);
-    egui::Area::new(egui::Id::new("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -36.0)).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -36.0)).show(ctx, |ui| {
         for t in &app.toasts {
             egui::Frame::NONE
                 .fill(tk.panel)

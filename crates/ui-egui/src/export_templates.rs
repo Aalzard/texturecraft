@@ -259,7 +259,7 @@ fn preset_list(app: &mut TextureCraftApp, ui: &mut Ui, builtins: &[ExportPreset]
         for name in names {
             match app.ui.export.renaming.as_mut().filter(|_| name == sel) {
                 Some(buf) => {
-                    let r = ui.add(egui::TextEdit::singleline(buf).id(egui::Id::new(RENAME_ID)).desired_width(f32::INFINITY));
+                    let r = ui.add(egui::TextEdit::singleline(buf).id(egui::Id::unique(RENAME_ID)).desired_width(f32::INFINITY));
                     if r.lost_focus() {
                         act = Some(if ui.input(|i| i.key_pressed(egui::Key::Escape)) { ListAction::Select(name) } else { ListAction::Rename(buf.clone()) });
                     }
@@ -294,7 +294,7 @@ fn apply(app: &mut TextureCraftApp, ctx: &egui::Context, act: ListAction) {
         ListAction::StartRename(name) => {
             app.ui.export.preset = name.clone();
             app.ui.export.renaming = Some(name);
-            ctx.memory_mut(|m| m.request_focus(egui::Id::new(RENAME_ID)));
+            ctx.memory_mut(|m| m.request_focus(egui::Id::unique(RENAME_ID)));
         }
         ListAction::Rename(name) => rename(app, name.trim()),
         ListAction::Remove => {
@@ -636,7 +636,7 @@ fn input_maps(ui: &mut Ui) {
                         && let Some(at) = r.interact_pointer_pos()
                     {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                        egui::Area::new(egui::Id::new(("exp_input_drag", gi, k)))
+                        egui::Area::new(egui::Id::unique(("exp_input_drag", gi, k)))
                             .order(egui::Order::Tooltip)
                             .fixed_pos(at + vec2(8.0, 8.0))
                             .show(ui.ctx(), |ui| chip(ui, label, true));

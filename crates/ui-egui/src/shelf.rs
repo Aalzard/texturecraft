@@ -172,7 +172,7 @@ pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
 fn drag_preview(ctx: &egui::Context) {
     let tk = Tokens::get(ctx);
     let (Some(d), Some(pos)) = (egui::DragAndDrop::payload::<ShelfDrag>(ctx), ctx.input(|i| i.pointer.hover_pos())) else { return };
-    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("shelf_drag")));
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("shelf_drag")));
     let galley = p.layout_no_wrap(d.label.clone(), egui::FontId::proportional(11.0), tk.text_strong);
     let rect = egui::Rect::from_min_size(pos + vec2(14.0, 12.0), galley.size() + vec2(12.0, 6.0));
     p.rect_filled(rect, 3.0, tk.row_selected);

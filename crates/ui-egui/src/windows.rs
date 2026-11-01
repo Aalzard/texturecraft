@@ -33,7 +33,7 @@ pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
 /// A titled tool window; `id` keeps its place across UI languages.
 pub(crate) fn window<'a>(id: &str, title: &str, open: &'a mut bool) -> egui::Window<'a> {
     egui::Window::new(RichText::new(title.to_uppercase()).size(10.5).strong())
-        .id(egui::Id::new(id))
+        .id(egui::Id::unique(id))
         .open(open)
         .resizable(true)
         .collapsible(false)
@@ -42,7 +42,12 @@ pub(crate) fn window<'a>(id: &str, title: &str, open: &'a mut bool) -> egui::Win
 
 /// A centered dialog; `id` keeps its place across UI languages.
 fn dialog<'a>(id: &str, title: &str, open: &'a mut bool) -> egui::Window<'a> {
-    egui::Window::new(title.to_owned()).id(egui::Id::new(id)).open(open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
+    egui::Window::new(title.to_owned())
+        .id(egui::Id::unique(id))
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
 }
 
 /// The Display Settings panel body (a dock tab).
@@ -127,7 +132,7 @@ fn cameras(app: &mut TextureCraftApp, ui: &mut Ui) {
                 app.run("camera.select", json!({"index": i}));
             }
             // The name being typed lives in egui's memory until the field loses focus.
-            let id = ui.id().with(("camera_name", i));
+            let id = ui.scope_id().with(("camera_name", i));
             let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| name.clone());
             let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 26.0));
             if r.changed() {
@@ -377,7 +382,7 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
             ui.label(tr("Accent color"));
             for a in Accent::ALL {
                 let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, p.accent == a, tr(a.label())));
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, p.accent == a, tr(a.label())));
                 let ring = if p.accent == a {
                     tk.text_strong
                 } else if resp.hovered() {
@@ -743,7 +748,7 @@ fn map_params(ui: &mut Ui, m: BakedMap, b: &mut BakeSettings) {
 }
 
 fn bake_bar(app: &mut TextureCraftApp, ctx: &egui::Context) {
-    egui::Area::new(egui::Id::new("bake_bar")).anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -40.0)).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("bake_bar")).anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -40.0)).show(ctx, |ui| {
         ui.horizontal(|ui| {
             if let Some(p) = app.bake_progress() {
                 ui.add(egui::ProgressBar::new(p).desired_width(220.0).show_percentage());
@@ -862,7 +867,7 @@ pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) ->
                     app.toast(trf("Imported {name}", &[("name", &name)]), false);
                 }
             }
-            app.ui.dock.focus(crate::docking::Panel::Assets, _ctx.content_rect());
+            app.ui.dock.focus(crate::docking::Panel::Assets);
             true
         }
         "file.exportMesh" => {

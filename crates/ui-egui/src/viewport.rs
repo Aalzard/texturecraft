@@ -23,7 +23,7 @@ pub const VIEW_2D: u64 = 2;
 /// While on, a click in the 3D view focuses the depth of field there (a transient UI mode kept in
 /// egui's memory).
 fn focus_pick_id() -> egui::Id {
-    egui::Id::new("tc_focus_pick")
+    egui::Id::unique("tc_focus_pick")
 }
 
 pub fn focus_picking(ctx: &egui::Context) -> bool {
@@ -193,7 +193,7 @@ fn axis_gizmo(ui: &Ui, rect: Rect, app: &TextureCraftApp, uv: bool) {
 }
 
 fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut PendingSync) {
-    let resp = ui.interact(rect, ui.id().with("view3d"), Sense::click_and_drag());
+    let resp = ui.interact(rect, ui.scope_id().with("view3d"), Sense::click_and_drag());
     app.viewport_rect = rect;
     let size = rect.size();
     app.session.viewport = Vec2::new(size.x.max(16.0), size.y.max(16.0));
@@ -441,7 +441,7 @@ struct DecalDrag {
 }
 
 fn decal_drag_id() -> egui::Id {
-    egui::Id::new("tc_decal_drag")
+    egui::Id::unique("tc_decal_drag")
 }
 
 /// Screen distance from the top edge to the rotation handle (points).
@@ -788,7 +788,7 @@ fn brush_cursor(app: &TextureCraftApp, ui: &Ui, rect: Rect, pos: Vec3, nrm: Vec3
 
 fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut PendingSync) {
     let tk = Tokens::get(ui.ctx());
-    let resp = ui.interact(rect, ui.id().with("view2d"), Sense::click_and_drag());
+    let resp = ui.interact(rect, ui.scope_id().with("view2d"), Sense::click_and_drag());
     let size = rect.size();
     let alt = ui.input(|i| i.modifiers.alt);
     let delta = ui.input(|i| i.pointer.delta());

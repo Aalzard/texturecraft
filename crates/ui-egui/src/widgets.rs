@@ -23,7 +23,7 @@ pub fn slider(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeI
         ui.label(RichText::new(label).color(tk.text));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut text = format!("{:.*}", decimals, value);
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(44.0).horizontal_align(egui::Align::RIGHT).frame(egui::Frame::NONE));
+            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(44.0).align(egui::Align2::RIGHT_CENTER).frame(egui::Frame::NONE));
             if r.lost_focus()
                 && let Ok(v) = text.trim().parse::<f32>()
                 && v.is_finite()

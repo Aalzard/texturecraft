@@ -63,7 +63,7 @@ pub(crate) fn texture_set_list(app: &mut TextureCraftApp, ui: &mut Ui) {
                 p.rect_stroke(rect, 2.0, Stroke::new(1.0, tk.accent), egui::StrokeKind::Inside);
             }
             let eye = Rect::from_min_size(rect.min + vec2(4.0, 3.0), vec2(16.0, 16.0));
-            let eye_resp = ui.interact(eye, ui.id().with(("ts_eye", i)), Sense::click()).on_hover_text(tr("Show or hide the texture set"));
+            let eye_resp = ui.interact(eye, ui.scope_id().with(("ts_eye", i)), Sense::click()).on_hover_text(tr("Show or hide the texture set"));
             p.text(eye.center(), egui::Align2::CENTER_CENTER, if visible { ic::EYE } else { ic::EYE_SLASH }, egui::FontId::proportional(13.0), tk.text);
             // Narrow panels drop the shader label, then the resolution, before cutting the name.
             let cy = rect.center().y;
@@ -273,7 +273,7 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     let x0 = rect.left() + 6.0 + depth as f32 * 14.0;
     // Eye.
     let eye = Rect::from_center_size(pos2(x0 + 8.0, rect.center().y), vec2(18.0, 18.0));
-    let eye_resp = ui.interact(eye, ui.id().with(("eye", layer.id.0)), Sense::click()).on_hover_text(tr("Show or hide the layer"));
+    let eye_resp = ui.interact(eye, ui.scope_id().with(("eye", layer.id.0)), Sense::click()).on_hover_text(tr("Show or hide the layer"));
     p.text(
         eye.center(),
         egui::Align2::CENTER_CENTER,
@@ -288,7 +288,7 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     let mut x = x0 + 20.0;
     if let LayerKind::Group { collapsed, .. } = layer.kind {
         let caret = Rect::from_center_size(pos2(x + 6.0, rect.center().y), vec2(14.0, 14.0));
-        let cr = ui.interact(caret, ui.id().with(("caret", layer.id.0)), Sense::click()).on_hover_text(tr("Expand or collapse the folder"));
+        let cr = ui.interact(caret, ui.scope_id().with(("caret", layer.id.0)), Sense::click()).on_hover_text(tr("Expand or collapse the folder"));
         p.text(
             caret.center(),
             egui::Align2::CENTER_CENTER,
@@ -357,7 +357,7 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
             p.line_segment([mask_rect.left_top(), mask_rect.right_bottom()], Stroke::new(1.5, tk.danger));
         }
         let mr = ui
-            .interact(mask_rect, ui.id().with(("mask", layer.id.0)), Sense::click())
+            .interact(mask_rect, ui.scope_id().with(("mask", layer.id.0)), Sense::click())
             .on_hover_text(tr("Select the mask (Alt+click: show it in the viewport)"));
         if mr.clicked() {
             app.run("layer.select", json!({"layer": layer.id.0, "target": "mask"}));
@@ -401,7 +401,7 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     let blend_rect = Rect::from_min_size(pos2(rect.right() - right_w - 2.0, rect.top() + 3.0), vec2(right_w, 16.0));
     let op_rect = Rect::from_min_size(pos2(rect.right() - right_w - 2.0, rect.top() + 19.0), vec2(right_w, 16.0));
     if let Some(b) = blend {
-        let br = ui.interact(blend_rect, ui.id().with(("blend", layer.id.0)), Sense::click()).on_hover_text(tr("Blending mode of the displayed channel"));
+        let br = ui.interact(blend_rect, ui.scope_id().with(("blend", layer.id.0)), Sense::click()).on_hover_text(tr("Blending mode of the displayed channel"));
         p.text(blend_rect.right_center() - vec2(10.0, 0.0), egui::Align2::RIGHT_CENTER, b.mode.short(), egui::FontId::proportional(11.0), tk.text);
         p.text(blend_rect.right_center(), egui::Align2::RIGHT_CENTER, ic::CARET_DOWN, egui::FontId::proportional(8.0), tk.text_dim);
         egui::Popup::menu(&br).show(|ui| {
@@ -504,7 +504,7 @@ fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid: LayerI
     }
     let x0 = rect.left() + 6.0 + depth as f32 * 14.0;
     let eye = Rect::from_center_size(pos2(x0 + 8.0, rect.center().y), vec2(16.0, 16.0));
-    let er = ui.interact(eye, ui.id().with(("eff_eye", eid.0)), Sense::click()).on_hover_text(tr("Enable or disable the effect"));
+    let er = ui.interact(eye, ui.scope_id().with(("eff_eye", eid.0)), Sense::click()).on_hover_text(tr("Enable or disable the effect"));
     p.text(eye.center(), egui::Align2::CENTER_CENTER, if visible { ic::EYE } else { ic::EYE_SLASH }, egui::FontId::proportional(12.0), tk.text_dim);
     p.text(pos2(x0 + 22.0, rect.center().y), egui::Align2::LEFT_CENTER, glyph, egui::FontId::proportional(11.0), tk.text_dim);
     p.text(pos2(x0 + 38.0, rect.center().y), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(11.5), tk.text);
