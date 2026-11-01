@@ -15,7 +15,7 @@ use crate::i18n::LANGUAGES;
 use crate::i18n::{tr, trf};
 use crate::state::Mode;
 use crate::theme::{Accent, Brightness, Tokens, caption};
-use crate::widgets::{color_swatch, combo, icon_button, primary_button, slider};
+use crate::widgets::{color_swatch, combo, icon_button, primary_button, slider, slider_edit};
 
 pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
     start(app, ctx);
@@ -204,7 +204,7 @@ pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
     let ts = app.session.ts();
     if let Some(set) = app.session.doc.project.texture_sets.get(ts) {
         let mut hs = set.height_strength;
-        if slider(ui, tr("Height to normal strength"), &mut hs, 0.0..=10.0, 2).drag_stopped() {
+        if slider_edit(ui, tr("Height to normal strength"), &mut hs, 0.0..=10.0, 2) {
             app.run("textureSet.settings", json!({"ts": ts, "heightStrength": hs}));
         }
     }

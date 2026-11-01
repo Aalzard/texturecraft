@@ -16,7 +16,7 @@ use crate::i18n::{n_, tr, trf};
 use crate::shelf::{Asset, ShelfDrag};
 use crate::state::PropsTab;
 use crate::theme::{Tokens, caption};
-use crate::widgets::{chip, color_swatch, combo, dnd_release, elided, icon_button, section, slider};
+use crate::widgets::{chip, color_swatch, combo, dnd_release, elided, icon_button, section, slider, slider_edit};
 
 const TAG_COLORS: [Color32; 8] = [
     Color32::from_rgb(0xc0, 0x40, 0x40),
@@ -852,10 +852,10 @@ fn height_mask_section(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
         }
         ui.add_enabled_ui(hm.enabled, |ui| {
             let (mut contrast, mut offset) = (hm.contrast, hm.offset);
-            if slider(ui, tr("Contrast"), &mut contrast, 0.0..=16.0, 2).drag_stopped() {
+            if slider_edit(ui, tr("Contrast"), &mut contrast, 0.0..=16.0, 2) {
                 app.run("layer.set", json!({"layer": id, "heightMask": {"contrast": contrast}}));
             }
-            if slider(ui, tr("Height offset"), &mut offset, -1.0..=1.0, 2).drag_stopped() {
+            if slider_edit(ui, tr("Height offset"), &mut offset, -1.0..=1.0, 2) {
                 app.run("layer.set", json!({"layer": id, "heightMask": {"offset": offset}}));
             }
         });
@@ -1368,7 +1368,7 @@ fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: 
         Projection::Cylindrical { scale, .. } => (*scale, "cylindrical"),
         Projection::Decal(_) => return,
     };
-    if slider(ui, tr("Scale / tiling"), &mut scale, 0.01..=20.0, 2).drag_stopped() {
+    if slider_edit(ui, tr("Scale / tiling"), &mut scale, 0.01..=20.0, 2) {
         app.run("layer.fill.projection", with(base, json!({"projection": proj_id, "scale": scale})));
     }
 }
@@ -1395,7 +1395,7 @@ fn decal_editor(app: &mut TextureCraftApp, ui: &mut Ui, d: &Decal, layer: LayerI
     ];
     let mut done = false;
     for ((label, range), x) in rows.into_iter().zip(v.iter_mut()) {
-        done |= slider(ui, label, x, range, 3).drag_stopped();
+        done |= slider_edit(ui, label, x, range, 3);
     }
     if done {
         app.run("layer.decal.set", json!({"layer": layer.0, "size": [v[0], v[1]], "rotation": v[2], "offset": [v[3], v[4]], "depth": v[5]}));
@@ -1472,11 +1472,11 @@ fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Valu
                     );
                     let mut s = pattern.scale;
                     let mut con = pattern.contrast;
-                    let r1 = slider(ui, tr("Pattern scale"), &mut s, 0.1..=100.0, 1);
-                    let r2 = slider(ui, tr("Contrast"), &mut con, 0.0..=8.0, 2);
+                    let r1 = slider_edit(ui, tr("Pattern scale"), &mut s, 0.1..=100.0, 1);
+                    let r2 = slider_edit(ui, tr("Contrast"), &mut con, 0.0..=8.0, 2);
                     let mut seed = pattern.seed as f32;
-                    let r3 = slider(ui, tr("Seed"), &mut seed, 0.0..=999.0, 0);
-                    if r1.drag_stopped() || r2.drag_stopped() || r3.drag_stopped() {
+                    let r3 = slider_edit(ui, tr("Seed"), &mut seed, 0.0..=999.0, 0);
+                    if r1 || r2 || r3 {
                         app.run(
                             "layer.fill.set",
                             set(json!({"procedural": pattern.kind.label(), "scale": s, "contrast": con, "seed": seed as u64, "low": low, "high": high})),
@@ -1525,7 +1525,7 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
         });
     });
     let mut op = e.opacity;
-    if slider(ui, tr("Opacity"), &mut op, 0.0..=1.0, 2).drag_stopped() {
+    if slider_edit(ui, tr("Opacity"), &mut op, 0.0..=1.0, 2) {
         app.run("effect.set", json!({"effect": id, "opacity": op}));
     }
     ui.separator();
@@ -1542,13 +1542,13 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
                 }
             });
             let (mut level, mut soft, mut noise, mut ns) = (g.level, g.softness, g.noise_amount, g.noise_scale);
-            let r1 = slider(ui, tr("Level"), &mut level, 0.0..=1.0, 2);
-            let r2 = slider(ui, tr("Softness"), &mut soft, 0.0..=1.0, 2);
-            let r3 = slider(ui, tr("Noise amount"), &mut noise, 0.0..=2.0, 2);
-            let r4 = slider(ui, tr("Noise scale"), &mut ns, 0.1..=64.0, 1);
+            let r1 = slider_edit(ui, tr("Level"), &mut level, 0.0..=1.0, 2);
+            let r2 = slider_edit(ui, tr("Softness"), &mut soft, 0.0..=1.0, 2);
+            let r3 = slider_edit(ui, tr("Noise amount"), &mut noise, 0.0..=2.0, 2);
+            let r4 = slider_edit(ui, tr("Noise scale"), &mut ns, 0.1..=64.0, 1);
             let mut inv = g.invert;
             let r5 = ui.checkbox(&mut inv, tr("Invert"));
-            if r1.drag_stopped() || r2.drag_stopped() || r3.drag_stopped() || r4.drag_stopped() || r5.changed() {
+            if r1 || r2 || r3 || r4 || r5.changed() {
                 app.run("effect.set", json!({"effect": id, "level": level, "softness": soft, "noise": noise, "noiseScale": ns, "invert": inv}));
             }
             if !app.session.doc.baked.contains_key(&app.session.ts()) {
@@ -1564,7 +1564,7 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
             let mut done = false;
             for (i, label) in labels.iter().enumerate() {
                 let range = if i == 2 { 0.1..=5.0 } else { 0.0..=1.0 };
-                done |= slider(ui, label, &mut v[i], range, 2).drag_stopped();
+                done |= slider_edit(ui, label, &mut v[i], range, 2);
             }
             if done {
                 app.run("effect.set", json!({"effect": id, "inLow": v[0], "inHigh": v[1], "gamma": v[2], "outLow": v[3], "outHigh": v[4]}));
@@ -1592,7 +1592,7 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
             match source {
                 Source::Uniform(v) => {
                     let mut x = v[0];
-                    if slider(ui, tr("Value"), &mut x, 0.0..=1.0, 2).drag_stopped() {
+                    if slider_edit(ui, tr("Value"), &mut x, 0.0..=1.0, 2) {
                         app.run("effect.set", json!({"effect": id, "value": x}));
                     }
                 }
@@ -1652,7 +1652,7 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
     ui.label(caption(tr(f.label())));
     if let Filter::Hsl { hue, .. } = f {
         let mut h = hue * 360.0;
-        if slider(ui, tr("Hue shift (degrees)"), &mut h, -180.0..=180.0, 0).drag_stopped() {
+        if slider_edit(ui, tr("Hue shift (degrees)"), &mut h, -180.0..=180.0, 0) {
             set(app, "hue", json!(h / 360.0));
         }
     }
@@ -1664,7 +1664,7 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
         } else {
             2
         };
-        if slider(ui, tr(label), &mut v, lo..=hi, decimals).drag_stopped() {
+        if slider_edit(ui, tr(label), &mut v, lo..=hi, decimals) {
             set(app, key, json!(v));
         }
     }
@@ -1676,7 +1676,7 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
                 let mut v = *rgb;
                 let mut done = false;
                 for (x, name) in v.iter_mut().zip([tr("Cyan / red"), tr("Magenta / green"), tr("Yellow / blue")]) {
-                    done |= slider(ui, name, x, -1.0..=1.0, 2).drag_stopped();
+                    done |= slider_edit(ui, name, x, -1.0..=1.0, 2);
                 }
                 if done {
                     set(app, key, json!(v));
