@@ -4,7 +4,9 @@
 //! meters, Y up, like glTF). FBX 6 keeps the geometry inside its Model, names objects instead of
 //! numbering them and lists properties in `Properties60`; both read into the same scene.
 //! Materials bring their diffuse color and, when the file embeds it (a Video's `Content`), the
-//! diffuse texture (for high-poly color map bakes). Camera Models become the file's cameras (lens
+//! diffuse texture (for high-poly color map bakes); a texture kept as a file beside the FBX comes
+//! along when the FBX is packaged with it ([`package`]: a stored zip of the FBX first and the
+//! files under their paths below its folder, which [`read`] opens like the FBX). Camera Models become the file's cameras (lens
 //! from their camera NodeAttribute, or the Model's own properties in FBX 6).
 
 use std::borrow::Cow;
@@ -14,11 +16,16 @@ use std::io::Read as _;
 use base64::Engine as _;
 use texturecraft_geom::glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 
-use super::{Corner, PolygonSink, RawBaseColor, RawCamera, RawMesh, check_vertices, lens_fov};
+use super::external::below;
+use super::{
+    Corner, MAX_MESH_FILE_BYTES, MAX_TEXTURE_BYTES, MAX_ZIP_ENTRIES, PolygonSink, RawBaseColor, RawCamera, RawMesh, check_vertices, lens_fov, zip_entry,
+};
 use crate::{FormatError, Result, malformed};
 
 const KIND: &str = "FBX";
 const MAGIC: &[u8] = b"Kaydara FBX Binary  \0";
+/// A zip package of an FBX and its texture files ([`package`]).
+const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
 /// First FBX version with the object/connection layout read here (6.0).
 const MIN_VERSION: i64 = 6000;
 /// Deepest node nesting (and Model parent chain) followed.
@@ -424,11 +431,69 @@ fn parse_ascii(s: &[u8]) -> Result<(Vec<Node>, i64)> {
 // ---------------------------------------------------------------------------------------------
 // Scene.
 
+/// The bytes of the first of a texture's candidate file paths (relative to the FBX's folder)
+/// that exists.
+type Files<'a> = dyn FnMut(&[&str]) -> Option<Vec<u8>> + 'a;
+
+/// An FBX, or a package of one and its texture files.
 pub(crate) fn read(bytes: &[u8]) -> Result<RawMesh> {
-    crate::guard(KIND, || read_inner(bytes))
+    if !bytes.starts_with(ZIP_MAGIC) {
+        return crate::guard(KIND, || read_inner(bytes, &mut |_| None));
+    }
+    crate::guard(KIND, || {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| malformed(KIND, format!("FBX package: {e}")))?;
+        if zip.len() > MAX_ZIP_ENTRIES {
+            return Err(FormatError::TooLarge(format!("the FBX package has more than {MAX_ZIP_ENTRIES} entries")));
+        }
+        let name = zip.file_names().filter(|n| super::extension(n) == "fbx").min_by_key(|n| zip.index_for_name(n)).map(str::to_string);
+        let name = name.ok_or_else(|| malformed(KIND, "the package contains no FBX file"))?;
+        let fbx = zip_entry(&mut zip, &name, MAX_MESH_FILE_BYTES)
+            .ok_or_else(|| FormatError::TooLarge("the packaged FBX is unreadable or larger than 2 GiB".into()))?;
+        if fbx.starts_with(ZIP_MAGIC) {
+            return Err(malformed(KIND, "the package holds another package"));
+        }
+        read_inner(&fbx, &mut |paths| paths.iter().find_map(|p| zip_entry(&mut zip, &below(p)?, MAX_TEXTURE_BYTES)))
+    })
 }
 
-fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
+/// An FBX whose base color textures are files, as a package holding it (first) and the files
+/// `found` has, under their paths below its folder; None when it found none (or `bytes` is a
+/// package already). Also the texture paths it could not find.
+pub(crate) fn package(file_name: &str, bytes: &[u8], found: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Result<(Option<Vec<u8>>, Vec<String>)> {
+    if bytes.starts_with(ZIP_MAGIC) {
+        return Ok((None, Vec::new()));
+    }
+    crate::guard(KIND, || {
+        let (mut files, mut missing): (Vec<(String, Vec<u8>)>, Vec<String>) = (Vec::new(), Vec::new());
+        read_inner(bytes, &mut |paths| {
+            if let Some((_, data)) = files.iter().find(|(n, _)| paths.iter().any(|p| below(p).as_ref() == Some(n))) {
+                return Some(data.clone());
+            }
+            for p in paths {
+                if let (Some(name), Some(data)) = (below(p), found(p).filter(|d| d.len() as u64 <= MAX_TEXTURE_BYTES)) {
+                    files.push((name, data.clone()));
+                    return Some(data);
+                }
+            }
+            // A texture is missing when none of its paths was found; named by its first.
+            if let Some(first) = paths.first().filter(|f| !missing.iter().any(|m| m == *f)) {
+                missing.push(first.to_string());
+            }
+            None
+        })?;
+        if files.is_empty() {
+            return Ok((None, missing));
+        }
+        let total = files.iter().fold(bytes.len() as u64, |t, (_, d)| t.saturating_add(d.len() as u64));
+        if total > MAX_MESH_FILE_BYTES {
+            return Err(FormatError::TooLarge("the FBX and its textures exceed 2 GiB".into()));
+        }
+        let leaf = std::path::Path::new(file_name).file_name().and_then(|n| n.to_str()).unwrap_or("mesh.fbx");
+        Ok((Some(crate::mesh_export::usd::usdz(leaf, bytes, &files)?), missing))
+    })
+}
+
+fn read_inner(bytes: &[u8], files: &mut Files) -> Result<RawMesh> {
     let (nodes, version) = if bytes.starts_with(MAGIC) { parse_binary(bytes)? } else { parse_ascii(bytes)? };
     if version < MIN_VERSION {
         return Err(FormatError::Unsupported(format!("FBX version {version} (re-export as FBX 2006 / 6.1 or newer)")));
@@ -482,7 +547,7 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
     unplaced.sort_unstable();
     instances.extend(unplaced.into_iter().map(|g| (g, None)));
 
-    let base_colors = base_colors(&materials, &textures, &videos, &connections);
+    let base_colors = base_colors(&materials, &textures, &videos, &connections, files);
     let global = global_transform(root("GlobalSettings").or_else(|| objects.child("GlobalSettings")));
     let mut sink = PolygonSink::default();
     let no_slots = Vec::new();
@@ -540,6 +605,7 @@ fn base_colors(
     textures: &HashMap<String, &Node>,
     videos: &HashMap<String, &Node>,
     connections: &[&Node],
+    files: &mut Files,
 ) -> Vec<RawBaseColor> {
     // Texture → its Video, material → its diffuse texture (a property connection wins).
     let (mut video_of, mut diffuse) = (HashMap::new(), HashMap::new());
@@ -563,8 +629,9 @@ fn base_colors(
         .iter()
         .filter_map(|(id, m)| {
             let texture = diffuse.get(id);
-            let image =
-                texture.and_then(|t| video_of.get(t)).and_then(|v| videos.get(v)).or_else(|| texture.and_then(|t| textures.get(t))).and_then(|n| n.content());
+            let (video, tex) = (texture.and_then(|t| video_of.get(t)).and_then(|v| videos.get(v)), texture.and_then(|t| textures.get(t)));
+            // Embedded content first, then the file the texture (or its video) names.
+            let image = video.or(tex).and_then(|n| n.content()).or_else(|| [tex, video].into_iter().flatten().find_map(|n| texture_file(n, files)));
             let factor = match (&image, m.property("DiffuseColor").as_deref()) {
                 (None, Some([r, g, b, ..])) => {
                     let f = m.number("DiffuseFactor").unwrap_or(1.0);
@@ -577,6 +644,21 @@ fn base_colors(
         .collect();
     out.sort_by(|a, b| a.material.cmp(&b.material));
     out
+}
+
+/// The file a Texture or Video names: its relative path, else its absolute path's file name
+/// (looked for in the FBX's folder).
+fn texture_file(n: &Node, files: &mut Files) -> Option<Vec<u8>> {
+    let relative = n.child_str("RelativeFilename");
+    let absolute = [n.child_str("FileName"), n.child_str("Filename")].into_iter().find(|s| !s.is_empty()).unwrap_or_default();
+    let leaf = absolute.rsplit(['/', '\\']).next().unwrap_or_default();
+    let mut paths: Vec<&str> = Vec::new();
+    for p in [relative, leaf] {
+        if !p.is_empty() && !paths.contains(&p) {
+            paths.push(p);
+        }
+    }
+    if paths.is_empty() { None } else { files(&paths) }
 }
 
 /// `Name\0\1Class` (binary) or `Class::Name` (ASCII) to `Name`.

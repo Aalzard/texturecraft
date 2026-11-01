@@ -312,11 +312,17 @@ fn textured_scene(png: &[u8]) -> Vec<N> {
     nodes
 }
 
-#[test]
-fn fbx_diffuse_colors_and_embedded_textures_reach_high_polys() {
+/// A 2 × 2 PNG: red in the left column, green in the top row, blue 7.
+fn tiny_png() -> Vec<u8> {
     let mut png = Vec::new();
     let img = image::RgbaImage::from_fn(2, 2, |x, y| image::Rgba([if x == 0 { 255 } else { 0 }, if y == 0 { 255 } else { 0 }, 7, 255]));
     image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png
+}
+
+#[test]
+fn fbx_diffuse_colors_and_embedded_textures_reach_high_polys() {
+    let png = tiny_png();
     let nodes = textured_scene(&png);
     for (label, bytes) in [("binary", binary_fbx(&nodes, 7500, true)), ("ascii", ascii_fbx(&nodes).into_bytes())] {
         let hp = import_high_poly_bytes("textured.fbx", &bytes).unwrap_or_else(|e| panic!("{label}: {e}"));
@@ -330,6 +336,56 @@ fn fbx_diffuse_colors_and_embedded_textures_reach_high_polys() {
         check_fbx_scene(&import_mesh_bytes("textured.fbx", &bytes).unwrap().mesh, false);
     }
     hammer("x.fbx", &binary_fbx(&nodes, 7500, false));
+}
+
+/// [`textured_scene`] with Blue's texture kept as a file: `tex/wood.png` relative to the FBX, or
+/// only an absolute path elsewhere (found by its file name next to the FBX).
+fn texture_file_scene(relative: &'static str) -> Vec<N> {
+    let mut nodes = textured_scene(&[]);
+    let objects = nodes.iter_mut().find(|n| n.name == "Objects").unwrap();
+    objects.children.retain(|n| n.name != "Video");
+    let tex = objects.children.iter_mut().find(|n| n.name == "Texture").unwrap();
+    tex.children.push(n("FileName", vec![P::S("C:/Users/artist/maps/wood.png")], vec![]));
+    tex.children.push(n("RelativeFilename", vec![P::S(relative)], vec![]));
+    nodes
+}
+
+#[test]
+fn fbx_texture_files_are_packaged_with_the_mesh() {
+    let png = tiny_png();
+    let blue = |bytes: &[u8]| import_high_poly_bytes("wood.fbx", bytes).unwrap().base_color[1].as_ref().map(|b| (b.width, b.texels[0]));
+    for (label, bytes) in
+        [("binary", binary_fbx(&texture_file_scene("tex\\wood.png"), 7500, true)), ("ascii", ascii_fbx(&texture_file_scene("tex/wood.png")).into_bytes())]
+    {
+        assert_eq!(blue(&bytes), None, "{label}: the file alone has no texture");
+        // Beside the FBX under its relative path: packaged, and the package reads like the FBX.
+        let mut asked = Vec::new();
+        let f = self_contained_mesh("scenes/wood.fbx", bytes.clone(), &mut |p| {
+            asked.push(p.to_string());
+            (p == "tex/wood.png").then(|| png.clone())
+        })
+        .unwrap();
+        assert_eq!(asked, ["tex/wood.png"], "{label}");
+        assert!(f.warnings.is_empty() && f.name == "scenes/wood.fbx" && f.bytes.starts_with(b"PK"), "{label}: {:?}", f.warnings);
+        assert_eq!(blue(&f.bytes), Some((2, [255, 255, 7, 255])), "{label}");
+        check_fbx_scene(&import_mesh_bytes("wood.fbx", &f.bytes).unwrap().mesh, false);
+        assert_eq!(self_contained_mesh("wood.fbx", f.bytes.clone(), &mut |_| panic!("packaged already")).unwrap().bytes, f.bytes);
+        // Only the absolute path's file name next to the FBX.
+        let g = self_contained_mesh("wood.fbx", bytes.clone(), &mut |p| (p == "wood.png").then(|| png.clone())).unwrap();
+        assert!(g.warnings.is_empty(), "{label}: {:?}", g.warnings);
+        assert_eq!(blue(&g.bytes), Some((2, [255, 255, 7, 255])), "{label}");
+        // Missing: unchanged, with a warning naming it.
+        let h = self_contained_mesh("wood.fbx", bytes.clone(), &mut |_| None).unwrap();
+        assert_eq!(h.bytes, bytes, "{label}");
+        assert!(h.warnings.iter().any(|w| w.contains("wood.png") && w.contains("not found")), "{label}: {:?}", h.warnings);
+    }
+    let packaged = self_contained_mesh("wood.fbx", ascii_fbx(&texture_file_scene("tex/wood.png")).into_bytes(), &mut |_| Some(png.clone())).unwrap();
+    hammer("x.fbx", &packaged.bytes[..packaged.bytes.len().min(4096)]);
+    // A package without an FBX, or holding another package, is an error.
+    let empty = crate::mesh_export::usd::usdz("a.png", &png, &[]).unwrap();
+    assert!(import_mesh_bytes("x.fbx", &empty).is_err());
+    let nested = crate::mesh_export::usd::usdz("inner.fbx", &packaged.bytes, &[]).unwrap();
+    assert!(import_mesh_bytes("x.fbx", &nested).is_err());
 }
 
 #[test]

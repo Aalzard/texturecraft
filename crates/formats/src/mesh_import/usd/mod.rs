@@ -21,12 +21,11 @@ mod usda;
 mod usdc;
 
 use std::collections::HashMap;
-use std::io::Read as _;
 
 use texturecraft_geom::glam::{DMat4, DQuat, DVec3, DVec4, Mat3, Mat4, Vec2, Vec3, Vec4};
 
 use super::external::below;
-use super::{Corner, MAX_MESH_FILE_BYTES, PolygonSink, RawBaseColor, RawCamera, RawMesh, lens_fov};
+use super::{Corner, MAX_MESH_FILE_BYTES, MAX_TEXTURE_BYTES, MAX_ZIP_ENTRIES, PolygonSink, RawBaseColor, RawCamera, RawMesh, lens_fov, zip_entry};
 use crate::{FormatError, Result, malformed};
 
 pub(crate) const KIND: &str = "USD";
@@ -36,10 +35,6 @@ const MAX_DECODED_BYTES: usize = 1 << 31;
 const MAX_DEPTH: usize = 128;
 /// Composed prims visited (bounds exponential instancing through references).
 const MAX_PRIM_VISITS: usize = 1_000_000;
-/// Entries accepted in a `.usdz` package.
-const MAX_ZIP_ENTRIES: usize = 100_000;
-/// Largest texture file read from a `.usdz` package.
-const MAX_TEXTURE_BYTES: u64 = 1 << 28;
 
 /// A decoded value: numbers (scalars, vectors, quaternions as w x y z, matrices row-major and
 /// bools all flattened), tokens / strings / asset paths, or paths.
@@ -166,10 +161,7 @@ struct Package<'a> {
 impl Package<'_> {
     /// Entry `name`'s bytes, at most `cap` (None when missing, larger or unreadable).
     fn read(&mut self, name: &str, cap: u64) -> Option<Vec<u8>> {
-        let f = self.zip.by_name(name).ok()?;
-        let mut data = Vec::new();
-        f.take(cap + 1).read_to_end(&mut data).ok()?;
-        (data.len() as u64 <= cap).then_some(data)
+        zip_entry(&mut self.zip, name, cap)
     }
 }
 

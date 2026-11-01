@@ -54,6 +54,20 @@ pub struct ImportedMesh {
     pub cameras: Vec<texturecraft_core::Camera>,
 }
 
+/// Most entries of a zip package (usdz, an FBX with its textures).
+pub(crate) const MAX_ZIP_ENTRIES: usize = 100_000;
+/// Largest texture file read from a package or beside a mesh.
+pub(crate) const MAX_TEXTURE_BYTES: u64 = 1 << 28;
+
+/// Entry `name` of a zip package, at most `cap` bytes (None when missing, larger or unreadable).
+pub(crate) fn zip_entry(zip: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, name: &str, cap: u64) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let f = zip.by_name(name).ok()?;
+    let mut data = Vec::new();
+    f.take(cap + 1).read_to_end(&mut data).ok()?;
+    (data.len() as u64 <= cap).then_some(data)
+}
+
 /// Cameras read from a file (at most [`MAX_CAMERAS`]).
 pub(crate) const MAX_CAMERAS: usize = 64;
 
