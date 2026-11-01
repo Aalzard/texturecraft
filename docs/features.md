@@ -40,7 +40,7 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **48 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
   velvet, skin, wax, glass, woods, stone, plastics, fabric, leather, ceramic), **17 smart
   materials** (rusted iron, worn paint, oxidized copper, bronze statue, weathered wood, mossy
-  brick…) and **10 smart masks**, all procedural, so they work at any resolution. Drag them from
+  brick…) and **18 smart masks**, all procedural, so they work at any resolution. Drag them from
   the tabbed, searchable shelf onto the layer stack or straight onto the model.
 - **Your own library:** right-click a layer or folder, choose *Create smart material*, and it
   appears under *My smart materials*, pixels and images included.
