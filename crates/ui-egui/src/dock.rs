@@ -95,6 +95,22 @@ pub(crate) fn texture_set_list(app: &mut TextureCraftApp, ui: &mut Ui) {
 // ---------------------------------------------------------------------------------------------
 // Layers
 
+/// The add-mask commands, for the selected layer or (`row`) the layer whose mask slot was clicked.
+fn add_mask_menu(app: &mut TextureCraftApp, ui: &mut Ui, row: Option<u64>) {
+    let enabled = row.is_some() || app.session.selected_layer().is_some();
+    for (label, id) in
+        [(tr("Add white mask"), "mask.add.white"), (tr("Add black mask"), "mask.add.black"), (tr("Add mask with color selection"), "mask.add.colorSelection")]
+    {
+        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+            if let Some(layer) = row {
+                app.run("layer.select", json!({ "layer": layer }));
+            }
+            app.run(id, Value::Null);
+            ui.close();
+        }
+    }
+}
+
 pub(crate) fn layers(app: &mut TextureCraftApp, ui: &mut Ui) {
     let tk = Tokens::get(ui.ctx());
     // Wraps in a narrow column instead of widening the rows below past the panel.
@@ -108,7 +124,6 @@ pub(crate) fn layers(app: &mut TextureCraftApp, ui: &mut Ui) {
                 ui.selectable_value(&mut app.ui.layer_channel, c, tr(c.label()));
             }
         });
-        let has = app.session.selected_layer().is_some();
         let selected = app.session.selected_layer().and_then(|id| app.session.doc.project.layers.get(&id)).cloned();
         ui.menu_button(RichText::new(ic::MAGIC_WAND).size(14.0), |ui| match &selected {
             Some(l) => effect_menu(app, ui, l),
@@ -118,20 +133,7 @@ pub(crate) fn layers(app: &mut TextureCraftApp, ui: &mut Ui) {
         })
         .response
         .on_hover_text(tr("Add effect"));
-        ui.menu_button(RichText::new(ic::SELECTION_BACKGROUND).size(14.0), |ui| {
-            for (label, id) in [
-                (tr("Add white mask"), "mask.add.white"),
-                (tr("Add black mask"), "mask.add.black"),
-                (tr("Add mask with color selection"), "mask.add.colorSelection"),
-            ] {
-                if ui.add_enabled(has, egui::Button::new(label)).clicked() {
-                    app.run(id, Value::Null);
-                    ui.close();
-                }
-            }
-        })
-        .response
-        .on_hover_text(tr("Add mask"));
+        ui.menu_button(RichText::new(ic::SELECTION_BACKGROUND).size(14.0), |ui| add_mask_menu(app, ui, None)).response.on_hover_text(tr("Add mask"));
         if icon_button(ui, ic::PAINT_BRUSH, tr("Add paint layer"), false, 22.0).clicked() {
             app.run("layer.add.paint", Value::Null);
         }
@@ -374,7 +376,13 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
             p.rect_stroke(mask_rect.expand(2.0), 1.0, Stroke::new(1.5, tk.warning), egui::StrokeKind::Outside);
         }
     } else {
-        p.rect_stroke(mask_rect, 1.0, Stroke::new(1.0, tk.field_border), egui::StrokeKind::Inside);
+        // The empty slot adds a mask to this layer.
+        let slot = ui.interact(mask_rect, ui.scope_id().with(("mask_slot", layer.id.0)), Sense::click()).on_hover_text(tr("Add mask"));
+        p.rect_stroke(mask_rect, 1.0, Stroke::new(1.0, if slot.hovered() { tk.accent } else { tk.field_border }), egui::StrokeKind::Inside);
+        if slot.hovered() {
+            p.text(mask_rect.center(), egui::Align2::CENTER_CENTER, ic::PLUS, egui::FontId::proportional(12.0), tk.text);
+        }
+        egui::Popup::menu(&slot).show(|ui| add_mask_menu(app, ui, Some(layer.id.0)));
     }
     // Name (or rename editor).
     let name_rect = Rect::from_min_max(pos2(x, rect.top() + 4.0), pos2(mask_rect.left() - 4.0, rect.bottom() - 4.0));
