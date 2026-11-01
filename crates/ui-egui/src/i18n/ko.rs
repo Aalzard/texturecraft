@@ -931,4 +931,9 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "TextureCraft 자체 제목 표시줄 대신 운영 체제의 창 테두리와 버튼을 사용합니다",
     ),
+    ("Brushes", "브러시 목록"),
+    ("My brushes", "내 브러시"),
+    ("Use this brush (keeps its size)", "이 브러시 사용 (크기 유지)"),
+    ("Brush name", "브러시 이름"),
+    ("Save current brush", "현재 브러시 저장"),
 ];

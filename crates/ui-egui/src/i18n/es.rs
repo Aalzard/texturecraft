@@ -964,4 +964,9 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "Usar el marco y los botones de ventana del sistema operativo en lugar de la barra de título propia de TextureCraft",
     ),
+    ("Brushes", "Pinceles"),
+    ("My brushes", "Mis pinceles"),
+    ("Use this brush (keeps its size)", "Usar este pincel (conserva su tamaño)"),
+    ("Brush name", "Nombre del pincel"),
+    ("Save current brush", "Guardar el pincel actual"),
 ];

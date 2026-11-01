@@ -8,6 +8,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   angle, flow and position jitter; tangent or camera alignment, angle fade, backface culling, lazy
   mouse, X/Y/Z mirror and radial symmetry (copies paint the far side too) and pen pressure.
   **67 procedural brush alphas** in their own shelf tab, or any imported image as the alpha.
+  **18 brush presets** (basic, wear and grunge, details) in the shelf's Brushes tab set the
+  stroke and keep the size; save your own brushes there too.
 - **Tools:** paint, eraser, **projection** with image stencils (hold S to move, turn and scale the
   stencil), polygon fill (triangle, UV island or the whole mesh), **path** and **lasso fill**, a
   **particle brush**, **smudge**, **clone** (V + click sets the source), color picker, Shift+click

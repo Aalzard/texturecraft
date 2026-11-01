@@ -166,6 +166,33 @@ fn image_resources_fill_layers_and_round_trip() {
 }
 
 #[test]
+fn brush_presets_apply_save_and_load() {
+    let mut s = session();
+    let list = execute(&mut s, "brush.preset.list", &Value::Null).unwrap();
+    assert!(list.as_array().unwrap().len() >= 12);
+    execute(&mut s, "tool.brush", &json!({"size": 30})).unwrap();
+    let b = execute(&mut s, "brush.preset.apply", &json!({"preset": "Scratches"})).unwrap();
+    assert_eq!((b["alpha"]["library"].as_str(), b["followPath"].as_bool()), (Some("scratches"), Some(true)));
+    assert!((b["size"].as_f64().unwrap() - 30.0).abs() < 1e-3, "presets keep the size");
+    assert!(execute(&mut s, "tool.stroke", &json!({"points": [[160, 200], [240, 200]]})).unwrap()["stamps"].as_u64().unwrap() > 0);
+    // Saved and loaded back onto another brush, the stroke returns and the size stays.
+    let path = std::env::temp_dir().join(format!("tc-brush-{}.tcbrush", std::process::id()));
+    let path = path.to_str().unwrap();
+    execute(&mut s, "brush.preset.save", &json!({"path": path})).unwrap();
+    execute(&mut s, "brush.preset.apply", &json!({"preset": "basic_soft"})).unwrap();
+    execute(&mut s, "tool.brush", &json!({"size": 10})).unwrap();
+    let b = execute(&mut s, "brush.preset.load", &json!({"path": path})).unwrap();
+    assert_eq!(b["alpha"]["library"], "scratches");
+    assert!((b["size"].as_f64().unwrap() - 10.0).abs() < 1e-3);
+    std::fs::write(path, b"{}").unwrap();
+    assert!(execute(&mut s, "brush.preset.load", &json!({"path": path})).is_err());
+    let _ = std::fs::remove_file(path);
+    for bad in [json!({}), json!({"preset": "nope"})] {
+        assert!(execute(&mut s, "brush.preset.apply", &bad).is_err());
+    }
+}
+
+#[test]
 fn projection_tool_paints_the_stencil_colors() {
     let mut s = session();
     let mut png = Vec::new();
