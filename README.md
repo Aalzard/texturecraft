@@ -154,7 +154,7 @@ cargo xtask ci                                               # fmt, clippy, test
 You need Rust 1.95 or newer. The app opens with a baked sample project; **File ▸ New project** starts
 from a built-in mesh, a project template or your own mesh file (UVs are generated if it has none).
 
-Japanese, Chinese and Korean interface text uses the fonts of
+Japanese, Chinese, Korean and Arabic interface text uses the fonts of
 [storytold/craft-fonts](https://github.com/storytold/craft-fonts) where it has them, an optional
 build input (releases always use it): `CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p texturecraft`
 (an absolute path). Without it, the desktop app uses the installed system fonts.
@@ -184,7 +184,7 @@ area, the remaining work and what's next.
 to end, weighted by how much of the day each area carries: importing meshes, texture sets and UDIM
 tiles, the layer stack with masks, effects and smart materials, every painting tool, baking, the PBR
 viewport and Rendering mode, export presets and templates, and the full menu set. The interface
-speaks English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese and Korean;
+speaks English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese, Korean and Arabic;
 [localization-parity.md](docs/localization-parity.md) has the details. The scores are self-assessed
 from our code against public documentation.
 
