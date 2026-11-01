@@ -383,10 +383,21 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(name_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
         if let Some((_, buf)) = app.ui.rename.as_mut() {
             let edit_id = ui.scope_id().with(("layer_rename", layer.id.0));
-            let r = child.add(egui::TextEdit::singleline(buf).id(edit_id).desired_width(name_rect.width()));
-            if !r.has_focus() && ui.data(|d| d.get_temp::<bool>(edit_id)).unwrap_or(true) {
-                r.request_focus();
+            let edit = egui::TextEdit::singleline(buf)
+                .id(edit_id)
+                .desired_width(name_rect.width())
+                .event_filter(egui::EventFilter {
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    escape: true,
+                    ..Default::default()
+                });
+            let r = child.add(edit);
+            if ui.data(|d| d.get_temp::<bool>(edit_id)).unwrap_or(true) {
                 ui.data_mut(|d| d.insert_temp(edit_id, false));
+                if !r.has_focus() {
+                    r.request_focus();
+                }
             }
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
