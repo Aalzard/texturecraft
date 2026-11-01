@@ -935,4 +935,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Show at startup", "시작 시 표시"),
     ("Continue with the sample project", "샘플 프로젝트로 계속"),
     ("No recent projects yet", "아직 최근 프로젝트가 없습니다"),
+    ("Text", "텍스트"),
+    ("Font", "글꼴"),
+    ("Style", "스타일"),
+    ("Use as brush alpha", "브러시 알파로 사용"),
+    ("Place as decal", "데칼로 배치"),
 ];

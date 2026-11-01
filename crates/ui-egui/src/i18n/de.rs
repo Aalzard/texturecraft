@@ -983,4 +983,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Show at startup", "Beim Start anzeigen"),
     ("Continue with the sample project", "Mit dem Beispielprojekt fortfahren"),
     ("No recent projects yet", "Noch keine zuletzt geöffneten Projekte"),
+    ("Text", "Text"),
+    ("Font", "Schrift"),
+    ("Style", "Schnitt"),
+    ("Use as brush alpha", "Als Pinsel-Alpha verwenden"),
+    ("Place as decal", "Als Decal platzieren"),
 ];

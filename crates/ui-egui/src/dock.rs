@@ -1114,7 +1114,8 @@ fn alpha_tile(ui: &mut Ui, on: bool, label: &str, paint: impl FnOnce(&egui::Pain
         p.rect_stroke(rect, 3.0, Stroke::new(1.0, tk.accent), egui::StrokeKind::Inside);
     }
     paint(p, Rect::from_center_size(rect.center() - vec2(0.0, 7.0), vec2(40.0, 40.0)));
-    p.text(rect.center_bottom() - vec2(0.0, 6.0), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(9.5), tk.viewport_text);
+    let name = elided(p, label, 9.5, tk.viewport_text, rect.width() - 4.0);
+    p.galley(rect.center_bottom() - vec2(name.size().x * 0.5, 6.0 + name.size().y * 0.5), name, tk.viewport_text);
     resp.on_hover_text(label)
 }
 
@@ -1163,6 +1164,62 @@ fn alpha_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     }
     ui.label(RichText::new(tr("More in Assets > Alphas: click one, or drag it here")).size(10.0).color(tk.text_dim));
     crate::shelf::drop_target(app, ui, &zone.response, crate::shelf::DropZone::Brush);
+    section(ui, "sec_text", tr("Text"), true, |ui| text_section(app, ui));
+}
+
+/// Text drawn in a font, as the brush alpha or a decal (`resource.text`).
+fn text_section(app: &mut TextureCraftApp, ui: &mut Ui) {
+    if app.ui.text.fonts.is_empty()
+        && let Some(f) = app.run("text.fonts", Value::Null)
+    {
+        let installed = f["installed"].as_array().into_iter().flatten().map(|v| {
+            let styles = v["styles"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+            (v["family"].as_str().unwrap_or_default().to_string(), styles)
+        });
+        let built_in = f["builtIn"].as_array().into_iter().flatten().filter_map(Value::as_str).map(|n| (n.to_string(), Vec::new()));
+        app.ui.text.fonts = installed.chain(built_in).collect();
+    }
+    // A decal shows the text in the tool's base color; an alpha must stay white.
+    let color = app.session.tool.values.get(&Channel::BaseColor).copied().unwrap_or([1.0; 3]);
+    let t = &mut app.ui.text;
+    ui.add(egui::TextEdit::multiline(&mut t.text).desired_rows(2).desired_width(f32::INFINITY).hint_text(tr("Text")));
+    let shown = if t.font.is_empty() { tr("Default").to_string() } else { t.font.clone() };
+    combo(ui, tr("Font"), shown, |ui| {
+        if ui.selectable_label(t.font.is_empty(), tr("Default")).clicked() {
+            (t.font, t.style) = (String::new(), String::new());
+        }
+        for (family, _) in &t.fonts {
+            if ui.selectable_label(t.font == *family, family).clicked() {
+                (t.font, t.style) = (family.clone(), String::new());
+            }
+        }
+    });
+    let styles = t.fonts.iter().find(|(f, _)| *f == t.font).map(|(_, s)| s.clone()).unwrap_or_default();
+    if styles.len() > 1 {
+        let shown = if t.style.is_empty() { tr("Default").to_string() } else { t.style.clone() };
+        combo(ui, tr("Style"), shown, |ui| {
+            for s in styles {
+                ui.selectable_value(&mut t.style, s.clone(), s);
+            }
+        });
+    }
+    let mut params = json!({"text": t.text, "font": (!t.font.is_empty()).then_some(&t.font), "style": (!t.style.is_empty()).then_some(&t.style)});
+    let ready = !t.text.trim().is_empty();
+    ui.horizontal_wrapped(|ui| {
+        let alpha = ui.add_enabled(ready, egui::Button::new(tr("Use as brush alpha"))).clicked();
+        let decal = ui.add_enabled(ready, egui::Button::new(tr("Place as decal"))).clicked();
+        if decal {
+            params["color"] = json!(color);
+        }
+        if (alpha || decal)
+            && let Some(name) = app.run("resource.text", params).and_then(|r| r["name"].as_str().map(str::to_string))
+        {
+            match alpha {
+                true => app.run("tool.brush", json!({"alpha": {"image": name}})),
+                false => app.run("layer.add.decal", json!({"image": name})),
+            };
+        }
+    });
 }
 
 fn material_section(app: &mut TextureCraftApp, ui: &mut Ui) {
