@@ -129,3 +129,17 @@ fn particle_brush_paints_below_the_start_and_is_deterministic() {
     assert!(highest + 20 > start, "nothing well above the start: {highest}");
     assert_eq!(rows, particle_rows());
 }
+
+#[test]
+fn radial_symmetry_paints_copies_around_the_axis() {
+    let mut s = session(primitives::sphere(1.0, 48, 24));
+    assert!(execute(&mut s, "tool.brush", &json!({"symmetryRadial": 2, "symmetryAxis": "w"})).is_err());
+    let r = execute(&mut s, "tool.brush", &json!({"symmetryRadial": 2, "symmetryAxis": "y"})).unwrap();
+    assert_eq!(r["radialSymmetry"], json!({"copies": 2, "axis": "y"}));
+    execute(&mut s, "tool.stroke", &json!({"points": [[200, 200]]})).unwrap();
+    s.update();
+    assert!(red_at(&s, 200.0, 200.0));
+    // Half a turn around Y: the copy faces the other way.
+    s.camera.yaw = std::f32::consts::PI;
+    assert!(red_at(&s, 200.0, 200.0), "the radial copy on the back");
+}

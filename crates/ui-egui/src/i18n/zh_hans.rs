@@ -560,6 +560,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Quarter", "1/4"),
     ("Quick mask", "快速遮罩"),
     ("Quit", "退出"),
+    ("Radial axis", "径向轴"),
+    ("Radial copies", "径向副本"),
     ("Radius (texels at 2K)", "半径（2K 下的纹素数）"),
     ("RENDERING", "渲染"),
     ("Rebind any menu item, tool or command", "重新绑定任意菜单项、工具或命令"),

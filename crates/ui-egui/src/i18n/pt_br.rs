@@ -626,6 +626,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Quarter", "Um quarto"),
     ("Quick mask", "Máscara rápida"),
     ("Quit", "Sair"),
+    ("Radial axis", "Eixo radial"),
+    ("Radial copies", "Cópias radiais"),
     ("Radius (texels at 2K)", "Raio (texels em 2K)"),
     ("RENDERING", "RENDERIZAÇÃO"),
     ("Rebind any menu item, tool or command", "Reatribuir qualquer item de menu, ferramenta ou comando"),

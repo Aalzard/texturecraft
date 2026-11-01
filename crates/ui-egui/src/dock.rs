@@ -1047,6 +1047,18 @@ fn brush_section(app: &mut TextureCraftApp, ui: &mut Ui) {
             ui.checkbox(&mut b.symmetry.y, tr("Mirror Y"));
             ui.checkbox(&mut b.symmetry.z, tr("Mirror Z"));
         });
+        let mut copies = f32::from(b.symmetry.radial);
+        if slider(ui, tr("Radial copies"), &mut copies, 0.0..=32.0, 0).changed() {
+            b.symmetry.radial = copies as u8;
+        }
+        ui.add_enabled_ui(b.symmetry.radial > 1, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(tr("Radial axis"));
+                for (k, name) in ["X", "Y", "Z"].into_iter().enumerate() {
+                    ui.selectable_value(&mut b.symmetry.axis, k as u8, name);
+                }
+            });
+        });
     });
     *b = b.sanitized();
 }

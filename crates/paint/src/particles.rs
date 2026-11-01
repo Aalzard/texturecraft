@@ -89,7 +89,18 @@ mod tests {
         let bvh = Bvh::new(&m);
         let cam = OrbitCamera::default();
         let ctx = PickCtx { mesh: &m, bvh: &bvh, camera: &cam, viewport: Vec2::new(100.0, 100.0) };
-        let s = Stamp { center: Vec3::ZERO, normal: Vec3::Z, tangent: Vec3::X, bitangent: Vec3::Y, radius: 0.1, flow: 1.0, hardness: 0.5, depth: 1.0, seed: 3 };
+        let s = Stamp {
+            center: Vec3::ZERO,
+            normal: Vec3::Z,
+            tangent: Vec3::X,
+            bitangent: Vec3::Y,
+            radius: 0.1,
+            flow: 1.0,
+            hardness: 0.5,
+            depth: 1.0,
+            seed: 3,
+            copy: false,
+        };
         let p = Particles { enabled: true, count: 4, lifetime: 20, gravity: 1.0 };
         let a = emit(&ctx, &p, &s);
         assert_eq!(a, emit(&ctx, &p, &s));

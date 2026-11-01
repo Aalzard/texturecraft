@@ -51,6 +51,8 @@ pub struct Stamp {
     pub depth: f32,
     /// Varies procedural alphas per stamp.
     pub seed: u32,
+    /// A symmetry copy: it paints where symmetry puts it, whether the camera sees that or not.
+    pub copy: bool,
 }
 
 /// An in-progress stroke.
@@ -190,10 +192,11 @@ impl Stroke {
         let r = radius * (1.0 + jitter(2, s.jitter_size)).max(0.05);
         let offset = (tangent * jitter(3, 1.0) + bitangent * jitter(4, 1.0)) * s.jitter_position * radius;
         let flow = (s.flow * (1.0 - jitter(5, s.jitter_flow).abs())).clamp(0.0, 1.0);
-        Stamp { center: hit.pos + offset, normal, tangent, bitangent, radius: r, flow, hardness: s.hardness, depth: s.depth, seed: n }
+        Stamp { center: hit.pos + offset, normal, tangent, bitangent, radius: r, flow, hardness: s.hardness, depth: s.depth, seed: n, copy: false }
     }
 
-    /// Mirror copies of a stamp for the enabled symmetry axes.
+    /// Mirror copies of a stamp for the enabled symmetry axes, then radial copies of it and
+    /// its mirrors.
     fn mirrors(&self, s: &Stamp) -> Vec<Stamp> {
         let sym = self.settings.symmetry;
         if !sym.any() {
@@ -209,7 +212,22 @@ impl Stroke {
             let m = |v: Vec3| v * f;
             let normal = m(s.normal);
             let tangent = m(s.tangent);
-            out.push(Stamp { center: self.center + m(s.center - self.center), normal, tangent, bitangent: normal.cross(tangent), ..*s });
+            out.push(Stamp { center: self.center + m(s.center - self.center), normal, tangent, bitangent: normal.cross(tangent), copy: true, ..*s });
+        }
+        if sym.radial > 1 {
+            let axis = [Vec3::X, Vec3::Y, Vec3::Z].get(sym.axis as usize).copied().unwrap_or(Vec3::Y);
+            let base: Vec<Stamp> = std::iter::once(*s).chain(out.iter().copied()).collect();
+            for k in 1..sym.radial {
+                let q = Quat::from_axis_angle(axis, f32::from(k) * std::f32::consts::TAU / f32::from(sym.radial));
+                out.extend(base.iter().map(|b| Stamp {
+                    center: self.center + q * (b.center - self.center),
+                    normal: q * b.normal,
+                    tangent: q * b.tangent,
+                    bitangent: q * b.bitangent,
+                    copy: true,
+                    ..*b
+                }));
+            }
         }
         out
     }
@@ -273,5 +291,28 @@ mod tests {
         let out = s.add(&ctx, Vec2::new(250.0, 200.0), 1.0);
         assert_eq!(out.len(), 2);
         assert!((out[0].center.x + out[1].center.x).abs() < 1e-4);
+    }
+
+    #[test]
+    fn radial_symmetry_spreads_copies_around_the_axis() {
+        let (m, b, c) = ctx_parts();
+        let ctx = PickCtx { mesh: &m, bvh: &b, camera: &c, viewport: Vec2::new(400.0, 400.0) };
+        let mut st = BrushSettings::default();
+        st.symmetry.radial = 4;
+        let mut s = Stroke::new(&st, &m);
+        let out = s.add(&ctx, Vec2::new(250.0, 180.0), 1.0);
+        assert_eq!(out.len(), 4);
+        // Same height and distance from the Y axis, a quarter turn apart: they sum to the axis.
+        let sum = out.iter().fold(Vec3::ZERO, |a, x| a + x.center);
+        assert!(sum.x.abs() < 1e-3 && sum.z.abs() < 1e-3, "{sum}");
+        assert!(out.iter().all(|x| (x.center.y - out[0].center.y).abs() < 1e-4 && (x.normal.dot(x.tangent)).abs() < 1e-4));
+        // With mirror X as well: each mirror is spread too.
+        st.symmetry.x = true;
+        let mut s = Stroke::new(&st, &m);
+        assert_eq!(s.add(&ctx, Vec2::new(250.0, 180.0), 1.0).len(), 8);
+        // Out-of-range settings are clamped.
+        st.symmetry = crate::brush::Symmetry { radial: 200, axis: 9, ..st.symmetry };
+        let clean = st.sanitized().symmetry;
+        assert_eq!((clean.radial, clean.axis), (32, 2));
     }
 }

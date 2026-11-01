@@ -608,6 +608,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Quarter", "1/4"),
     ("Quick mask", "퀵 마스크"),
     ("Quit", "종료"),
+    ("Radial axis", "방사형 축"),
+    ("Radial copies", "방사형 복사본"),
     ("Radius (texels at 2K)", "반경 (2K 기준 텍셀)"),
     ("RENDERING", "렌더링"),
     ("Rebind any menu item, tool or command", "메뉴 항목, 도구 또는 명령의 단축키를 다시 지정합니다"),
