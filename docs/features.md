@@ -69,7 +69,7 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   override and OpenGL or DirectX normals.
 - **Output template editor:** build your own presets with per-channel packing and converted maps,
   and share them as JSON.
-- **Mesh export** to OBJ, textured GLB (with clear coat and sheen) and USD.
+- **Mesh export** to OBJ, textured GLB (with clear coat and sheen) and USD (with clear coat).
 
 ## The viewport
 

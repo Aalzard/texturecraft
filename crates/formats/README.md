@@ -56,7 +56,8 @@ pub struct UsdExport { pub bytes: Vec<u8>, pub textures: Vec<(String, Vec<u8>)> 
 USD: one `Mesh` prim (vertex normals and `primvars:st`, `subdivisionScheme = "none"`), one
 `materialBind` GeomSubset per material when there are several, and a UsdPreviewSurface material
 per material with a UsdUVTexture per map (base color and emissive sRGB; roughness, metallic,
-OpenGL normal with scale 2 / bias -1, opacity raw; black emissive maps dropped). Meters, Y up.
+OpenGL normal with scale 2 / bias -1, opacity, clear coat and clear coat roughness raw; black
+emissive maps dropped, and both clear coat maps when the coat is black). Meters, Y up.
 `.usdc` is a Crate 0.8.0 file; `.usdz` is that layer first plus the PNGs, stored uncompressed at
 64-byte aligned offsets; `.usda` / `.usdc` reference `<name>_<material>_<slot>.png` next to the
 layer.

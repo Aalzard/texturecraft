@@ -2,7 +2,8 @@
 //! package of a `.usdc` layer and its PNG textures). One `Mesh` prim (points, normals and
 //! `primvars:st` per vertex, triangles), one `materialBind` GeomSubset per material when there
 //! are several, and a UsdPreviewSurface material per material whose maps (base color,
-//! roughness, metallic, normal, emissive, opacity) are UsdUVTexture shaders. Meters, Y up.
+//! roughness, metallic, normal, emissive, opacity, clear coat and its roughness) are
+//! UsdUVTexture shaders. Meters, Y up.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -45,13 +46,15 @@ pub struct UsdExport {
 
 /// A UsdPreviewSurface input fed by a texture: (file stem, input, input type, texture output,
 /// sRGB).
-const SLOTS: [(&str, &str, &str, &str, bool); 6] = [
+const SLOTS: [(&str, &str, &str, &str, bool); 8] = [
     ("BaseColor", "diffuseColor", "color3f", "rgb", true),
     ("Roughness", "roughness", "float", "r", false),
     ("Metallic", "metallic", "float", "r", false),
     ("Normal", "normal", "normal3f", "rgb", false),
     ("Emissive", "emissiveColor", "color3f", "rgb", true),
     ("Opacity", "opacity", "float", "r", false),
+    ("Clearcoat", "clearcoat", "float", "r", false),
+    ("ClearcoatRoughness", "clearcoatRoughness", "float", "r", false),
 ];
 
 /// Texture export options for [`usd_bytes`]: one 8-bit PNG per UsdPreviewSurface input, named
@@ -66,6 +69,8 @@ pub fn usd_export_options() -> ExportOptions {
                 "Metallic" => gray(ch(Channel::Metallic, 0)),
                 "Normal" => rgb(|k| virt(VirtualMap::NormalOpenGl, k)),
                 "Emissive" => rgb(|k| ch(Channel::Emissive, k)),
+                "Clearcoat" => gray(ch(Channel::CoatWeight, 0)),
+                "ClearcoatRoughness" => gray(ch(Channel::CoatRoughness, 0)),
                 _ => gray(ch(Channel::Opacity, 0)),
             };
             MapSpec { file: stem.into(), format: FileFormat::Png, bit_depth: 8, channels }
@@ -290,10 +295,18 @@ pub fn usd_bytes(mesh: &Mesh, name: &str, textures: &[Vec<ExportedFile>], format
     let mut names = Vec::with_capacity(mesh.materials.len());
     for (m, material) in mesh.materials.iter().enumerate() {
         let mut slots = Vec::new();
-        for f in textures.get(m).map_or(&[][..], Vec::as_slice) {
+        let maps = textures.get(m).map_or(&[][..], Vec::as_slice);
+        // Without a coat its roughness means nothing.
+        let no_coat = maps.iter().find(|f| f.name == "Clearcoat.png").is_none_or(|f| is_black(&f.bytes));
+        for f in maps {
             let slot_stem = f.name.strip_suffix(".png").unwrap_or_default();
             let Some(slot) = SLOTS.iter().position(|s| s.0 == slot_stem) else { continue };
-            if slot_stem == "Emissive" && is_black(&f.bytes) {
+            let skip = match slot_stem {
+                "Emissive" => is_black(&f.bytes),
+                "Clearcoat" | "ClearcoatRoughness" => no_coat,
+                _ => false,
+            };
+            if skip {
                 continue;
             }
             let file = format!("{stem}_{}_{slot_stem}.png", sanitize_file_stem(material));
