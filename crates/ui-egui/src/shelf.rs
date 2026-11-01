@@ -11,6 +11,7 @@ use texturecraft_engine::core::ProceduralKind;
 use texturecraft_engine::filter_lib::FILTERS;
 use texturecraft_engine::materials::MATERIALS;
 use texturecraft_engine::paint::alphas;
+use texturecraft_engine::paint::presets::{BrushPreset, PRESETS};
 use texturecraft_engine::smart_masks::SMART_MASKS;
 use texturecraft_render::ibl::ENVIRONMENTS;
 
@@ -25,6 +26,7 @@ pub(crate) enum Tab {
     Smart,
     Masks,
     Filters,
+    Brushes,
     Alphas,
     Procedurals,
     Environments,
@@ -32,11 +34,12 @@ pub(crate) enum Tab {
 }
 
 /// The shelf tabs: icon and (English, translated where shown) name.
-pub(crate) const TABS: [(Tab, &str, &str); 8] = [
+pub(crate) const TABS: [(Tab, &str, &str); 9] = [
     (Tab::Materials, ic::SPHERE, "Materials"),
     (Tab::Smart, ic::STACK, "Smart materials"),
     (Tab::Masks, ic::CIRCLE_HALF, "Smart masks"),
     (Tab::Filters, ic::FUNNEL, "Filters"),
+    (Tab::Brushes, ic::PAINT_BRUSH_BROAD, "Brushes"),
     (Tab::Alphas, ic::SHAPES, "Alphas"),
     (Tab::Procedurals, ic::CHECKERBOARD, "Procedurals"),
     (Tab::Environments, ic::SUN_HORIZON, "Environments"),
@@ -158,6 +161,7 @@ pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
                 }
                 Tab::Masks => smart_masks(app, ui, &ctx, &filter, title),
                 Tab::Filters => filters(app, ui, &ctx, &filter, title),
+                Tab::Brushes => brushes(app, ui, &ctx, &filter, title),
                 Tab::Alphas => alpha_library(app, ui, &ctx, &filter, title),
                 Tab::Procedurals => procedurals(app, ui, &ctx, &filter, title),
                 Tab::Environments => environments(app, ui, &filter, title),
@@ -331,6 +335,82 @@ fn filters(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter: 
         });
     }
 }
+
+/// Brush presets, grouped by category, then the user's own: a click sets the brush's stroke
+/// (alpha, spacing, flow, jitters…) and keeps its size.
+fn brushes(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter: &str, name: &str) {
+    let shown: Vec<&BrushPreset> = PRESETS.iter().filter(|p| matches(filter, &[p.label, p.category, p.id])).collect();
+    if !shown.is_empty() {
+        title(ui, name);
+        for cat in categories(&shown, |p| p.category) {
+            header(ui, cat);
+            tiles(ui, |ui| {
+                for p in shown.iter().filter(|p| p.category == cat) {
+                    let tex = app.thumbs.brush_preset(ctx, p);
+                    if tile(ui, tex.as_ref(), p.label, tr("Use this brush (keeps its size)"), None).clicked() {
+                        app.run("brush.preset.apply", json!({"preset": p.id}));
+                    }
+                }
+            });
+        }
+    }
+    my_brushes(app, ui, filter);
+}
+
+/// The user's saved brush presets (desktop brushes folder) and saving the current brush there.
+#[cfg(not(target_arch = "wasm32"))]
+fn my_brushes(app: &mut TextureCraftApp, ui: &mut Ui, filter: &str) {
+    use texturecraft_engine::brush_preset_cmds::BRUSH_EXT;
+    let dir = crate::user_dir("brushes");
+    if app.brushes.is_none() {
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+            .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == BRUSH_EXT)).collect())
+            .unwrap_or_default();
+        files.sort();
+        app.brushes = Some(files);
+    }
+    let files = app.brushes.clone().unwrap_or_default();
+    let name = |f: &std::path::PathBuf| f.file_stem().and_then(|s| s.to_str()).unwrap_or("brush").to_string();
+    let shown: Vec<_> = files.iter().filter(|f| matches(filter, &[&name(f)])).collect();
+    if !filter.is_empty() && shown.is_empty() {
+        return;
+    }
+    ui.horizontal(|ui| {
+        header(ui, tr("My brushes"));
+        if ui.small_button(ic::ARROW_CLOCKWISE).on_hover_text(tr("Rescan the library folder")).clicked() {
+            app.brushes = None;
+        }
+    });
+    for f in shown {
+        if ui
+            .add(egui::Button::selectable(false, format!("{}  {}", ic::PAINT_BRUSH_BROAD, name(f))))
+            .on_hover_text(tr("Use this brush (keeps its size)"))
+            .clicked()
+        {
+            app.run("brush.preset.load", json!({"path": f.display().to_string()}));
+        }
+    }
+    ui.horizontal(|ui| {
+        let id = ui.make_persistent_id("brush_preset_name");
+        let mut new_name: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_default();
+        ui.add(egui::TextEdit::singleline(&mut new_name).hint_text(tr("Brush name")).desired_width(110.0));
+        let file = texturecraft_engine::formats::export::sanitize_file_stem(new_name.trim());
+        if ui.add_enabled(!new_name.trim().is_empty(), egui::Button::new(tr("Save current brush"))).clicked() {
+            let path = dir.join(format!("{file}.{BRUSH_EXT}"));
+            // A folder that can't be made fails the save, which reports it.
+            let _ = std::fs::create_dir_all(&dir);
+            if app.run("brush.preset.save", json!({"path": path.display().to_string()})).is_some() {
+                new_name.clear();
+                app.brushes = None;
+            }
+        }
+        ui.data_mut(|d| d.insert_temp(id, new_name));
+    });
+    ui.add_space(6.0);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn my_brushes(_: &mut TextureCraftApp, _: &mut Ui, _: &str) {}
 
 /// The built-in alpha library, grouped by category; the brush's alpha is outlined.
 fn alpha_library(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter: &str, name: &str) {

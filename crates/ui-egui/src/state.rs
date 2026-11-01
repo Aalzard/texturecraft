@@ -73,6 +73,9 @@ pub struct Windows {
     /// Browser File › Export Mesh: the download format choice.
     #[serde(default)]
     pub export_mesh: bool,
+    /// The start window: new, open, recent projects (the app opens it at launch).
+    #[serde(skip)]
+    pub start: bool,
 }
 
 /// Edit › Settings.
@@ -94,6 +97,8 @@ pub struct Prefs {
     pub accent: crate::theme::Accent,
     /// The system draws the window's title bar instead of TextureCraft (desktop; read at startup).
     pub system_title_bar: bool,
+    /// Show the start window at launch.
+    pub start_window: bool,
 }
 
 impl Default for Prefs {
@@ -106,6 +111,7 @@ impl Default for Prefs {
             brightness: crate::theme::Brightness::default(),
             accent: crate::theme::Accent::default(),
             system_title_bar: false,
+            start_window: true,
         }
     }
 }
