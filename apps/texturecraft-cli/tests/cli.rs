@@ -98,6 +98,16 @@ fn info_on_a_mesh_reports_uvs() {
 }
 
 #[test]
+fn info_on_a_builtin_mesh() {
+    let info = json(&["info", "builtin:cube"]);
+    assert_eq!(info["kind"], "mesh");
+    assert_eq!(info["file"], "builtin:cube");
+    assert_eq!(info["triangles"], 1728);
+    assert_eq!(info["uv"]["uvsGenerated"], false);
+    assert_eq!(cli(&["info", "builtin:bogus"]).status.code(), Some(1));
+}
+
+#[test]
 fn render_writes_a_png() {
     let d = tmp("render");
     let out = d.join("ball.png");
