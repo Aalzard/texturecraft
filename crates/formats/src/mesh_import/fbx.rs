@@ -4,7 +4,8 @@
 //! meters, Y up, like glTF). FBX 6 keeps the geometry inside its Model, names objects instead of
 //! numbering them and lists properties in `Properties60`; both read into the same scene.
 //! Materials bring their diffuse color and, when the file embeds it (a Video's `Content`), the
-//! diffuse texture (for high-poly color map bakes).
+//! diffuse texture (for high-poly color map bakes). Camera Models become the file's cameras (lens
+//! from their camera NodeAttribute, or the Model's own properties in FBX 6).
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -13,7 +14,7 @@ use std::io::Read as _;
 use base64::Engine as _;
 use texturecraft_geom::glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 
-use super::{Corner, PolygonSink, RawBaseColor, RawMesh, check_vertices};
+use super::{Corner, PolygonSink, RawBaseColor, RawCamera, RawMesh, check_vertices, lens_fov};
 use crate::{FormatError, Result, malformed};
 
 const KIND: &str = "FBX";
@@ -81,6 +82,11 @@ impl Node {
     /// An object's name: after its id (7.x) or the id itself (6.x).
     fn object_name(&self) -> &str {
         clean_name(if self.int_at(0).is_some() { self.str_at(1) } else { self.str_at(0) })
+    }
+
+    /// An object's class (`Mesh`, `Camera`, …): after its name.
+    fn class(&self) -> &str {
+        self.str_at(if self.int_at(0).is_some() { 2 } else { 1 })
     }
 
     fn str_at(&self, i: usize) -> &str {
@@ -430,7 +436,7 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
     let root = |name: &str| nodes.iter().find(|n| n.name == name);
     let objects = root("Objects").ok_or_else(|| malformed(KIND, "the file has no Objects"))?;
     let (mut geometries, mut models, mut materials) = (HashMap::new(), HashMap::new(), HashMap::new());
-    let (mut textures, mut videos) = (HashMap::new(), HashMap::new());
+    let (mut textures, mut videos, mut attributes) = (HashMap::new(), HashMap::new(), HashMap::new());
     // (geometry, model) instances; an FBX 6 Model holds its geometry itself.
     let mut instances: Vec<(String, Option<String>)> = Vec::new();
     for o in &objects.children {
@@ -447,12 +453,14 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
             "Material" => materials.insert(id, o),
             "Texture" => textures.insert(id, o),
             "Video" => videos.insert(id, o),
+            "NodeAttribute" => attributes.insert(id, o),
             _ => None,
         };
     }
     // Model parents, and each Model's materials in slot order.
     let mut parents: HashMap<String, String> = HashMap::new();
     let mut slots: HashMap<String, Vec<String>> = HashMap::new();
+    let mut attribute_of: HashMap<String, &Node> = HashMap::new();
     let connections: Vec<&Node> = root("Connections").into_iter().flat_map(|c| c.all("C").chain(c.all("Connect"))).collect();
     for c in &connections {
         let (Some(child), Some(parent)) = (c.id_at(1), c.id_at(2)) else { continue };
@@ -465,6 +473,8 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
             instances.push((child, Some(parent)));
         } else if let Some(m) = materials.get(&child) {
             slots.entry(parent).or_default().push(material_name(&child, m));
+        } else if let Some(a) = attributes.get(&child) {
+            attribute_of.insert(parent, *a);
         }
     }
     let placed: HashSet<&String> = instances.iter().map(|(g, _)| g).collect();
@@ -493,7 +503,28 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
     }
     let mut raw = sink.finish();
     raw.base_colors = base_colors;
+    // In file order; FBX 6's built-in "Producer" views are not the scene's cameras.
+    for o in objects.children.iter().filter(|o| o.name == "Model" && o.class() == "Camera" && !o.object_name().starts_with("Producer ")) {
+        let Some(id) = o.id_at(0) else { continue };
+        if let Ok(m) = world(&models, &parents, &id) {
+            raw.cameras.push(camera(o, attribute_of.get(&id).copied().unwrap_or(o), global * m));
+        }
+    }
     Ok(raw)
+}
+
+/// A camera Model at `m` with its lens in `lens`: FBX cameras look down +X with +Y up. The
+/// vertical field of view comes from the focal length (mm) over the film height (inches).
+/// shortcut: `OrthoZoom` is taken as the orthographic half view height in scene units; check it
+/// against an exporter's orthographic camera when one is at hand.
+fn camera(model: &Node, lens: &Node, m: Mat4) -> RawCamera {
+    let num = |k: &str| lens.number(k).map(|v| v as f32).filter(|v| v.is_finite() && *v > 0.0);
+    let fov = match num("FocalLength") {
+        Some(f) => lens_fov(f, num("FilmHeight").unwrap_or(0.612) * 25.4),
+        None => num("FieldOfViewY").or_else(|| num("FieldOfView")).unwrap_or(40.0),
+    };
+    let ortho = (lens.number("CameraProjectionType") == Some(1.0)).then(|| num("OrthoZoom").unwrap_or(1.0));
+    RawCamera::placed(model.object_name().to_string(), m, Vec3::X, fov, ortho)
 }
 
 /// A material's name in the mesh: its object name, or `Material_<id>` when it has none.

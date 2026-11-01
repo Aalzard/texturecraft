@@ -63,7 +63,7 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
                 gltf::camera::Projection::Orthographic(o) => (40.0, Some(o.ymag())),
             };
             let name = cam.name().or_else(|| node.name()).map_or_else(|| format!("Camera {}", raw.cameras.len() + 1), str::to_string);
-            raw.cameras.push(super::RawCamera { name, eye: m.transform_point3(Vec3::ZERO), forward: m.transform_vector3(Vec3::NEG_Z), fov, ortho_half_height });
+            raw.cameras.push(super::RawCamera::placed(name, m, Vec3::NEG_Z, fov, ortho_half_height));
         }
         if let Some(mesh) = node.mesh() {
             let part = node.name().or_else(|| mesh.name()).unwrap_or_default();

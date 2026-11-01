@@ -5,7 +5,8 @@
 //! (`primvars:normals` or `normals`), UVs (`primvars:st`, `st0`, `UVMap` or the first
 //! `texCoord2f[]` primvar, indexed or not, any interpolation), `orientation`, and material names
 //! from `material:binding` (inherited down the hierarchy) and `materialBind` GeomSubsets. Stage
-//! `metersPerUnit` (USD's fallback is 0.01) and `upAxis` become meters, Y up. A material's
+//! `metersPerUnit` (USD's fallback is 0.01) and `upAxis` become meters, Y up. `Camera` prims
+//! (focalLength, verticalAperture, projection) become the file's cameras. A material's
 //! UsdPreviewSurface gives its base color: the `diffuseColor` value, or the UsdUVTexture it is
 //! connected to when the texture file is inside the `.usdz` package (for color map bakes). A loose
 //! layer is packaged with its texture files first ([`package`]).
@@ -25,7 +26,7 @@ use std::io::Read as _;
 use texturecraft_geom::glam::{DMat4, DQuat, DVec3, DVec4, Mat3, Mat4, Vec2, Vec3, Vec4};
 
 use super::external::below;
-use super::{Corner, MAX_MESH_FILE_BYTES, PolygonSink, RawBaseColor, RawMesh};
+use super::{Corner, MAX_MESH_FILE_BYTES, PolygonSink, RawBaseColor, RawCamera, RawMesh, lens_fov};
 use crate::{FormatError, Result, malformed};
 
 pub(crate) const KIND: &str = "USD";
@@ -248,6 +249,7 @@ struct Stage<'a> {
     layer: &'a Layer,
     by_path: HashMap<&'a str, usize>,
     sink: PolygonSink,
+    cameras: Vec<RawCamera>,
     /// Up axis and units: stage space to meters, Y up.
     global: Mat4,
     visits: usize,
@@ -263,6 +265,7 @@ fn compose(layer: &Layer, mut assets: Option<&mut (dyn Assets + '_)>) -> Result<
     }
     stage.visit(&[0], stage.global, None, 0)?;
     let mut raw = stage.sink.finish();
+    raw.cameras = std::mem::take(&mut stage.cameras);
     let mut names: Vec<String> = raw.groups.iter().map(|(m, _, _)| m.clone()).collect();
     names.sort();
     names.dedup();
@@ -284,7 +287,7 @@ impl<'a> Stage<'a> {
             _ => Mat4::IDENTITY,
         };
         let by_path = layer.prims.iter().enumerate().map(|(i, p)| (p.path.as_str(), i)).collect();
-        Stage { layer, by_path, sink: PolygonSink::default(), global: up * Mat4::from_scale(Vec3::splat(mpu)), visits: 0 }
+        Stage { layer, by_path, sink: PolygonSink::default(), cameras: Vec::new(), global: up * Mat4::from_scale(Vec3::splat(mpu)), visits: 0 }
     }
 
     fn spec(&self, i: usize) -> Option<&'a PrimSpec> {
@@ -430,6 +433,7 @@ impl<'a> Stage<'a> {
         let binding = self.binding(c).or(binding);
         match self.type_name(c) {
             "Mesh" => self.mesh(c, world, binding.as_deref(), depth)?,
+            "Camera" => self.camera(c, world),
             "PointInstancer" => self.sink.warn("PointInstancer prims were skipped".into()),
             _ => {}
         }
@@ -439,6 +443,16 @@ impl<'a> Stage<'a> {
             }
         }
         Ok(())
+    }
+
+    /// A camera prim (USD's lens fallbacks: 50 mm over 15.2908 mm; apertures are in tenths of
+    /// a scene unit, which orthographic views measure).
+    fn camera(&mut self, c: &[usize], world: Mat4) {
+        let name = self.spec(c.first().copied().unwrap_or_default()).map(|s| s.name.clone()).unwrap_or_default();
+        let num = |k: &str, fallback: f32| self.nums(c, k).and_then(|v| v.first()).map(|v| *v as f32).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(fallback);
+        let (focal, aperture) = (num("focalLength", 50.0), num("verticalAperture", 15.2908));
+        let ortho = (self.token(c, "projection") == Some("orthographic")).then_some(aperture * 0.05);
+        self.cameras.push(RawCamera::placed(name, world, Vec3::NEG_Z, lens_fov(focal, aperture), ortho));
     }
 
     /// The prim's local transform from `xformOpOrder`, and whether it resets the parent's.
