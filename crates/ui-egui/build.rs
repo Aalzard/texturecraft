@@ -11,8 +11,10 @@ use std::path::PathBuf;
 const MANIFESTS: &[(&str, Faces, Faces)] = &[
     ("fonts/manifest.txt", &[("BIZ UDPGothic", "Regular"), ("Noto Sans CJK SC", "Regular")], &[("BIZ UDPGothic", "Regular")]),
     // The interface font: one variable file for every weight (0.5 MB), and the numbers' face.
-    ("fonts/latin-manifest.txt", LATIN, LATIN),
+    (LATIN_MANIFEST, LATIN, LATIN),
 ];
+/// Newer than the core catalog: a checkout without it keeps the default interface font.
+const LATIN_MANIFEST: &str = "fonts/latin-manifest.txt";
 const LATIN: Faces = &[("IBM Plex Sans", "Variable"), ("IBM Plex Mono", "Regular")];
 /// (family, style) pairs of a manifest.
 type Faces = &'static [(&'static str, &'static str)];
@@ -41,6 +43,9 @@ fn main() {
 fn craft_fonts(dir: &std::path::Path, rel: &str, desktop: &[(&str, &str)], web: &[(&str, &str)]) -> Result<String, String> {
     let manifest = dir.join(rel);
     println!("cargo::rerun-if-changed={}", manifest.display());
+    if rel == LATIN_MANIFEST && !manifest.exists() {
+        return Ok(String::new());
+    }
     let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
     let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
     let wanted = if wasm { web } else { desktop };
