@@ -36,6 +36,7 @@ pub const FILTERS: &[FilterDef] = &[
     def("grayscale", "Grayscale", "Adjustments", false),
     def("edgeDetect", "Edge Detect", "Adjustments", true),
     def("normalInvert", "Normal Invert", "Adjustments", false),
+    def("bakedLighting", "Baked Lighting", "Adjustments", false),
     def("blur", "Blur", "Blur and sharpen", true),
     def("blurDirectional", "Blur Directional", "Blur and sharpen", true),
     def("slopeBlur", "Slope Blur", "Blur and sharpen", true),
@@ -105,6 +106,7 @@ pub fn build(id: &str, p: &Value) -> Result<EffectKind> {
         "bevel" => Filter::Bevel { width: 16.0 },
         "mosaic" => Filter::Mosaic { size: 32.0 },
         "glow" => Filter::Glow { radius: 16.0, amount: 1.0 },
+        "bakedLighting" => Filter::BakedLighting { azimuth: 45.0, elevation: 45.0, light: 0.8, ambient: 0.4, occlusion: 1.0 },
         "levels" => {
             let mut l = Levels::default();
             crate::mask_cmds::levels_from(p, &mut l);
@@ -179,6 +181,13 @@ pub fn scalar_params(f: &Filter) -> Vec<(&'static str, &'static str, f32, f32, f
         Filter::Glow { radius, amount } => {
             vec![("radius", "Radius (texels at 2K)", *radius, 0.0, 128.0), ("amount", "Amount", *amount, 0.0, 5.0)]
         }
+        Filter::BakedLighting { azimuth, elevation, light, ambient, occlusion } => vec![
+            ("azimuth", "Light azimuth (degrees)", *azimuth, 0.0, 360.0),
+            ("elevation", "Light elevation (degrees)", *elevation, -90.0, 90.0),
+            ("light", "Light intensity", *light, 0.0, 4.0),
+            ("ambient", "Ambient", *ambient, 0.0, 2.0),
+            ("occlusion", "Ambient occlusion", *occlusion, 0.0, 1.0),
+        ],
         Filter::Invert | Filter::ColorBalance { .. } | Filter::GradientMap { .. } | Filter::Grayscale | Filter::NormalInvert => Vec::new(),
     }
 }
@@ -256,6 +265,15 @@ pub(crate) fn apply(p: &Value, f: &mut Filter, cmd: &str) -> Result<()> {
         Filter::Glow { radius, amount } => {
             set(radius, "radius", 0.0, 256.0);
             set(amount, "amount", 0.0, 10.0);
+        }
+        Filter::BakedLighting { azimuth, elevation, light, ambient, occlusion } => {
+            if let Some(v) = f32p(p, "azimuth") {
+                *azimuth = v.rem_euclid(360.0);
+            }
+            set(elevation, "elevation", -90.0, 90.0);
+            set(light, "light", 0.0, 10.0);
+            set(ambient, "ambient", 0.0, 10.0);
+            set(occlusion, "occlusion", 0.0, 1.0);
         }
         Filter::DirectionalWarp { intensity, angle: a, scale, seed: s } => {
             set(intensity, "intensity", 0.0, 256.0);

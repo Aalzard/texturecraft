@@ -580,6 +580,16 @@ pub enum Filter {
         radius: f32,
         amount: f32,
     },
+    /// Lighting painted into the base color: `ambient` (times the baked ambient occlusion by
+    /// `occlusion`) plus a directional light of strength `light` from `azimuth` around +Y
+    /// (degrees from +Z) and `elevation` above the horizon (degrees), on the mesh's normals.
+    BakedLighting {
+        azimuth: f32,
+        elevation: f32,
+        light: f32,
+        ambient: f32,
+        occlusion: f32,
+    },
 }
 
 /// Push `x` (0..1) towards 1 (`amount` > 0) or 0 (`amount` < 0); `amount` in −1..1.
@@ -734,7 +744,8 @@ impl Filter {
             | Filter::DirectionalWarp { .. }
             | Filter::Bevel { .. }
             | Filter::Mosaic { .. }
-            | Filter::Glow { .. } => return None,
+            | Filter::Glow { .. }
+            | Filter::BakedLighting { .. } => return None,
         })
     }
 
@@ -761,7 +772,20 @@ impl Filter {
             Filter::Bevel { .. } => "Bevel",
             Filter::Mosaic { .. } => "Mosaic",
             Filter::Glow { .. } => "Glow",
+            Filter::BakedLighting { .. } => "Baked Lighting",
         }
+    }
+
+    /// Baked lighting's factor on the base color of a surface facing `nrm` (world space) with
+    /// ambient occlusion `ao` (None for other filters).
+    pub fn baked_light(&self, nrm: [f32; 3], ao: f32) -> Option<f32> {
+        let Filter::BakedLighting { azimuth, elevation, light, ambient, occlusion } = self else { return None };
+        let (sa, ca) = azimuth.to_radians().sin_cos();
+        let (se, ce) = elevation.to_radians().sin_cos();
+        let facing = (nrm[0] * ce * sa + nrm[1] * se + nrm[2] * ce * ca).max(0.0);
+        let ao = if ao.is_finite() { ao.clamp(0.0, 1.0) } else { 1.0 };
+        let k = ambient * (1.0 + (ao - 1.0) * occlusion.clamp(0.0, 1.0)) + light * facing;
+        Some(if k.is_finite() { k.max(0.0) } else { 1.0 })
     }
 }
 
