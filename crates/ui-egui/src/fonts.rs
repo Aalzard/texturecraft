@@ -242,8 +242,10 @@ mod tests {
         let ubuntu = defs.font_data.get("Ubuntu-Light").unwrap();
         let (a, d, g) = line_metrics(ubuntu.font.as_ref().as_ref(), 0).unwrap();
         assert!(a > 0.5 && a < 1.5 && d < 0.0 && d > -0.6 && g >= 0.0, "{a} {d} {g}");
-        // The primary font needs no shift against itself.
-        assert_eq!(aligned(FontData::from_owned(ubuntu.font.as_ref().as_ref().to_vec())).tweak.y_offset_factor, 0.0);
+        // The primary font (Inter with craft-fonts, else egui's) needs no shift against itself.
+        let ui = crate::theme::font_definitions();
+        let primary = ui.families.get(&FontFamily::Proportional).and_then(|f| f.first()).and_then(|n| ui.font_data.get(n)).unwrap();
+        assert_eq!(aligned(FontData::from_owned(primary.font.as_ref().as_ref().to_vec())).tweak.y_offset_factor, 0.0);
         for junk in [&b""[..], b"ttcf", b"\0\x01\0\0\0\x09", &[0xff; 64]] {
             assert!(line_metrics(junk, 0).is_none());
             assert!(line_metrics(junk, 7).is_none());
