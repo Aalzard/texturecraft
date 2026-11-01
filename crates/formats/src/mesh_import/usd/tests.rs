@@ -296,8 +296,15 @@ fn usda_usdc_and_usdz_round_trip_with_textures() {
             file("Roughness.png", png([128; 3])),
             file("Normal.png", png([128, 128, 255])),
             file("Emissive.png", png([0; 3])),
+            file("Clearcoat.png", png([0; 3])),
+            file("ClearcoatRoughness.png", png([30; 3])),
         ],
-        vec![file("Metallic.png", png([255; 3])), file("Opacity.png", png([255; 3]))],
+        vec![
+            file("Metallic.png", png([255; 3])),
+            file("Opacity.png", png([255; 3])),
+            file("Clearcoat.png", png([255; 3])),
+            file("ClearcoatRoughness.png", png([30; 3])),
+        ],
         vec![],
     ];
     let usda = round_trip(&m, UsdFormat::Usda, "usda", &textures);
@@ -306,12 +313,18 @@ fn usda_usdc_and_usdz_round_trip_with_textures() {
         text.contains("UsdPreviewSurface") && text.contains("@./Test_scene_Red_BaseColor.png@") && !text.contains("Emissive.png"),
         "black emissive dropped"
     );
+    assert!(
+        text.contains("Materials/Blue/Clearcoat.outputs:r>")
+            && text.contains("Materials/Blue/ClearcoatRoughness.outputs:r>")
+            && !text.contains("Red_Clearcoat"),
+        "a coat exports with its roughness; no coat (black) drops both"
+    );
     round_trip(&m, UsdFormat::Usdc, "usdc", &textures);
     let usdz = round_trip(&m, UsdFormat::Usdz, "usdz", &textures);
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&usdz)).unwrap();
     let names: Vec<String> = zip.file_names().map(str::to_string).collect();
     assert_eq!(names.first().map(String::as_str), Some("Test_scene.usdc"));
-    assert_eq!(names.len(), 1 + 5, "the layer and every non-black texture");
+    assert_eq!(names.len(), 1 + 7, "the layer and every non-black texture");
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).unwrap();
         assert_eq!(f.compression(), zip::CompressionMethod::Stored);
@@ -324,7 +337,7 @@ fn usda_usdc_and_usdz_round_trip_with_textures() {
     }
     // usda and usdc keep their textures for writing next to the layer.
     let out = usd_bytes(&m, "Test scene", &textures, UsdFormat::Usda).unwrap();
-    assert_eq!(out.textures.len(), 5);
+    assert_eq!(out.textures.len(), 7);
     assert!(usd_bytes(&Mesh::default(), "x", &[], UsdFormat::Usdc).is_err());
 }
 
