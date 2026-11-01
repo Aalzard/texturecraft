@@ -95,18 +95,19 @@
 
 ## Made in TextureCraft
 
-Both pieces below were textured with TextureCraft's procedural materials and smart materials (no
-textures or models from anywhere else) and path traced on the GPU by `texturecraft-cli render`.
+Two original props, modelled procedurally by contributors, textured layer by layer with TextureCraft's
+own materials, masks and mesh-map generators (no textures or models from anywhere else) and path
+traced on the GPU by `texturecraft-cli render`.
 
 <table>
 <tr>
 <td width="50%" valign="top">
-  <img src="docs/images/texturecraft-crate.png" alt="A path-traced crate: teal paint chipping off wooden planks, a rusted iron lid and a tarnished brass handle" width="100%">
-  <p align="center"><sub><b>Crate</b>: chipped paint on wood, rusted iron and tarnished brass smart materials, one per texture set</sub></p>
+  <img src="docs/images/texturecraft-lantern.png" alt="A path-traced storm lantern on a dark stage: red enamel chipped to bare steel on the edges, rust and grime in the seams, a cream pinstripe, a tarnished brass burner and knob, rusty guard wires and a glowing flame behind the glass globe" width="100%">
+  <p align="center"><sub><b>Storm lantern</b>: chipped enamel, rust, soot and a lit flame over eight texture sets</sub></p>
 </td>
 <td width="50%" valign="top">
-  <img src="docs/images/texturecraft-materials.png" alt="Three path-traced material balls: glossy red car paint with a clear coat, purple velvet with sheen, and brushed steel with anisotropic highlights" width="100%">
-  <p align="center"><sub><b>Shading lobes</b>: car paint (clear coat), velvet (sheen) and brushed steel (anisotropy)</sub></p>
+  <img src="docs/images/texturecraft-camera.png" alt="A path-traced vintage rangefinder camera: black enamel worn through to brass on the top plate, cognac leatherette, knurled chrome dials, a black lens barrel with an engraved distance scale and a coated front element" width="100%">
+  <p align="center"><sub><b>Rangefinder camera</b>: black paint brassing, leatherette, chrome and coated glass</sub></p>
 </td>
 </tr>
 </table>
