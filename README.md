@@ -87,7 +87,7 @@
   <p align="center"><sub><b>Rendering mode</b> (F10): your textures path traced on the GPU, with a denoiser</sub></p>
 </td>
 <td width="50%" valign="top">
-  <img src="docs/images/texturecraft-light.png" alt="TextureCraft in the light brightness level with the blue accent: the same panels as rounded cards on a light background around the dark 3D viewport" width="100%">
+  <img src="docs/images/texturecraft-light.png" alt="TextureCraft in the light brightness level with the blue accent: the same panels as tiles on a light background around the dark 3D viewport" width="100%">
   <p align="center"><sub><b>Light theme</b>: four brightness levels and seven accent colours</sub></p>
 </td>
 </tr>
