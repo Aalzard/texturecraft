@@ -31,9 +31,16 @@ Loopback TCP (`127.0.0.1` only), one JSON object per line each way. Requests are
 {"id": 0, "method": "auth", "params": {"token": "<token>"}}
 ```
 
-The token is `TEXTURECRAFT_CONTROL_TOKEN` when that is set (16 characters or more), otherwise a
-fresh random token the app writes to `<temp>/texturecraft-control-<port>.token` (`<temp>` is
-`%TEMP%` on Windows, `$TMPDIR` or `/tmp` elsewhere). Any other first request is refused.
+The token is `TEXTURECRAFT_CONTROL_TOKEN` when that is set (16 to 1024 printable ASCII
+characters; surrounding whitespace is ignored), otherwise a fresh random 256-bit token the app
+writes to `<temp>/texturecraft-control-<port>.token` (`<temp>` is `%TEMP%` on Windows, `$TMPDIR`
+or `/tmp` elsewhere). On Unix the file is created new and readable by its owner only; when an
+existing file there cannot be replaced (another user's, in a shared `/tmp`), the control server
+stays off: set `TEXTURECRAFT_CONTROL_TOKEN` instead. Clients (`texturecraft-cli mcp --bridge`)
+only read a token file that is a regular file owned by them with no group or other permissions.
+
+A connection must authenticate within 10 seconds. Any other first request, or a wrong token, is
+refused and the connection closed. At most 16 connections are served at once.
 
 Scripted runs (agents, recordings, tests) can set `TEXTURECRAFT_NO_PREFS` (any value) so the app
 neither reads nor overwrites the user's saved layout and settings: it starts from the defaults and
