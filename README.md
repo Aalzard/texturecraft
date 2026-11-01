@@ -191,7 +191,6 @@ from our code against public documentation.
 - hardware ray tracing in Rendering mode;
 - pen tilt (the windowing layer doesn't report it yet);
 - Alembic files in the older HDF5 container, and Alembic animation (the first sample is read);
-- displacement in the viewport's key-light shadows (the viewport and the path tracers displace);
 - a native-speaker review of the translations;
 - the first signed release on every platform.
 

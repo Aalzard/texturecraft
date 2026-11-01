@@ -164,6 +164,21 @@ fn post_effects() {
     assert_eq!(all.px.len(), base.px.len());
 }
 
+/// The shadow pass draws the displaced (dense) mesh when the view displaces: with flat height it
+/// casts the same shadows as the plain mesh.
+#[test]
+fn displaced_shadows_match_flat_height() {
+    let Some((mut h, frame)) = setup() else { return };
+    let lit = shaded(&frame, |s| {
+        s.light = LIGHT;
+        s.shadows = true;
+    });
+    let plain = render(&mut h, &lit, "shadows_plain");
+    let displaced = render(&mut h, &shaded(&lit, |s| s.displacement = true), "shadows_displaced");
+    let off = plain.px.chunks(4).zip(displaced.px.chunks(4)).filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 8)).count();
+    assert!(off < 480 * 360 / 100, "{off} pixels differ");
+}
+
 #[test]
 fn shadows_darken_the_key_light() {
     let Some((mut h, frame)) = setup() else { return };

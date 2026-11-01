@@ -75,7 +75,7 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 ## The viewport
 
 - Physically based shading (metallic/roughness or specular/glossiness) with clear coat, sheen,
-  anisotropy, subsurface scattering, transmission, parallax occlusion and **displacement** from the
+  anisotropy, subsurface scattering, transmission, parallax occlusion and **displacement** (with its own shadows) from the
   height channel; image-based lighting from
   six procedural studio and outdoor environments or **your own HDR/EXR panoramas**; ACES or linear
   tone mapping, key-light shadows, bloom, vignette, sharpen, grain, **depth of field** and
