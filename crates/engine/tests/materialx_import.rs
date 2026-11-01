@@ -80,7 +80,7 @@ fn a_material_becomes_one_fill_layer_in_one_undo_step() {
 
     // The traversal and the missing file were skipped with a warning, not read.
     let warnings = r["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap().to_string()).collect::<Vec<_>>();
-    assert!(fill.sources.get(&Channel::Normal).is_none() && fill.sources.get(&Channel::Height).is_none(), "{fill:?}");
+    assert!(!fill.sources.contains_key(&Channel::Normal) && !fill.sources.contains_key(&Channel::Height), "{fill:?}");
     assert!(warnings.iter().any(|w| w.contains("outside")), "{warnings:?}");
     assert!(warnings.iter().any(|w| w.contains("missing.png")), "{warnings:?}");
     // A channel the texture set doesn't have is reported, not invented.
