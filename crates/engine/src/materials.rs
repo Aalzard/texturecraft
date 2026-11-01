@@ -120,6 +120,10 @@ pub const MATERIALS: &[SmartMaterial] = &[
     sm("plastic_dusty", "Plastic Dusty", PLASTIC, [0.05, 0.2, 0.45], 0.0, 0.4),
     sm("plastic_scuffed", "Plastic Scuffed", PLASTIC, [0.06, 0.06, 0.065], 0.0, 0.5),
     sm("leather_worn", "Leather Worn", FABRIC, [0.22, 0.12, 0.07], 0.0, 0.5),
+    sm("stone_mossy", "Stone Mossy", STONE, [0.36, 0.35, 0.33], 0.0, 0.85),
+    sm("paint_sun_faded", "Paint Sun Faded", PLASTIC, [0.55, 0.06, 0.05], 0.0, 0.45),
+    sm("steel_water_stained", "Steel Water Stained", METAL, [0.56, 0.57, 0.58], 1.0, 0.35),
+    sm("plastic_grimy", "Plastic Grimy", PLASTIC, [0.75, 0.74, 0.7], 0.0, 0.45),
 ];
 
 fn norm(x: &str) -> String {
@@ -497,6 +501,30 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
                     (generator(G::Dirt, 0.4, 0.2, 0.5), Lighten),
                 ],
             ));
+            Ok(v)
+        }
+        "stone_mossy" => {
+            let mut v = build(b, "granite")?;
+            v.push(b.preset("Dust", dielectric(rgb([0.42, 0.4, 0.36]), u(0.95)), "dust_cavities", false)?);
+            let moss = plus(dielectric(pat(P::Noise, 1.0, 11, 1.0, [0.03, 0.05, 0.01], [0.07, 0.1, 0.02]), u(0.95)), height(u(0.015)));
+            v.push(b.preset("Moss", moss, "moss_top", false)?);
+            Ok(v)
+        }
+        "paint_sun_faded" => {
+            let mut v = one(b, dielectric(rgb(m.base), u(0.4)))?;
+            v.push(b.preset("Faded", dielectric(pat(P::Clouds, 3.0, 4, 1.0, [0.62, 0.36, 0.33], [0.72, 0.48, 0.45]), u(0.7)), "sun_faded", false)?);
+            v.push(b.preset("Chipped edges", dielectric(rgb([0.75, 0.73, 0.7]), u(0.6)), "edges_sharp", false)?);
+            Ok(v)
+        }
+        "steel_water_stained" => {
+            let mut v = build(b, "steel")?;
+            v.push(b.preset("Stains", dielectric(pat(P::Grunge, 4.0, 8, 1.0, [0.2, 0.18, 0.15], [0.32, 0.29, 0.25]), u(0.75)), "water_stains", false)?);
+            Ok(v)
+        }
+        "plastic_grimy" => {
+            let mut v = one(b, dielectric(rgb(m.base), u(0.45)))?;
+            v.push(b.preset("Worn edges", dielectric(rgb([0.86, 0.85, 0.82]), u(0.3)), "edges_soft", false)?);
+            v.push(b.preset("Grime", dielectric(rgb([0.16, 0.14, 0.11]), u(0.9)), "dust_cavities", false)?);
             Ok(v)
         }
         "plastic_dusty" => {
