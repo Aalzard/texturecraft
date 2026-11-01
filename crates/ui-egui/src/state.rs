@@ -76,7 +76,7 @@ pub struct Prefs {
     /// Viewport texture resolution: 0 full, 1 half, 2 quarter of each texture set's size (lighter
     /// on GPU memory and uploads for 4K and 8K sets; painting and export keep full resolution).
     pub viewport_texture: u8,
-    /// Interface brightness (the views keep their studio grey).
+    /// Interface brightness (the views keep their studio slate).
     pub brightness: crate::theme::Brightness,
     /// The colour of what is on, chosen or focused.
     pub accent: crate::theme::Accent,

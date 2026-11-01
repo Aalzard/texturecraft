@@ -1,5 +1,5 @@
 // Viewport post processing, appended to util.wgsl (uses `src`, `src_samp`, `vs_full`): the
-// resolved scene (linear HDR, premultiplied by scene coverage) → flat studio backdrop, exposure,
+// resolved scene (linear HDR, premultiplied by scene coverage) → studio backdrop, exposure,
 // tone mapping, optional bloom / sharpen / vignette / grain, sRGB encoding.
 
 struct Post {
@@ -34,10 +34,12 @@ fn tonemap(hdr: vec3<f32>) -> vec3<f32> {
     return min(x, vec3<f32>(1.0));
 }
 
-// The flat studio gray behind the scene, with a gentle falloff so the stage doesn't look like a hole.
+// The studio backdrop behind the scene: the interface's cool slate (#30343b at the top to #1b1e23
+// at the bottom, faintly tinted so colors still read true), a little darker in the corners so the
+// stage doesn't look like a hole.
 fn backdrop(uv: vec2<f32>) -> vec3<f32> {
-    let r = length(uv * 2.0 - 1.0) * 0.35;
-    return vec3<f32>(0.0232 * (1.06 - r * r));
+    let d = uv * 2.0 - 1.0;
+    return mix(vec3<f32>(0.0295, 0.0343, 0.0437), vec3<f32>(0.0110, 0.0130, 0.0168), uv.y) * (1.0 - 0.09 * dot(d, d));
 }
 
 // Display-linear color of one pixel (scene over backdrop), without bloom.

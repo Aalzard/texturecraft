@@ -4,7 +4,7 @@
 // in compose/src/display.rs), the G-buffer of the depth of field and subsurface blur passes, the
 // 2D UV view,
 // the background, debug views and the 3D wireframe. Output is scene-linear HDR, premultiplied by
-// alpha = scene coverage over the flat studio backdrop; exposure, tone mapping and sRGB encoding
+// alpha = scene coverage over the studio backdrop; exposure, tone mapping and sRGB encoding
 // happen in the post pass (post.wgsl). WebGPU/WebGL2-safe (fragment passes only).
 
 struct Globals {
