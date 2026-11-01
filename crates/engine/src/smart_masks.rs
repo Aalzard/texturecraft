@@ -36,6 +36,14 @@ pub const SMART_MASKS: &[SmartMask] = &[
     SmartMask { id: "grunge", label: "Grunge Blotches" },
     SmartMask { id: "paint_chips", label: "Paint Chips" },
     SmartMask { id: "fingerprints", label: "Fingerprints" },
+    SmartMask { id: "edges_soft", label: "Edges Soft" },
+    SmartMask { id: "edges_sharp", label: "Edges Sharp" },
+    SmartMask { id: "exposed", label: "Exposed Areas" },
+    SmartMask { id: "thin_areas", label: "Thin Areas" },
+    SmartMask { id: "dust_cavities", label: "Dust in Cavities" },
+    SmartMask { id: "moss_top", label: "Moss from Top" },
+    SmartMask { id: "water_stains", label: "Water Stains" },
+    SmartMask { id: "sun_faded", label: "Sun Faded" },
 ];
 
 fn norm(x: &str) -> String {
@@ -92,6 +100,24 @@ pub(crate) fn preset(id: &str) -> Option<(MaskBackground, Vec<(EffectKind, Blend
         "grunge" => vec![(pattern(P::Grunge, 2.0, 8, 1.0), Normal)],
         "paint_chips" => vec![(pattern(P::Chips, 5.0, 2, 1.0), Normal), (generator(G::EdgeWear, 0.6, 0.12, 0.5), Lighten)],
         "fingerprints" => vec![(pattern(P::Smudges, 4.0, 3, 1.0), Normal)],
+        // A wide, soft highlight on convex edges, and a thin clean line right on them.
+        "edges_soft" => vec![(generator(G::EdgeWear, 0.35, 0.35, 0.15), Normal)],
+        "edges_sharp" => vec![(generator(G::EdgeWear, 0.65, 0.05, 0.0), Normal)],
+        // Open surfaces that light reaches (the opposite of cavities).
+        "exposed" => vec![(generator(G::AmbientOcclusion, 0.5, 0.3, 0.0), Normal)],
+        "thin_areas" => vec![(generator(G::ThinAreas, 0.3, 0.2, 0.2), Normal)],
+        // Cavities filled with soft, cloudy dust.
+        "dust_cavities" => vec![(generator(G::Dirt, 0.5, 0.3, 0.2), Normal), (pattern(P::Clouds, 4.0, 21, 1.2), Multiply)],
+        // Patches growing on what faces up, broken up by cells.
+        "moss_top" => vec![(directional(G::Direction, UP, 0.45, 0.2, 0.6, false), Normal), (pattern(P::Cells, 6.0, 17, 1.4), Multiply)],
+        // Tide marks: streaks running down the sides, faded by clouds.
+        "water_stains" => vec![
+            (pattern(P::Streaks, 2.0, 13, 0.9), Normal),
+            (directional(G::Direction, UP, 0.15, 0.2, 0.0, true), Multiply),
+            (pattern(P::Clouds, 2.5, 14, 1.0), Multiply),
+        ],
+        // Surfaces facing the sky, softly graded.
+        "sun_faded" => vec![(directional(G::Direction, UP, 0.5, 0.45, 0.1, false), Normal)],
         _ => return None,
     };
     Some((MaskBackground::Black, fx))
