@@ -877,4 +877,9 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "使用操作系统的窗口边框和按钮，而不是 TextureCraft 自己的标题栏",
     ),
+    ("Text", "文字"),
+    ("Font", "字体"),
+    ("Style", "样式"),
+    ("Use as brush alpha", "用作笔刷 Alpha"),
+    ("Place as decal", "作为贴花放置"),
 ];

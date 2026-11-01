@@ -3904,6 +3904,7 @@ dependencies = [
 name = "texturecraft-engine"
 version = "0.2.0"
 dependencies = [
+ "epaint_default_fonts",
  "image",
  "rayon",
  "serde",
@@ -3957,8 +3958,11 @@ dependencies = [
 name = "texturecraft-paint"
 version = "0.2.0"
 dependencies = [
+ "epaint_default_fonts",
+ "harfrust",
  "rayon",
  "serde",
+ "skrifa 0.44.0",
  "texturecraft-compose",
  "texturecraft-core",
  "texturecraft-geom",
