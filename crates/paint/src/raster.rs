@@ -179,18 +179,20 @@ fn scan_triangle(ctx: &RasterCtx, s: &Stamp, t: u32, w: u32, h: u32, fade_lo: f3
             let n = (*na * b0 + *nb * b1 + *nc * b2).try_normalize().unwrap_or(s.normal);
             let to_eye = (ctx.eye - p).try_normalize().unwrap_or(n);
             let facing = n.dot(to_eye);
-            if ctx.backface_culling && facing <= 0.0 {
+            // Symmetry copies paint where the camera may not see (the back of the model).
+            let culled = ctx.backface_culling && !s.copy;
+            if culled && facing <= 0.0 {
                 continue;
             }
             if n.dot(s.normal) <= 0.0 {
                 continue;
             }
-            if let Some(depth) = ctx.depth
+            if let Some(depth) = ctx.depth.filter(|_| !s.copy)
                 && !depth.visible(p)
             {
                 continue;
             }
-            let fade = if ctx.backface_culling { smoothstep(fade_lo, fade_hi, facing) } else { 1.0 };
+            let fade = if culled { smoothstep(fade_lo, fade_hi, facing) } else { 1.0 };
             let a = shape.sample(lx, ly, s.hardness, s.seed) * s.flow * fade;
             if a > 0.0 {
                 texels.push((x, y, a));
@@ -245,8 +247,18 @@ mod tests {
             angle_fade: (70.0, 85.0),
             shape: Shape { alpha: crate::BrushAlpha::Round, image: None, library: None, level: 0 },
         };
-        let st =
-            Stamp { center: Vec3::ZERO, normal: Vec3::Y, tangent: Vec3::X, bitangent: Vec3::Z, radius: 0.25, flow: 1.0, hardness: 0.9, depth: 1.0, seed: 0 };
+        let st = Stamp {
+            center: Vec3::ZERO,
+            normal: Vec3::Y,
+            tangent: Vec3::X,
+            bitangent: Vec3::Z,
+            radius: 0.25,
+            flow: 1.0,
+            hardness: 0.9,
+            depth: 1.0,
+            seed: 0,
+            copy: false,
+        };
         rasterize(&mut canvas, &ctx, &[st]);
         // Plane is 2 units over 128 texels: radius 0.25 = 16 texels around the center (64, 64).
         let at = |x: u32, y: u32| from_u16(canvas.alpha.get(x, y)[0]);

@@ -126,17 +126,33 @@ pub(crate) fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Mirror symmetry through the mesh center.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Mirror and radial symmetry through the mesh center.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Symmetry {
     pub x: bool,
     pub y: bool,
     pub z: bool,
+    /// Radial symmetry: copies spread evenly around `axis` (0 or 1: off; at most 32).
+    #[serde(default)]
+    pub radial: u8,
+    /// Axis of radial symmetry: 0 = X, 1 = Y, 2 = Z.
+    #[serde(default = "radial_axis")]
+    pub axis: u8,
+}
+
+fn radial_axis() -> u8 {
+    1
+}
+
+impl Default for Symmetry {
+    fn default() -> Self {
+        Symmetry { x: false, y: false, z: false, radial: 0, axis: radial_axis() }
+    }
 }
 
 impl Symmetry {
     pub fn any(&self) -> bool {
-        self.x || self.y || self.z
+        self.x || self.y || self.z || self.radial > 1
     }
 }
 
@@ -254,6 +270,7 @@ impl BrushSettings {
             jitter_flow: f(self.jitter_flow, 0.0, 1.0, 0.0),
             jitter_position: f(self.jitter_position, 0.0, 4.0, 0.0),
             depth: f(self.depth, 0.05, 4.0, 1.0),
+            symmetry: Symmetry { radial: self.symmetry.radial.min(32), axis: self.symmetry.axis.min(2), ..self.symmetry },
             particles: Particles {
                 enabled: self.particles.enabled,
                 count: self.particles.count.clamp(1, 16),

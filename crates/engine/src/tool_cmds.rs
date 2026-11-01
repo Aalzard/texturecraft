@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Brush settings",
             [],
             None,
-            "{size?: 0..100, flow?: 0..100, opacity?: 0..100, spacing?: 1..1000, hardness?: 0..100, angle?, followPath?, alignment?: tangent|camera, lazy?, jitterSize?, jitterAngle?, jitterFlow?, jitterPosition?, alpha?: procedural name | {image: resource name} | {library: id (alpha.list)}, backfaceCulling?, symmetryX?, symmetryY?, symmetryZ?, minSize?, smudgeStrength?: 0..100, cloneSource?: composite|layer (what the Clone tool copies), particles?: {enabled?, count?: 1..16, lifetime?: 1..128 steps, gravity?: 0..2}}",
+            "{size?: 0..100, flow?: 0..100, opacity?: 0..100, spacing?: 1..1000, hardness?: 0..100, angle?, followPath?, alignment?: tangent|camera, lazy?, jitterSize?, jitterAngle?, jitterFlow?, jitterPosition?, alpha?: procedural name | {image: resource name} | {library: id (alpha.list)}, backfaceCulling?, symmetryX?, symmetryY?, symmetryZ?, symmetryRadial?: 0..32 copies around symmetryAxis?: x|y|z (default y), minSize?, smudgeStrength?: 0..100, cloneSource?: composite|layer (what the Clone tool copies), particles?: {enabled?, count?: 1..16, lifetime?: 1..128 steps, gravity?: 0..2}}",
             always,
             brush
         ),
@@ -150,6 +150,17 @@ fn brush(s: &mut Session, p: &Value) -> Result<Value> {
             *slot = v;
         }
     }
+    if let Some(v) = f32p(p, "symmetryRadial") {
+        b.symmetry.radial = v.clamp(0.0, 32.0) as u8;
+    }
+    if let Some(a) = strp(p, "symmetryAxis") {
+        b.symmetry.axis = match a.to_ascii_lowercase().as_str() {
+            "x" => 0,
+            "y" => 1,
+            "z" => 2,
+            _ => return Err(bad("tool.brush", format!("unknown symmetry axis `{a}` (x, y or z)"))),
+        };
+    }
     if let Some(v) = boolp(p, "screenSpace") {
         b.screen_space = v;
     }
@@ -187,6 +198,7 @@ pub(crate) fn brush_json(s: &Session) -> Value {
             (None, None) => json!(b.alpha.label()),
         },
         "backfaceCulling": b.backface_culling, "symmetry": [b.symmetry.x, b.symmetry.y, b.symmetry.z],
+        "radialSymmetry": { "copies": b.symmetry.radial, "axis": (["x", "y", "z"].get(b.symmetry.axis as usize)) },
         "smudgeStrength": s.tool.smudge_strength * 100.0, "particles": b.particles,
         "cloneSource": if s.tool.clone_from == CloneFrom::Layer { "layer" } else { "composite" },
     })

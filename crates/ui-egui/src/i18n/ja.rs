@@ -614,6 +614,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Quarter", "1/4"),
     ("Quick mask", "クイックマスク"),
     ("Quit", "終了"),
+    ("Radial axis", "放射軸"),
+    ("Radial copies", "放射状コピー"),
     ("Radius (texels at 2K)", "半径 (2K時のテクセル)"),
     ("RENDERING", "レンダリング"),
     ("Rebind any menu item, tool or command", "メニュー項目、ツール、コマンドのショートカットを再割り当て"),
