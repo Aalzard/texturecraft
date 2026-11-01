@@ -382,12 +382,22 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     if renaming {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(name_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
         if let Some((_, buf)) = app.ui.rename.as_mut() {
-            let r = child.add(egui::TextEdit::singleline(buf).desired_width(name_rect.width()));
-            r.request_focus();
-            if r.lost_focus() {
-                let name = buf.clone();
+            // Escape reaches us instead of just unfocusing the field, so it can cancel.
+            let filter = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, escape: true, ..Default::default() };
+            let r = child.add(egui::TextEdit::singleline(buf).desired_width(name_rect.width()).event_filter(filter));
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 app.ui.rename = None;
-                app.run("layer.rename", json!({"layer": layer.id.0, "name": name}));
+            } else if r.lost_focus() {
+                // Enter or a click elsewhere.
+                let name = buf.trim().to_string();
+                app.ui.rename = None;
+                if !name.is_empty() && name != layer.name {
+                    app.run("layer.rename", json!({"layer": layer.id.0, "name": name}));
+                }
+            } else if !r.has_focus() {
+                // Only until the field has focus: requesting it every frame kept it from ever
+                // losing focus, which trapped the editor open and blocked every shortcut.
+                r.request_focus();
             }
         }
     } else {
@@ -437,13 +447,13 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
         p.text(blend_rect.right_center(), egui::Align2::RIGHT_CENTER, tr("off"), egui::FontId::proportional(11.0), tk.text_dim);
     }
     // Interaction: select, rename, drag & drop, context menu.
-    if resp.clicked() && !eye_resp.clicked() {
+    if resp.clicked() && !eye_resp.clicked() && !renaming {
         app.run("layer.select", json!({"layer": layer.id.0}));
     }
-    if resp.double_clicked() {
+    if resp.double_clicked() && !eye_resp.clicked() && !renaming {
         app.ui.rename = Some((layer.id.0, layer.name.clone()));
     }
-    if resp.drag_started() {
+    if resp.drag_started() && !renaming {
         resp.dnd_set_drag_payload(layer.id.0);
     }
     // Drops: a layer or a shelf material lands above this row (inside a folder when dropped on

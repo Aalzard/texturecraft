@@ -396,13 +396,16 @@ fn serve(a: &Args) -> R {
     match a.get("--port") {
         None => rpc::serve_lines(&h, std::io::stdin().lock(), std::io::stdout().lock()).map_err(s),
         Some(p) => {
-            let port = port_of(p)?;
-            let (token, file) = server_token(port).map_err(s)?;
-            rpc::serve_tcp(port, h, token, |addr| match file {
+            // Bind first: a port in use must not replace its server's token file, and port 0's
+            // token file is named after the port actually picked.
+            let listener = rpc::bind_tcp(port_of(p)?).map_err(s)?;
+            let addr = listener.local_addr().map_err(s)?;
+            let (token, file) = server_token(addr.port()).map_err(s)?;
+            match file {
                 Some(f) => eprintln!("texturecraft-cli: serving on {addr}; token in {}", f.display()),
                 None => eprintln!("texturecraft-cli: serving on {addr}; token from TEXTURECRAFT_CONTROL_TOKEN"),
-            })
-            .map_err(s)
+            }
+            rpc::serve_listener(listener, h, token).map_err(s)
         }
     }
 }
