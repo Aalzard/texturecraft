@@ -314,3 +314,67 @@ fn color_map_samples_textures_next_to_a_high_poly() {
     assert!(s.log.iter().any(|l| l.contains("tex/painted color.png was not found")), "{:?}", s.log);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A plane session whose vertex normals lean, with a high poly plane `dy` above it.
+fn leaning_session(lean: bool) -> Session {
+    let mut mesh = primitives::builtin("plane").unwrap();
+    if lean {
+        mesh.normals = vec![texturecraft_engine::geom::glam::Vec3::new(0.6, 0.8, 0.0); mesh.positions.len()];
+        mesh.compute_tangents();
+    }
+    let high_text = obj(&mesh, 0.1, f32::MAX, [1.0; 3]);
+    let mut s = Session::new_project("t", mesh, "builtin:plane", None, 256).unwrap();
+    let high = temp_file(if lean { "lean_high.obj" } else { "flat_high.obj" }, &high_text);
+    execute(&mut s, "bake.highPoly.add", &json!({ "path": high })).unwrap();
+    execute(
+        &mut s,
+        "bake.settings",
+        &json!({ "resolution": 128, "dilation": 0, "maps": ["height"], "maxFrontal": 0.5, "maxRear": 0.2, "averageNormals": true }),
+    )
+    .unwrap();
+    s
+}
+
+fn centre_height(s: &mut Session) -> f32 {
+    execute(s, "bake.run", &json!({ "cpu": true })).unwrap();
+    s.doc.baked[&0].maps[&BakedMap::Height][64 * 128 + 64]
+}
+
+#[test]
+fn skew_correction_turns_the_transfer_rays_onto_the_base_normal() {
+    let flat = centre_height(&mut leaning_session(false));
+    let mut s = leaning_session(true);
+    let leaning = centre_height(&mut s);
+    assert!((leaning - flat).abs() > 0.01, "leaning rays read a different height: {leaning} vs {flat}");
+
+    // Black changes nothing; white onto each triangle's flat normal matches the upright bake.
+    let r = execute(&mut s, "bake.skew.set", &json!({ "value": 0.0, "base": "triangle" })).unwrap();
+    assert_eq!(r["skew"]["base"], "triangle");
+    assert!((centre_height(&mut s) - leaning).abs() < 1e-6);
+    execute(&mut s, "bake.skew.set", &json!({ "value": 1.0, "base": "triangle", "edgeDistance": 0.1, "edgeContrast": 2.0 })).unwrap();
+    assert_eq!(execute(&mut s, "bake.highPoly.list", &Value::Null).unwrap()["skew"]["edgeContrast"], 2.0);
+    assert!((centre_height(&mut s) - flat).abs() < 1e-3, "skew-corrected: {} vs upright {flat}", centre_height(&mut s));
+
+    // A greyscale image over the atlas: white everywhere is the same as value 1.
+    let dir = std::path::PathBuf::from(temp_file("skew.txt", "")).parent().unwrap().to_path_buf();
+    let png = dir.join("skew.png");
+    image::GrayImage::from_pixel(4, 4, image::Luma([255])).save(&png).unwrap();
+    execute(&mut s, "bake.skew.set", &json!({ "path": png.display().to_string(), "base": "triangle" })).unwrap();
+    assert_eq!(execute(&mut s, "bake.highPoly.list", &Value::Null).unwrap()["skew"]["width"], 4);
+    assert!((centre_height(&mut s) - flat).abs() < 1e-3);
+
+    // Clearing restores the plain bake; hostile input is an error and leaves the state alone.
+    execute(&mut s, "bake.skew.clear", &Value::Null).unwrap();
+    assert!((centre_height(&mut s) - leaning).abs() < 1e-6);
+    execute(&mut s, "bake.skew.set", &json!({ "value": 0.5 })).unwrap();
+    for bad in [
+        json!({ "base": "sideways" }),
+        json!({ "edgeDistance": -1.0 }),
+        json!({ "edgeContrast": 0.0 }),
+        json!({ "path": dir.join("missing.png").display().to_string() }),
+    ] {
+        assert!(execute(&mut s, "bake.skew.set", &bad).is_err(), "{bad}");
+    }
+    assert!(s.bake_meshes.skew.as_ref().is_some_and(|k| k.values == [0.5]), "a refused skew keeps the previous one");
+    let _ = std::fs::remove_dir_all(&dir);
+}

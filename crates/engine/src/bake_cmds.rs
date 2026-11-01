@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::{Value, json};
 use texturecraft_bake::rays::Tracer;
-use texturecraft_bake::{BakeOutput, BakeRequest, HighPoly, MAX_RAYS, Progress, bake, bake_on};
+use texturecraft_bake::{BakeOutput, BakeRequest, HighPoly, MAX_RAYS, Progress, SkewMap, bake, bake_on};
 use texturecraft_core::{BakeMatch, BakeSettings, BakedMap, DirectionMode, PositionMode, RayDistribution, RaySettings, SelfOcclusion};
 use texturecraft_geom::{BaseColor, Bvh, Mesh};
 
@@ -51,6 +51,20 @@ pub fn specs() -> Vec<CommandSpec> {
             s.modified = true;
             Ok(meshes_json(s))
         }),
+        cmd!(
+            "bake.skew.set",
+            "Set skew correction",
+            [],
+            None,
+            "{value?: 0..1 (a constant map, default 1) | path: a greyscale image over the UV atlas (white turns the rays onto the base normal, black keeps the cage's averaged direction), edgeDistance?: fraction of the mesh diagonal over which hard edges hold the correction back (default 0), edgeContrast?: falloff exponent (default 1), base?: mesh|triangle (default mesh)} → {skew}. Applies to the transfer rays of a bake from the built-in distance cage; a cage mesh ignores it",
+            always,
+            skew_set
+        ),
+        cmd!("bake.skew.clear", "Remove skew correction", [], None, "{}", always, |s, _| {
+            s.bake_meshes.skew = None;
+            s.modified = true;
+            Ok(meshes_json(s))
+        }),
     ]
 }
 
@@ -89,6 +103,8 @@ pub fn install_gpu_tracer(tracer: Arc<dyn Tracer>) {
 pub struct BakeMeshes {
     pub high: Vec<BakeMesh>,
     pub cage: Option<BakeMesh>,
+    /// Skew correction of the transfer rays (not saved in the project).
+    pub skew: Option<Arc<SkewMap>>,
     /// Every high poly appended into one mesh (rebuilt when the list changes).
     merged: Option<MergedHigh>,
 }
@@ -119,6 +135,7 @@ pub struct BakeTask {
     /// The merged high polys, unless the set bakes from the low poly.
     pub high: Option<MergedHigh>,
     pub cage: Option<Arc<Mesh>>,
+    pub skew: Option<Arc<SkewMap>>,
     /// UV tile grid (columns, rows) of the set; (1, 1) without UV tiles.
     pub tiles: (u32, u32),
     /// The GPU ray tracer, if installed and not turned off (`bake.run {cpu: true}`).
@@ -135,6 +152,7 @@ impl BakeTask {
             settings: &self.settings,
             high,
             cage: self.cage.as_deref(),
+            skew: self.skew.as_deref(),
             tiles: self.tiles,
         };
         match &self.tracer {
@@ -169,9 +187,10 @@ impl Session {
         let set = self.doc.project.texture_set(ts)?;
         let high = if set.bake.use_low_as_high { None } else { self.bake_meshes.merged.clone() };
         let cage = high.as_ref().and(self.bake_meshes.cage.as_ref()).map(|c| c.mesh.clone());
+        let skew = high.as_ref().and(self.bake_meshes.skew.clone());
         let tiles = set.tile_grid().map_or((1, 1), |g| (g.cols, g.rows));
         let tracer = GPU_TRACER.get().cloned();
-        Ok(BakeTask { ts, mesh: self.mesh.clone(), bvh: self.bvh.clone(), material: set.material, settings: set.bake.clone(), high, cage, tiles, tracer })
+        Ok(BakeTask { ts, mesh: self.mesh.clone(), bvh: self.bvh.clone(), material: set.material, settings: set.bake.clone(), high, cage, skew, tiles, tracer })
     }
 
     /// Store a finished bake (one undo step).
@@ -282,7 +301,10 @@ impl Session {
 /// `bake.highPoly.list`: the high polys and the cage (also part of `project.inspect`).
 pub fn meshes_json(s: &Session) -> Value {
     let one = |m: &BakeMesh| json!({ "name": m.name, "triangles": m.mesh.triangle_count(), "parts": m.mesh.submeshes.iter().map(|p| p.name.as_str()).collect::<Vec<_>>() });
-    json!({ "highPoly": s.bake_meshes.high.iter().map(one).collect::<Vec<_>>(), "cage": s.bake_meshes.cage.as_ref().map(one) })
+    let skew = s.bake_meshes.skew.as_ref().map(|k| {
+        json!({ "width": k.width, "height": k.height, "edgeDistance": k.edge_distance, "edgeContrast": k.edge_contrast, "base": if k.per_triangle { "triangle" } else { "mesh" } })
+    });
+    json!({ "highPoly": s.bake_meshes.high.iter().map(one).collect::<Vec<_>>(), "cage": s.bake_meshes.cage.as_ref().map(one), "skew": skew })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -313,6 +335,47 @@ fn high_remove(s: &mut Session, p: &Value) -> Result<Value> {
         (None, None) => return Err(bad("bake.highPoly.remove", "`index`, `name` or `all` is required")),
     };
     s.remove_high_poly(index)?;
+    Ok(meshes_json(s))
+}
+
+/// The greyscale skew map of an image file (the mean of its colour channels, as stored).
+#[cfg(not(target_arch = "wasm32"))]
+fn skew_image(path: &str) -> Result<(u32, u32, Vec<f32>)> {
+    const MAX_BYTES: u64 = 256 << 20;
+    let cmd = "bake.skew.set";
+    let len = std::fs::metadata(path).map_err(|e| bad(cmd, format!("cannot read {path}: {e}")))?.len();
+    if len > MAX_BYTES {
+        return Err(bad(cmd, format!("{path} is over 256 MiB")));
+    }
+    let bytes = std::fs::read(path).map_err(|e| bad(cmd, format!("cannot read {path}: {e}")))?;
+    let img = texturecraft_formats::decode_image(&bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+    Ok((img.width, img.height, img.rgba.iter().map(|p| (p[0] + p[1] + p[2]) / 3.0).collect()))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn skew_image(_: &str) -> Result<(u32, u32, Vec<f32>)> {
+    Err(EngineError::Other("file paths are not available in the browser".into()))
+}
+
+fn skew_set(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "bake.skew.set";
+    let mut map = match strp(p, "path") {
+        Some(path) => {
+            let (width, height, values) = skew_image(path)?;
+            SkewMap { width, height, values: values.into_iter().map(|v| v.clamp(0.0, 1.0)).collect(), ..SkewMap::constant(0.0) }
+        }
+        None => SkewMap::constant(f32p(p, "value").unwrap_or(1.0).clamp(0.0, 1.0)),
+    };
+    map.edge_distance = f32p(p, "edgeDistance").unwrap_or(0.0);
+    map.edge_contrast = f32p(p, "edgeContrast").unwrap_or(1.0);
+    map.per_triangle = match strp(p, "base") {
+        None | Some("mesh") => false,
+        Some("triangle") => true,
+        Some(other) => return Err(bad(cmd, format!("unknown base `{other}`"))),
+    };
+    map.validate().map_err(|e| bad(cmd, e.to_string()))?;
+    s.bake_meshes.skew = Some(Arc::new(map));
+    s.modified = true;
     Ok(meshes_json(s))
 }
 
