@@ -924,4 +924,13 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "استخدام إطار وأزرار نافذة نظام التشغيل بدلاً من شريط عنوان TextureCraft الخاص",
     ),
+    ("GPU error: {error}", "خطأ في GPU: {error}"),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "لا توجد ذاكرة GPU كافية لعرض مجموعة الخامات \"{name}\" كاملة: خفّض دقة الخامة لمنفذ العرض في الإعدادات. لا يتأثر الرسم والتصدير.",
+    ),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "لا توجد ذاكرة GPU كافية لعرض {count} من مجموعات الخامات كاملة ({names}): خفّض دقة الخامة لمنفذ العرض في الإعدادات. لا يتأثر الرسم والتصدير.",
+    ),
 ];
