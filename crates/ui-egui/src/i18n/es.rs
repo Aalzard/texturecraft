@@ -177,6 +177,11 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Color picker", "Cuentagotas"),
     ("Color selection", "Selección de color"),
+    ("Color to replace", "Color a reemplazar"),
+    (
+        "Colors near the first shift towards the second, keeping their shading.",
+        "Los colores cercanos al primero se desplazan hacia el segundo y conservan su sombreado.",
+    ),
     (
         "Colors read as gray. Add a levels or blur effect above to shape the result.",
         "Los colores se leen como gris. Añade encima un efecto de niveles o desenfoque para ajustar el resultado.",
@@ -661,10 +666,12 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Rendering on GPU: {n} / {max} samples, {s} s", "Renderizando en GPU: {n} / {max} muestras, {s} s"),
     ("Rendering, path traced", "Renderizado con trazado de trayectorias"),
     ("Replace", "Reemplazar"),
+    ("Replace Color", "Reemplazar color"),
     (
         "Replace the selected layer's mask with this smart mask (or drag it onto a layer)",
         "Reemplazar la máscara de la capa seleccionada por esta máscara inteligente (o arrastrarla a una capa)",
     ),
+    ("Replacement color", "Color de reemplazo"),
     ("Report a bug...", "Informar de un error..."),
     ("Rescan the library folder", "Volver a examinar la carpeta de la biblioteca"),
     ("Reset UI", "Restablecer interfaz"),
@@ -802,6 +809,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Tiles", "Baldosas"),
     ("Tint", "Tinte"),
     ("Toggle mask", "Activar/desactivar máscara"),
+    ("Tolerance", "Tolerancia"),
     ("Tone mapping", "Mapeo de tonos"),
     ("Tools", "Herramientas"),
     ("Torus", "Toro"),
