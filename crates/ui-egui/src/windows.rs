@@ -401,6 +401,13 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
                 }
             });
             ui.end_row();
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ui.label(tr("Title bar"));
+                ui.checkbox(&mut p.system_title_bar, tr("System title bar (applies on restart)"))
+                    .on_hover_text(tr("Use the operating system's window frame and buttons instead of TextureCraft's own title bar"));
+                ui.end_row();
+            }
         });
         ui.add_space(8.0);
         ui.label(caption(tr("Viewport")));

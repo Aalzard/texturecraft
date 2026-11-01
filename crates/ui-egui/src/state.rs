@@ -80,6 +80,8 @@ pub struct Prefs {
     pub brightness: crate::theme::Brightness,
     /// The colour of what is on, chosen or focused.
     pub accent: crate::theme::Accent,
+    /// The system draws the window's title bar instead of TextureCraft (desktop; read at startup).
+    pub system_title_bar: bool,
 }
 
 impl Default for Prefs {
@@ -91,6 +93,7 @@ impl Default for Prefs {
             viewport_texture: 0,
             brightness: crate::theme::Brightness::default(),
             accent: crate::theme::Accent::default(),
+            system_title_bar: false,
         }
     }
 }

@@ -96,6 +96,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 
 - A modern look in **four brightness levels** (dark, medium dark, medium light and light) with
   **seven accent colors**, set in Settings › Interface.
+- **Its own title bar** with the app icon, menus and window buttons on Windows (and on Linux
+  desktops that leave the frame to the app, such as GNOME), the macOS traffic lights over the same
+  strip, and Settings › Interface › System title bar for the system's frame instead.
 - **Dockable, tabbed and floating panels**, saved layouts, and panels that reopen where you closed
   them.
 - A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.

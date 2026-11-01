@@ -170,45 +170,44 @@ pub fn parse_shortcut(s: &str) -> Option<KeyboardShortcut> {
     key.map(|k| KeyboardShortcut::new(mods, k))
 }
 
+/// The menus, then the mode label at the right of `ui` (the strip `titlebar::show` lays out).
 pub fn menu_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     let tk = Tokens::get(ui.ctx());
-    egui::Panel::top("menu_bar").exact_size(24.0).frame(egui::Frame::NONE.fill(tk.chrome).inner_margin(egui::Margin::symmetric(6, 0))).show(ui, |ui| {
-        egui::MenuBar::new().ui(ui, |ui| {
-            let ctx = ui.ctx().clone();
-            for top in TOP {
-                ui.menu_button(tr(top), |ui| {
-                    ui.set_min_width(220.0);
-                    let mut current_sub: Option<&str> = None;
-                    let items: Vec<Item> = CATALOG.iter().filter(|i| i.menu == top).copied().collect();
-                    for item in &items {
-                        if let Some(s) = item.sub {
-                            if current_sub == Some(s) {
-                                continue;
+    egui::MenuBar::new().ui(ui, |ui| {
+        let ctx = ui.ctx().clone();
+        for top in TOP {
+            ui.menu_button(tr(top), |ui| {
+                ui.set_min_width(220.0);
+                let mut current_sub: Option<&str> = None;
+                let items: Vec<Item> = CATALOG.iter().filter(|i| i.menu == top).copied().collect();
+                for item in &items {
+                    if let Some(s) = item.sub {
+                        if current_sub == Some(s) {
+                            continue;
+                        }
+                        current_sub = Some(s);
+                        ui.menu_button(tr(s), |ui| {
+                            for x in items.iter().filter(|x| x.sub == Some(s)) {
+                                menu_item(app, &ctx, ui, x);
                             }
-                            current_sub = Some(s);
-                            ui.menu_button(tr(s), |ui| {
-                                for x in items.iter().filter(|x| x.sub == Some(s)) {
-                                    menu_item(app, &ctx, ui, x);
-                                }
-                            });
-                            continue;
-                        }
-                        if item.label == "-" {
-                            ui.separator();
-                            continue;
-                        }
-                        menu_item(app, &ctx, ui, item);
+                        });
+                        continue;
                     }
-                });
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mode = match app.ui.mode {
-                    Mode::Painting => tr("Painting"),
-                    Mode::Baking => tr("Baking"),
-                    Mode::Rendering => tr("Rendering"),
-                };
-                ui.label(egui::RichText::new(mode).size(11.0).color(tk.text_dim));
+                    if item.label == "-" {
+                        ui.separator();
+                        continue;
+                    }
+                    menu_item(app, &ctx, ui, item);
+                }
             });
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mode = match app.ui.mode {
+                Mode::Painting => tr("Painting"),
+                Mode::Baking => tr("Baking"),
+                Mode::Rendering => tr("Rendering"),
+            };
+            ui.label(egui::RichText::new(mode).size(11.0).color(tk.text_dim));
         });
     });
 }

@@ -780,6 +780,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-window"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f8f8829cc7be65d466d687dae381d1ca60e31242#f8f8829cc7be65d466d687dae381d1ca60e31242"
+dependencies = [
+ "egui",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "wayland-client",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3780,10 +3791,13 @@ dependencies = [
  "egui",
  "image",
  "log",
+ "ron",
  "serde_json",
  "texturecraft-engine",
  "texturecraft-ui-egui",
+ "winit",
  "winresource",
+ "winsafe",
 ]
 
 [[package]]
@@ -3941,6 +3955,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "craft-ui",
+ "craft-window",
  "eframe",
  "egui",
  "egui-phosphor",
@@ -5089,6 +5104,12 @@ dependencies = [
  "toml",
  "version_check",
 ]
+
+[[package]]
+name = "winsafe"
+version = "0.0.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ef0ffc427f045c0cc9ebffd6f4f91153dcd2a1547b5c3c29ee3f541e16e95c6"
 
 [[package]]
 name = "winx"

@@ -922,4 +922,13 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Green", "초록"),
     ("Amber", "호박색"),
     ("Pink", "분홍"),
+    ("Minimize", "최소화"),
+    ("Maximize", "최대화"),
+    ("Restore", "이전 크기로 복원"),
+    ("Title bar", "제목 표시줄"),
+    ("System title bar (applies on restart)", "시스템 제목 표시줄 (다시 시작하면 적용)"),
+    (
+        "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
+        "TextureCraft 자체 제목 표시줄 대신 운영 체제의 창 테두리와 버튼을 사용합니다",
+    ),
 ];

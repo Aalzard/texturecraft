@@ -5,7 +5,7 @@
 //! - `command.run {id, params?}`: run an engine command (programmatic: never opens a dialog).
 //! - `command.list {filter?}`: every command with params docs and enabled state.
 //! - `session.inspect`: project, texture sets, layer stack, tool, camera, display, history.
-//! - `ui.inspect`: the UI state (panels, windows, mode, layout, viewport rect).
+//! - `ui.inspect`: the UI state (panels, windows, mode, layout, viewport rect, who draws the title bar).
 //! - `ui.menu.list`: the menu catalog with ids, shortcuts and whether each is live.
 //! - `ui.menu.invoke {id}`: behave like a menu click (may open a window).
 //! - `ui.set {...}`: merge fields into the UI state (e.g. `{"layout":"Only3D"}`).
@@ -108,6 +108,7 @@ pub fn handle(app: &mut TextureCraftApp, ctx: &egui::Context, method: &str, p: &
                 "viewport": [r.min.x, r.min.y, r.width(), r.height()],
                 "fps": app.fps,
                 "uiMs": app.ui_ms,
+                "titleBar": app.title_bar.name(),
                 "baking": app.bake_progress(),
                 "toasts": app.toasts.iter().map(|t| json!({"text": t.text, "error": t.error})).collect::<Vec<_>>(),
             }))
