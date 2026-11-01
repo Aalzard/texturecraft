@@ -111,6 +111,8 @@ Built-in presets:
 | Unity HDRP (Mask Map) | `BaseMap`, `MaskMap` (R metal, G AO, B detail = 0, A smoothness), `Normal` (OpenGL) |
 | Unity Standard (Metallic Smoothness) | `Albedo`, `MetallicSmoothness` (R metal, A smoothness), `Normal` (OpenGL), `Occlusion` |
 | Blender (Principled BSDF) | `BaseColor`, `Metallic`, `Roughness`, `Normal` (OpenGL), `Height` (16-bit), `Emission`, `Specular` |
+| Godot 4 (ORM) | `albedo` (A = opacity), `orm` (R AO, G roughness, B metal), `normal` (OpenGL), `emission` |
+| OpenPBR (separate maps) | one map per OpenPBR Surface input the set has: `base_color`, `base_metalness`, `specular_roughness`, `specular_roughness_anisotropy`, `coat_weight`, `coat_roughness`, `fuzz_weight`, `fuzz_color`, `fuzz_roughness`, `transmission_weight`, `subsurface_weight`, `emission_color`, `geometry_opacity`, `geometry_normal` (OpenGL), `height` (16-bit) |
 | Separate maps | one file per channel, gray where scalar, height 16-bit |
 | Mesh maps | every baked map (`$channel` = map id), 16-bit |
 

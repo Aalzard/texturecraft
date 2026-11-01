@@ -145,6 +145,37 @@ pub fn builtin_presets() -> Vec<ExportPreset> {
                 map("Specular", 8, gray(ch(Channel::SpecularLevel, 0))),
             ],
         ),
+        preset(
+            "Godot 4 (ORM)",
+            vec![
+                map("albedo", 8, base_with_alpha()),
+                map("orm", 8, orm()),
+                map("normal", 8, normal(VirtualMap::NormalOpenGl)),
+                map("emission", 8, rgb(|k| ch(Channel::Emissive, k))),
+            ],
+        ),
+        // OpenPBR Surface inputs, one map each (maps of channels a set lacks are skipped).
+        preset("OpenPBR (separate maps)", {
+            let gray8 = |name: &str, c: Channel| map(name, 8, gray(ch(c, 0)));
+            let rgb8 = |name: &str, c: Channel| map(name, 8, rgb(|k| ch(c, k)));
+            vec![
+                rgb8("base_color", Channel::BaseColor),
+                gray8("base_metalness", Channel::Metallic),
+                gray8("specular_roughness", Channel::Roughness),
+                gray8("specular_roughness_anisotropy", Channel::AnisotropyLevel),
+                gray8("coat_weight", Channel::CoatWeight),
+                gray8("coat_roughness", Channel::CoatRoughness),
+                gray8("fuzz_weight", Channel::SheenWeight),
+                rgb8("fuzz_color", Channel::SheenColor),
+                gray8("fuzz_roughness", Channel::SheenRoughness),
+                gray8("transmission_weight", Channel::Transmission),
+                gray8("subsurface_weight", Channel::ScatterWeight),
+                rgb8("emission_color", Channel::Emissive),
+                gray8("geometry_opacity", Channel::Opacity),
+                map("geometry_normal", 8, normal(VirtualMap::NormalOpenGl)),
+                map("height", 16, gray(ch(Channel::Height, 0))),
+            ]
+        }),
         preset("Separate maps", Channel::ALL.into_iter().map(channel_map).collect()),
         preset(
             "Mesh maps",

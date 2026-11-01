@@ -327,6 +327,16 @@ fn list_outputs_matches_render_and_presets_round_trip() {
         assert_eq!(planned, rendered, "{}", preset.name);
     }
     assert!(builtin_preset("unity hdrp (mask map)").is_some());
+    // OpenPBR writes the lobe maps a set has, and skips the rest.
+    let openpbr = ExportOptions::new(builtin_preset("OpenPBR (separate maps)").unwrap());
+    let names = |fx: &Fx| list_outputs(&fx.project, 0, "m", &openpbr).unwrap().into_iter().map(|p| p.name).collect::<Vec<String>>();
+    let plain = names(&fx);
+    assert!(plain.iter().any(|n| n.ends_with("_base_color.png")) && !plain.iter().any(|n| n.contains("coat_")), "{plain:?}");
+    let mut lobes = default_channels();
+    lobes.extend([Channel::CoatWeight, Channel::CoatRoughness, Channel::SheenWeight]);
+    let coated = names(&Fx::new(&lobes));
+    assert!(coated.iter().any(|n| n.ends_with("_coat_weight.png")) && coated.iter().any(|n| n.ends_with("_fuzz_weight.png")), "{coated:?}");
+    assert!(builtin_preset("godot 4 (orm)").is_some());
     assert!(preset_from_json("{").is_err());
     let dup = r#"{"name":"x","maps":[{"file":"a","format":"Png","bit_depth":8,"channels":[["R",{"Constant":1.0}],["R",{"Constant":0.0}]]}]}"#;
     assert!(preset_from_json(dup).is_err());
