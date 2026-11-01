@@ -242,6 +242,7 @@ impl Session {
         match self.tool.tool {
             Tool::PolygonFill => return self.polygon_fill(screen, viewport).map(|_| true),
             Tool::ColorPicker => return self.color_pick(screen, viewport).map(|_| true),
+            Tool::GeometryMask => return crate::instance_cmds::toggle_part_at(self, screen, viewport).map(|_| true),
             _ => {}
         }
         let first_uv = if self.tool.tool == Tool::Clone { self.pick(screen, viewport).map(|h| h.uv) } else { None };
@@ -252,7 +253,7 @@ impl Session {
     /// Start a stroke in the 2D view at texture coordinate `uv`.
     pub fn begin_stroke_uv(&mut self, uv: Vec2, pressure: f32) -> Result<()> {
         self.cancel_stroke();
-        if matches!(self.tool.tool, Tool::PolygonFill | Tool::ColorPicker) {
+        if matches!(self.tool.tool, Tool::PolygonFill | Tool::ColorPicker | Tool::GeometryMask) {
             return Err(EngineError::Other("use this tool in the 3D view".into()));
         }
         self.start_stroke(self.viewport, true, Some(uv))?;

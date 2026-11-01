@@ -92,10 +92,13 @@ pub enum Tool {
     ColorPicker,
     /// Paint along an editable curve (or fill a closed one).
     Path,
+    /// Click mesh parts to show or hide the selected layer on them.
+    GeometryMask,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 8] = [Tool::Paint, Tool::Eraser, Tool::Projection, Tool::PolygonFill, Tool::Smudge, Tool::Clone, Tool::ColorPicker, Tool::Path];
+    pub const ALL: [Tool; 9] =
+        [Tool::Paint, Tool::Eraser, Tool::Projection, Tool::PolygonFill, Tool::Smudge, Tool::Clone, Tool::ColorPicker, Tool::Path, Tool::GeometryMask];
     pub fn label(self) -> &'static str {
         match self {
             Tool::Paint => "Paint",
@@ -106,6 +109,7 @@ impl Tool {
             Tool::Clone => "Clone",
             Tool::ColorPicker => "Color picker",
             Tool::Path => "Path",
+            Tool::GeometryMask => "Geometry mask",
         }
     }
     pub fn id(self) -> &'static str {
@@ -118,6 +122,7 @@ impl Tool {
             Tool::Clone => "clone",
             Tool::ColorPicker => "colorPicker",
             Tool::Path => "path",
+            Tool::GeometryMask => "geometryMask",
         }
     }
     pub fn parse(s: &str) -> Option<Tool> {

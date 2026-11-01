@@ -137,6 +137,37 @@ pub(crate) fn prune_pixels(doc: &mut Document) {
     doc.pixels.retain(|x| alive.contains(&x));
 }
 
+/// Show or hide the selected layer on the mesh part under viewport point `screen` (the Geometry
+/// mask tool): `{layer, part, shown, geometryMask}`.
+pub(crate) fn toggle_part_at(s: &mut Session, screen: texturecraft_geom::glam::Vec2, viewport: texturecraft_geom::glam::Vec2) -> Result<Value> {
+    let cmd = "tool.click";
+    let hit = s.pick(screen, viewport).ok_or_else(|| bad(cmd, "nothing under the point"))?;
+    let first = hit.tri.saturating_mul(3);
+    let part = s.mesh.submeshes.iter().find(|m| m.start <= first && first < m.start.saturating_add(m.count)).map(|m| m.name.clone());
+    let part = part.ok_or_else(|| bad(cmd, "the mesh has no parts"))?;
+    let layer = s.selected_layer().ok_or_else(|| bad(cmd, "select a layer first"))?;
+    let ts = s.doc.project.locate(layer).map_or(s.ts(), |(ts, _, _)| ts);
+    let parts = crate::set_cmds::parts(s, ts);
+    if !parts.contains(&part) {
+        return Err(bad(cmd, format!("mesh part `{part}` is not in the selected layer's texture set")));
+    }
+    let mut shown = s.doc.project.layers.get(&layer).and_then(|l| l.geometry_mask.clone()).unwrap_or_else(|| parts.clone());
+    let on = !shown.contains(&part);
+    if on {
+        shown.push(part.clone());
+    } else {
+        shown.retain(|p| *p != part);
+    }
+    // In mesh order; showing every part again clears the mask.
+    let ordered: Vec<String> = parts.iter().filter(|p| shown.contains(p)).cloned().collect();
+    let mask = (ordered.len() != parts.len()).then_some(ordered);
+    s.edit(if on { "Show layer on part" } else { "Hide layer on part" }, |s| {
+        s.doc.project.layer_mut(layer)?.geometry_mask = mask.clone();
+        Ok(())
+    })?;
+    Ok(json!({ "layer": layer.0, "part": part, "shown": on, "geometryMask": mask }))
+}
+
 fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "layer.set";
     // Linked properties live on an instance's source; the geometry mask is the layer's own

@@ -521,6 +521,23 @@ fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid: LayerI
     });
 }
 
+/// The Geometry mask tool: what a click does, and the selected layer's parts.
+fn geometry_tool_section(app: &mut TextureCraftApp, ui: &mut Ui) {
+    let tk = Tokens::get(ui.ctx());
+    ui.label(caption(tr("Geometry mask")));
+    ui.label(RichText::new(tr("Click a mesh part to show or hide the selected layer on it.")).color(tk.text_dim));
+    let Some(layer) = app.session.selected_layer().and_then(|id| app.session.doc.project.layers.get(&id).cloned()) else { return };
+    let ts = app.session.doc.project.locate(layer.id).map_or(app.session.ts(), |(ts, _, _)| ts);
+    let parts = texturecraft_engine::set_cmds::parts(&app.session, ts);
+    for part in &parts {
+        let on = layer.geometry_mask.as_ref().is_none_or(|m| m.contains(part));
+        ui.label(RichText::new(format!("{} {part}", if on { ic::EYE } else { ic::EYE_SLASH })).color(if on { tk.text } else { tk.text_dim }));
+    }
+    if ui.add_enabled(layer.geometry_mask.is_some(), egui::Button::new(tr("Show on all parts"))).clicked() {
+        app.run("layer.set", json!({"layer": layer.id.0, "geometryMask": null}));
+    }
+}
+
 /// Geometry mask: the mesh parts of the layer's texture set it shows on (when the set has
 /// several parts).
 fn geometry_mask_menu(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
@@ -860,6 +877,7 @@ fn tool_properties(app: &mut TextureCraftApp, ui: &mut Ui) {
         Tool::Clone => Some(clone_section),
         Tool::Smudge => Some(smudge_section),
         Tool::Path => Some(path_section),
+        Tool::GeometryMask => Some(geometry_tool_section),
         _ => None,
     };
     if let Some(section) = tool_section {
