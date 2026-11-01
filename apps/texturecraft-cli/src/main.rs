@@ -35,7 +35,9 @@ USAGE:
       camera saved in the project (camera.add); --samples path traces it instead (Rendering
       mode), on the GPU when it has compute shaders, else (or with --cpu) on the CPU.
   texturecraft-cli new <mesh file | builtin:<id>> <out.tcraft> [--resolution <px>] [--sample]
-      New project; --sample bakes and applies a smart material to every texture set.
+      New project; --sample bakes and applies a smart material to every texture set. The
+      sample's mesh maps are baked at the resolution up to 1024 px (most of the file's size),
+      so a 2048 sample project is as large as a 1024 one.
   texturecraft-cli mcp [--bridge <port>] [--token <token>] [--read-root <dir>] [--write-root <dir>]
       MCP server on stdio: headless (file access only below the roots), or bridged to
       `texturecraft --control <port>`. --automation-read-root / --automation-write-root are
