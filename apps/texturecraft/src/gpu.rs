@@ -8,9 +8,9 @@
 //! 1. Window surface support: adapters that cannot present to the surface are ranked last.
 //! 2. Explicit filter: `--gpu <name>` CLI option or `WGPU_ADAPTER_NAME` environment variable (case-insensitive substring).
 //! 3. Hardware before software: physical GPUs before software/CPU rasterizers (llvmpipe, lavapipe, WARP).
-//! 4. Backend preference: native backends (Vulkan, Metal, DX12) before OpenGL.
-//! 5. Power preference: [`wgpu::PowerPreference::HighPerformance`] (default for 3D painting) prefers discrete GPUs,
+//! 4. Power preference: [`wgpu::PowerPreference::HighPerformance`] (default for 3D painting) prefers discrete GPUs,
 //!    [`wgpu::PowerPreference::LowPower`] prefers integrated GPUs, and [`wgpu::PowerPreference::None`] preserves system order.
+//! 5. Backend preference: native backends (Vulkan, Metal, DX12) before OpenGL.
 
 use std::sync::Arc;
 
@@ -95,10 +95,11 @@ pub fn pick_adapter_index(candidates: &[Candidate], named_filter: Option<&str>, 
             // Hardware GPUs before software/CPU rasterizers.
             let software_penalty = c.is_software();
 
-            // Native backends before OpenGL.
-            let backend_rank = match c.backend {
-                Backend::Vulkan | Backend::Metal | Backend::Dx12 => 0,
-                Backend::Gl => 1,
+            // Native backends before OpenGL (except when preserving system order).
+            let backend_rank = match (power, c.backend) {
+                (PowerPreference::None, _) => 0,
+                (_, Backend::Vulkan | Backend::Metal | Backend::Dx12) => 0,
+                (_, Backend::Gl) => 1,
                 _ => 2,
             };
 
@@ -130,10 +131,15 @@ pub fn pick_adapter_index(candidates: &[Candidate], named_filter: Option<&str>, 
 }
 
 /// Configures `options` with adapter selection honoring `--gpu`, `WGPU_ADAPTER_NAME`, and `WGPU_POWER_PREF`.
-pub fn configure(options: &mut NativeOptions, cli_gpu: Option<String>, cli_power: Option<PowerPreference>) {
+pub fn configure(options: &mut NativeOptions, cli_gpu: Option<String>, cli_power: Option<PowerPreference>) -> Result<(), String> {
     let effective_filter = cli_gpu.or_else(|| std::env::var(ADAPTER_NAME_ENV).ok());
-    let effective_power =
-        cli_power.or_else(|| std::env::var(POWER_PREF_ENV).ok().and_then(|s| parse_power_preference(&s).ok())).unwrap_or(PowerPreference::HighPerformance);
+    let effective_power = match cli_power {
+        Some(p) => p,
+        None => match std::env::var(POWER_PREF_ENV) {
+            Ok(val) => parse_power_preference(&val)?,
+            Err(_) => PowerPreference::HighPerformance,
+        },
+    };
 
     if let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
         create.power_preference = effective_power;
@@ -150,11 +156,22 @@ pub fn configure(options: &mut NativeOptions, cli_gpu: Option<String>, cli_power
                 .ok_or_else(|| "no graphics adapter found that can present to the window".to_string())?;
 
             let chosen = &candidates[chosen_idx];
+            if !chosen.surface_supported {
+                return Err("no graphics adapter found that can present to the window".to_string());
+            }
+
+            if let Some(ref f) = filter
+                && !chosen.matches_filter(f)
+            {
+                log::warn!("no graphics adapter matched filter `{f}`; fell back to {}", chosen.name);
+            }
+
             log::info!("selected graphics adapter: {} ({:?}, {:?})", chosen.name, chosen.device_type, chosen.backend);
 
             adapters.get(chosen_idx).cloned().ok_or_else(|| "selected adapter index out of range".to_string())
         }));
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -195,6 +212,17 @@ mod tests {
         ];
 
         let selected = pick_adapter_index(&candidates, None, PowerPreference::LowPower);
+        assert_eq!(selected, Some(0));
+    }
+
+    #[test]
+    fn none_power_preference_preserves_enumerated_order() {
+        let candidates = vec![
+            dummy_candidate("GPU A (GL)", DeviceType::DiscreteGpu, Backend::Gl, true),
+            dummy_candidate("GPU B (Vulkan)", DeviceType::DiscreteGpu, Backend::Vulkan, true),
+        ];
+
+        let selected = pick_adapter_index(&candidates, None, PowerPreference::None);
         assert_eq!(selected, Some(0));
     }
 

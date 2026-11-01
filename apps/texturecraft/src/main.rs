@@ -187,7 +187,10 @@ fn main() {
     }
     let viewport = title_bar.viewport(viewport);
     let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, persistence_path, ..Default::default() };
-    gpu::configure(&mut options, args.gpu, args.power_pref);
+    if let Err(e) = gpu::configure(&mut options, args.gpu, args.power_pref) {
+        eprintln!("texturecraft: {e}");
+        std::process::exit(2);
+    }
     let control = args.control;
     let r = eframe::run_native(
         APP_NAME,
