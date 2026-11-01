@@ -102,8 +102,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Dockable, tabbed and floating panels**, saved layouts, and panels that reopen where you closed
   them.
 - A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.
-- **9 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese and
-  Korean, switchable live.
+- **10 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese,
+  Korean and Arabic, switchable live.
 - **In the browser:** the same app compiled to WebAssembly, on WebGPU or WebGL2, with touch
   navigation and project open, save and download.
 

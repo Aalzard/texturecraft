@@ -1,5 +1,5 @@
 //! Embeds the optional craft-fonts UI fonts (storytold/craft-fonts) when `CRAFT_FONTS_DIR` points
-//! at a checkout: Inter for the interface (from its Latin catalog) and the CJK
+//! at a checkout: Inter for the interface (from its Latin catalog) and the CJK and Arabic
 //! faces; without it `CRAFT_FONTS` is empty and the UI uses egui's and the system's fonts. The
 //! recipe follows craft-fonts' `docs/integration.md`; no font file is committed here. The Latin
 //! faces are embedded without their Private Use Area ([`without_private_use`]).
@@ -10,10 +10,12 @@ use std::path::PathBuf;
 /// The UI faces TextureCraft embeds (family, style) per manifest: desktop, then web (the web build
 /// has a download budget: of the CJK faces only the Japanese one, ~4.5 MB).
 const MANIFESTS: &[(&str, Faces, Faces)] = &[
-    ("fonts/manifest.txt", &[("BIZ UDPGothic", "Regular"), ("Noto Sans CJK SC", "Regular")], &[("BIZ UDPGothic", "Regular")]),
+    ("fonts/manifest.txt", &[("BIZ UDPGothic", "Regular"), ("Noto Sans CJK SC", "Regular"), ARABIC], &[("BIZ UDPGothic", "Regular"), ARABIC]),
     // The interface font, regular and semibold (0.8 MB).
     (LATIN_MANIFEST, LATIN, LATIN),
 ];
+/// The Arabic face (0.8 MB, so the web build has it too).
+const ARABIC: (&str, &str) = ("Noto Sans Arabic", "Regular");
 /// Newer than the core catalog: a checkout without it keeps the default interface font.
 const LATIN_MANIFEST: &str = "fonts/latin-manifest.txt";
 const LATIN: Faces = &[("Inter", "Regular"), ("Inter", "SemiBold")];
