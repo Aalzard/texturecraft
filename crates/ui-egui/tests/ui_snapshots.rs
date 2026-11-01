@@ -5,8 +5,9 @@
 //! TC_UI_SNAPSHOTS=<dir> cargo test -p texturecraft-ui-egui --release --test ui_snapshots -- --ignored
 //! ```
 //!
-//! Writes `<dir>/<name>.png` at 1600x960: the default layout in each brightness, a floating
-//! panel and the main windows. Ignored by default: it needs a GPU adapter and takes a few
+//! Writes `<dir>/<name>.png` at 1600x960: the default layout in each brightness, the strip as the
+//! app-drawn title bar (Windows) and with the macOS traffic lights' inset, a floating panel and the
+//! main windows. Ignored by default: it needs a GPU adapter and takes a few
 //! seconds.
 
 use std::path::{Path, PathBuf};
@@ -15,6 +16,7 @@ use egui_kittest::Harness;
 use texturecraft_ui_egui::TextureCraftApp;
 use texturecraft_ui_egui::docking::Panel;
 use texturecraft_ui_egui::theme::Brightness;
+use texturecraft_ui_egui::titlebar::TitleBar;
 
 fn save(h: &mut Harness<'_, TextureCraftApp>, dir: &Path, name: &str) {
     h.run_steps(6);
@@ -39,6 +41,18 @@ fn window_snapshots() {
         save(&mut h, &dir, name);
     }
     h.state_mut().ui.prefs.brightness = Brightness::MediumDark;
+    h.state_mut().title_bar = TitleBar::Integrated;
+    save(&mut h, &dir, "titlebar-macos");
+    h.state_mut().title_bar = TitleBar::App(craft_window::Layout::default());
+    save(&mut h, &dir, "titlebar-app");
+    // The close button under the pointer, and the glyphs at a fractional scale.
+    h.hover_at(egui::pos2(1600.0 - 23.0, 14.0));
+    save(&mut h, &dir, "titlebar-app-close-hover");
+    h.hover_at(egui::pos2(800.0, 500.0));
+    h.set_pixels_per_point(1.5);
+    save(&mut h, &dir, "titlebar-app-150");
+    h.set_pixels_per_point(1.0);
+    h.state_mut().title_bar = TitleBar::System;
     h.state_mut().ui.dock.focus(Panel::Display);
     save(&mut h, &dir, "panel-display");
     h.state_mut().ui.dock.close(Panel::Display);

@@ -23,6 +23,7 @@ pub mod shelf;
 pub mod state;
 pub mod theme;
 pub mod thumbs;
+pub mod titlebar;
 pub mod toolbar;
 pub mod viewport;
 pub mod web_files;
@@ -93,6 +94,8 @@ pub struct TextureCraftApp {
     pub fonts: fonts::UiFonts,
     /// A notice across the top of the window until dismissed (English key, shown translated).
     pub banner: Option<&'static str>,
+    /// Who draws the window's title bar (decided at startup, before the window opens).
+    pub title_bar: titlebar::TitleBar,
     last_time: f64,
     /// When the next autosave is due (seconds of app time; desktop only).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -135,6 +138,7 @@ impl TextureCraftApp {
             render_state: cc.wgpu_render_state.clone(),
             fonts: fonts::UiFonts::default(),
             banner: None,
+            title_bar: titlebar::TitleBar::default(),
             last_time: 0.0,
             next_autosave,
             styled: None,
@@ -386,7 +390,7 @@ impl eframe::App for TextureCraftApp {
         let ctx = ui.ctx().clone();
         let t0 = now_ms();
         if !self.ui.hide_ui {
-            menus::menu_bar(self, ui);
+            titlebar::show(self, ui);
             banner(self, ui);
             toolbar::top_bar(self, ui);
             toolbar::status_bar(self, ui);

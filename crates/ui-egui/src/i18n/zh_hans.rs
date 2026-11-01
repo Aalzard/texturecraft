@@ -868,4 +868,13 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Green", "绿色"),
     ("Amber", "琥珀色"),
     ("Pink", "粉色"),
+    ("Minimize", "最小化"),
+    ("Maximize", "最大化"),
+    ("Restore", "还原"),
+    ("Title bar", "标题栏"),
+    ("System title bar (applies on restart)", "系统标题栏（重启后生效）"),
+    (
+        "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
+        "使用操作系统的窗口边框和按钮，而不是 TextureCraft 自己的标题栏",
+    ),
 ];

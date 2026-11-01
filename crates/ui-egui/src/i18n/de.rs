@@ -970,4 +970,13 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Green", "Grün"),
     ("Amber", "Bernstein"),
     ("Pink", "Pink"),
+    ("Minimize", "Minimieren"),
+    ("Maximize", "Maximieren"),
+    ("Restore", "Wiederherstellen"),
+    ("Title bar", "Titelleiste"),
+    ("System title bar (applies on restart)", "Titelleiste des Systems (ab dem nächsten Start)"),
+    (
+        "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
+        "Fensterrahmen und Fenstertasten des Betriebssystems statt der eigenen Titelleiste von TextureCraft verwenden",
+    ),
 ];
