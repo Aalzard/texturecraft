@@ -59,7 +59,9 @@ covered texel it walks the stack bottom to top: paint layers are unpremultiplied
 (value, coverage) tiles, fill layers evaluate uniform values, procedurals (through UV, tri-planar,
 planar, spherical or cylindrical projections) or image resources; masks evaluate their effect
 stack (painted bitmaps, fills, mesh-map generators, levels, filters, ID color selection,
-compare); each enabled channel blends with its mode and opacity. Only dirty tiles are recomposited
+compare); a layer's geometry mask (mesh part names) zeroes its mask on texels whose triangle, from
+the UV G-buffer, lies in another part; each enabled channel blends with its mode and opacity. Only
+dirty tiles are recomposited
 (a stroke dirties the tiles it touches), then padded, converted to display formats and uploaded to
 the GPU.
 
@@ -84,6 +86,12 @@ the painted normal channel. Debug views show any channel, any baked mesh map or 
 The 2D view draws the UV layout with the material and a wireframe. Everything is fragment passes,
 so it runs on Vulkan, Metal, DX12, WebGPU and WebGL2. `render::headless` renders without a window
 (CLI, MCP, tests).
+
+Displacement draws a dense, flat subdivision of the mesh (wgpu has no tessellation stage) and moves
+it along the normals by the height channel in the vertex shader of the 3D view and of the key-light
+shadow pass (`shaders/displace.wgsl`, shared by both). Rendering mode's path tracers (`render::trace`
+on the CPU, `render::gpu_trace` on the GPU) trace the same displaced copy, built on the CPU by
+`render::displace` from the composited height.
 
 ## Commands and automation
 

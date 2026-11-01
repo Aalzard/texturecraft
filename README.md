@@ -179,7 +179,7 @@ The details are in [`docs/control-protocol.md`](docs/control-protocol.md).
 TextureCraft is under active development. [**ROADMAP.md**](ROADMAP.md) has the parity estimate by
 area, the remaining work and what's next.
 
-**Where we are (2026-10-23):** we estimate about 91% of a texture artist's daily workflow works end
+**Where we are (2026-11-01):** we estimate about 93% of a texture artist's daily workflow works end
 to end, weighted by how much of the day each area carries: importing meshes, texture sets and UDIM
 tiles, the layer stack with masks, effects and smart materials, every painting tool, baking, the PBR
 viewport and Rendering mode, export presets and templates, and the full menu set. The interface
