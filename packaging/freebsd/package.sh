@@ -32,10 +32,18 @@ done
 # FreeBSD's uname says amd64; release file names use x86_64 like the Linux and Windows ones.
 MACHINE="$(uname -m)"
 case "$MACHINE" in
-  amd64 | x86_64) ARCH=x86_64 ;;
-  arm64 | aarch64) ARCH=aarch64 ;;
+  amd64 | x86_64) HOST_ARCH=x86_64 ;;
+  arm64 | aarch64) HOST_ARCH=aarch64 ;;
   *) echo "unsupported architecture $MACHINE" >&2; exit 2 ;;
 esac
+ARCH="$HOST_ARCH"
+if [ -n "${CARGO_BUILD_TARGET:-}" ]; then
+  case "$CARGO_BUILD_TARGET" in
+    aarch64-unknown-freebsd) ARCH=aarch64 ;;
+    x86_64-unknown-freebsd) ARCH=x86_64 ;;
+    *) echo "error: unsupported FreeBSD target $CARGO_BUILD_TARGET" >&2; exit 2 ;;
+  esac
+fi
 if [ "$DRY_RUN" = 0 ] && [ "$(uname -s)" != FreeBSD ]; then
   echo "error: build on FreeBSD (or pass --dry-run to check the tree layout)" >&2
   exit 2
@@ -54,7 +62,7 @@ STAGE="$WORK/$BASENAME"
 rm -rf "$WORK"
 mkdir -p "$WORK"
 
-BIN="$CARGO_TARGET_DIR/release"
+BIN="$CARGO_TARGET_DIR/${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release"
 OUT_DIR="$DIST"
 if [ "$DRY_RUN" = 1 ]; then
   # Stub binaries, and the tarball stays in the work dir so dist/ only ever holds real builds.
@@ -92,7 +100,9 @@ mkdir -p "$OUT_DIR"
 tar -C "$WORK" -czf "$OUT_DIR/$BASENAME.tar.gz" "$BASENAME"
 echo "wrote $OUT_DIR/$BASENAME.tar.gz"
 
-"$STAGE/bin/texturecraft-cli" --version
+if [ -z "${CARGO_BUILD_TARGET:-}" ] || [ "$DRY_RUN" = 1 ]; then
+  "$STAGE/bin/texturecraft-cli" --version
+fi
 if [ "$DRY_RUN" = 1 ]; then
   echo "==> dry run: tarball contents"
   tar -tzvf "$OUT_DIR/$BASENAME.tar.gz"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and package TextureCraft for Linux (<arch> is x86_64 or aarch64):
+# Build and package TextureCraft for Linux (x86_64, aarch64 or cross-compiled riscv64):
 #
 #   $DIST/texturecraft-<version>-linux-<arch>.AppImage  any distro with glibc >= the build host's
 #   $DIST/texturecraft-<version>-linux-<arch>.AppImage.zsync  delta updates (needs zsyncmake)
@@ -30,8 +30,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-ARCH="$(uname -m)"
+ARCH="${CROSS_ARCH:-$(uname -m)}"
 case "$ARCH" in
+  riscv64) DEB_ARCH=riscv64 ;;
   x86_64) DEB_ARCH=amd64 ;;
   aarch64 | arm64) ARCH=aarch64; DEB_ARCH=arm64 ;;
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
@@ -42,9 +43,9 @@ BASENAME="texturecraft-$VERSION-linux-$ARCH"
 echo "==> TextureCraft $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release --locked -p texturecraft -p texturecraft-cli)
+  (cd "$ROOT" && cargo build --release --locked -p texturecraft -p texturecraft-cli ${CROSS_TARGET:+--target "$CROSS_TARGET"})
 fi
-BIN="$CARGO_TARGET_DIR/release"
+BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
 WORK="$CARGO_TARGET_DIR/linux-package"
 STAGE="$WORK/root"
 rm -rf "$WORK"
@@ -52,7 +53,7 @@ rm -rf "$WORK"
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
 install -Dm755 "$BIN/texturecraft" "$STAGE/usr/bin/texturecraft"
 install -Dm755 "$BIN/texturecraft-cli" "$STAGE/usr/bin/texturecraft-cli"
-strip "$STAGE/usr/bin/texturecraft" "$STAGE/usr/bin/texturecraft-cli" 2>/dev/null || true
+"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/texturecraft" "$STAGE/usr/bin/texturecraft-cli" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
@@ -87,6 +88,8 @@ if has deb || has rpm; then
   export NFPM_ARCH="$DEB_ARCH"
   # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
   sed "s|\${STAGE}|$STAGE|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
+  # The riscv64 cross sysroot is Ubuntu 24.04, whose glibc floor is 2.39.
+  if [ "$ARCH" = riscv64 ]; then sed -i "s/libc6 (>= 2.35)/libc6 (>= 2.39)/" "$WORK/nfpm.yaml"; fi
   for fmt in deb rpm; do
     if has "$fmt"; then (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt"); fi
   done
@@ -139,6 +142,10 @@ if has appimage; then
   fi
 fi
 
-"$STAGE/usr/bin/texturecraft-cli" --version
+if [ -n "${CROSS_TARGET:-}" ]; then
+  if [ -n "${EMULATOR:-}" ]; then "$EMULATOR" "$STAGE/usr/bin/texturecraft-cli" --version; fi
+else
+  "$STAGE/usr/bin/texturecraft-cli" --version
+fi
 echo "==> done"
 ls -lh "$DIST"
