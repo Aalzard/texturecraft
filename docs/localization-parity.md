@@ -23,7 +23,7 @@ generator, filter and brush alpha names (**KEYS** strings, counted by the
 | Simplified Chinese | `zh-Hans` | KEYS (100%) | yes | CJK glyphs: craft-fonts (Noto Sans CJK SC) or system fonts on desktop; see below | no | full | 2 h (review) |
 | Spanish | `es` | KEYS (100%) | yes | Latin | no | full | 1 h (review) |
 | Hindi | `hi` | 0 | no | Devanagari shaping: not yet (egui has no complex shaping) | no | none | 12 h |
-| Arabic | `ar` | 0 | no | RTL layout and shaping: not yet | no | none | 20 h |
+| Arabic | `ar` | KEYS (100%) | yes | Arabic script / RTL layout & shaping | yes | full | 0 h |
 | French | `fr` | KEYS (100%) | yes | Latin | no | full | 1 h (review) |
 | Portuguese (Brazil) | `pt-BR` | KEYS (100%) | yes | Latin | no | full | 1 h (review) |
 | Indonesian | `id` | 0 | no | Latin | no | none | 3 h |
