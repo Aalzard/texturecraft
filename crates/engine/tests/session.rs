@@ -189,6 +189,10 @@ fn brush_presets_apply_save_and_load() {
     let _ = std::fs::remove_file(path);
     for bad in [json!({}), json!({"preset": "nope"})] {
         assert!(execute(&mut s, "brush.preset.apply", &bad).is_err());
+    }
+}
+
+#[test]
 fn text_becomes_a_brush_alpha_and_a_decal() {
     let mut s = session();
     let fonts = execute(&mut s, "text.fonts", &Value::Null).unwrap();
