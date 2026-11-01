@@ -344,7 +344,15 @@ fn usda_usdc_and_usdz_round_trip_with_textures() {
             && !text.contains("Red_Clearcoat"),
         "a coat exports with its roughness; no coat (black) drops both"
     );
-    round_trip(&m, UsdFormat::Usdc, "usdc", &textures);
+    // The primvar reader's varname is a string (usdchecker --arkit refuses a token), in both encodings.
+    assert!(text.contains("string inputs:varname = \"st\""), "{text}");
+    let usdc = round_trip(&m, UsdFormat::Usdc, "usdc", &textures);
+    let layer = super::usdc::read(&usdc, &mut super::Budget::new()).unwrap();
+    let varnames: Vec<&super::Prop> = layer.prims.iter().filter_map(|p| p.props.get("inputs:varname")).collect();
+    assert!(!varnames.is_empty());
+    for v in varnames {
+        assert_eq!((v.type_name.as_str(), v.value.clone()), ("string", Some(super::Val::Tok(vec!["st".into()]))));
+    }
     let usdz = round_trip(&m, UsdFormat::Usdz, "usdz", &textures);
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&usdz)).unwrap();
     let names: Vec<String> = zip.file_names().map(|n| n.unwrap().into_owned()).collect();
