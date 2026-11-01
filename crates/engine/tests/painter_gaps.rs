@@ -63,6 +63,9 @@ fn filter_library_adds_every_filter_and_edits_its_parameters() {
         "warpDirectional",
         "grayscale",
         "normalInvert",
+        "bevel",
+        "mosaic",
+        "glow",
     ] {
         assert!(ids.contains(&want), "{want} missing from {ids:?}");
     }
@@ -106,6 +109,9 @@ fn filter_library_adds_every_filter_and_edits_its_parameters() {
         ("warpDirectional", json!({"intensity": 50, "angle": 30})),
         ("highPass", json!({"radius": 20})),
         ("edgeDetect", json!({"width": 4})),
+        ("bevel", json!({"width": 20})),
+        ("mosaic", json!({"size": 40})),
+        ("glow", json!({"radius": 20, "amount": 2})),
     ] {
         let mut p = json!({"filter": fid, "target": "content"});
         p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());

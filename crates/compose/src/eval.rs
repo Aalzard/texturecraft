@@ -243,6 +243,12 @@ enum Op {
     Blur(Option<f32>),
     /// The value minus its box blur, around the channel's mid value.
     HighPass,
+    /// Values ramped down towards their shape's edge, from the box blur.
+    Bevel,
+    /// The value plus its box blur times the amount.
+    Glow(f32),
+    /// The value at the center of its cell (`r` texels across).
+    Mosaic,
     /// Average along a direction (unit vector in texels).
     Line([f32; 2]),
     /// Read at an offset given by a noise vector field, or by noise along a direction.
@@ -273,6 +279,10 @@ fn neighbourhood(effects: &[Effect], res: u32) -> Option<(usize, f32, Op)> {
             }
             EffectKind::Filter(Filter::HighPass { radius }) => Some((i, texels(*radius), Op::HighPass)),
             EffectKind::Filter(Filter::EdgeDetect { width }) => Some((i, texels(*width), Op::Edge)),
+            // Three box passes ramp an edge over about twice their radius.
+            EffectKind::Filter(Filter::Bevel { width }) => Some((i, texels(*width * 0.5), Op::Bevel)),
+            EffectKind::Filter(Filter::Glow { radius, amount }) => Some((i, texels(*radius), Op::Glow(*amount))),
+            EffectKind::Filter(Filter::Mosaic { size }) => Some((i, texels(*size), Op::Mosaic)),
             EffectKind::Filter(Filter::SlopeBlur { radius, scale, seed }) if *radius > 0.0 => {
                 Some((i, texels(*radius), Op::Slope { scale: *scale, seed: *seed }))
             }
@@ -383,7 +393,11 @@ fn gather(op: Op, orig: &[f32], cover: &[f32], comps: usize, (x0, y0, w, h): (u3
                         sample(x + d.x * t, y + d.y * t, &mut acc);
                     }
                 }
-                Op::Blur(_) | Op::HighPass => {}
+                Op::Mosaic => {
+                    let center = |v: f32| ((v / r).floor() + 0.5) * r - 0.5;
+                    sample(center(x), center(y), &mut acc);
+                }
+                Op::Blur(_) | Op::HighPass | Op::Bevel | Op::Glow(_) => {}
             }
             if acc[4] > 1e-6
                 && let Some(px) = line.get_mut(col * comps..(col + 1) * comps)
@@ -521,7 +535,8 @@ fn field(inp: &Inputs, channels: &[Channel], below: &Fields, id: LayerId, job: J
     // Clamped: a hostile radius must not overflow the halo and window arithmetic.
     let r = radius.round().clamp(1.0, gw.max(gh) as f32) as u32;
     // Three box passes reach 3r texels, the other filters r (and a texel for bilinear samples).
-    let reach = if matches!(op, Op::Blur(_) | Op::HighPass) { 3 * r } else { r + 1 };
+    let blurs = matches!(op, Op::Blur(_) | Op::HighPass | Op::Bevel | Op::Glow(_));
+    let reach = if blurs { 3 * r } else { r + 1 };
     let halo = reach.div_ceil(TILE);
     let (tx0, ty0) = tiles.iter().fold((u32::MAX, u32::MAX), |(a, b), t| (a.min(t.0), b.min(t.1)));
     let (tx1, ty1) = tiles.iter().fold((0, 0), |(a, b), t| (a.max(t.0), b.max(t.1)));
@@ -597,14 +612,11 @@ fn field(inp: &Inputs, channels: &[Channel], below: &Fields, id: LayerId, job: J
         Job::Content(ch) if ch.kind() == ChannelKind::Signed => 0.0,
         _ => 0.5,
     };
-    match op {
-        Op::Blur(_) | Op::HighPass => {}
-        _ => {
-            let mut data = gather(op, &orig, &cover, comps, (rx0, ry0, w, h), r as f32, inp.tile_res(), opacity);
-            unpremultiply(&mut data, comps);
-            return Some(Field { x0: rx0, y0: ry0, w, h, comps, data });
-        }
-    };
+    if !blurs {
+        let mut data = gather(op, &orig, &cover, comps, (rx0, ry0, w, h), r as f32, inp.tile_res(), opacity);
+        unpremultiply(&mut data, comps);
+        return Some(Field { x0: rx0, y0: ry0, w, h, comps, data });
+    }
     // Weighted so uncovered texels don't bleed in.
     let (wu, hu, ru) = (w as usize, h as usize, r as usize);
     let mut weights = cover;
@@ -623,7 +635,10 @@ fn field(inp: &Inputs, channels: &[Channel], below: &Fields, id: LayerId, job: J
                 let filtered = match op {
                     Op::Blur(Some(amount)) => o + amount * (o - blurred),
                     Op::HighPass if p < 3 => o - blurred + mid * cov,
-                    Op::HighPass => o,
+                    // Away from 0 by at most the value itself: 0 at the edge, full inside.
+                    Op::Bevel if p < 3 => o.signum() * o.abs().min((2.0 * blurred * o.signum() - o.abs()).max(0.0)),
+                    Op::Glow(amount) if p < 3 => o + amount * blurred,
+                    Op::HighPass | Op::Bevel | Op::Glow(_) => o,
                     _ => blurred,
                 };
                 *slot = o + (filtered - o) * opacity;
@@ -2133,6 +2148,43 @@ soft {soft:?}"
         assert_eq!(Filter::Grayscale.point(ChannelKind::Scalar, [0.3; 3]), Some([0.3; 3]));
         assert_eq!(Filter::NormalInvert.point(ChannelKind::NormalMap, [0.5, 0.25, 1.0]), Some([0.5, 0.75, 1.0]));
         assert_eq!(Filter::NormalInvert.point(ChannelKind::Color, [0.5, 0.25, 1.0]), Some([0.5, 0.25, 1.0]));
+    }
+
+    #[test]
+    fn bevel_glow_and_mosaic() {
+        let checker = |f: &mut Fixture| {
+            let id = f.project.alloc_id();
+            let mut fill = Fill::default();
+            fill.sources.insert(Channel::Roughness, Source::Procedural { pattern: Procedural::new(ProceduralKind::Checker), low: [0.0; 3], high: [1.0; 3] });
+            f.project.insert_layer(0, Layer::new(id, "F", LayerKind::Fill(fill), &[Channel::Roughness]), None, false).unwrap();
+            id
+        };
+        let values = |f: &Fixture| {
+            let out = run(f, None);
+            (0..64 * 64).map(|i| out.value(Channel::Roughness, i % 64, i / 64)[0]).collect::<Vec<f32>>()
+        };
+        let mut f = fixture();
+        let id = checker(&mut f);
+        let plain = values(&f);
+        // Bevel: never above the shape, and its edges become ramps.
+        let fx = content_fx(&mut f, id, EffectKind::Filter(Filter::Bevel { width: 128.0 }));
+        let bevel = values(&f);
+        let mids = |v: &[f32]| v.iter().filter(|x| **x > 0.05 && **x < 0.95).count();
+        assert!(bevel.iter().zip(&plain).all(|(b, p)| *b <= p + 1e-4 && *b >= 0.0), "a bevel only lowers values");
+        assert!(mids(&bevel) > mids(&plain) + 64, "{} vs {}", mids(&bevel), mids(&plain));
+        // Mosaic: fewer changes from one texel to the next.
+        f.project.layer_mut(id).unwrap().content_effects.retain(|e| e.id != fx);
+        let fx = content_fx(&mut f, id, EffectKind::Filter(Filter::Mosaic { size: 768.0 }));
+        let mosaic = values(&f);
+        let steps = |v: &[f32]| v.windows(2).filter(|w| (w[0] - w[1]).abs() > 0.01).count();
+        assert!(steps(&mosaic) < steps(&plain), "{} vs {}", steps(&mosaic), steps(&plain));
+        assert!(mosaic.iter().all(|v| (0.0..=1.0).contains(v)));
+        // Glow on uniform content adds its own blur: 0.2 + 0.2.
+        f.project.layer_mut(id).unwrap().content_effects.retain(|e| e.id != fx);
+        let mut f = fixture();
+        let id = fill_layer(&mut f.project, [0.1; 3], 0.2);
+        content_fx(&mut f, id, EffectKind::Filter(Filter::Glow { radius: 32.0, amount: 1.0 }));
+        assert!(close(run(&f, None).value(Channel::Roughness, 30, 30), [0.4; 3]));
     }
 
     #[test]

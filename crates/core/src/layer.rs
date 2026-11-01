@@ -565,6 +565,21 @@ pub enum Filter {
     Grayscale,
     /// Flip the green component of normal maps (OpenGL ↔ DirectX); other channels unchanged.
     NormalInvert,
+    /// Shapes rounded off at their edges: values ramp up from 0 at a shape's edge to their own
+    /// level over about `width` texels at 2K (a mask's or height's bevel).
+    Bevel {
+        width: f32,
+    },
+    /// Square cells `size` texels at 2K across, each the value at its center.
+    Mosaic {
+        size: f32,
+    },
+    /// Adds a blur of the values (`radius` texels at 2K) times `amount`: light bleeds around
+    /// bright areas.
+    Glow {
+        radius: f32,
+        amount: f32,
+    },
 }
 
 /// Push `x` (0..1) towards 1 (`amount` > 0) or 0 (`amount` < 0); `amount` in −1..1.
@@ -650,6 +665,9 @@ impl Filter {
                 | Filter::HighPass { .. }
                 | Filter::EdgeDetect { .. }
                 | Filter::DirectionalWarp { .. }
+                | Filter::Bevel { .. }
+                | Filter::Mosaic { .. }
+                | Filter::Glow { .. }
         )
     }
 
@@ -713,7 +731,10 @@ impl Filter {
             | Filter::SlopeBlur { .. }
             | Filter::HighPass { .. }
             | Filter::EdgeDetect { .. }
-            | Filter::DirectionalWarp { .. } => return None,
+            | Filter::DirectionalWarp { .. }
+            | Filter::Bevel { .. }
+            | Filter::Mosaic { .. }
+            | Filter::Glow { .. } => return None,
         })
     }
 
@@ -737,6 +758,9 @@ impl Filter {
             Filter::DirectionalWarp { .. } => "Warp Directional",
             Filter::Grayscale => "Grayscale",
             Filter::NormalInvert => "Normal Invert",
+            Filter::Bevel { .. } => "Bevel",
+            Filter::Mosaic { .. } => "Mosaic",
+            Filter::Glow { .. } => "Glow",
         }
     }
 }
