@@ -14,6 +14,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   straight lines, and painting directly in the **2D UV view**.
 - **Geometry decals:** drop an image on the surface, then move, scale and turn its frame; it stays
   an editable fill layer.
+- **Text** in any installed font (or the built-in ones), shaped for every script with kerning and
+  ligatures, one or more lines: stamp it with the brush as its alpha, or place it as a decal in the
+  tool's base color (Properties › Alpha › Text).
 - **Quick mask** (Y): paint a temporary mask (U to edit, Ctrl+Shift+I to invert) that protects
   everything outside it while you paint.
 - **Every channel at once:** base color, metallic, roughness, height, normal, emissive, opacity,

@@ -114,11 +114,18 @@ impl Thumbs {
             return t.clone();
         }
         let n = 64usize;
+        // Letterboxed to keep its proportions, over black where it is transparent.
+        let aspect = img.width as f32 / img.height.max(1) as f32;
+        let (sx, sy) = if aspect >= 1.0 { (1.0, aspect) } else { (1.0 / aspect.max(1e-6), 1.0) };
         let mut ci = ColorImage::filled([n, n], Color32::BLACK);
         for y in 0..n {
             for x in 0..n {
-                let s = img.sample((x as f32 + 0.5) / n as f32, (y as f32 + 0.5) / n as f32);
-                let enc = |v: f32| if img.srgb { (v.clamp(0.0, 1.0) * 255.0) as u8 } else { (linear_to_srgb(v) * 255.0) as u8 };
+                let (u, v) = (((x as f32 + 0.5) / n as f32 - 0.5) * sx + 0.5, ((y as f32 + 0.5) / n as f32 - 0.5) * sy + 0.5);
+                if !((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)) {
+                    continue;
+                }
+                let s = img.sample(u, v);
+                let enc = |c: f32| if img.srgb { (c.clamp(0.0, 1.0) * s[3].clamp(0.0, 1.0) * 255.0) as u8 } else { (linear_to_srgb(c * s[3]) * 255.0) as u8 };
                 ci.pixels[y * n + x] = Color32::from_rgb(enc(s[0]), enc(s[1]), enc(s[2]));
             }
         }

@@ -877,5 +877,10 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "使用操作系统的窗口边框和按钮，而不是 TextureCraft 自己的标题栏",
     ),
+    ("Text", "文字"),
+    ("Font", "字体"),
+    ("Style", "样式"),
+    ("Use as brush alpha", "用作笔刷 Alpha"),
+    ("Place as decal", "作为贴花放置"),
     ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "“{layer}”尚未绘制：滤镜会改变你在其上绘制的内容。"),
 ];

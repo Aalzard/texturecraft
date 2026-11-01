@@ -961,5 +961,10 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "Usar a moldura e os botões de janela do sistema operacional em vez da barra de título própria do TextureCraft",
     ),
+    ("Text", "Texto"),
+    ("Font", "Fonte"),
+    ("Style", "Estilo"),
+    ("Use as brush alpha", "Usar como alpha do pincel"),
+    ("Place as decal", "Colocar como decalque"),
     ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "\"{layer}\" ainda não tem pintura: o filtro altera o que você pintar nela."),
 ];

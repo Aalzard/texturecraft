@@ -166,6 +166,28 @@ fn image_resources_fill_layers_and_round_trip() {
 }
 
 #[test]
+fn text_becomes_a_brush_alpha_and_a_decal() {
+    let mut s = session();
+    let fonts = execute(&mut s, "text.fonts", &Value::Null).unwrap();
+    assert_eq!(fonts["builtIn"][0], "Ubuntu Light");
+    let r = execute(&mut s, "resource.text", &json!({"text": "TEXT\nCRAFT", "font": "ubuntu light", "size": 64})).unwrap();
+    let name = r["name"].as_str().unwrap().to_string();
+    assert_eq!(name, "Text_TEXT.png");
+    assert!(r["width"].as_u64().unwrap() > r["height"].as_u64().unwrap() / 2, "two short lines");
+    // White with the glyphs in alpha.
+    let img = s.images[&name].clone();
+    assert!(img.rgba.iter().any(|t| t[3] > 0.99) && img.rgba.iter().any(|t| t[3] == 0.0) && img.rgba.iter().all(|t| t[0] == 1.0));
+    // As the brush alpha it paints (keeping its proportions), and it places as a decal.
+    execute(&mut s, "tool.material", &json!({"channel": "baseColor", "color": [1.0, 0.0, 0.0]})).unwrap();
+    execute(&mut s, "tool.brush", &json!({"size": 40, "alpha": {"image": name}})).unwrap();
+    assert!(execute(&mut s, "tool.click", &json!({"x": 200, "y": 200})).is_ok());
+    assert!(execute(&mut s, "layer.add.decal", &json!({"image": name})).unwrap()["layer"].as_u64().is_some());
+    for bad in [json!({}), json!({"text": "  "}), json!({"text": "x", "font": "No Such Font"})] {
+        assert!(execute(&mut s, "resource.text", &bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn projection_tool_paints_the_stencil_colors() {
     let mut s = session();
     let mut png = Vec::new();
