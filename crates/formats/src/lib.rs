@@ -26,6 +26,7 @@ pub mod export;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fonts;
 pub mod image_res;
+pub mod materialx_read;
 pub mod mesh_export;
 pub mod mesh_import;
 pub mod presets;

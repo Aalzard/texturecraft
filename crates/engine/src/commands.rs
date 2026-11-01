@@ -66,6 +66,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(crate::template_cmds::specs());
         v.extend(crate::project_cmds::specs());
         v.extend(crate::bake_cmds::specs());
+        v.extend(crate::materialx_cmds::specs());
         v.extend(crate::file_cmds::specs());
         v.extend(crate::preset_cmds::specs());
         v.extend(crate::resource_cmds::specs());
