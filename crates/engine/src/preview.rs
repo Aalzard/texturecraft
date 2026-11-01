@@ -127,6 +127,9 @@ fn magnified(f: Filter, k: f32) -> Filter {
         Filter::Warp { intensity, scale, seed } => Filter::Warp { intensity: intensity * k, scale, seed },
         Filter::HighPass { radius } => Filter::HighPass { radius: radius * k },
         Filter::EdgeDetect { width } => Filter::EdgeDetect { width: width * k },
+        Filter::Bevel { width } => Filter::Bevel { width: width * k },
+        Filter::Mosaic { size } => Filter::Mosaic { size: size * k },
+        Filter::Glow { radius, amount } => Filter::Glow { radius: radius * k, amount },
         Filter::DirectionalWarp { intensity, angle, scale, seed } => Filter::DirectionalWarp { intensity: intensity * k, angle, scale, seed },
         f => f,
     }

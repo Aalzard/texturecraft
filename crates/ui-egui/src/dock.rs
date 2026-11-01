@@ -1573,7 +1573,10 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
         | Filter::SlopeBlur { .. }
         | Filter::DirectionalWarp { .. }
         | Filter::HighPass { .. }
-        | Filter::EdgeDetect { .. } => {
+        | Filter::EdgeDetect { .. }
+        | Filter::Bevel { .. }
+        | Filter::Mosaic { .. }
+        | Filter::Glow { .. } => {
             ui.label(RichText::new(tr("Works in texture space, like the blur: it does not cross UV seams.")).size(10.5).color(tk.text_dim));
         }
         _ => {}

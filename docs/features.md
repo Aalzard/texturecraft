@@ -25,10 +25,10 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Paint, fill, folder and instance layers** with **32 blend modes per channel** (Normal through
   Normal map detail), per-channel opacity, visibility, color tags, drag-and-drop reordering,
   duplicate, group, flatten, cut, copy and paste across texture sets.
-- **Filters and content effects** on any layer or mask: **23 filters** (HSL, levels,
+- **Filters and content effects** on any layer or mask: **26 filters** (HSL, levels,
   contrast/luminosity, color balance, gradient map, posterize, clamp, invert, threshold,
   grayscale, edge detect, normal invert, blur, directional and slope blur, sharpen, high pass,
-  warp, directional warp and four material finishes), fills and paint.
+  bevel, glow, warp, directional warp, mosaic and four material finishes), fills and paint.
   **Anchor points** record the stack at a layer so masks and fills higher up can react to it.
 - **Masks** with a white or black background and a stack of effects: painted strokes, fills,
   **mesh-map generators** (edge wear, dirt, thin areas, curvature, AO, position and direction

@@ -41,8 +41,11 @@ pub const FILTERS: &[FilterDef] = &[
     def("slopeBlur", "Slope Blur", "Blur and sharpen", true),
     def("sharpen", "Sharpen", "Blur and sharpen", true),
     def("highPass", "High Pass", "Blur and sharpen", true),
+    def("bevel", "Bevel", "Blur and sharpen", true),
+    def("glow", "Glow", "Blur and sharpen", true),
     def("warp", "Warp", "Distort", true),
     def("warpDirectional", "Warp Directional", "Distort", true),
+    def("mosaic", "Mosaic", "Distort", true),
     def("matFinishGrind", "MatFinish Grind", "Material finish", false),
     def("matFinishRaw", "MatFinish Raw", "Material finish", false),
     def("matFinishSanded", "MatFinish Sanded", "Material finish", false),
@@ -99,6 +102,9 @@ pub fn build(id: &str, p: &Value) -> Result<EffectKind> {
         "warpDirectional" => Filter::DirectionalWarp { intensity: 16.0, angle: 0.0, scale: 4.0, seed: 1 },
         "grayscale" => Filter::Grayscale,
         "normalInvert" => Filter::NormalInvert,
+        "bevel" => Filter::Bevel { width: 16.0 },
+        "mosaic" => Filter::Mosaic { size: 32.0 },
+        "glow" => Filter::Glow { radius: 16.0, amount: 1.0 },
         "levels" => {
             let mut l = Levels::default();
             crate::mask_cmds::levels_from(p, &mut l);
@@ -167,6 +173,11 @@ pub fn scalar_params(f: &Filter) -> Vec<(&'static str, &'static str, f32, f32, f
                 ("scale", "Noise scale", *scale, 0.5, 64.0),
                 ("seed", "Seed", *seed as f32, 0.0, 999.0),
             ]
+        }
+        Filter::Bevel { width } => vec![("width", "Width (texels at 2K)", *width, 0.0, 128.0)],
+        Filter::Mosaic { size } => vec![("size", "Cell size (texels at 2K)", *size, 1.0, 256.0)],
+        Filter::Glow { radius, amount } => {
+            vec![("radius", "Radius (texels at 2K)", *radius, 0.0, 128.0), ("amount", "Amount", *amount, 0.0, 5.0)]
         }
         Filter::Invert | Filter::ColorBalance { .. } | Filter::GradientMap { .. } | Filter::Grayscale | Filter::NormalInvert => Vec::new(),
     }
@@ -240,7 +251,12 @@ pub(crate) fn apply(p: &Value, f: &mut Filter, cmd: &str) -> Result<()> {
             seed(s);
         }
         Filter::HighPass { radius } => set(radius, "radius", 0.0, 256.0),
-        Filter::EdgeDetect { width } => set(width, "width", 0.0, 256.0),
+        Filter::EdgeDetect { width } | Filter::Bevel { width } => set(width, "width", 0.0, 256.0),
+        Filter::Mosaic { size } => set(size, "size", 1.0, 512.0),
+        Filter::Glow { radius, amount } => {
+            set(radius, "radius", 0.0, 256.0);
+            set(amount, "amount", 0.0, 10.0);
+        }
         Filter::DirectionalWarp { intensity, angle: a, scale, seed: s } => {
             set(intensity, "intensity", 0.0, 256.0);
             angle(a);
