@@ -19,6 +19,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("tool.smudge", "Smudge", ["Tools"], Some("5"), "{}", always, |s, _| set_tool(s, Tool::Smudge)),
         cmd!("tool.clone", "Clone", ["Tools"], Some("6"), "{}", always, |s, _| set_tool(s, Tool::Clone)),
         cmd!("tool.colorPicker", "Color picker", ["Tools"], Some("P"), "{}", always, |s, _| set_tool(s, Tool::ColorPicker)),
+        cmd!(
+            "tool.geometryMask",
+            "Geometry mask",
+            ["Tools"],
+            Some("8"),
+            "{} — then tool.click toggles the selected layer on the mesh part under the point",
+            always,
+            |s, _| { set_tool(s, Tool::GeometryMask) }
+        ),
         cmd!("tool.select", "Select tool", [], None, "{tool: paint|eraser|projection|polygonFill|smudge|clone|colorPicker|path}", always, select),
         cmd!(
             "tool.brush",
@@ -358,6 +367,7 @@ fn click(s: &mut Session, p: &Value) -> Result<Value> {
             let v = s.color_pick(Vec2::new(x, y), vp)?;
             json!(v.iter().map(|(c, v)| (c.id().to_string(), json!(v))).collect::<serde_json::Map<_, _>>())
         }
+        Tool::GeometryMask => crate::instance_cmds::toggle_part_at(s, Vec2::new(x, y), vp)?,
         _ => json!({ "stamps": s.stroke_points(&[Vec2::new(x, y)], vp)? }),
     };
     s.update();

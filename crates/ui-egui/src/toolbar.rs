@@ -24,6 +24,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Clone => ic::STAMP,
         Tool::ColorPicker => ic::EYEDROPPER,
         Tool::Path => ic::PATH,
+        Tool::GeometryMask => ic::CUBE_FOCUS,
     }
 }
 
@@ -109,6 +110,9 @@ pub fn top_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
                     }
                     Tool::ColorPicker => {
                         ui.label(RichText::new(tr("Click the mesh to pick its material into the brush")).color(tk.text_dim));
+                    }
+                    Tool::GeometryMask => {
+                        ui.label(RichText::new(tr("Click a mesh part to show or hide the selected layer on it.")).color(tk.text_dim));
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

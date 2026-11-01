@@ -136,6 +136,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Clear", "清除"),
     ("Clear mask", "清除遮罩"),
     ("Clear recent projects", "清除最近的项目"),
+    ("Click a mesh part to show or hide the selected layer on it.", "单击网格部件，可在其上显示或隐藏所选图层。"),
     ("Click the mesh to pick its material into the brush", "单击网格，将其材质吸取到笔刷中"),
     ("Click the mesh to place the decal", "单击网格以放置贴花"),
     ("Click, then press the new shortcut (Esc cancels)", "单击后按下新的快捷键（Esc 取消）"),

@@ -151,6 +151,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Clear", "지우기"),
     ("Clear mask", "마스크 지우기"),
     ("Clear recent projects", "최근 프로젝트 지우기"),
+    ("Click a mesh part to show or hide the selected layer on it.", "메시 파트를 클릭하면 선택한 레이어를 해당 파트에서 표시하거나 숨깁니다."),
     ("Click the mesh to pick its material into the brush", "메시를 클릭하여 해당 머티리얼을 브러시로 가져옵니다"),
     ("Click the mesh to place the decal", "메시를 클릭하여 데칼 배치"),
     ("Click, then press the new shortcut (Esc cancels)", "클릭한 후 새 단축키를 누르세요 (Esc로 취소)"),

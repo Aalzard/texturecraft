@@ -154,6 +154,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Clear", "Borrar"),
     ("Clear mask", "Borrar máscara"),
     ("Clear recent projects", "Borrar proyectos recientes"),
+    ("Click a mesh part to show or hide the selected layer on it.", "Haz clic en una parte de la malla para mostrar u ocultar en ella la capa seleccionada."),
     ("Click the mesh to pick its material into the brush", "Haz clic en la malla para tomar su material en el pincel"),
     ("Click the mesh to place the decal", "Haz clic en la malla para colocar la calcomanía"),
     ("Click, then press the new shortcut (Esc cancels)", "Haz clic y pulsa el nuevo atajo (Esc cancela)"),
