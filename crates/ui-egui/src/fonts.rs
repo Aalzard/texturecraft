@@ -6,8 +6,8 @@
 //! 2. on desktop, the operating system's CJK fonts (Windows, macOS, Linux and BSD paths).
 //!
 //! Fonts load lazily: one script when the UI language needs it, all three while the language
-//! picker shows every language's own name. They are appended after the app's fonts, so Latin
-//! text and row heights keep the default font; the current language's script goes first, so
+//! picker shows every language's own name. They are appended after the app's fonts
+//! (`theme::font_definitions`), so Latin text and row heights keep the interface font; the current language's script goes first, so
 //! shared Han characters take that language's glyph forms. In the browser only craft-fonts
 //! can supply them (without it, a CJK language shows its English name in the picker).
 
@@ -138,7 +138,12 @@ impl UiFonts {
             let Some(data) = self.data(*s) else { continue };
             let name = format!("cjk-{}", s.iso());
             defs.font_data.insert(name.clone(), data);
-            for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            for family in [
+                FontFamily::Proportional,
+                FontFamily::Monospace,
+                FontFamily::Name(crate::theme::MEDIUM.into()),
+                FontFamily::Name(crate::theme::SEMIBOLD.into()),
+            ] {
                 defs.families.entry(family).or_default().push(name.clone());
             }
         }
@@ -188,7 +193,7 @@ fn load(script: Script) -> Option<FontData> {
 /// `data` shifted so its baseline meets the UI font's. egui centers a fallback face's line box
 /// in the primary font's, so faces with taller boxes (most CJK fonts) would sit high.
 fn aligned(mut data: FontData) -> FontData {
-    let defs = egui::FontDefinitions::default();
+    let defs = crate::theme::font_definitions();
     let primary = defs.families.get(&FontFamily::Proportional).and_then(|f| f.first()).and_then(|n| defs.font_data.get(n));
     if let (Some((pa, pd, pg)), Some((ca, cd, cg))) =
         (primary.and_then(|p| line_metrics(p.font.as_ref().as_ref(), p.index)), line_metrics(data.font.as_ref().as_ref(), data.index))

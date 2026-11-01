@@ -422,8 +422,10 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
         });
         let mut op = (b.opacity * 100.0).round();
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(op_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
-        // As tall as its slot in the row (the style's fields are taller).
+        // As tall as its slot in the row (the style's fields are taller), in the row's small print.
         child.spacing_mut().interact_size.y = op_rect.height();
+        child.spacing_mut().button_padding = vec2(4.0, 0.0);
+        child.style_mut().override_text_style = Some(egui::TextStyle::Small);
         let r = child.add(egui::DragValue::new(&mut op).range(0.0..=100.0).speed(0.5).max_decimals(0));
         if r.changed() {
             app.run("layer.blend", json!({"layer": layer.id.0, "channel": ch.id(), "opacity": op / 100.0}));

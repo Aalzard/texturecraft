@@ -280,7 +280,7 @@ fn area_id() -> Id {
 }
 
 /// The dock look: every panel group is a card on the window's frame colour, its tab strip
-/// without hard lines, the shown tab a pill, uppercase captions.
+/// without hard lines, the shown tab a pill, titles in the medium weight.
 fn style(ui: &Ui, t: &Tokens) -> DockStyle {
     let mut s = DockStyle::from_ui(ui);
     s.gap = 6.0;
@@ -295,7 +295,7 @@ fn style(ui: &Ui, t: &Tokens) -> DockStyle {
     s.accent = t.accent;
     s.floating_background = t.panel;
     s.floating_stroke = egui::Stroke::new(1.0, t.button_border);
-    s.font = egui::FontId::proportional(10.5);
+    s.font = crate::theme::medium(12.5);
     s.min_tab_width = 54.0;
     s.tab_height = 30.0;
     // Panels arrange in a split tree around the viewport; floating title bars only move windows.
@@ -375,7 +375,7 @@ impl DockContent<Panel> for Panels<'_> {
     }
 
     fn label(&mut self, _ui: &Ui, _panel: &Panel, logical: &str, font: &egui::FontId, color: egui::Color32) -> egui::WidgetText {
-        RichText::new(logical.to_uppercase()).font(font.clone()).strong().color(color).into()
+        RichText::new(logical).font(font.clone()).color(color).into()
     }
 
     fn permissions(&self, panel: &Panel) -> Permissions {

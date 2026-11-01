@@ -125,7 +125,10 @@ panic. The shared standard is `../craftrules/standards/never-crash.md`.
 7. **Performance is a feature.** Never scan a full texture set per frame; work on dirty tiles.
    Benchmark heavy paths (bake, composite, export) in release and record numbers in the dev log.
 8. **Verify UI changes visually.** Launch with `--control <port>` and call `ui.screenshot` (whole
-   window) or `viewport.screenshot`; look at the PNG.
+   window) or `viewport.screenshot`; look at the PNG. Without a visible screen (a locked machine,
+   CI), render the whole window offscreen:
+   `TC_UI_SNAPSHOTS=<dir> cargo test -p texturecraft-ui-egui --release --test ui_snapshots -- --ignored`
+   (add `CRAFT_FONTS_DIR=<craft-fonts checkout>` to see the release fonts).
 
 ## 4. Picking work
 
