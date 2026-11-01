@@ -54,6 +54,7 @@ async fn run(canvas: web_sys::HtmlCanvasElement) -> Result<(), String> {
             options,
             Box::new(|cc| {
                 let mut app = TextureCraftApp::new(cc, session);
+                app.ui.windows.start = app.ui.prefs.start_window;
                 if let Some(rs) = &cc.wgpu_render_state {
                     let backend = rs.adapter.get_info().backend;
                     log::info!("TextureCraft: wgpu backend {backend:?}");

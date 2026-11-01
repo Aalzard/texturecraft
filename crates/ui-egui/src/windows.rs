@@ -18,6 +18,7 @@ use crate::theme::{Accent, Brightness, Tokens, caption};
 use crate::widgets::{color_swatch, combo, icon_button, primary_button, slider};
 
 pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
+    start(app, ctx);
     new_project(app, ctx);
     about(app, ctx);
     settings(app, ctx);
@@ -236,6 +237,72 @@ pub(crate) fn history(app: &mut TextureCraftApp, ui: &mut Ui) {
     });
 }
 
+/// What the start window was asked for.
+enum Start {
+    Menu(&'static str),
+    Recent(String),
+    Close,
+}
+
+/// The start window: a new project, a project file or a recent one, or the sample that is open.
+fn start(app: &mut TextureCraftApp, ctx: &egui::Context) {
+    if !app.ui.windows.start {
+        return;
+    }
+    let tk = Tokens::get(ctx);
+    let mut open = true;
+    let mut action = None;
+    dialog("start", "TextureCraft", &mut open).min_width(380.0).show(ctx, |ui| {
+        ui.horizontal(|ui| {
+            if ui.add(primary_button(ui, tr("New project..."))).clicked() {
+                action = Some(Start::Menu("ui.newProject"));
+            }
+            if ui.button(tr("Open...")).clicked() {
+                action = Some(Start::Menu("file.open"));
+            }
+        });
+        if file_dialogs_available() {
+            ui.add_space(8.0);
+            ui.label(caption(tr("Recent projects")));
+            if app.ui.recent.is_empty() {
+                ui.label(RichText::new(tr("No recent projects yet")).color(tk.text_dim));
+            }
+            for path in &app.ui.recent {
+                let name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path);
+                if ui
+                    .add(egui::Button::selectable(false, format!("{}  {name}", ic::FILE)).min_size(vec2(ui.available_width(), 0.0)))
+                    .on_hover_text(path)
+                    .clicked()
+                {
+                    action = Some(Start::Recent(path.clone()));
+                }
+            }
+        }
+        ui.add_space(8.0);
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut app.ui.prefs.start_window, tr("Show at startup"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(tr("Continue with the sample project")).clicked() {
+                    action = Some(Start::Close);
+                }
+            });
+        });
+    });
+    if let Some(a) = action {
+        app.ui.windows.start = false;
+        match a {
+            Start::Menu(id) => crate::menus::invoke(app, ctx, id),
+            #[cfg(not(target_arch = "wasm32"))]
+            Start::Recent(path) => open_path(app, &path),
+            _ => {}
+        }
+    }
+    if !open {
+        app.ui.windows.start = false;
+    }
+}
+
 fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
     if !app.ui.windows.new_project {
         return;
@@ -408,6 +475,9 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
                     .on_hover_text(tr("Use the operating system's window frame and buttons instead of TextureCraft's own title bar"));
                 ui.end_row();
             }
+            ui.label(tr("Start window"));
+            ui.checkbox(&mut p.start_window, tr("Show at startup"));
+            ui.end_row();
         });
         ui.add_space(8.0);
         ui.label(caption(tr("Viewport")));

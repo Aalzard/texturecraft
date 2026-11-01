@@ -877,4 +877,8 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "使用操作系统的窗口边框和按钮，而不是 TextureCraft 自己的标题栏",
     ),
+    ("Start window", "启动窗口"),
+    ("Show at startup", "启动时显示"),
+    ("Continue with the sample project", "继续使用示例项目"),
+    ("No recent projects yet", "暂无最近的项目"),
 ];

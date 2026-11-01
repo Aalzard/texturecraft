@@ -973,4 +973,8 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "Usa la cornice e i pulsanti della finestra del sistema operativo invece della barra del titolo di TextureCraft",
     ),
+    ("Start window", "Finestra iniziale"),
+    ("Show at startup", "Mostra all'avvio"),
+    ("Continue with the sample project", "Continua con il progetto di esempio"),
+    ("No recent projects yet", "Ancora nessun progetto recente"),
 ];

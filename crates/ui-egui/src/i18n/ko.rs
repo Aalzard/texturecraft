@@ -931,4 +931,8 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "TextureCraft 자체 제목 표시줄 대신 운영 체제의 창 테두리와 버튼을 사용합니다",
     ),
+    ("Start window", "시작 창"),
+    ("Show at startup", "시작 시 표시"),
+    ("Continue with the sample project", "샘플 프로젝트로 계속"),
+    ("No recent projects yet", "아직 최근 프로젝트가 없습니다"),
 ];
