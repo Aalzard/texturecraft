@@ -8,12 +8,9 @@
 //!
 //! The viewport is the central canvas: it stays docked, never takes tabs and is the only panel
 //! that cannot close or float. The layout persists with `UiState` as a craft-ui `Workspace`;
-//! a layout that does not load or validate becomes the default, and a layout saved before the
-//! shared docking (`{main, windows, closed}`) is converted.
+//! a layout that does not load or validate becomes the default.
 
-use std::collections::HashSet;
-
-use craft_ui::docking::{Action, DockArea, DockContent, DockStyle, Floating, Layout, Location, Node, PanelLimits, PanelState, Permissions, Placement, Zone};
+use craft_ui::docking::{Action, DockArea, DockContent, DockStyle, Layout, Location, Node, PanelLimits, PanelState, Permissions, Placement};
 use craft_ui::layout::{SplitAxis, SplitSize};
 use egui::{Id, Margin, RichText, Ui, vec2};
 use serde::{Deserialize, Serialize};
@@ -82,11 +79,6 @@ impl Panel {
             Panel::History => "History",
             Panel::Log => "Log",
         }
-    }
-
-    /// The panel named `name` in a saved layout.
-    fn parse(name: &str) -> Option<Panel> {
-        serde_json::from_value(Value::String(name.to_owned())).ok()
     }
 
     /// Where the panel floats when it has never been laid out: `[x, y, width, height]`, cascaded.
@@ -182,180 +174,6 @@ pub fn validate(workspace: &Workspace) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Layouts saved before the shared docking
-
-/// `{main, windows, closed}`: a tree of tab groups and splits, floating windows and where each
-/// closed panel was. Panels are names, so a panel from a newer file is dropped, not an error.
-#[derive(Deserialize)]
-struct OldLayout {
-    main: OldNode,
-    #[serde(default)]
-    windows: Vec<OldWindow>,
-    #[serde(default)]
-    closed: Vec<(String, OldPlace)>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum OldNode {
-    Tabs {
-        tabs: Vec<String>,
-        #[serde(default)]
-        active: usize,
-    },
-    Split {
-        vertical: bool,
-        fraction: f32,
-        first: Box<OldNode>,
-        second: Box<OldNode>,
-    },
-}
-
-#[derive(Deserialize)]
-struct OldWindow {
-    #[serde(default)]
-    rect: Option<[f32; 4]>,
-    root: OldNode,
-}
-
-#[derive(Deserialize)]
-#[serde(default)]
-struct OldPlace {
-    with: Vec<String>,
-    index: usize,
-    beside: Vec<String>,
-    vertical: bool,
-    first: bool,
-    fraction: f32,
-    window: Option<[f32; 4]>,
-}
-
-impl Default for OldPlace {
-    fn default() -> Self {
-        OldPlace { with: Vec::new(), index: 0, beside: Vec::new(), vertical: false, first: false, fraction: 0.5, window: None }
-    }
-}
-
-fn ratio(fraction: f32) -> f32 {
-    if fraction.is_finite() { fraction.clamp(0.05, 0.95) } else { 0.5 }
-}
-
-fn rect_ok(rect: [f32; 4]) -> Option<[f32; 4]> {
-    (rect.iter().all(|v| v.is_finite()) && rect[2] > 0.0 && rect[3] > 0.0).then_some(rect)
-}
-
-impl OldNode {
-    /// The shared node: unknown and repeated panels (and the viewport outside the main area),
-    /// empty groups and one-sided splits dropped, ratios clamped. A viewport that shared a group
-    /// moves to a frame of its own beside it.
-    fn convert(self, seen: &mut HashSet<Panel>, main: bool) -> Option<Node<Panel>> {
-        match self {
-            OldNode::Tabs { tabs: names, active } => {
-                let mut panels = Vec::new();
-                let mut front = None;
-                for (i, name) in names.iter().enumerate() {
-                    let Some(panel) = Panel::parse(name) else { continue };
-                    if (panel == Panel::Viewport && !main) || !seen.insert(panel) {
-                        continue;
-                    }
-                    if i == active {
-                        front = Some(panels.len());
-                    }
-                    panels.push(panel);
-                }
-                let last = panels.len().checked_sub(1)?;
-                let active = front.unwrap_or(0).min(last);
-                match panels.iter().position(|p| *p == Panel::Viewport) {
-                    Some(at) if panels.len() > 1 => {
-                        panels.remove(at);
-                        let active = active.min(panels.len() - 1);
-                        Some(split(SplitAxis::Horizontal, 0.78, tabs(&[Panel::Viewport]), Node::Tabs { panels, active }))
-                    }
-                    _ => Some(Node::Tabs { panels, active }),
-                }
-            }
-            OldNode::Split { vertical, fraction, first, second } => {
-                let first = first.convert(seen, main);
-                let second = second.convert(seen, main);
-                match (first, second) {
-                    (Some(a), Some(b)) => Some(split(if vertical { SplitAxis::Vertical } else { SplitAxis::Horizontal }, ratio(fraction), a, b)),
-                    (a, b) => a.or(b),
-                }
-            }
-        }
-    }
-}
-
-impl OldPlace {
-    /// Where the closed panel goes back: its tab group, a split beside the panels it was split
-    /// off from, or its floating window. `None` when the file said nothing usable.
-    fn location(self) -> Option<Location<Panel>> {
-        let known = |names: &[String]| names.iter().filter_map(|n| Panel::parse(n)).filter(|p| *p != Panel::Viewport).collect::<Vec<_>>();
-        let with = known(&self.with);
-        let beside = known(&self.beside);
-        let floating = self.window.and_then(rect_ok);
-        let mut location =
-            Location { floating, anchor: None, placement: Placement::Tab { before: None }, size: None, stack: None, sibling: Vec::new(), group: None };
-        if let Some(anchor) = with.first() {
-            location.anchor = Some(*anchor);
-            location.placement = Placement::Tab { before: with.get(self.index).copied() };
-        } else if let Some(anchor) = beside.first() {
-            let zone = match (self.vertical, self.first) {
-                (false, true) => Zone::Left,
-                (false, false) => Zone::Right,
-                (true, true) => Zone::Top,
-                (true, false) => Zone::Bottom,
-            };
-            location.anchor = Some(*anchor);
-            location.placement = Placement::Split(zone);
-            location.size = Some(SplitSize::Ratio(ratio(self.fraction)));
-            location.sibling = beside;
-        } else if floating.is_none() {
-            return None;
-        }
-        Some(location)
-    }
-}
-
-impl OldLayout {
-    fn convert(self) -> Workspace {
-        let mut seen = HashSet::new();
-        let root = self.main.convert(&mut seen, true);
-        let floating = self
-            .windows
-            .into_iter()
-            .filter_map(|window| {
-                let root = window.root.convert(&mut seen, false)?;
-                Some(Floating::new(root, window.rect.and_then(rect_ok).unwrap_or([960.0, 90.0, 300.0, 380.0])))
-            })
-            .collect();
-        let mut workspace = Workspace::new(Layout { root, floating });
-        let mut hidden: Vec<(Panel, Location<Panel>)> = Vec::new();
-        for (name, place) in self.closed {
-            let Some(panel) = Panel::parse(&name) else { continue };
-            if panel == Panel::Viewport || seen.contains(&panel) || hidden.iter().any(|(p, _)| *p == panel) {
-                continue;
-            }
-            if let Some(location) = place.location() {
-                hidden.push((panel, location));
-            }
-        }
-        // A panel the file neither shows nor lists was closed: it stays closed and reopens at its
-        // default place.
-        let default = default_workspace();
-        for panel in Panel::ALL {
-            let listed = seen.contains(&panel) || hidden.iter().any(|(p, _)| *p == panel);
-            if panel != Panel::Viewport && !listed {
-                let location = default.layout.location(&panel).ok().or_else(|| default.hidden.iter().find(|(p, _)| *p == panel).map(|(_, l)| l.clone()));
-                hidden.extend(location.map(|l| (panel, l)));
-            }
-        }
-        workspace.hidden = hidden;
-        workspace
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
 // The live dock
 
 /// The dock layout (part of `UiState`; serialized as a craft-ui `Workspace`).
@@ -392,14 +210,10 @@ impl<'de> Deserialize<'de> for Dock {
 }
 
 impl Dock {
-    /// The dock for a saved layout, in the current or the earlier format.
+    /// The dock for a saved layout; the default when it is not a valid workspace.
     pub fn from_value(value: Value) -> Dock {
         let default = default_workspace();
-        let loaded = if value.get("main").is_some() {
-            serde_json::from_value::<OldLayout>(value).ok().map(OldLayout::convert)
-        } else {
-            serde_json::from_value::<Workspace>(value).ok()
-        };
+        let loaded = serde_json::from_value::<Workspace>(value).ok();
         let Some(mut workspace) = loaded.filter(|w| validate(w).is_ok()) else { return Dock::default() };
         workspace.reconcile(|_| true, permissions, &default);
         if validate(&workspace).is_err() {
@@ -581,26 +395,9 @@ impl DockContent<Panel> for Panels<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn panels_of(w: &Workspace) -> Vec<Panel> {
         w.layout.panels().into_iter().copied().collect()
-    }
-
-    /// A layout as the dock of egui_dock wrote it: the default arrangement, Layers closed from
-    /// its tab group, Log in a floating window.
-    fn saved_before_shared_docking() -> Value {
-        json!({
-            "main": {"split": {"vertical": false, "fraction": 0.115,
-                "first": {"tabs": {"tabs": ["Assets"], "active": 0}},
-                "second": {"split": {"vertical": false, "fraction": 0.78,
-                    "first": {"tabs": {"tabs": ["Viewport"], "active": 0}},
-                    "second": {"split": {"vertical": true, "fraction": 0.3,
-                        "first": {"tabs": {"tabs": ["TextureSetList"], "active": 0}},
-                        "second": {"tabs": {"tabs": ["TextureSetSettings", "Properties"], "active": 1}}}}}}}},
-            "windows": [{"rect": [100.0, 120.0, 320.0, 400.0], "root": {"tabs": {"tabs": ["Log", "Bogus"], "active": 0}}}],
-            "closed": [["Layers", {"with": ["TextureSetSettings", "Properties"], "index": 0}]]
-        })
     }
 
     #[test]
@@ -622,40 +419,11 @@ mod tests {
     }
 
     #[test]
-    fn a_layout_saved_before_the_shared_docking_loads() {
-        let mut dock: Dock = serde_json::from_value(saved_before_shared_docking()).unwrap();
-        let w = dock.workspace();
-        assert!(validate(w).is_ok());
-        // The tree is kept (Layers is closed), and the log keeps its window and rect.
-        assert_eq!(panels_of(w), [Panel::Assets, Panel::Viewport, Panel::TextureSetList, Panel::TextureSetSettings, Panel::Properties, Panel::Log]);
-        assert_eq!(w.layout.floating.len(), 1);
-        assert_eq!(w.layout.floating[0].rect, [100.0, 120.0, 320.0, 400.0]);
-        assert!(!dock.is_open(Panel::Layers) && dock.workspace().hidden.iter().any(|(p, _)| *p == Panel::Layers));
-        // Panels the file never mentioned are hidden at their default place.
-        assert!(!dock.is_open(Panel::Display) && dock.workspace().hidden.iter().any(|(p, _)| *p == Panel::Display));
-        // Reopening Layers puts it back in its tab group, first.
-        dock.focus(Panel::Layers);
-        assert!(dock.is_visible(Panel::Layers));
-        assert_eq!(dock.workspace().layout.floating.len(), 1);
-        let mut nodes: Vec<&Node<Panel>> = dock.workspace().layout.root.iter().collect();
-        let mut group = None;
-        while let Some(node) = nodes.pop() {
-            match node {
-                Node::Split { first, second, .. } => nodes.extend([&**first, &**second]),
-                Node::Tabs { panels, .. } if panels.contains(&Panel::Layers) => group = Some(panels.clone()),
-                _ => {}
-            }
-        }
-        assert_eq!(group.unwrap(), [Panel::Layers, Panel::TextureSetSettings, Panel::Properties]);
-    }
-
-    #[test]
     fn unreadable_layouts_become_the_default() {
         for text in [
-            // No viewport at all.
-            r#"{"main":{"tabs":{"tabs":["Layers"]}}}"#,
+            // The layout of the earlier dock.
+            r#"{"main":{"tabs":{"tabs":["Viewport"]}},"windows":[]}"#,
             // Not a layout.
-            r#"{"main":7}"#,
             r#"[1,2]"#,
             r#""dock""#,
             // A shared workspace with a panel this build does not know.
@@ -668,19 +436,6 @@ mod tests {
             let dock: Dock = serde_json::from_str(text).unwrap();
             assert_eq!(dock, Dock::default(), "{text}");
         }
-    }
-
-    #[test]
-    fn hostile_old_layouts_are_repaired() {
-        // Duplicates, unknown panels, a viewport in a window, bad fractions and rects, empty groups.
-        let json = r#"{"main":{"split":{"vertical":false,"fraction":0.3,"first":{"tabs":{"tabs":["Layers","Layers","Bogus"],"active":9}},
-            "second":{"split":{"vertical":true,"fraction":7,"first":{"tabs":{"tabs":["Viewport"]}},"second":{"tabs":{"tabs":[]}}}}}},
-            "windows":[{"rect":[0,0,-5,10],"root":{"tabs":{"tabs":["Viewport","Log","Layers"]}}}]}"#;
-        let dock: Dock = serde_json::from_str(json).unwrap();
-        let w = dock.workspace();
-        assert!(validate(w).is_ok());
-        assert_eq!(panels_of(w), [Panel::Layers, Panel::Viewport, Panel::Log]);
-        assert_eq!(w.layout.floating.len(), 1);
     }
 
     #[test]
