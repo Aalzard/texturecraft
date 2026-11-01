@@ -95,6 +95,20 @@ fn shade(app: &TextureCraftApp) -> Shade {
     }
 }
 
+/// Show what the GPU side reported (each message once while its toast is up).
+fn gpu_report_toasts(app: &mut TextureCraftApp, reports: crate::gpu::GpuReports) {
+    let names: Vec<String> = reports.memory.iter().filter_map(|ts| app.session.doc.project.texture_sets.get(*ts).map(|t| t.name.clone())).collect();
+    let texts = names
+        .iter()
+        .map(|name| trf("Not enough GPU memory to show texture set \"{name}\" fully: lower Settings ▸ Viewport ▸ Texture resolution. Painting and export are not affected.", &[("name", name)]))
+        .chain(reports.errors.iter().map(|e| trf("GPU error: {error}", &[("error", e)])));
+    for text in texts.collect::<Vec<_>>() {
+        if !app.toasts.iter().any(|t| t.text == text) {
+            app.toast(text, true);
+        }
+    }
+}
+
 /// This frame's scene sync (compositing and GPU uploads), run by the first view drawn, after
 /// that view handled its input: a stroke shows in the frame it is painted, not the next.
 pub struct PendingSync(Option<Option<crate::gpu::AuxView>>);
@@ -105,7 +119,9 @@ fn add_callback(app: &mut TextureCraftApp, ui: &Ui, rect: Rect, frame: Frame, sy
         (Some(aux), Some(g)) => {
             let t0 = crate::now_ms();
             let scene = g.sync(&mut app.session, aux, u32::from(app.ui.prefs.viewport_texture.min(2)), f64::from(app.profiler.logic_ms));
+            let reports = g.take_reports();
             app.profiler.sync_ms += (crate::now_ms() - t0) as f32;
+            gpu_report_toasts(app, reports);
             // Display tiles left for later frames (the frame budget ran out).
             if app.session.caches.iter().any(|c| !c.upload.is_empty()) {
                 ui.ctx().request_repaint();

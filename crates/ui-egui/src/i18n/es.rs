@@ -964,4 +964,9 @@ pub const TABLE: &[(&str, &str)] = &[
         "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
         "Usar el marco y los botones de ventana del sistema operativo en lugar de la barra de título propia de TextureCraft",
     ),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower Settings ▸ Viewport ▸ Texture resolution. Painting and export are not affected.",
+        "No hay suficiente memoria de GPU para mostrar el conjunto de texturas \"{name}\" por completo: reduce Ajustes ▸ Ventana gráfica ▸ Resolución de texturas. La pintura y la exportación no se ven afectadas.",
+    ),
+    ("GPU error: {error}", "Error de GPU: {error}"),
 ];
