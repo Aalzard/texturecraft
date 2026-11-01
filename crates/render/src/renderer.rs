@@ -1010,14 +1010,7 @@ impl Renderer {
         if self.mesh.as_ref().is_some_and(|m| m.id == id) {
             return;
         }
-        let verts: Vec<Vertex> = (0..mesh.positions.len())
-            .map(|i| Vertex {
-                pos: mesh.positions[i].to_array(),
-                nrm: mesh.normals.get(i).map(|n| n.to_array()).unwrap_or([0.0, 1.0, 0.0]),
-                tan: mesh.tangents.get(i).map(|t| t.to_array()).unwrap_or([1.0, 0.0, 0.0, 1.0]),
-                uv: mesh.uvs.get(i).map(|u| u.to_array()).unwrap_or([0.0, 0.0]),
-            })
-            .collect();
+        let verts = subdivide::vertices(mesh);
         let mk = |label: &str, data: &[u8], usage: wgpu::BufferUsages| upload_buffer(device, queue, label, data, usage);
         let mut idx_bytes = bytemuck::cast_slice::<u32, u8>(&mesh.indices).to_vec();
         idx_bytes.resize(idx_bytes.len().next_multiple_of(4), 0);
