@@ -66,6 +66,7 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("titanium", "Titanium", METAL, [0.542, 0.497, 0.449], 1.0, 0.32),
     m("nickel", "Nickel", METAL, [0.66, 0.609, 0.526], 1.0, 0.25),
     m("galvanized", "Steel Galvanized", METAL, [0.69, 0.71, 0.72], 1.0, 0.4),
+    m("rust", "Rust", METAL, [0.3, 0.1, 0.03], 0.0, 0.85),
     // Woods.
     m("wood", "Wood Varnished", WOOD, [0.29, 0.15, 0.06], 0.0, 0.26),
     m("wood_oak", "Oak", WOOD, [0.33, 0.2, 0.09], 0.0, 0.62),
@@ -82,6 +83,9 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("granite", "Granite", STONE, [0.3, 0.27, 0.25], 0.0, 0.3),
     m("asphalt", "Asphalt", STONE, [0.06, 0.06, 0.058], 0.0, 0.9),
     m("clay", "Clay Earthenware", STONE, [0.45, 0.18, 0.09], 0.0, 0.8),
+    m("slate", "Slate", STONE, [0.11, 0.115, 0.13], 0.0, 0.72),
+    m("sandstone", "Sandstone", STONE, [0.52, 0.38, 0.23], 0.0, 0.9),
+    m("terrazzo", "Terrazzo", STONE, [0.7, 0.69, 0.66], 0.0, 0.3),
     // Plastics, rubber, composites.
     m("plastic_glossy", "Plastic Glossy", PLASTIC, [0.8, 0.12, 0.08], 0.0, 0.16),
     m("plastic_matte", "Plastic Matte", PLASTIC, [0.18, 0.18, 0.19], 0.0, 0.6),
@@ -102,6 +106,8 @@ pub const MATERIALS: &[SmartMaterial] = &[
     // Organic.
     m("skin", "Skin", ORGANIC, [0.56, 0.35, 0.27], 0.0, 0.5),
     m("wax", "Candle Wax", ORGANIC, [0.8, 0.72, 0.55], 0.0, 0.35),
+    m("cork", "Cork", ORGANIC, [0.36, 0.21, 0.1], 0.0, 0.85),
+    m("paper", "Paper", ORGANIC, [0.82, 0.81, 0.77], 0.0, 0.92),
     // Smart materials.
     sm("steel_painted_worn", "Steel Painted Worn", METAL, [0.42, 0.06, 0.04], 0.2, 0.45),
     sm("steel_painted_rust", "Steel Painted Rust Leaks", METAL, [0.62, 0.62, 0.6], 0.1, 0.5),
@@ -248,6 +254,33 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
                 metal(pat(P::Hammered, 6.0, 1, 1.0, [0.86, 0.55, 0.45], [0.955, 0.638, 0.538]), gray(P::Hammered, 6.0, 1, 0.38, 0.24)),
                 height(gray(P::Hammered, 6.0, 1, -0.04, 0.0)),
             ),
+        ),
+        // Iron oxide is a dielectric: rough, pitted, blotchy orange-brown.
+        "rust" => one(
+            b,
+            plus(
+                dielectric(pat(P::Grunge, 3.0, 11, 1.0, [0.12, 0.035, 0.012], [0.36, 0.13, 0.04]), gray(P::Clouds, 5.0, 11, 0.95, 0.75)),
+                height(gray(P::Pores, 10.0, 11, -0.015, 0.0)),
+            ),
+        ),
+        "slate" => one(
+            b,
+            plus(
+                dielectric(pat(P::Clouds, 3.0, 5, 1.2, [0.07, 0.075, 0.085], [0.16, 0.17, 0.19]), gray(P::Noise, 1.0, 5, 0.64, 0.8)),
+                height(gray(P::Cells, 4.0, 5, -0.01, 0.0)),
+            ),
+        ),
+        "sandstone" => {
+            one(b, plus(dielectric(pat(P::Noise, 4.0, 13, 1.0, [0.42, 0.3, 0.18], [0.6, 0.45, 0.28]), u(0.9)), height(gray(P::Perlin, 6.0, 13, -0.01, 0.0))))
+        }
+        // Stone chips in a pale binder, polished flat.
+        "terrazzo" => one(b, dielectric(pat(P::Voronoi, 18.0, 9, 1.0, [0.55, 0.55, 0.53], [0.85, 0.84, 0.8]), gray(P::Voronoi, 18.0, 9, 0.34, 0.26))),
+        "cork" => {
+            one(b, plus(dielectric(pat(P::Noise, 6.0, 17, 1.0, [0.25, 0.14, 0.06], [0.45, 0.28, 0.13]), u(0.85)), height(gray(P::Pores, 20.0, 17, -0.01, 0.0))))
+        }
+        "paper" => one(
+            b,
+            plus(dielectric(pat(P::Clouds, 8.0, 19, 1.0, [0.78, 0.77, 0.73], [0.86, 0.85, 0.81]), u(0.92)), height(gray(P::Noise, 1.0, 19, -0.002, 0.0))),
         ),
         "galvanized" => one(b, metal(pat(P::Voronoi, 10.0, 4, 1.0, [0.6, 0.62, 0.63], [0.78, 0.8, 0.81]), gray(P::Voronoi, 10.0, 4, 0.5, 0.28))),
         // ---- Woods (grain along X, rings across Y) ---------------------------------------------
