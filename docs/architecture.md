@@ -88,10 +88,10 @@ so it runs on Vulkan, Metal, DX12, WebGPU and WebGL2. `render::headless` renders
 (CLI, MCP, tests).
 
 Displacement draws a dense, flat subdivision of the mesh (wgpu has no tessellation stage) and moves
-it along the normals by the height channel in the vertex shader of the 3D view and of the key-light
-shadow pass (`shaders/displace.wgsl`, shared by both). Rendering mode's path tracers (`render::trace`
-on the CPU, `render::gpu_trace` on the GPU) trace the same displaced copy, built on the CPU by
-`render::displace` from the composited height.
+it along the normals by the height channel in the vertex shader of the 3D view and of the
+key-light shadow pass (`shaders/displace.wgsl`, shared by both). Rendering mode's path tracers
+(`render::trace` on the CPU, `render::gpu_trace` on the GPU) trace the same displaced copy, built
+on the CPU by `render::displace` from the composited height.
 
 ## Commands and automation
 
