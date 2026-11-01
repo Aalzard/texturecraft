@@ -19,6 +19,8 @@ use texturecraft_ui_egui::ControlRequest;
 /// How long an authenticated connection may stay idle.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// Listen on `127.0.0.1:port` and return the requests for the UI thread to answer
+/// ([`ControlRequest::reply`]). Bind or token failures are printed and leave the channel empty.
 pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
     let (tx, rx) = channel::<ControlRequest>();
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
@@ -62,6 +64,7 @@ fn accept(listener: TcpListener, token: &str, tx: &Sender<ControlRequest>, ctx: 
     }
 }
 
+/// Send `reply` with the request's `id`; false when the client is gone.
 fn reply(out: &mut TcpStream, id: Value, mut reply: Value) -> bool {
     if let Some(o) = reply.as_object_mut() {
         o.insert("id".into(), id);
@@ -69,6 +72,8 @@ fn reply(out: &mut TcpStream, id: Value, mut reply: Value) -> bool {
     writeln!(out, "{reply}").is_ok() && out.flush().is_ok()
 }
 
+/// One connection: `auth` first (within [`AUTH_TIMEOUT`], one attempt), then requests
+/// forwarded to the UI thread one at a time until the client disconnects or idles out.
 fn serve(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>, ctx: &egui::Context) {
     let Ok(mut deadline) = AuthDeadline::start(&stream, AUTH_TIMEOUT).map(Some) else { return };
     let _ = stream.set_read_timeout(Some(IDLE_TIMEOUT));
@@ -91,7 +96,9 @@ fn serve(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>, ctx: &egui
         let msg: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {
-                if !reply(&mut out, Value::Null, json!({"ok": false, "error": format!("bad JSON: {e}")})) {
+                let sent = reply(&mut out, Value::Null, json!({"ok": false, "error": format!("bad JSON: {e}")}));
+                // Before `auth` a malformed line is the one refused attempt, as on `serve --port`.
+                if !sent || deadline.is_some() {
                     return;
                 }
                 continue;
@@ -175,6 +182,10 @@ mod tests {
         assert_eq!(call(&mut w, &mut r, &wrong).unwrap()["ok"], false);
         let right = format!(r#"{{"id":2,"method":"auth","params":{{"token":"{TOKEN}"}}}}"#);
         assert!(call(&mut w, &mut r, &right).is_none());
+        // So is a malformed first line: no further lines before `auth`.
+        let (mut w, mut r) = connect(addr);
+        assert_eq!(call(&mut w, &mut r, "not json").unwrap()["ok"], false);
+        assert!(call(&mut w, &mut r, &right).is_none(), "closed after malformed JSON before auth");
         // The right token unlocks the connection.
         let (mut w, mut r) = connect(addr);
         let ok = call(&mut w, &mut r, &right).unwrap();

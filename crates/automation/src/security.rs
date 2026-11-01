@@ -196,6 +196,7 @@ pub struct AuthDeadline {
 }
 
 impl AuthDeadline {
+    /// Shut `stream` down after `timeout` unless the returned deadline is dropped first.
     pub fn start(stream: &TcpStream, timeout: Duration) -> std::io::Result<AuthDeadline> {
         let stream = stream.try_clone()?;
         let (tx, rx) = channel::<()>();
