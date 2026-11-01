@@ -138,12 +138,7 @@ impl UiFonts {
             let Some(data) = self.data(*s) else { continue };
             let name = format!("cjk-{}", s.iso());
             defs.font_data.insert(name.clone(), data);
-            for family in [
-                FontFamily::Proportional,
-                FontFamily::Monospace,
-                FontFamily::Name(crate::theme::MEDIUM.into()),
-                FontFamily::Name(crate::theme::SEMIBOLD.into()),
-            ] {
+            for family in [FontFamily::Proportional, FontFamily::Monospace, FontFamily::Name(crate::theme::SEMIBOLD.into())] {
                 defs.families.entry(family).or_default().push(name.clone());
             }
         }

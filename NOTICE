@@ -21,7 +21,7 @@ Every other bundled asset is original to TextureCraft (generated in code or draw
 project).
 
 Builds made with craft-fonts (CRAFT_FONTS_DIR; all official releases) also embed the fonts listed
-in https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md (IBM Plex Sans, IBM Plex Mono
+in https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md (Inter
 and BIZ UDPGothic on desktop and web, Noto Sans CJK SC on desktop), under the SIL Open Font License
 1.1. Their licence texts ship
 with the package as OFL-<family>.txt.

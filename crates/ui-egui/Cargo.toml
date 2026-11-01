@@ -30,6 +30,12 @@ sys-locale = "0.3"
 # Floating panels open as OS windows.
 craft-ui = { workspace = true, features = ["native-windows"] }
 
+# build.rs: the interface faces lose their Private Use Area, where the icon font draws (the
+# versions craft-libs' craft-fonts-build subsets with).
+[build-dependencies]
+skera = "0.8"
+skrifa = { version = "0.48", default-features = false, features = ["std"] }
+
 # Browser file I/O (web_files.rs): async pickers and Blob downloads.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

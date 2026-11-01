@@ -11,7 +11,7 @@ use crate::docking::Panel;
 use crate::i18n::{tr, trf};
 use crate::keymap::tip;
 use crate::state::{Mode, ViewLayout};
-use crate::theme::{Tokens, card};
+use crate::theme::{GUTTER, Tokens, card};
 use crate::widgets::{bar_slider, icon_button};
 
 pub fn tool_icon(t: Tool) -> &'static str {
@@ -30,8 +30,8 @@ pub fn tool_icon(t: Tool) -> &'static str {
 
 pub fn top_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     let tk = Tokens::get(ui.ctx());
-    egui::Panel::top("tool_bar").exact_size(40.0).frame(egui::Frame::NONE).show(ui, |ui| {
-        card(ui, &tk, egui::Margin { left: 6, right: 6, top: 6, bottom: 0 }, egui::Margin::symmetric(8, 0), |ui| {
+    egui::Panel::top("tool_bar").exact_size(40.0).show_separator_line(false).frame(egui::Frame::NONE).show(ui, |ui| {
+        card(ui, &tk, egui::Margin { left: GUTTER, right: GUTTER, top: GUTTER, bottom: 0 }, egui::Margin::symmetric(8, 0), |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
                 if app.ui.mode == Mode::Baking {
@@ -166,8 +166,8 @@ pub fn path_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
 
 pub fn tool_shelf(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     let tk = Tokens::get(ui.ctx());
-    egui::Panel::left("tool_shelf").resizable(false).exact_size(40.0).frame(egui::Frame::NONE).show(ui, |ui| {
-        card(ui, &tk, egui::Margin { left: 6, right: 0, top: 6, bottom: 6 }, egui::Margin::symmetric(3, 6), |ui| {
+    egui::Panel::left("tool_shelf").resizable(false).exact_size(40.0).show_separator_line(false).frame(egui::Frame::NONE).show(ui, |ui| {
+        card(ui, &tk, egui::Margin { left: GUTTER, right: 0, top: GUTTER, bottom: GUTTER }, egui::Margin::symmetric(3, 6), |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
             let painting = app.ui.mode == Mode::Painting;
             for t in Tool::ALL {
@@ -211,8 +211,8 @@ pub fn tool_shelf(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
 
 pub fn rail(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     let tk = Tokens::get(ui.ctx());
-    egui::Panel::right("rail").resizable(false).exact_size(38.0).frame(egui::Frame::NONE).show(ui, |ui| {
-        card(ui, &tk, egui::Margin { left: 0, right: 6, top: 6, bottom: 6 }, egui::Margin::symmetric(3, 6), |ui| {
+    egui::Panel::right("rail").resizable(false).exact_size(38.0).show_separator_line(false).frame(egui::Frame::NONE).show(ui, |ui| {
+        card(ui, &tk, egui::Margin { left: 0, right: GUTTER, top: GUTTER, bottom: GUTTER }, egui::Margin::symmetric(3, 6), |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             if icon_button(ui, ic::EXPORT, &tip(&app.ui.keymap, tr("Export textures"), "ui.export"), app.ui.windows.export, 26.0).clicked() {
                 app.ui.windows.export = !app.ui.windows.export;
@@ -233,47 +233,51 @@ pub fn rail(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
 
 pub fn status_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     let tk = Tokens::get(ui.ctx());
-    egui::Panel::bottom("status_bar").exact_size(22.0).frame(egui::Frame::NONE.fill(tk.chrome).inner_margin(egui::Margin::symmetric(10, 0))).show(ui, |ui| {
-        ui.horizontal_centered(|ui| {
-            if let Some(p) = app.bake_progress() {
-                ui.add(egui::ProgressBar::new(p).desired_width(160.0).desired_height(10.0).text(RichText::new(tr("Baking")).size(10.0)));
-                if ui.small_button(tr("Cancel")).clicked() {
-                    app.cancel_bake();
+    egui::Panel::bottom("status_bar")
+        .exact_size(22.0)
+        .show_separator_line(false)
+        .frame(egui::Frame::NONE.fill(tk.chrome).inner_margin(egui::Margin::symmetric(10, 0)))
+        .show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                if let Some(p) = app.bake_progress() {
+                    ui.add(egui::ProgressBar::new(p).desired_width(160.0).desired_height(10.0).text(RichText::new(tr("Baking")).size(10.0)));
+                    if ui.small_button(tr("Cancel")).clicked() {
+                        app.cancel_bake();
+                    }
+                } else if let Some(job) = &app.resize {
+                    let bar = egui::ProgressBar::new(job.progress.fraction()).desired_width(160.0).desired_height(10.0);
+                    ui.add(bar.animate(true).text(RichText::new(tr("Resizing")).size(10.0)));
+                } else if let Some(p) = app.gpu.as_ref().and_then(|g| g.composite_progress(&app.session)) {
+                    ui.add(egui::ProgressBar::new(p).desired_width(160.0).desired_height(10.0).text(RichText::new(tr("Compositing")).size(10.0)));
+                    ui.ctx().request_repaint();
+                } else if let Some(msg) = app.session.log.last() {
+                    ui.label(RichText::new(msg).size(11.0).color(tk.text_dim));
                 }
-            } else if let Some(job) = &app.resize {
-                let bar = egui::ProgressBar::new(job.progress.fraction()).desired_width(160.0).desired_height(10.0);
-                ui.add(bar.animate(true).text(RichText::new(tr("Resizing")).size(10.0)));
-            } else if let Some(p) = app.gpu.as_ref().and_then(|g| g.composite_progress(&app.session)) {
-                ui.add(egui::ProgressBar::new(p).desired_width(160.0).desired_height(10.0).text(RichText::new(tr("Compositing")).size(10.0)));
-                ui.ctx().request_repaint();
-            } else if let Some(msg) = app.session.log.last() {
-                ui.label(RichText::new(msg).size(11.0).color(tk.text_dim));
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let gpu = app.gpu.as_ref().map(|g| g.adapter.as_str()).unwrap_or(tr("no GPU"));
-                ui.label(
-                    RichText::new(trf("Version: {version} ({gpu})", &[("version", &texturecraft_engine::VERSION), ("gpu", &gpu)]))
-                        .size(11.0)
-                        .color(tk.text_dim),
-                );
-                ui.separator();
-                let m = app.session.memory();
-                let mb = |b: usize| b as f64 / (1024.0 * 1024.0);
-                let total = mb(m.total());
-                let decimals = if total < 10.0 { 1 } else { 0 };
-                let mb1 = |b: usize| format!("{:.1}", mb(b));
-                ui.label(RichText::new(trf("Layer memory: {mb} MB", &[("mb", &format!("{total:.decimals$}"))])).size(11.0).color(tk.text_dim)).on_hover_ui(
-                    |ui| {
-                        ui.label(trf(
-                            "Painted layer pixels {pixels} MB, composited channels {composites} MB, compositing cache {cache} MB",
-                            &[("pixels", &mb1(m.pixels)), ("composites", &mb1(m.composites)), ("cache", &mb1(m.cache))],
-                        ));
-                    },
-                );
-                ui.separator();
-                ui.label(RichText::new(trf("UI {ms} ms", &[("ms", &format!("{:.1}", app.ui_ms))])).size(11.0).color(tk.text_dim));
-                ui.add_space(vec2(0.0, 0.0).x);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let gpu = app.gpu.as_ref().map(|g| g.adapter.as_str()).unwrap_or(tr("no GPU"));
+                    ui.label(
+                        RichText::new(trf("Version: {version} ({gpu})", &[("version", &texturecraft_engine::VERSION), ("gpu", &gpu)]))
+                            .size(11.0)
+                            .color(tk.text_dim),
+                    );
+                    ui.separator();
+                    let m = app.session.memory();
+                    let mb = |b: usize| b as f64 / (1024.0 * 1024.0);
+                    let total = mb(m.total());
+                    let decimals = if total < 10.0 { 1 } else { 0 };
+                    let mb1 = |b: usize| format!("{:.1}", mb(b));
+                    ui.label(RichText::new(trf("Layer memory: {mb} MB", &[("mb", &format!("{total:.decimals$}"))])).size(11.0).color(tk.text_dim)).on_hover_ui(
+                        |ui| {
+                            ui.label(trf(
+                                "Painted layer pixels {pixels} MB, composited channels {composites} MB, compositing cache {cache} MB",
+                                &[("pixels", &mb1(m.pixels)), ("composites", &mb1(m.composites)), ("cache", &mb1(m.cache))],
+                            ));
+                        },
+                    );
+                    ui.separator();
+                    ui.label(RichText::new(trf("UI {ms} ms", &[("ms", &format!("{:.1}", app.ui_ms))])).size(11.0).color(tk.text_dim));
+                    ui.add_space(vec2(0.0, 0.0).x);
+                });
             });
         });
-    });
 }

@@ -32,7 +32,7 @@ pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
 
 /// A titled tool window; `id` keeps its place across UI languages.
 pub(crate) fn window<'a>(id: &str, title: &str, open: &'a mut bool) -> egui::Window<'a> {
-    egui::Window::new(RichText::new(title).font(crate::theme::medium(13.0)).strong())
+    egui::Window::new(RichText::new(title).font(crate::theme::semibold(13.0)).strong())
         .id(egui::Id::unique(id))
         .open(open)
         .resizable(true)
@@ -513,8 +513,14 @@ pub(crate) fn log(app: &mut TextureCraftApp, ui: &mut Ui) {
 
 pub fn bake_left(app: &mut TextureCraftApp, ui: &mut Ui) {
     let tk = Tokens::get(ui.ctx());
-    egui::Panel::left("bake_left").resizable(true).default_size(320.0).frame(egui::Frame::NONE).show(ui, |ui| {
-        crate::theme::card(ui, &tk, egui::Margin { left: 6, right: 0, top: 6, bottom: 6 }, egui::Margin::symmetric(8, 6), |ui| bake_body(app, ui));
+    egui::Panel::left("bake_left").resizable(true).default_size(320.0).show_separator_line(false).frame(egui::Frame::NONE).show(ui, |ui| {
+        crate::theme::card(
+            ui,
+            &tk,
+            egui::Margin { left: crate::theme::GUTTER, right: 0, top: crate::theme::GUTTER, bottom: crate::theme::GUTTER },
+            egui::Margin::symmetric(8, 6),
+            |ui| bake_body(app, ui),
+        );
     });
 }
 
