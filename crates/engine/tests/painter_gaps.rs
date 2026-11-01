@@ -67,6 +67,7 @@ fn filter_library_adds_every_filter_and_edits_its_parameters() {
         "mosaic",
         "glow",
         "bakedLighting",
+        "replaceColor",
     ] {
         assert!(ids.contains(&want), "{want} missing from {ids:?}");
     }
@@ -309,4 +310,35 @@ fn decal_drags_merge_into_one_undo_step() {
         execute(&mut s, "edit.undo", &Value::Null).unwrap();
     }
     assert_eq!(execute(&mut s, "project.inspect", &Value::Null).unwrap()["layers"], start);
+}
+
+/// The Geometry mask tool: a click toggles the selected layer on the part under it.
+#[test]
+fn geometry_mask_tool_toggles_the_clicked_part() {
+    let obj = "o Lid\nv 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 0.5 0\nvt 0 0.5\nf 1/1 2/2 3/3\n\
+               o Body\nv 1 1 0\nv 2 1 0\nv 1 2 0\nvt 0.5 0.5\nvt 1 0.5\nvt 0.5 1\nf 4/4 5/5 6/6\n";
+    let mut s = Session::from_mesh_bytes("parts.obj", obj.as_bytes(), 256, "parts").unwrap();
+    s.viewport = Vec2::new(400.0, 400.0);
+    (s.camera.yaw, s.camera.pitch) = (0.0, 0.0);
+    let (lo, hi) = s.mesh.bounds();
+    s.camera.frame(lo, hi);
+    // Viewport pixels of a point inside each triangle.
+    let screen = |s: &Session, p: [f32; 3]| {
+        let n = s.camera.project(texturecraft_engine::geom::glam::Vec3::from(p), 1.0).unwrap();
+        json!({"x": (n.x + 1.0) * 200.0, "y": (1.0 - n.y) * 200.0})
+    };
+    let (lid, body) = (screen(&s, [0.25, 0.25, 0.0]), screen(&s, [1.25, 1.25, 0.0]));
+    let layer = id(execute(&mut s, "layer.add.fill", &json!({"color": [1, 0, 0]})).unwrap(), "layer");
+    execute(&mut s, "tool.geometryMask", &Value::Null).unwrap();
+    let r = execute(&mut s, "tool.click", &lid).unwrap();
+    assert_eq!((r["part"].as_str(), r["shown"].as_bool(), &r["geometryMask"]), (Some("Lid"), Some(false), &json!(["Body"])), "{r}");
+    assert_eq!(s.doc.project.layer(layer).unwrap().geometry_mask, Some(vec!["Body".to_string()]));
+    let r = execute(&mut s, "tool.click", &body).unwrap();
+    assert_eq!(r["geometryMask"], json!([]), "both hidden");
+    execute(&mut s, "tool.click", &lid).unwrap();
+    let r = execute(&mut s, "tool.click", &body).unwrap();
+    assert_eq!(r["geometryMask"], Value::Null, "shown on every part again: no mask");
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.doc.project.layer(layer).unwrap().geometry_mask, Some(vec!["Lid".to_string()]));
+    assert!(execute(&mut s, "tool.click", &json!({"x": 1, "y": 1})).is_err(), "nothing under the point");
 }

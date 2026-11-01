@@ -23,6 +23,7 @@ pub mod shelf;
 pub mod state;
 pub mod theme;
 pub mod thumbs;
+pub mod titlebar;
 pub mod toolbar;
 pub mod viewport;
 pub mod web_files;
@@ -93,6 +94,8 @@ pub struct TextureCraftApp {
     pub fonts: fonts::UiFonts,
     /// A notice across the top of the window until dismissed (English key, shown translated).
     pub banner: Option<&'static str>,
+    /// Who draws the window's title bar (decided at startup, before the window opens).
+    pub title_bar: titlebar::TitleBar,
     last_time: f64,
     /// When the next autosave is due (seconds of app time; desktop only).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -135,6 +138,7 @@ impl TextureCraftApp {
             render_state: cc.wgpu_render_state.clone(),
             fonts: fonts::UiFonts::default(),
             banner: None,
+            title_bar: titlebar::TitleBar::default(),
             last_time: 0.0,
             next_autosave,
             styled: None,
@@ -386,7 +390,7 @@ impl eframe::App for TextureCraftApp {
         let ctx = ui.ctx().clone();
         let t0 = now_ms();
         if !self.ui.hide_ui {
-            menus::menu_bar(self, ui);
+            titlebar::show(self, ui);
             banner(self, ui);
             toolbar::top_bar(self, ui);
             toolbar::status_bar(self, ui);
@@ -398,12 +402,10 @@ impl eframe::App for TextureCraftApp {
             toolbar::rail(self, ui);
         }
         let hide = self.ui.hide_ui;
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill({
-                let tk = theme::Tokens::get(&ctx);
-                if hide { tk.viewport } else { tk.chrome }
-            }))
-            .show(ui, |ui| if hide { viewport::central(self, ui) } else { docking::show(self, ui) });
+        let tk = theme::Tokens::get(&ctx);
+        // The dock keeps the cards' gutter from the bars and rails around it.
+        let frame = if hide { egui::Frame::NONE.fill(tk.viewport) } else { egui::Frame::NONE.fill(tk.chrome).inner_margin(theme::GUTTER) };
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| if hide { viewport::central(self, ui) } else { docking::show(self, ui) });
         windows::show(self, &ctx);
         toasts(self, &ctx);
         let end = now_ms();
@@ -441,19 +443,22 @@ pub fn now_ms() -> f64 {
 fn banner(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     let Some(text) = app.banner else { return };
     let tk = theme::Tokens::get(ui.ctx());
-    egui::Panel::top("banner").frame(egui::Frame::NONE.fill(tk.row_selected).inner_margin(egui::Margin::symmetric(10, 5))).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(egui_phosphor::regular::INFO).color(tk.accent));
-            // The text wraps in the width the dismiss button leaves.
-            let width = (ui.available_width() - 28.0).max(80.0);
-            ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(i18n::tr(text)).color(tk.text_strong)).wrap());
+    egui::Panel::top("banner").show_separator_line(false).frame(egui::Frame::NONE.fill(tk.row_selected).inner_margin(egui::Margin::symmetric(10, 5))).show(
+        ui,
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(egui_phosphor::regular::INFO).color(tk.accent));
+                // The text wraps in the width the dismiss button leaves.
+                let width = (ui.available_width() - 28.0).max(80.0);
+                ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.add(egui::Label::new(egui::RichText::new(i18n::tr(text)).color(tk.text_strong)).wrap());
+                });
+                if widgets::icon_button(ui, egui_phosphor::regular::X, i18n::tr("Dismiss"), false, 18.0).clicked() {
+                    app.banner = None;
+                }
             });
-            if widgets::icon_button(ui, egui_phosphor::regular::X, i18n::tr("Dismiss"), false, 18.0).clicked() {
-                app.banner = None;
-            }
-        });
-    });
+        },
+    );
 }
 
 fn toasts(app: &mut TextureCraftApp, ctx: &egui::Context) {

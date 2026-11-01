@@ -157,6 +157,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Clear", "Cancella"),
     ("Clear mask", "Cancella maschera"),
     ("Clear recent projects", "Cancella progetti recenti"),
+    (
+        "Click a mesh part to show or hide the selected layer on it.",
+        "Fai clic su una parte della mesh per mostrare o nascondere il livello selezionato su di essa.",
+    ),
     ("Click the mesh to pick its material into the brush", "Fai clic sulla mesh per prelevarne il materiale nel pennello"),
     ("Click the mesh to place the decal", "Fai clic sulla mesh per posizionare la decal"),
     ("Click, then press the new shortcut (Esc cancels)", "Fai clic, poi premi la nuova scorciatoia (Esc per annullare)"),
@@ -179,6 +183,11 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Color picker", "Contagocce"),
     ("Color selection", "Selezione colore"),
+    ("Color to replace", "Colore da sostituire"),
+    (
+        "Colors near the first shift towards the second, keeping their shading.",
+        "I colori vicini al primo si spostano verso il secondo, mantenendo l'ombreggiatura.",
+    ),
     (
         "Colors read as gray. Add a levels or blur effect above to shape the result.",
         "I colori vengono letti come grigio. Aggiungi sopra un effetto Livelli o Sfocatura per modellare il risultato.",
@@ -666,10 +675,12 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Rendering on GPU: {n} / {max} samples, {s} s", "Rendering su GPU: {n} / {max} campioni, {s} s"),
     ("Rendering, path traced", "Rendering, path tracing"),
     ("Replace", "Sostituisci"),
+    ("Replace Color", "Sostituisci colore"),
     (
         "Replace the selected layer's mask with this smart mask (or drag it onto a layer)",
         "Sostituisci la maschera del livello selezionato con questa maschera intelligente (o trascinala su un livello)",
     ),
+    ("Replacement color", "Colore sostitutivo"),
     ("Report a bug...", "Segnala un bug..."),
     ("Rescan the library folder", "Ripeti la scansione della cartella della libreria"),
     ("Reset UI", "Ripristina interfaccia"),
@@ -807,6 +818,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Tiles", "Piastrelle"),
     ("Tint", "Tinta"),
     ("Toggle mask", "Attiva/disattiva maschera"),
+    ("Tolerance", "Tolleranza"),
     ("Tone mapping", "Mappatura dei toni"),
     ("Tools", "Strumenti"),
     ("Torus", "Toro"),
@@ -952,4 +964,13 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Green", "Verde"),
     ("Amber", "Ambra"),
     ("Pink", "Rosa"),
+    ("Minimize", "Riduci a icona"),
+    ("Maximize", "Ingrandisci"),
+    ("Restore", "Ripristina"),
+    ("Title bar", "Barra del titolo"),
+    ("System title bar (applies on restart)", "Barra del titolo di sistema (si applica al riavvio)"),
+    (
+        "Use the operating system's window frame and buttons instead of TextureCraft's own title bar",
+        "Usa la cornice e i pulsanti della finestra del sistema operativo invece della barra del titolo di TextureCraft",
+    ),
 ];

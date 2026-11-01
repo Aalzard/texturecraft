@@ -104,9 +104,10 @@ fn denoise_step(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
+// The viewport's studio backdrop (matches post.wgsl).
 fn backdrop(uv: vec2<f32>) -> vec3<f32> {
-    let r = length(uv * 2.0 - 1.0) * 0.35;
-    return vec3<f32>(0.0232 * (1.06 - r * r));
+    let d = uv * 2.0 - 1.0;
+    return mix(vec3<f32>(0.0295, 0.0343, 0.0437), vec3<f32>(0.0110, 0.0130, 0.0168), uv.y) * (1.0 - 0.09 * dot(d, d));
 }
 
 fn tonemap(hdr: vec3<f32>) -> vec3<f32> {

@@ -30,7 +30,7 @@ artwork. Licence: see `LICENSE.txt`.
 | `texturecraft-1024.png` | full tile, 1024 px | docs, store listings |
 | `texturecraft.icns` | macOS icon set, 16 to 1024 px | `packaging/macos/package.sh` (`CFBundleIconFile`) |
 | `texturecraft.ico` | Windows icon, 16 to 256 px | `apps/texturecraft/build.rs` (embedded in the `.exe`), the MSI (`packaging/windows/package.ps1`) |
-| `hicolor/<size>/apps/ai.storyteller.texturecraft.png` | Linux theme icons, 16 to 512 px; the 256 one is also the runtime window icon (`apps/texturecraft/src/main.rs`) and the README icon | `packaging/linux/ai.storyteller.texturecraft.desktop` |
+| `hicolor/<size>/apps/ai.storyteller.texturecraft.png` | Linux theme icons, 16 to 512 px; the 256 one is also the runtime window and taskbar icon (`apps/texturecraft/src/main.rs`) and the README icon, and the 16 to 64 px ones the icon at the left of the title bar (`crates/ui-egui/src/titlebar.rs`) | `packaging/linux/ai.storyteller.texturecraft.desktop` |
 | `hicolor/scalable/apps/ai.storyteller.texturecraft.svg` | Linux scalable icon | as above |
 
 ## How it reaches each OS
@@ -38,8 +38,8 @@ artwork. Licence: see `LICENSE.txt`.
 - **macOS:** the app sets the Dock / app-switcher icon at runtime (`ViewportBuilder::with_icon`); the
   `.app` from `packaging/macos/package.sh` carries `texturecraft.icns`.
 - **Windows:** `build.rs` embeds `texturecraft.ico` and VERSIONINFO with `winresource` (taskbar, Start
-  menu, Explorer, Alt-Tab); the runtime icon covers the title bar, and the MSI uses the same `.ico`
-  for its shortcuts.
+  menu, Explorer, Alt-Tab); the runtime icon covers the window and taskbar, and the MSI uses the
+  same `.ico` for its shortcuts.
 - **Linux and FreeBSD:** the packages install `packaging/linux/ai.storyteller.texturecraft.desktop` to
   `share/applications/` and `hicolor/` to `share/icons/`; the AppImage and Flatpak carry the same
   files.

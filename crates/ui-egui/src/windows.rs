@@ -32,7 +32,7 @@ pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
 
 /// A titled tool window; `id` keeps its place across UI languages.
 pub(crate) fn window<'a>(id: &str, title: &str, open: &'a mut bool) -> egui::Window<'a> {
-    egui::Window::new(RichText::new(title.to_uppercase()).size(10.5).strong())
+    egui::Window::new(RichText::new(title).font(crate::theme::semibold(13.0)).strong())
         .id(egui::Id::unique(id))
         .open(open)
         .resizable(true)
@@ -356,8 +356,10 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
     let drawable = LANGUAGES.each_ref().map(|l| crate::fonts::Script::of_language(l.code).is_none_or(|s| app.fonts.covers(s)));
     window("settings", tr("Settings"), &mut open).default_width(360.0).show(ctx, |ui| {
         let p = &mut app.ui.prefs;
+        // Every section is a two-column form: labels on the left, controls aligned beside them.
+        let form = |id: &str| egui::Grid::new(id).num_columns(2).spacing(vec2(12.0, 8.0)).min_col_width(120.0);
         ui.label(caption(tr("Interface")));
-        ui.horizontal(|ui| {
+        form("settings_interface").show(ui, |ui| {
             ui.label(tr("Language"));
             let current = crate::i18n::current();
             egui::ComboBox::from_id_salt("language").width(180.0).height(320.0).selected_text(current.name).show_ui(ui, |ui| {
@@ -368,69 +370,84 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
                     }
                 }
             });
-        });
-        slider(ui, tr("Interface scale"), &mut p.ui_scale, 0.75..=2.0, 2);
-        ui.horizontal(|ui| {
+            ui.end_row();
+            ui.label(tr("Interface scale"));
+            ui.add(egui::Slider::new(&mut p.ui_scale, 0.75..=2.0).fixed_decimals(2));
+            ui.end_row();
             ui.label(tr("Brightness"));
             egui::ComboBox::from_id_salt("brightness").width(140.0).selected_text(tr(p.brightness.label())).show_ui(ui, |ui| {
                 for b in Brightness::ALL {
                     ui.selectable_value(&mut p.brightness, b, tr(b.label()));
                 }
             });
-        });
-        ui.horizontal(|ui| {
+            ui.end_row();
             ui.label(tr("Accent color"));
-            for a in Accent::ALL {
-                let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, p.accent == a, tr(a.label())));
-                let ring = if p.accent == a {
-                    tk.text_strong
-                } else if resp.hovered() {
-                    tk.text_dim
-                } else {
-                    Color32::TRANSPARENT
-                };
-                ui.painter().circle(rect.center(), 6.5, a.colors(tk.dark).0, egui::Stroke::NONE);
-                ui.painter().circle_stroke(rect.center(), 9.0, egui::Stroke::new(1.5, ring));
-                if resp.on_hover_text(tr(a.label())).clicked() {
-                    p.accent = a;
+            ui.horizontal(|ui| {
+                for a in Accent::ALL {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
+                    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, p.accent == a, tr(a.label())));
+                    let ring = if p.accent == a {
+                        tk.text_strong
+                    } else if resp.hovered() {
+                        tk.text_dim
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    ui.painter().circle(rect.center(), 6.5, a.colors(tk.dark).0, egui::Stroke::NONE);
+                    ui.painter().circle_stroke(rect.center(), 9.0, egui::Stroke::new(1.5, ring));
+                    if resp.on_hover_text(tr(a.label())).clicked() {
+                        p.accent = a;
+                    }
                 }
+            });
+            ui.end_row();
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ui.label(tr("Title bar"));
+                ui.checkbox(&mut p.system_title_bar, tr("System title bar (applies on restart)"))
+                    .on_hover_text(tr("Use the operating system's window frame and buttons instead of TextureCraft's own title bar"));
+                ui.end_row();
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         ui.label(caption(tr("Viewport")));
-        ui.horizontal(|ui| {
+        form("settings_viewport").show(ui, |ui| {
             ui.label(tr("Texture resolution"));
-            for (v, l) in [(0u8, tr("Full")), (1, tr("Half")), (2, tr("Quarter"))] {
-                ui.selectable_value(&mut p.viewport_texture, v, l);
-            }
-        })
-        .response
-        .on_hover_text(tr(
-            "Size of the textures the viewport shows: lower uses less GPU memory with large texture sets. Painting and export keep full resolution.",
-        ));
-        ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                for (v, l) in [(0u8, tr("Full")), (1, tr("Half")), (2, tr("Quarter"))] {
+                    ui.selectable_value(&mut p.viewport_texture, v, l);
+                }
+            })
+            .response
+            .on_hover_text(tr(
+                "Size of the textures the viewport shows: lower uses less GPU memory with large texture sets. Painting and export keep full resolution.",
+            ));
+            ui.end_row();
+        });
+        ui.add_space(8.0);
         #[cfg(not(target_arch = "wasm32"))]
         {
             ui.label(caption(tr("Project")));
-            ui.horizontal(|ui| {
+            form("settings_project").show(ui, |ui| {
                 ui.label(tr("Autosave every"));
                 ui.add(egui::DragValue::new(&mut p.autosave_minutes).range(0..=120).suffix(format!(" {}", tr("min"))));
+                ui.end_row();
             });
             ui.label(
                 RichText::new(trf("0 turns autosave off. Copies go to {folder}", &[("folder", &crate::user_dir("autosave").display())]))
-                    .size(10.5)
+                    .small()
                     .color(tk.text_dim),
             );
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.label(caption(tr("Folders")));
-            for (label, dir) in [(tr("Smart materials"), crate::library_dir()), (tr("UI layouts"), crate::user_dir("layouts"))] {
-                ui.horizontal(|ui| {
+            form("settings_folders").show(ui, |ui| {
+                for (label, dir) in [(tr("Smart materials"), crate::library_dir()), (tr("UI layouts"), crate::user_dir("layouts"))] {
                     ui.label(label);
-                    ui.label(RichText::new(dir.display().to_string()).size(10.5).color(tk.text_dim));
-                });
-            }
-            ui.add_space(6.0);
+                    ui.label(RichText::new(dir.display().to_string()).small().color(tk.text_dim));
+                    ui.end_row();
+                }
+            });
+            ui.add_space(8.0);
         }
         ui.label(caption(tr("Keyboard")));
         if ui.button(tr("Edit keyboard shortcuts...")).on_hover_text(tr("Rebind any menu item, tool or command")).clicked() {
@@ -503,8 +520,14 @@ pub(crate) fn log(app: &mut TextureCraftApp, ui: &mut Ui) {
 
 pub fn bake_left(app: &mut TextureCraftApp, ui: &mut Ui) {
     let tk = Tokens::get(ui.ctx());
-    egui::Panel::left("bake_left").resizable(true).default_size(320.0).frame(egui::Frame::NONE).show(ui, |ui| {
-        crate::theme::card(ui, &tk, egui::Margin { left: 6, right: 0, top: 6, bottom: 6 }, egui::Margin::symmetric(8, 6), |ui| bake_body(app, ui));
+    egui::Panel::left("bake_left").resizable(true).default_size(320.0).show_separator_line(false).frame(egui::Frame::NONE).show(ui, |ui| {
+        crate::theme::card(
+            ui,
+            &tk,
+            egui::Margin { left: crate::theme::GUTTER, right: 0, top: crate::theme::GUTTER, bottom: crate::theme::GUTTER },
+            egui::Margin::symmetric(8, 6),
+            |ui| bake_body(app, ui),
+        );
     });
 }
 

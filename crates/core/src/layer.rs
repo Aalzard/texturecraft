@@ -594,6 +594,14 @@ pub enum Filter {
         ambient: f32,
         occlusion: f32,
     },
+    /// Colors near `from` (within `tolerance`, fading out over `softness`, as RGB distance
+    /// 0..1) shifted by `to − from`, so their shading and texture stay (linear RGB).
+    ReplaceColor {
+        from: [f32; 3],
+        to: [f32; 3],
+        tolerance: f32,
+        softness: f32,
+    },
 }
 
 /// Push `x` (0..1) towards 1 (`amount` > 0) or 0 (`amount` < 0); `amount` in −1..1.
@@ -738,6 +746,22 @@ impl Filter {
                 ChannelKind::NormalMap => [v[0], 1.0 - v[1], v[2]],
                 _ => v,
             },
+            Filter::ReplaceColor { from, to, tolerance, softness } => match kind {
+                ChannelKind::Color => {
+                    let d = ((v[0] - from[0]).powi(2) + (v[1] - from[1]).powi(2) + (v[2] - from[2]).powi(2)).sqrt() / 3f32.sqrt();
+                    let (t, s) = (tolerance.clamp(0.0, 1.0), softness.clamp(0.0, 1.0));
+                    let w = if d <= t {
+                        1.0
+                    } else if d >= t + s {
+                        0.0
+                    } else {
+                        let x = 1.0 - (d - t) / s.max(1e-6);
+                        x * x * (3.0 - 2.0 * x)
+                    };
+                    std::array::from_fn(|k| unit(v[k] + (to[k] - from[k]) * w))
+                }
+                _ => v,
+            },
             Filter::Blur { .. }
             | Filter::Sharpen { .. }
             | Filter::Warp { .. }
@@ -777,6 +801,7 @@ impl Filter {
             Filter::Mosaic { .. } => "Mosaic",
             Filter::Glow { .. } => "Glow",
             Filter::BakedLighting { .. } => "Baked Lighting",
+            Filter::ReplaceColor { .. } => "Replace Color",
         }
     }
 

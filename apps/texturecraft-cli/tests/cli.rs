@@ -128,6 +128,12 @@ fn path_traced_render_needs_no_gpu() {
         let lum = |x, y| img.get_pixel(x, y).0.iter().map(|v| *v as u32).sum::<u32>();
         assert!(lum(48, 28) > lum(1, 1) + 60);
     }
+    // --camera looks through a camera saved in the project; an unknown name is an error.
+    let proj = d.join("cams.tcraft");
+    ok(&["run", "builtin:cube", "camera.set", r#"{"yaw": 80, "distance": 9}"#, "-o", p(&proj)]);
+    ok(&["run", p(&proj), "camera.add", r#"{"name": "Side"}"#, "-o", p(&proj)]);
+    ok(&["render", p(&proj), p(&out), "--size", "48x32", "--camera", "Side", "--samples", "2", "--cpu"]);
+    assert_eq!(cli(&["render", p(&proj), p(&out), "--camera", "Nope", "--samples", "2", "--cpu"]).status.code(), Some(1));
     assert_eq!(cli(&["render", "builtin:cube", p(&out), "--samples", "0"]).status.code(), Some(1));
     assert_eq!(cli(&["render", "builtin:cube", p(&out), "--samples", "4", "--view", "2d"]).status.code(), Some(1));
     let _ = std::fs::remove_dir_all(&d);

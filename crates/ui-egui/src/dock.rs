@@ -99,6 +99,9 @@ pub(crate) fn layers(app: &mut TextureCraftApp, ui: &mut Ui) {
     let tk = Tokens::get(ui.ctx());
     // Wraps in a narrow column instead of widening the rows below past the panel.
     ui.horizontal_wrapped(|ui| {
+        // The menu buttons as compact as the icon buttons beside them.
+        ui.spacing_mut().button_padding.x = 4.0;
+        ui.spacing_mut().item_spacing.x = 4.0;
         let chans = app.session.doc.project.texture_set(app.session.ts()).map(|t| t.channel_list()).unwrap_or_default();
         egui::ComboBox::from_id_salt("layer_channel").width(86.0).selected_text(tr(app.ui.layer_channel.label())).show_ui(ui, |ui| {
             for c in chans {
@@ -422,8 +425,10 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
         });
         let mut op = (b.opacity * 100.0).round();
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(op_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
-        // As tall as its slot in the row (the style's fields are taller).
+        // As tall as its slot in the row (the style's fields are taller), in the row's small print.
         child.spacing_mut().interact_size.y = op_rect.height();
+        child.spacing_mut().button_padding = vec2(4.0, 0.0);
+        child.style_mut().override_text_style = Some(egui::TextStyle::Small);
         let r = child.add(egui::DragValue::new(&mut op).range(0.0..=100.0).speed(0.5).max_decimals(0));
         if r.changed() {
             app.run("layer.blend", json!({"layer": layer.id.0, "channel": ch.id(), "opacity": op / 100.0}));
@@ -519,6 +524,23 @@ fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid: LayerI
             ui.close();
         }
     });
+}
+
+/// The Geometry mask tool: what a click does, and the selected layer's parts.
+fn geometry_tool_section(app: &mut TextureCraftApp, ui: &mut Ui) {
+    let tk = Tokens::get(ui.ctx());
+    ui.label(caption(tr("Geometry mask")));
+    ui.label(RichText::new(tr("Click a mesh part to show or hide the selected layer on it.")).color(tk.text_dim));
+    let Some(layer) = app.session.selected_layer().and_then(|id| app.session.doc.project.layers.get(&id).cloned()) else { return };
+    let ts = app.session.doc.project.locate(layer.id).map_or(app.session.ts(), |(ts, _, _)| ts);
+    let parts = texturecraft_engine::set_cmds::parts(&app.session, ts);
+    for part in &parts {
+        let on = layer.geometry_mask.as_ref().is_none_or(|m| m.contains(part));
+        ui.label(RichText::new(format!("{} {part}", if on { ic::EYE } else { ic::EYE_SLASH })).color(if on { tk.text } else { tk.text_dim }));
+    }
+    if ui.add_enabled(layer.geometry_mask.is_some(), egui::Button::new(tr("Show on all parts"))).clicked() {
+        app.run("layer.set", json!({"layer": layer.id.0, "geometryMask": null}));
+    }
 }
 
 /// Geometry mask: the mesh parts of the layer's texture set it shows on (when the set has
@@ -860,6 +882,7 @@ fn tool_properties(app: &mut TextureCraftApp, ui: &mut Ui) {
         Tool::Clone => Some(clone_section),
         Tool::Smudge => Some(smudge_section),
         Tool::Path => Some(path_section),
+        Tool::GeometryMask => Some(geometry_tool_section),
         _ => None,
     };
     if let Some(section) = tool_section {
@@ -1584,6 +1607,18 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
                     set(app, key, json!(v));
                 }
             }
+        }
+        Filter::ReplaceColor { from, to, .. } => {
+            for (key, label, rgb) in [("from", tr("Color to replace"), from), ("to", tr("Replacement color"), to)] {
+                let mut v = *rgb;
+                ui.horizontal(|ui| {
+                    if color_swatch(ui, &format!("replace_{key}_{id}"), &mut v, 36.0) {
+                        set(app, key, json!(v));
+                    }
+                    ui.label(label);
+                });
+            }
+            ui.label(RichText::new(tr("Colors near the first shift towards the second, keeping their shading.")).size(10.5).color(tk.text_dim));
         }
         Filter::GradientMap { colors } => {
             let mut c = colors.clone();
