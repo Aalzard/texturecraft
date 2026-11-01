@@ -97,6 +97,20 @@ notarize() {
   fi
 }
 
+# Apple's CloudKit ticket lookup can drop its connection after notarization succeeded.
+# Stapling and validation are idempotent; a missing or bad ticket still fails every attempt.
+stapler_retry() {
+  local action="$1" target="$2" try
+  for try in 1 2 3 4; do
+    xcrun stapler "$action" "$target" && return 0
+    [ "$try" = 4 ] && break
+    echo "stapler $action failed (try $try of 4); retrying in $((try * 20)) s" >&2
+    sleep $((try * 20))
+  done
+  echo "error: stapler $action $(basename "$target") failed 4 times" >&2
+  return 1
+}
+
 # ---- TextureCraft.app ----------------------------------------------------------------------------
 echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -120,8 +134,8 @@ codesign --verify --strict --deep --verbose=2 "$APP"
 if [ "$NOTARIZE" = 1 ]; then
   ditto -c -k --keepParent "$APP" "$WORK/TextureCraft-notarize.zip"
   notarize "$WORK/TextureCraft-notarize.zip"
-  xcrun stapler staple "$APP"
-  xcrun stapler validate "$APP"
+  stapler_retry staple "$APP"
+  stapler_retry validate "$APP"
   spctl --assess --type execute -vvv "$APP"
 fi
 
@@ -141,8 +155,8 @@ sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 if [ "$NOTARIZE" = 1 ]; then
   notarize "$DMG"
-  xcrun stapler staple "$DMG"
-  xcrun stapler validate "$DMG"
+  stapler_retry staple "$DMG"
+  stapler_retry validate "$DMG"
   spctl --assess --type open --context context:primary-signature -vvv "$DMG"
 fi
 
