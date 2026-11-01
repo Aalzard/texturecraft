@@ -1,7 +1,7 @@
 //! COLLADA (.dae): `triangles`, `polylist` and `polygons` with VERTEX / NORMAL / TEXCOORD inputs,
 //! materials bound through `instance_geometry` (and skinned `instance_controller`), the visual
-//! scene's node transforms (matrix, translate, rotate, scale), and the asset's unit and up axis
-//! (converted to meters, Y up, like glTF).
+//! scene's node transforms (matrix, translate, rotate, scale, lookat), instanced cameras, and the
+//! asset's unit and up axis (converted to meters, Y up, like glTF).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -9,7 +9,7 @@ use std::rc::Rc;
 use quick_xml::events::{BytesStart, Event};
 use texturecraft_geom::glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 
-use super::{Corner, PolygonSink, RawMesh, check_vertices};
+use super::{Corner, PolygonSink, RawCamera, RawMesh, check_vertices};
 use crate::{FormatError, Result, malformed};
 
 const KIND: &str = "COLLADA";
@@ -171,6 +171,7 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
     };
     let global = up * Mat4::from_scale(Vec3::splat(meter));
     let mut sink = PolygonSink::default();
+    let mut cameras = Vec::new();
     let scene = root.child("scene").and_then(|s| s.child("instance_visual_scene")).and_then(|i| d.get(i.attr("url")));
     let scene = scene.or_else(|| root.child("library_visual_scenes").and_then(|l| l.child("visual_scene")));
     let Some(scene) = scene else {
@@ -191,6 +192,10 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
         let m = parent * node_transform(node)?;
         sink.part = node.attr("name").or_else(|| node.attr("id")).unwrap_or_default().to_string();
         for inst in &node.children {
+            if inst.name == "instance_camera" {
+                cameras.extend(d.get(inst.attr("url")).and_then(|c| camera(c, m, &sink.part)));
+                continue;
+            }
             let (geom, bind_shape) = match inst.name.as_str() {
                 "instance_geometry" => (d.get(inst.attr("url")), Mat4::IDENTITY),
                 "instance_controller" => {
@@ -211,7 +216,24 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
         let children: Vec<&El> = children.collect();
         stack.extend(children.into_iter().rev().map(|c| (c, m, depth + 1)));
     }
-    Ok(sink.finish())
+    let mut raw = sink.finish();
+    raw.cameras = cameras;
+    Ok(raw)
+}
+
+/// A `<camera>` instanced by node `name` at `m`: COLLADA cameras look down -Z with +Y up.
+fn camera(cam: &El, m: Mat4, name: &str) -> Option<RawCamera> {
+    let tc = cam.child("optics")?.child("technique_common")?;
+    let num = |e: &El, k: &str| e.child(k).and_then(|v| v.text.trim().parse::<f32>().ok()).filter(|v| v.is_finite() && *v > 0.0);
+    let name = if name.is_empty() { cam.attr("name").or_else(|| cam.attr("id")).unwrap_or_default() } else { name };
+    if let Some(p) = tc.child("perspective") {
+        let x_to_y = |x: f32| Some(2.0 * ((x * 0.5).to_radians().tan() / num(p, "aspect_ratio")?).atan().to_degrees());
+        let fov = num(p, "yfov").or_else(|| num(p, "xfov").and_then(x_to_y)).or_else(|| num(p, "xfov")).unwrap_or(40.0);
+        return Some(RawCamera::placed(name.into(), m, Vec3::NEG_Z, fov, None));
+    }
+    let o = tc.child("orthographic")?;
+    let half = num(o, "ymag").or_else(|| Some(num(o, "xmag")? / num(o, "aspect_ratio")?)).or_else(|| num(o, "xmag")).unwrap_or(1.0);
+    Some(RawCamera::placed(name.into(), m, Vec3::NEG_Z, 40.0, Some(half)))
 }
 
 /// Row-major 4×4 floats to a matrix.
@@ -225,7 +247,7 @@ fn node_transform(node: &El) -> Result<Mat4> {
     let mut m = Mat4::IDENTITY;
     for t in &node.children {
         let v = match t.name.as_str() {
-            "matrix" | "translate" | "rotate" | "scale" => t.floats()?,
+            "matrix" | "translate" | "rotate" | "scale" | "lookat" => t.floats()?,
             _ => continue,
         };
         let step = match (t.name.as_str(), v.as_slice()) {
@@ -233,6 +255,10 @@ fn node_transform(node: &El) -> Result<Mat4> {
             ("translate", [x, y, z, ..]) => Some(Mat4::from_translation(Vec3::new(*x, *y, *z))),
             ("scale", [x, y, z, ..]) => Some(Mat4::from_scale(Vec3::new(*x, *y, *z))),
             ("rotate", [x, y, z, deg, ..]) => Vec3::new(*x, *y, *z).try_normalize().map(|axis| Mat4::from_axis_angle(axis, deg.to_radians())),
+            // Eye, interest point and up: the node sits at the eye looking at the interest.
+            ("lookat", [ex, ey, ez, ix, iy, iz, ux, uy, uz, ..]) => {
+                Some(Mat4::look_at_rh(Vec3::new(*ex, *ey, *ez), Vec3::new(*ix, *iy, *iz), Vec3::new(*ux, *uy, *uz)).inverse()).filter(|m| m.is_finite())
+            }
             _ => None,
         };
         m *= step.unwrap_or(Mat4::IDENTITY);

@@ -118,6 +118,23 @@ class Mesh "Template"
     int[] faceVertexIndices = [0, 1, 2]
     point3f[] points = [(0, 0, 0), (9, 0, 0), (0, 9, 0)]
 }
+
+def Camera "Shot"
+{
+    float focalLength = 35
+    float verticalAperture = 20.955
+    double3 xformOp:translate = (0, -500, 100)
+    float3 xformOp:rotateXYZ = (90, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+}
+
+def Camera "Top"
+{
+    token projection = "orthographic"
+    float verticalAperture = 40
+    double3 xformOp:translate = (0, 0, 1000)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
 "#;
 
 /// Internal references (with a hole and a binding inside the referenced class), a
@@ -233,6 +250,14 @@ fn usda_hierarchy_units_axes_and_subsets() {
     uvs.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
     uvs.dedup();
     assert_eq!(uvs, [Vec2::new(0.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0)]);
+    // Cameras: "Shot" stands 5 m back and 1 m up (Z up, cm), turned to look along +Y, which is
+    // -Z once converted; "Top" looks straight down orthographically.
+    let [shot, top] = imported.cameras.as_slice() else { panic!("{:?}", imported.cameras) };
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    assert_eq!((shot.name.as_str(), top.name.as_str()), ("Shot", "Top"));
+    assert!(!shot.ortho && near(shot.fov, 2.0 * (20.955f32 / 70.0).atan().to_degrees()), "{shot:?}");
+    assert!(near(shot.yaw, 0.0) && near(shot.pitch, 0.0) && near(shot.distance, 5.5), "{shot:?}");
+    assert!(top.ortho && near(top.pitch, 89f32.to_radians()) && near(top.distance, 9.0), "{top:?}");
 }
 
 #[test]

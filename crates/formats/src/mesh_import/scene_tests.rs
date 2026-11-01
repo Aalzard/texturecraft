@@ -46,7 +46,8 @@ fn layer(name: &'static str, mapping: &'static str, reference: &'static str, dat
     n(name, vec![P::I(0)], children)
 }
 
-/// A quad (material slot 0) and a triangle (slot 1) under a parented Model, two materials.
+/// A quad (material slot 0) and a triangle (slot 1) under a parented Model, two materials, and
+/// a camera 5 units out on +Z (Y up) turned to look down -Z, with its lens on a NodeAttribute.
 fn scene(z_up: bool) -> Vec<N> {
     // The Z-up variant also turns the parent with PreRotation instead of Lcl Rotation.
     let rotation = if z_up { "PreRotation" } else { "Lcl Rotation" };
@@ -97,9 +98,19 @@ fn scene(z_up: bool) -> Vec<N> {
                 model(21, "Child\u{0}\u{1}Model", vec![prop("Lcl Translation", &[100.0, 0.0, 0.0])]),
                 material(30, "Red\u{0}\u{1}Material"),
                 material(31, "Blue\u{0}\u{1}Material"),
+                n(
+                    "Model",
+                    vec![P::L(40), P::S("Shot\u{0}\u{1}Model"), P::S("Camera")],
+                    vec![props70(vec![prop("Lcl Translation", &[0.0, 0.0, 500.0]), prop("Lcl Rotation", &[0.0, 90.0, 0.0])])],
+                ),
+                n(
+                    "NodeAttribute",
+                    vec![P::L(41), P::S("\u{0}\u{1}NodeAttribute"), P::S("Camera")],
+                    vec![props70(vec![prop("FocalLength", &[35.0]), prop("FilmHeight", &[0.612])])],
+                ),
             ],
         ),
-        n("Connections", vec![], vec![c(10, 21), c(21, 20), c(20, 0), c(30, 21), c(31, 21)]),
+        n("Connections", vec![], vec![c(10, 21), c(21, 20), c(20, 0), c(30, 21), c(31, 21), c(40, 0), c(41, 40)]),
     ]
 }
 
@@ -267,13 +278,23 @@ fn check_fbx_scene(m: &Mesh, z_up: bool) {
     }
 }
 
+/// The camera of [`scene`] (Y up): 35 mm over a 0.612" film, 5 m out, looking at the mesh.
+fn check_fbx_camera(im: &ImportedMesh) {
+    let [shot] = im.cameras.as_slice() else { panic!("{:?}", im.cameras) };
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    assert_eq!(shot.name, "Shot");
+    assert!(!shot.ortho && near(shot.fov, 2.0 * (0.612f32 * 25.4 / 70.0).atan().to_degrees()), "{shot:?}");
+    assert!(near(shot.yaw, 0.0) && near(shot.pitch, 0.0) && near(shot.distance, 4.0), "{shot:?}");
+}
+
 #[test]
 fn fbx_binary_32_and_64_bit_compressed_or_not() {
     let nodes = scene(false);
     for (version, compress) in [(7400, false), (7400, true), (7500, false), (7500, true)] {
         let bytes = binary_fbx(&nodes, version, compress);
-        let m = import_mesh_bytes("scene.fbx", &bytes).unwrap_or_else(|e| panic!("{version} {compress}: {e}")).mesh;
-        check_fbx_scene(&m, false);
+        let im = import_mesh_bytes("scene.fbx", &bytes).unwrap_or_else(|e| panic!("{version} {compress}: {e}"));
+        check_fbx_scene(&im.mesh, false);
+        check_fbx_camera(&im);
     }
 }
 
@@ -314,7 +335,9 @@ fn fbx_diffuse_colors_and_embedded_textures_reach_high_polys() {
 #[test]
 fn fbx_ascii_and_z_up() {
     let text = ascii_fbx(&scene(false));
-    check_fbx_scene(&import_mesh_bytes("scene.FBX", text.as_bytes()).unwrap().mesh, false);
+    let im = import_mesh_bytes("scene.FBX", text.as_bytes()).unwrap();
+    check_fbx_scene(&im.mesh, false);
+    check_fbx_camera(&im);
     check_fbx_scene(&import_mesh_bytes("z.fbx", ascii_fbx(&scene(true)).as_bytes()).unwrap().mesh, true);
     check_fbx_scene(&import_mesh_bytes("z.fbx", &binary_fbx(&scene(true), 7700, true)).unwrap().mesh, true);
 }
@@ -331,6 +354,12 @@ Definitions:  {
 	Count: 4
 }
 Objects:  {
+	Model: "Model::Producer Perspective", "Camera" {
+		Version: 232
+		Properties60:  {
+			Property: "FocalLength", "Number", "A+",35
+		}
+	}
 	Model: "Model::Parent", "Null" {
 		Version: 232
 		Properties60:  {
@@ -466,7 +495,9 @@ fn scene61() -> Vec<N> {
 
 #[test]
 fn fbx_6_ascii_and_binary_read_like_7() {
-    check_fbx_scene(&import_mesh_bytes("six.fbx", FBX61.as_bytes()).unwrap().mesh, false);
+    let six = import_mesh_bytes("six.fbx", FBX61.as_bytes()).unwrap();
+    check_fbx_scene(&six.mesh, false);
+    assert!(six.cameras.is_empty(), "the Producer views are not scene cameras");
     check_fbx_scene(&import_mesh_bytes("six.fbx", &binary_fbx(&scene61(), 6100, false)).unwrap().mesh, false);
     hammer("x.fbx", FBX61.as_bytes());
     hammer("x.fbx", &binary_fbx(&scene61(), 6100, true));
@@ -564,6 +595,9 @@ const DAE: &str = r##"<?xml version="1.0" encoding="utf-8"?>
       </mesh>
     </geometry>
   </library_geometries>
+  <library_cameras>
+    <camera id="lens"><optics><technique_common><perspective><yfov>30</yfov></perspective></technique_common></optics></camera>
+  </library_cameras>
   <library_visual_scenes>
     <visual_scene id="scene">
       <node id="parent">
@@ -575,6 +609,10 @@ const DAE: &str = r##"<?xml version="1.0" encoding="utf-8"?>
             <bind_material><technique_common><instance_material symbol="mat0" target="#red-mat"/></technique_common></bind_material>
           </instance_geometry>
         </node>
+      </node>
+      <node id="cam" name="Overview">
+        <lookat>0 -10 0 0 0 0 0 0 1</lookat>
+        <instance_camera url="#lens"/>
       </node>
       <node id="other">
         <instance_geometry url="#tris">
@@ -609,6 +647,11 @@ fn dae_polylist_z_up_units_and_node_transforms() {
     // Parts are named after their nodes (ids when unnamed).
     let parts: Vec<&str> = m.submeshes.iter().map(|s| s.name.as_str()).collect();
     assert!(parts.contains(&"child") && parts.contains(&"other"), "{parts:?}");
+    // The camera looks at the origin from -10 along Z-up Y: on +Z once converted, facing -Z.
+    let [cam] = r.cameras.as_slice() else { panic!("{:?}", r.cameras) };
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    assert_eq!(cam.name, "Overview");
+    assert!(!cam.ortho && near(cam.fov, 30.0) && near(cam.yaw, 0.0) && near(cam.pitch, 0.0), "{cam:?}");
 }
 
 #[test]

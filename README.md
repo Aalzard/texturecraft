@@ -190,7 +190,6 @@ from our code against public documentation.
 **What's missing:**
 - hardware ray tracing in Rendering mode;
 - pen tilt (the windowing layer doesn't report it yet);
-- cameras from FBX, COLLADA and USD files (glTF cameras are imported);
 - Alembic files in the older HDF5 container, and Alembic animation (the first sample is read);
 - displacement in shadows and the path tracer (the viewport displaces);
 - a native-speaker review of the translations;

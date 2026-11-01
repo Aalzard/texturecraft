@@ -3,7 +3,8 @@
 //! model, COLLADA node, USD Mesh prim, Alembic PolyMesh; unnamed parts take the file stem), materials contiguous,
 //! glTF UV convention (origin top-left, v down),
 //! normals (computed when missing), vertex colors (glTF, OBJ, PLY), UVs (auto-unwrapped when
-//! missing) and MikkTSpace tangents. glTF cameras come along as the project's camera list.
+//! missing) and MikkTSpace tangents. glTF, FBX, COLLADA and USD cameras come along as the
+//! project's camera list.
 
 mod abc;
 mod dae;
@@ -22,7 +23,7 @@ pub(crate) mod usd;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
-use texturecraft_geom::glam::{Vec2, Vec3, Vec4};
+use texturecraft_geom::glam::{Mat4, Vec2, Vec3, Vec4};
 use texturecraft_geom::unwrap::{all_triangles_degenerate, auto_unwrap, weld_ids};
 use texturecraft_geom::{BaseColor, MAX_TRIANGLES, Mesh, SubMesh, UvGBuffer};
 
@@ -49,7 +50,7 @@ pub const MESH_EXTENSIONS: [&str; 12] = ["gltf", "glb", "fbx", "dae", "usd", "us
 pub struct ImportedMesh {
     pub mesh: Mesh,
     pub report: MeshReport,
-    /// Cameras of the file (glTF), as orbit cameras around the mesh.
+    /// Cameras of the file (glTF, FBX, COLLADA, USD), as orbit cameras around the mesh.
     pub cameras: Vec<texturecraft_core::Camera>,
 }
 
@@ -64,6 +65,27 @@ pub(crate) struct RawCamera {
     pub forward: Vec3,
     pub fov: f32,
     pub ortho_half_height: Option<f32>,
+}
+
+impl RawCamera {
+    /// A camera at the origin of `m` (local to world) looking along local `forward` with +Y
+    /// up; `ortho_half_height` is in local units.
+    pub fn placed(name: String, m: Mat4, forward: Vec3, fov: f32, ortho_half_height: Option<f32>) -> RawCamera {
+        let scale = m.transform_vector3(Vec3::Y).length();
+        RawCamera {
+            name,
+            eye: m.transform_point3(Vec3::ZERO),
+            forward: m.transform_vector3(forward),
+            fov,
+            ortho_half_height: ortho_half_height.map(|h| h * scale),
+        }
+    }
+}
+
+/// Vertical field of view in degrees of a lens of `focal` length over a film `aperture` high
+/// (same units).
+pub(crate) fn lens_fov(focal: f32, aperture: f32) -> f32 {
+    2.0 * (aperture / (2.0 * focal)).atan().to_degrees()
 }
 
 /// What the importer found and fixed, for the import dialog.
@@ -375,7 +397,8 @@ fn geometry(raw: RawMesh) -> Result<(Mesh, Vec<String>, Option<Vec<Vec2>>)> {
 
 /// Complete a raw mesh: submeshes, normals, UVs, tangents, validation and the report.
 pub(crate) fn finish(mut raw: RawMesh) -> Result<ImportedMesh> {
-    let raw_cameras = std::mem::take(&mut raw.cameras);
+    let mut raw_cameras = std::mem::take(&mut raw.cameras);
+    raw_cameras.truncate(MAX_CAMERAS);
     let (mut mesh, mut warnings, uvs) = geometry(raw)?;
     let uvs_generated = match uvs {
         Some(uv) if uv.len() == mesh.positions.len() => {
