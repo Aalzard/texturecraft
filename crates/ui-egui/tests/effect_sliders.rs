@@ -51,6 +51,33 @@ fn dragging_the_effect_opacity_applies_it() {
     assert!(opacity(&h, effect) < 0.5, "the dragged opacity applies: {}", opacity(&h, effect));
 }
 
+/// A generator slider applies while it is dragged (the texture follows the pointer), and the
+/// whole drag is one undo step.
+#[test]
+fn dragging_a_generator_slider_applies_live_as_one_undo_step() {
+    let (mut h, effect) = harness();
+    let level = |h: &Harness<'_, TextureCraftApp>| match &h.state().session.doc.project.effect(effect).unwrap().1.kind {
+        EffectKind::Generator(g) => g.level,
+        _ => panic!("a generator"),
+    };
+    let steps = h.state().session.history_labels().len();
+    let t = track(&h, "Level");
+    let at = |x: f32| egui::pos2(t.left() + x, t.center().y);
+    h.drag_at(at(10.0));
+    h.run_steps(2);
+    let mut last = 0.0;
+    for x in [60.0, 160.0] {
+        h.hover_at(at(x));
+        h.run_steps(2);
+        assert!(level(&h) > last && level(&h) != 0.5, "the level follows the drag before it is released: {last} -> {}", level(&h));
+        last = level(&h);
+    }
+    h.drop_at(at(160.0));
+    h.run_steps(3);
+    assert_eq!(level(&h), last);
+    assert_eq!(h.state().session.history_labels().len(), steps + 1, "one undo step for the drag");
+}
+
 /// The combo box in the row of the "Channel" label.
 fn channel_picker<'a>(h: &'a Harness<'_, TextureCraftApp>) -> egui_kittest::Node<'a> {
     let row = h.get_by_label("Channel").rect().center().y;

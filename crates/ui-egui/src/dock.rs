@@ -798,8 +798,8 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
         }
         ui.add_space(6.0);
         let mut hs = set.height_strength;
-        if slider(ui, tr("Height to normal strength"), &mut hs, 0.0..=10.0, 2).changed() {
-            app.run("textureSet.settings", json!({"ts": ts, "heightStrength": hs}));
+        if let Some(merge) = slider_edit(ui, tr("Height to normal strength"), &mut hs, 0.0..=10.0, 2) {
+            app.run("textureSet.settings", json!({"ts": ts, "heightStrength": hs, "merge": merge}));
         }
         let directx = app.session.doc.project.normal_format == texturecraft_engine::core::NormalFormat::DirectX;
         combo(ui, tr("Normal map format"), if directx { "DirectX" } else { "OpenGL" }, |ui| {
@@ -981,11 +981,11 @@ fn height_mask_section(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
         }
         ui.add_enabled_ui(hm.enabled, |ui| {
             let (mut contrast, mut offset) = (hm.contrast, hm.offset);
-            if slider_edit(ui, tr("Contrast"), &mut contrast, 0.0..=16.0, 2) {
-                app.run("layer.set", json!({"layer": id, "heightMask": {"contrast": contrast}}));
+            if let Some(merge) = slider_edit(ui, tr("Contrast"), &mut contrast, 0.0..=16.0, 2) {
+                app.run("layer.set", json!({"layer": id, "heightMask": {"contrast": contrast}, "merge": merge}));
             }
-            if slider_edit(ui, tr("Height offset"), &mut offset, -1.0..=1.0, 2) {
-                app.run("layer.set", json!({"layer": id, "heightMask": {"offset": offset}}));
+            if let Some(merge) = slider_edit(ui, tr("Height offset"), &mut offset, -1.0..=1.0, 2) {
+                app.run("layer.set", json!({"layer": id, "heightMask": {"offset": offset}, "merge": merge}));
             }
         });
     });
@@ -1628,34 +1628,34 @@ fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: 
         Projection::Decal(_) => return,
     };
     let mut edit = |extra: Value| app.run("layer.fill.projection", with(base, extra));
-    if slider_edit(ui, tr("Scale / tiling"), &mut scale, 0.01..=20.0, 2) {
-        edit(json!({"scale": scale}));
+    if let Some(merge) = slider_edit(ui, tr("Scale / tiling"), &mut scale, 0.01..=20.0, 2) {
+        edit(json!({"scale": scale, "merge": merge}));
     }
     match &fill.projection {
         Projection::Uv { rotation, offset, .. } => {
             let mut r = *rotation;
-            if slider_edit(ui, tr("Rotation"), &mut r, 0.0..=360.0, 0) {
-                edit(json!({"rotation": r}));
+            if let Some(merge) = slider_edit(ui, tr("Rotation"), &mut r, 0.0..=360.0, 0) {
+                edit(json!({"rotation": r, "merge": merge}));
             }
-            if let Some(o) = offset_sliders(ui, ["U", "V"], *offset) {
-                edit(json!({"offset": o}));
+            if let Some((o, merge)) = offset_sliders(ui, ["U", "V"], *offset) {
+                edit(json!({"offset": o, "merge": merge}));
             }
         }
         Projection::Triplanar { sharpness, offset, .. } => {
             let mut s = *sharpness;
-            if slider_edit(ui, tr("Blend sharpness"), &mut s, 1.0..=64.0, 1) {
-                edit(json!({"sharpness": s}));
+            if let Some(merge) = slider_edit(ui, tr("Blend sharpness"), &mut s, 1.0..=64.0, 1) {
+                edit(json!({"sharpness": s, "merge": merge}));
             }
-            if let Some(o) = offset_sliders(ui, ["X", "Y", "Z"], *offset) {
-                edit(json!({"offset": o}));
+            if let Some((o, merge)) = offset_sliders(ui, ["X", "Y", "Z"], *offset) {
+                edit(json!({"offset": o, "merge": merge}));
             }
         }
         Projection::Planar { axis, offset, .. } => {
             if let Some(a) = axis_combo(ui, *axis) {
                 edit(json!({"axis": a}));
             }
-            if let Some(o) = offset_sliders(ui, ["X", "Y", "Z"], *offset) {
-                edit(json!({"offset": o}));
+            if let Some((o, merge)) = offset_sliders(ui, ["X", "Y", "Z"], *offset) {
+                edit(json!({"offset": o, "merge": merge}));
             }
         }
         Projection::Cylindrical { axis, .. } => {
@@ -1667,13 +1667,14 @@ fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: 
     }
 }
 
-/// A slider per offset component ("Offset U", …): the whole offset once one is edited.
-fn offset_sliders<const N: usize>(ui: &mut Ui, axes: [&str; N], mut v: [f32; N]) -> Option<[f32; N]> {
-    let mut done = false;
+/// A slider per offset component ("Offset U", …): the whole offset once one is edited, with
+/// [`slider_edit`]'s `merge`.
+fn offset_sliders<const N: usize>(ui: &mut Ui, axes: [&str; N], mut v: [f32; N]) -> Option<([f32; N], bool)> {
+    let mut edit = None;
     for (axis, x) in axes.iter().zip(v.iter_mut()) {
-        done |= slider_edit(ui, &trf("Offset {axis}", &[("axis", axis)]), x, -1.0..=1.0, 2);
+        edit = edit.or(slider_edit(ui, &trf("Offset {axis}", &[("axis", axis)]), x, -1.0..=1.0, 2));
     }
-    done.then_some(v)
+    edit.map(|merge| (v, merge))
 }
 
 /// The axis a planar or cylindrical projection runs along: the one picked, if any.
@@ -1709,12 +1710,12 @@ fn decal_editor(app: &mut TextureCraftApp, ui: &mut Ui, d: &Decal, layer: LayerI
         (tr("Offset up"), -diag..=diag),
         (tr("Depth"), diag * 0.005..=diag),
     ];
-    let mut done = false;
+    let mut edit = None;
     for ((label, range), x) in rows.into_iter().zip(v.iter_mut()) {
-        done |= slider_edit(ui, label, x, range, 3);
+        edit = edit.or(slider_edit(ui, label, x, range, 3));
     }
-    if done {
-        app.run("layer.decal.set", json!({"layer": layer.0, "size": [v[0], v[1]], "rotation": v[2], "offset": [v[3], v[4]], "depth": v[5]}));
+    if let Some(merge) = edit {
+        app.run("layer.decal.set", json!({"layer": layer.0, "size": [v[0], v[1]], "rotation": v[2], "offset": [v[3], v[4]], "depth": v[5], "merge": merge}));
     }
     ui.label(
         RichText::new(tr("The image's alpha cuts the decal's shape; faces turned away and surfaces beyond its depth stay clear."))
@@ -1776,9 +1777,8 @@ fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Valu
                         }
                     } else {
                         let range = if c.kind() == ChannelKind::Signed { -1.0..=1.0 } else { 0.0..=1.0 };
-                        let r = slider(ui, tr("Value"), &mut v[0], range, 2);
-                        if r.changed() {
-                            app.run("layer.fill.set", set(json!({"value": v[0]})));
+                        if let Some(merge) = slider_edit(ui, tr("Value"), &mut v[0], range, 2) {
+                            app.run("layer.fill.set", set(json!({"value": v[0], "merge": merge})));
                         }
                     }
                 }
@@ -1796,10 +1796,10 @@ fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Valu
                     let r2 = slider_edit(ui, tr("Contrast"), &mut con, 0.0..=8.0, 2);
                     let mut seed = pattern.seed as f32;
                     let r3 = slider_edit(ui, tr("Seed"), &mut seed, 0.0..=999.0, 0);
-                    if r1 || r2 || r3 {
+                    if let Some(merge) = r1.or(r2).or(r3) {
                         app.run(
                             "layer.fill.set",
-                            set(json!({"procedural": pattern.kind.label(), "scale": s, "contrast": con, "seed": seed as u64, "low": low, "high": high})),
+                            set(json!({"procedural": pattern.kind.label(), "scale": s, "contrast": con, "seed": seed as u64, "low": low, "high": high, "merge": merge})),
                         );
                     }
                     if c.kind() == ChannelKind::Color {
@@ -1849,8 +1849,8 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
         });
     });
     let mut op = e.opacity;
-    if slider_edit(ui, tr("Opacity"), &mut op, 0.0..=1.0, 2) {
-        app.run("effect.set", json!({"effect": id, "opacity": op}));
+    if let Some(merge) = slider_edit(ui, tr("Opacity"), &mut op, 0.0..=1.0, 2) {
+        app.run("effect.set", json!({"effect": id, "opacity": op, "merge": merge}));
     }
     ui.separator();
     match &e.kind {
@@ -1872,8 +1872,8 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
             let r4 = slider_edit(ui, tr("Noise scale"), &mut ns, 0.1..=64.0, 1);
             let mut inv = g.invert;
             let r5 = ui.checkbox(&mut inv, tr("Invert"));
-            if r1 || r2 || r3 || r4 || r5.changed() {
-                app.run("effect.set", json!({"effect": id, "level": level, "softness": soft, "noise": noise, "noiseScale": ns, "invert": inv}));
+            if let Some(merge) = r1.or(r2).or(r3).or(r4).or(r5.changed().then_some(false)) {
+                app.run("effect.set", json!({"effect": id, "level": level, "softness": soft, "noise": noise, "noiseScale": ns, "invert": inv, "merge": merge}));
             }
             if !app.session.doc.baked.contains_key(&app.session.ts()) {
                 ui.label(
@@ -1886,13 +1886,13 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
             levels_histogram(app, ui, layer, eid, (l.in_low, l.in_high));
             let mut v = [l.in_low, l.in_high, l.gamma, l.out_low, l.out_high];
             let labels = [tr("Input low"), tr("Input high"), tr("Gamma"), tr("Output low"), tr("Output high")];
-            let mut done = false;
+            let mut edit = None;
             for (i, label) in labels.iter().enumerate() {
                 let range = if i == 2 { 0.1..=5.0 } else { 0.0..=1.0 };
-                done |= slider_edit(ui, label, &mut v[i], range, 2);
+                edit = edit.or(slider_edit(ui, label, &mut v[i], range, 2));
             }
-            if done {
-                app.run("effect.set", json!({"effect": id, "inLow": v[0], "inHigh": v[1], "gamma": v[2], "outLow": v[3], "outHigh": v[4]}));
+            if let Some(merge) = edit {
+                app.run("effect.set", json!({"effect": id, "inLow": v[0], "inHigh": v[1], "gamma": v[2], "outLow": v[3], "outHigh": v[4], "merge": merge}));
             }
         }
         EffectKind::Fill { source, .. } => {
@@ -1917,8 +1917,8 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
             match source {
                 Source::Uniform(v) => {
                     let mut x = v[0];
-                    if slider_edit(ui, tr("Value"), &mut x, 0.0..=1.0, 2) {
-                        app.run("effect.set", json!({"effect": id, "value": x}));
+                    if let Some(merge) = slider_edit(ui, tr("Value"), &mut x, 0.0..=1.0, 2) {
+                        app.run("effect.set", json!({"effect": id, "value": x, "merge": merge}));
                     }
                 }
                 Source::Anchor { channel, .. } => {
@@ -2024,16 +2024,16 @@ fn levels_histogram(app: &TextureCraftApp, ui: &mut Ui, layer: &Layer, eid: Laye
 /// The parameters of filter effect `id`.
 fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter) {
     let tk = Tokens::get(ui.ctx());
-    let set = |app: &mut TextureCraftApp, key: &str, v: Value| {
-        let mut p = json!({ "effect": id });
+    let set = |app: &mut TextureCraftApp, key: &str, v: Value, merge: bool| {
+        let mut p = json!({ "effect": id, "merge": merge });
         p[key] = v;
         app.run("effect.set", p);
     };
     ui.label(caption(tr(f.label())));
     if let Filter::Hsl { hue, .. } = f {
         let mut h = hue * 360.0;
-        if slider_edit(ui, tr("Hue shift (degrees)"), &mut h, -180.0..=180.0, 0) {
-            set(app, "hue", json!(h / 360.0));
+        if let Some(merge) = slider_edit(ui, tr("Hue shift (degrees)"), &mut h, -180.0..=180.0, 0) {
+            set(app, "hue", json!(h / 360.0), merge);
         }
     }
     for (key, label, mut v, lo, hi) in scalar_params(f) {
@@ -2044,8 +2044,8 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
         } else {
             2
         };
-        if slider_edit(ui, tr(label), &mut v, lo..=hi, decimals) {
-            set(app, key, json!(v));
+        if let Some(merge) = slider_edit(ui, tr(label), &mut v, lo..=hi, decimals) {
+            set(app, key, json!(v), merge);
         }
     }
     match f {
@@ -2054,12 +2054,12 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
             {
                 ui.label(RichText::new(label).strong());
                 let mut v = *rgb;
-                let mut done = false;
+                let mut edit = None;
                 for (x, name) in v.iter_mut().zip([tr("Cyan / red"), tr("Magenta / green"), tr("Yellow / blue")]) {
-                    done |= slider_edit(ui, name, x, -1.0..=1.0, 2);
+                    edit = edit.or(slider_edit(ui, name, x, -1.0..=1.0, 2));
                 }
-                if done {
-                    set(app, key, json!(v));
+                if let Some(merge) = edit {
+                    set(app, key, json!(v), merge);
                 }
             }
         }
@@ -2068,7 +2068,7 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
                 let mut v = *rgb;
                 ui.horizontal(|ui| {
                     if color_swatch(ui, &format!("replace_{key}_{id}"), &mut v, 36.0) {
-                        set(app, key, json!(v));
+                        set(app, key, json!(v), false);
                     }
                     ui.label(label);
                 });
@@ -2094,7 +2094,7 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
                 }
             });
             if changed {
-                set(app, "colors", json!(c));
+                set(app, "colors", json!(c), false);
             }
             ui.label(RichText::new(tr("Dark to light: the content's luminance picks a color along these stops.")).size(10.5).color(tk.text_dim));
         }

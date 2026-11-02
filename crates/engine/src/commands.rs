@@ -88,11 +88,15 @@ pub fn find(id: &str) -> Option<&'static CommandSpec> {
     command_specs().iter().find(|c| c.id == id)
 }
 
-/// Run a command by id with JSON params (empty params = defaults, never a dialog).
+/// Run a command by id with JSON params (empty params = defaults, never a dialog). With
+/// `merge: true` its edits continue the previous undo step of the same label (drags).
 pub fn execute(s: &mut Session, id: &str, params: &Value) -> Result<Value> {
     let spec = find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
     (spec.enabled)(s).map_err(|why| EngineError::Disabled { cmd: id.to_string(), why })?;
-    (spec.run)(s, params)
+    let outer = std::mem::replace(&mut s.merge_edits, boolp(params, "merge").unwrap_or(false));
+    let result = (spec.run)(s, params);
+    s.merge_edits = outer;
+    result
 }
 
 /// Every command, as JSON (for `commands` listings and MCP).

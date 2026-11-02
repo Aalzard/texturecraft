@@ -21,6 +21,8 @@ layer clipboard, and `effect.paste {layer?, target?}` adds it to another layer's
 
 `edit.undo {steps?}` and `edit.redo {steps?}` go back or forward several steps at once (as far
 as the history reaches); `edit.history` lists the steps done and the undone ones, next first.
+Any command takes `merge: true` to fold its edit into the previous undo step when that step has
+the same label: a drag that applies a value on every frame stays one step.
 
 ## Control channel (desktop app)
 

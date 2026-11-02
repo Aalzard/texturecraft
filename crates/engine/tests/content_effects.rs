@@ -260,3 +260,24 @@ fn histogram_counts_what_an_effect_reads() {
     assert!(execute(&mut s, "effect.histogram", &json!({"effect": 999_999})).is_err());
     assert!(execute(&mut s, "effect.histogram", &json!({"effect": lv, "channel": "nope"})).is_err());
 }
+
+/// `merge: true` on any command folds its edit into the previous step of the same label (a
+/// slider drag applies a value per frame and is one undo step); the next command starts afresh.
+#[test]
+fn merged_edits_are_one_undo_step() {
+    let mut s = session();
+    execute(&mut s, "layer.add.fill", &json!({"color": [1.0, 0.0, 0.0]})).unwrap();
+    let hsl = LayerId(id(execute(&mut s, "effect.add.filter", &json!({"target": "content", "filter": "hsl"})).unwrap(), "effect"));
+    let opacity = |s: &Session| s.doc.project.effect(hsl).unwrap().1.opacity;
+    let depth = s.history_labels().len();
+    for (i, op) in [0.8, 0.6, 0.4].into_iter().enumerate() {
+        execute(&mut s, "effect.set", &json!({"effect": hsl.0, "opacity": op, "merge": i > 0})).unwrap();
+    }
+    assert_eq!(s.history_labels().len(), depth + 1, "one step for the drag");
+    execute(&mut s, "effect.set", &json!({"effect": hsl.0, "opacity": 0.2})).unwrap();
+    assert_eq!(s.history_labels().len(), depth + 2, "a later edit without merge is its own step");
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert_eq!(opacity(&s), 0.4);
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert_eq!(opacity(&s), 1.0, "one undo reverts the whole drag");
+}
