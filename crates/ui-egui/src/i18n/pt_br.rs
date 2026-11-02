@@ -109,6 +109,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Salvamentos automáticos, materiais inteligentes, predefinições, modelos e layouts da interface vão para a pasta de dados. Uma nova pasta vale após reiniciar; os arquivos já salvos ficam onde estão.",
     ),
     ("Average normals", "Normais médias"),
+    ("Axis", "Eixo"),
     ("Back to painting", "Voltar à pintura"),
     ("Backface culling", "Descarte de faces traseiras"),
     ("Bake Mesh Maps", "Bake de mapas de malha"),
@@ -132,6 +133,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Bent normals", "Normais curvadas"),
     ("Bevel", "Chanfro"),
     ("Black", "Preto"),
+    ("Blend sharpness", "Nitidez da mistura"),
     ("Blending", "Mesclagem"),
     ("Blending mode of the displayed channel", "Modo de mesclagem do canal exibido"),
     ("Blur", "Desfoque"),
@@ -579,6 +581,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Offset", "Deslocamento"),
     ("Offset right", "Deslocamento à direita"),
     ("Offset up", "Deslocamento para cima"),
+    ("Offset {axis}", "Deslocamento {axis}"),
     (
         "Offsets the textures by the height channel, at the height to normal strength",
         "Desloca as texturas pelo canal de altura, com a intensidade de altura para normal",

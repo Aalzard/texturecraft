@@ -112,6 +112,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Les sauvegardes automatiques, matériaux intelligents, préréglages, modèles et dispositions de l'interface vont dans le dossier de données. Un nouveau dossier s'applique au redémarrage ; les fichiers déjà enregistrés restent où ils sont.",
     ),
     ("Average normals", "Moyenne des normales"),
+    ("Axis", "Axe"),
     ("Back to painting", "Retour à la peinture"),
     ("Backface culling", "Élimination des faces arrière"),
     ("Bake Mesh Maps", "Précalculer les cartes de maillage"),
@@ -135,6 +136,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Bent normals", "Normales déviées"),
     ("Bevel", "Biseau"),
     ("Black", "Noir"),
+    ("Blend sharpness", "Netteté du fondu"),
     ("Blending", "Fusion"),
     ("Blending mode of the displayed channel", "Mode de fusion du canal affiché"),
     ("Blur", "Flou"),
@@ -597,6 +599,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Offset", "Décalage"),
     ("Offset right", "Décalage vers la droite"),
     ("Offset up", "Décalage vers le haut"),
+    ("Offset {axis}", "Décalage {axis}"),
     (
         "Offsets the textures by the height channel, at the height to normal strength",
         "Décale les textures selon le canal de hauteur, avec l'intensité hauteur vers normale",

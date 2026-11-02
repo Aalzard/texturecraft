@@ -109,6 +109,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Salvataggi automatici, materiali smart, preset, modelli e layout dell'interfaccia vanno nella cartella dei dati. Una nuova cartella si applica al riavvio; i file già salvati restano dove sono.",
     ),
     ("Average normals", "Normali medie"),
+    ("Axis", "Asse"),
     ("Back to painting", "Torna alla pittura"),
     ("Backface culling", "Culling facce posteriori"),
     ("Bake Mesh Maps", "Bake mappe mesh"),
@@ -132,6 +133,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Bent normals", "Bent normal"),
     ("Bevel", "Smusso"),
     ("Black", "Nero"),
+    ("Blend sharpness", "Nitidezza della fusione"),
     ("Blending", "Fusione"),
     ("Blending mode of the displayed channel", "Metodo di fusione del canale visualizzato"),
     ("Blur", "Sfocatura"),
@@ -588,6 +590,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Offset", "Scostamento"),
     ("Offset right", "Offset a destra"),
     ("Offset up", "Offset in alto"),
+    ("Offset {axis}", "Scostamento {axis}"),
     (
         "Offsets the textures by the height channel, at the height to normal strength",
         "Sposta le texture in base al canale altezza, con l'intensità altezza in normale",

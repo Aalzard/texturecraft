@@ -112,6 +112,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "自動保存、スマートマテリアル、プリセット、テンプレート、UI レイアウトはデータフォルダーに保存されます。新しいフォルダーは再起動後に適用され、保存済みのファイルはそのまま残ります。",
     ),
     ("Average normals", "法線を平均化"),
+    ("Axis", "軸"),
     ("Back to painting", "ペイントに戻る"),
     ("Backface culling", "背面カリング"),
     ("Bake Mesh Maps", "メッシュマップのベイク"),
@@ -135,6 +136,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Bent normals", "ベントノーマル"),
     ("Bevel", "ベベル"),
     ("Black", "黒"),
+    ("Blend sharpness", "ブレンドのシャープさ"),
     ("Blending", "ブレンド"),
     ("Blending mode of the displayed channel", "表示中のチャンネルのブレンドモード"),
     ("Blur", "ぼかし"),
@@ -576,6 +578,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Offset", "オフセット"),
     ("Offset right", "右オフセット"),
     ("Offset up", "上オフセット"),
+    ("Offset {axis}", "オフセット {axis}"),
     (
         "Offsets the textures by the height channel, at the height to normal strength",
         "ハイトチャンネルに応じてテクスチャをオフセットします (強度はハイト→ノーマル強度)",
