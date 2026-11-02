@@ -83,6 +83,7 @@ pub fn usd_export_options() -> ExportOptions {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UsdValue {
     Token(String),
+    Str(String),
     Int(i32),
     Double(f64),
     Asset(String),
@@ -277,7 +278,8 @@ fn material(path: &str, id: &str, files: &[(usize, String)]) -> UsdPrim {
         let mut st = UsdPrim::new("st", "Shader");
         st.attrs = vec![
             UsdAttr::new("info:id", "token", Some(UsdValue::Token("UsdPrimvarReader_float2".into()))).uniform(),
-            UsdAttr::new("inputs:varname", "token", Some(UsdValue::Token("st".into()))),
+            // A string, not a token: usdchecker's ARKit profile refuses a token here.
+            UsdAttr::new("inputs:varname", "string", Some(UsdValue::Str("st".into()))),
             UsdAttr::new("outputs:result", "float2", None),
         ];
         mat.children.push(st);
@@ -355,7 +357,7 @@ fn usda_value(s: &mut String, v: &UsdValue) {
         s.push(']');
     };
     match v {
-        UsdValue::Token(t) => {
+        UsdValue::Token(t) | UsdValue::Str(t) => {
             let _ = write!(s, "\"{t}\"");
         }
         UsdValue::Int(i) => {

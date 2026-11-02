@@ -773,12 +773,12 @@ impl Session {
         self.caches.get_mut(ts).map(|c| std::mem::take(&mut c.upload).into_iter().collect()).unwrap_or_default()
     }
 
-    /// Grayscale RGBA8 of layer `id`'s mask at `size²` for the mask view (None without a mask).
-    pub fn mask_view_rgba(&self, id: LayerId, size: u32) -> Option<Vec<u8>> {
-        let (ts, _, _) = self.doc.project.locate(id)?;
+    /// `f` on the compositor inputs of texture set `ts` (without a live stroke; None for a set
+    /// not ready).
+    pub(crate) fn with_inputs<R>(&self, ts: usize, f: impl FnOnce(&texturecraft_compose::Inputs) -> Option<R>) -> Option<R> {
         let cache = self.caches.get(ts)?;
         let empty = BakedMaps::default();
-        let inputs = texturecraft_compose::Inputs {
+        f(&texturecraft_compose::Inputs {
             project: &self.doc.project,
             ts,
             mesh: &self.mesh,
@@ -788,9 +788,22 @@ impl Session {
             preview: None,
             images: &self.images,
             bounds: self.mesh.bounds(),
-        };
-        let gray = texturecraft_compose::mask_image(&inputs, id, size)?;
+        })
+    }
+
+    /// Grayscale RGBA8 of layer `id`'s mask at `size²` for the mask view (None without a mask).
+    pub fn mask_view_rgba(&self, id: LayerId, size: u32) -> Option<Vec<u8>> {
+        let (ts, _, _) = self.doc.project.locate(id)?;
+        let gray = self.with_inputs(ts, |inp| texturecraft_compose::mask_image(inp, id, size))?;
         Some(gray.iter().flat_map(|g| [*g, *g, *g, 255]).collect())
+    }
+
+    /// Histogram (`bins` buckets over 0..1) of the values entering effect `effect`: its layer's
+    /// mask, or for a content effect the layer's `channel` (None for an unknown effect).
+    pub fn effect_histogram(&self, effect: LayerId, channel: Channel, bins: usize) -> Option<Vec<u32>> {
+        let (owner, _) = self.doc.project.effect(effect)?;
+        let (ts, _, _) = self.doc.project.locate(owner)?;
+        self.with_inputs(ts, |inp| texturecraft_compose::effect_histogram(inp, effect, channel, bins))
     }
 
     pub fn baked(&self, ts: usize) -> Option<&BakedMaps> {

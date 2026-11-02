@@ -16,7 +16,7 @@ use crate::i18n::{n_, tr, trf};
 use crate::shelf::{Asset, ShelfDrag};
 use crate::state::PropsTab;
 use crate::theme::{Tokens, caption};
-use crate::widgets::{chip, color_swatch, combo, dnd_release, elided, icon_button, section, slider};
+use crate::widgets::{chip, color_swatch, combo, dnd_release, elided, histogram, icon_button, section, slider, slider_edit};
 
 const TAG_COLORS: [Color32; 8] = [
     Color32::from_rgb(0xc0, 0x40, 0x40),
@@ -47,6 +47,23 @@ pub(crate) fn texture_set_list(app: &mut TextureCraftApp, ui: &mut Ui) {
         })
         .collect();
     let active = app.session.ts();
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.menu_button(RichText::new(ic::EYE).size(14.0), |ui| {
+            for (label, mode) in [(tr("Show all"), "showAll"), (tr("Hide all"), "hideAll"), (tr("Invert show/hide"), "invert")] {
+                if ui.button(label).clicked() {
+                    app.run("textureSet.visibility", json!({ "mode": mode }));
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text(tr("Show or hide texture sets"));
+        let solo = sets.iter().enumerate().all(|(i, s)| s.2 == (i == active));
+        if icon_button(ui, ic::FRAME_CORNERS, tr("Focus: show only the active texture set"), solo && sets.len() > 1, 22.0).clicked() {
+            app.run("textureSet.visibility", json!({ "mode": "solo" }));
+        }
+    });
     egui::ScrollArea::vertical().id_salt("ts_scroll").show(ui, |ui| {
         for (i, (name, size, visible)) in sets.into_iter().enumerate() {
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
@@ -260,6 +277,7 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     let selected = app.session.selected_layer() == Some(layer.id);
     let h = 38.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::ListItem, true, selected, &layer.name));
     let p = ui.painter().clone();
     let bg = if selected && app.session.target == StackTarget::Content {
         tk.row_selected
@@ -852,10 +870,10 @@ fn height_mask_section(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
         }
         ui.add_enabled_ui(hm.enabled, |ui| {
             let (mut contrast, mut offset) = (hm.contrast, hm.offset);
-            if slider(ui, tr("Contrast"), &mut contrast, 0.0..=16.0, 2).drag_stopped() {
+            if slider_edit(ui, tr("Contrast"), &mut contrast, 0.0..=16.0, 2) {
                 app.run("layer.set", json!({"layer": id, "heightMask": {"contrast": contrast}}));
             }
-            if slider(ui, tr("Height offset"), &mut offset, -1.0..=1.0, 2).drag_stopped() {
+            if slider_edit(ui, tr("Height offset"), &mut offset, -1.0..=1.0, 2) {
                 app.run("layer.set", json!({"layer": id, "heightMask": {"offset": offset}}));
             }
         });
@@ -1222,6 +1240,9 @@ fn text_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     });
 }
 
+/// Tooltip of the material channel chips.
+pub(crate) const SOLO_HINT: &str = "Click: turn this channel on or off. Alt+click: this channel only";
+
 fn material_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     let tk = Tokens::get(ui.ctx());
     ui.label(caption(tr("Material")));
@@ -1229,8 +1250,9 @@ fn material_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         for c in &chans {
             let on = app.session.tool.enabled.contains(c);
-            if chip(ui, tr(c.short()), on).clicked() {
-                app.run("tool.material", json!({"channel": c.id(), "enabled": !on}));
+            if chip(ui, tr(c.short()), on).on_hover_text(tr(SOLO_HINT)).clicked() {
+                let solo = ui.input(|i| i.modifiers.alt);
+                app.run("tool.material", json!({"channel": c.id(), "enabled": solo || !on, "solo": solo}));
             }
         }
     });
@@ -1328,8 +1350,9 @@ fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value
     ui.horizontal_wrapped(|ui| {
         for c in &chans {
             let enabled = on.contains(c);
-            if chip(ui, tr(c.short()), enabled).clicked() {
-                app.run("layer.fill.set", with(base, json!({"channel": c.id(), "enabled": !enabled})));
+            if chip(ui, tr(c.short()), enabled).on_hover_text(tr(SOLO_HINT)).clicked() {
+                let solo = ui.input(|i| i.modifiers.alt);
+                app.run("layer.fill.set", with(base, json!({"channel": c.id(), "enabled": solo || !enabled, "solo": solo})));
             }
         }
     });
@@ -1368,7 +1391,7 @@ fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: 
         Projection::Cylindrical { scale, .. } => (*scale, "cylindrical"),
         Projection::Decal(_) => return,
     };
-    if slider(ui, tr("Scale / tiling"), &mut scale, 0.01..=20.0, 2).drag_stopped() {
+    if slider_edit(ui, tr("Scale / tiling"), &mut scale, 0.01..=20.0, 2) {
         app.run("layer.fill.projection", with(base, json!({"projection": proj_id, "scale": scale})));
     }
 }
@@ -1395,7 +1418,7 @@ fn decal_editor(app: &mut TextureCraftApp, ui: &mut Ui, d: &Decal, layer: LayerI
     ];
     let mut done = false;
     for ((label, range), x) in rows.into_iter().zip(v.iter_mut()) {
-        done |= slider(ui, label, x, range, 3).drag_stopped();
+        done |= slider_edit(ui, label, x, range, 3);
     }
     if done {
         app.run("layer.decal.set", json!({"layer": layer.0, "size": [v[0], v[1]], "rotation": v[2], "offset": [v[3], v[4]], "depth": v[5]}));
@@ -1472,11 +1495,11 @@ fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Valu
                     );
                     let mut s = pattern.scale;
                     let mut con = pattern.contrast;
-                    let r1 = slider(ui, tr("Pattern scale"), &mut s, 0.1..=100.0, 1);
-                    let r2 = slider(ui, tr("Contrast"), &mut con, 0.0..=8.0, 2);
+                    let r1 = slider_edit(ui, tr("Pattern scale"), &mut s, 0.1..=100.0, 1);
+                    let r2 = slider_edit(ui, tr("Contrast"), &mut con, 0.0..=8.0, 2);
                     let mut seed = pattern.seed as f32;
-                    let r3 = slider(ui, tr("Seed"), &mut seed, 0.0..=999.0, 0);
-                    if r1.drag_stopped() || r2.drag_stopped() || r3.drag_stopped() {
+                    let r3 = slider_edit(ui, tr("Seed"), &mut seed, 0.0..=999.0, 0);
+                    if r1 || r2 || r3 {
                         app.run(
                             "layer.fill.set",
                             set(json!({"procedural": pattern.kind.label(), "scale": s, "contrast": con, "seed": seed as u64, "low": low, "high": high})),
@@ -1525,7 +1548,7 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
         });
     });
     let mut op = e.opacity;
-    if slider(ui, tr("Opacity"), &mut op, 0.0..=1.0, 2).drag_stopped() {
+    if slider_edit(ui, tr("Opacity"), &mut op, 0.0..=1.0, 2) {
         app.run("effect.set", json!({"effect": id, "opacity": op}));
     }
     ui.separator();
@@ -1542,13 +1565,13 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
                 }
             });
             let (mut level, mut soft, mut noise, mut ns) = (g.level, g.softness, g.noise_amount, g.noise_scale);
-            let r1 = slider(ui, tr("Level"), &mut level, 0.0..=1.0, 2);
-            let r2 = slider(ui, tr("Softness"), &mut soft, 0.0..=1.0, 2);
-            let r3 = slider(ui, tr("Noise amount"), &mut noise, 0.0..=2.0, 2);
-            let r4 = slider(ui, tr("Noise scale"), &mut ns, 0.1..=64.0, 1);
+            let r1 = slider_edit(ui, tr("Level"), &mut level, 0.0..=1.0, 2);
+            let r2 = slider_edit(ui, tr("Softness"), &mut soft, 0.0..=1.0, 2);
+            let r3 = slider_edit(ui, tr("Noise amount"), &mut noise, 0.0..=2.0, 2);
+            let r4 = slider_edit(ui, tr("Noise scale"), &mut ns, 0.1..=64.0, 1);
             let mut inv = g.invert;
             let r5 = ui.checkbox(&mut inv, tr("Invert"));
-            if r1.drag_stopped() || r2.drag_stopped() || r3.drag_stopped() || r4.drag_stopped() || r5.changed() {
+            if r1 || r2 || r3 || r4 || r5.changed() {
                 app.run("effect.set", json!({"effect": id, "level": level, "softness": soft, "noise": noise, "noiseScale": ns, "invert": inv}));
             }
             if !app.session.doc.baked.contains_key(&app.session.ts()) {
@@ -1559,12 +1582,13 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
         }
         EffectKind::Levels(l) => {
             ui.label(caption(tr("Levels")));
+            levels_histogram(app, ui, layer, eid, (l.in_low, l.in_high));
             let mut v = [l.in_low, l.in_high, l.gamma, l.out_low, l.out_high];
             let labels = [tr("Input low"), tr("Input high"), tr("Gamma"), tr("Output low"), tr("Output high")];
             let mut done = false;
             for (i, label) in labels.iter().enumerate() {
                 let range = if i == 2 { 0.1..=5.0 } else { 0.0..=1.0 };
-                done |= slider(ui, label, &mut v[i], range, 2).drag_stopped();
+                done |= slider_edit(ui, label, &mut v[i], range, 2);
             }
             if done {
                 app.run("effect.set", json!({"effect": id, "inLow": v[0], "inHigh": v[1], "gamma": v[2], "outLow": v[3], "outHigh": v[4]}));
@@ -1592,7 +1616,7 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
             match source {
                 Source::Uniform(v) => {
                     let mut x = v[0];
-                    if slider(ui, tr("Value"), &mut x, 0.0..=1.0, 2).drag_stopped() {
+                    if slider_edit(ui, tr("Value"), &mut x, 0.0..=1.0, 2) {
                         app.run("effect.set", json!({"effect": id, "value": x}));
                     }
                 }
@@ -1641,6 +1665,38 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
     }
 }
 
+/// The histogram of what levels effect `eid` of `layer` remaps (its mask, or a content channel
+/// picked here), with the input range marked. Recomputed after a document change once no
+/// pointer button is held, so dragging a slider keeps the last one.
+fn levels_histogram(app: &TextureCraftApp, ui: &mut Ui, layer: &Layer, eid: LayerId, range: (f32, f32)) {
+    let mut channel = layer.channels.keys().next().copied().unwrap_or(Channel::BaseColor);
+    if layer.content_effects.iter().any(|e| e.id == eid) {
+        let pick = egui::Id::unique(("levels_channel", eid.0));
+        let chans: Vec<Channel> = layer.channels.keys().copied().filter(|c| c.kind() != texturecraft_engine::core::ChannelKind::NormalMap).collect();
+        channel = ui.data(|d| d.get_temp(pick)).filter(|c| chans.contains(c)).or(chans.first().copied()).unwrap_or(channel);
+        combo(ui, tr("Channel"), tr(channel.label()), |ui| {
+            for c in chans {
+                if ui.selectable_label(c == channel, tr(c.label())).clicked() {
+                    ui.data_mut(|d| d.insert_temp(pick, c));
+                }
+            }
+        });
+    }
+    let key = egui::Id::unique(("levels_histogram", eid.0, channel));
+    let rev = app.session.revision;
+    let counts = match ui.data(|d| d.get_temp::<(u64, std::sync::Arc<Vec<u32>>)>(key)) {
+        Some((r, h)) if r == rev || ui.input(|i| i.pointer.any_down()) => Some(h),
+        _ => app.session.effect_histogram(eid, channel, 64).map(|h| {
+            let h = std::sync::Arc::new(h);
+            ui.data_mut(|d| d.insert_temp(key, (rev, h.clone())));
+            h
+        }),
+    };
+    if let Some(counts) = counts {
+        histogram(ui, &counts, range);
+    }
+}
+
 /// The parameters of filter effect `id`.
 fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter) {
     let tk = Tokens::get(ui.ctx());
@@ -1652,7 +1708,7 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
     ui.label(caption(tr(f.label())));
     if let Filter::Hsl { hue, .. } = f {
         let mut h = hue * 360.0;
-        if slider(ui, tr("Hue shift (degrees)"), &mut h, -180.0..=180.0, 0).drag_stopped() {
+        if slider_edit(ui, tr("Hue shift (degrees)"), &mut h, -180.0..=180.0, 0) {
             set(app, "hue", json!(h / 360.0));
         }
     }
@@ -1664,7 +1720,7 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
         } else {
             2
         };
-        if slider(ui, tr(label), &mut v, lo..=hi, decimals).drag_stopped() {
+        if slider_edit(ui, tr(label), &mut v, lo..=hi, decimals) {
             set(app, key, json!(v));
         }
     }
@@ -1676,7 +1732,7 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, f: &Filter
                 let mut v = *rgb;
                 let mut done = false;
                 for (x, name) in v.iter_mut().zip([tr("Cyan / red"), tr("Magenta / green"), tr("Yellow / blue")]) {
-                    done |= slider(ui, name, x, -1.0..=1.0, 2).drag_stopped();
+                    done |= slider_edit(ui, name, x, -1.0..=1.0, 2);
                 }
                 if done {
                     set(app, key, json!(v));

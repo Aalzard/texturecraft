@@ -153,6 +153,19 @@ fn geometry_masks_limit_layers_to_mesh_parts() {
 }
 
 #[test]
+fn solo_keeps_one_material_channel() {
+    let mut s = session();
+    let r = execute(&mut s, "tool.material", &json!({"channel": "roughness", "solo": true})).unwrap();
+    assert_eq!(r["enabled"], json!(["roughness"]), "the brush paints roughness only");
+    let fill = id(execute(&mut s, "layer.add.fill", &Value::Null).unwrap(), "layer");
+    assert!(s.doc.project.layer(fill).unwrap().channels.len() > 1);
+    execute(&mut s, "layer.fill.set", &json!({"channel": "metallic", "solo": true})).unwrap();
+    assert_eq!(s.doc.project.layer(fill).unwrap().channels.keys().copied().collect::<Vec<_>>(), [Channel::Metallic]);
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert!(s.doc.project.layer(fill).unwrap().channels.len() > 1, "one undo step");
+}
+
+#[test]
 fn decals_project_an_image_from_a_frame_placed_on_the_surface() {
     let mut s = session();
     // A red disc on a transparent background.
@@ -186,6 +199,26 @@ fn decals_project_an_image_from_a_frame_placed_on_the_surface() {
     execute(&mut s, "edit.undo", &Value::Null).unwrap();
     execute(&mut s, "edit.undo", &Value::Null).unwrap();
     assert!(!red(at(&mut s, Channel::BaseColor, 170.0, 180.0)));
+}
+
+#[test]
+fn a_decal_takes_its_up_from_the_params_or_a_rule_that_never_degenerates() {
+    let mut s = session();
+    let name = s.import_resource_bytes("logo.png", png(8, 4, |x, _| if x < 4 { [255, 0, 0, 255] } else { [0, 0, 255, 255] })).unwrap();
+    let top = json!({"image": name, "position": [0.0, 1.0, 0.0], "normal": [0.0, 1.0, 0.0]});
+    let up = |r: &Value| [0, 1, 2].map(|i| r["decal"]["up"][i].as_f64().unwrap() as f32);
+    let mut with_up = top.clone();
+    with_up["up"] = json!([0.0, 0.0, -1.0]);
+    assert_eq!(up(&execute(&mut s, "layer.add.decal", &with_up).unwrap()), [0.0, 0.0, -1.0]);
+    with_up["up"] = json!([0.0, 2.0, 0.0]);
+    assert!(execute(&mut s, "layer.add.decal", &with_up).is_err(), "an up along the normal is refused");
+    // A level camera's up is the top face's normal: the decal's up is where the camera looks.
+    execute(&mut s, "camera.set", &json!({"yaw": 90.0, "pitch": 0.0})).unwrap();
+    let forward = s.camera.view().inverse().transform_vector3(texturecraft_engine::geom::glam::Vec3::NEG_Z);
+    let u = up(&execute(&mut s, "layer.add.decal", &top).unwrap());
+    assert!((texturecraft_engine::geom::glam::Vec3::from(u) - forward).length() < 1e-4, "{u:?} vs {forward}");
+    let r = execute(&mut s, "layer.decal.set", &json!({"up": [1.0, 0.0, 0.0]})).unwrap();
+    assert_eq!(up(&r), [1.0, 0.0, 0.0]);
 }
 
 #[test]

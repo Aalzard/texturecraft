@@ -313,8 +313,9 @@ fn pack(n: [f32; 3]) -> [f32; 3] {
     n.map(|v| v / len * 0.5 + 0.5)
 }
 
-/// Reoriented normal mapping (Barré-Brisebois & Hill): `detail` re-oriented onto `base`.
-fn rnm(base: [f32; 3], detail: [f32; 3]) -> [f32; 3] {
+/// Reoriented normal mapping (Barré-Brisebois & Hill): `detail` re-oriented onto `base` (both
+/// packed into 0..1, as is the result).
+pub fn rnm(base: [f32; 3], detail: [f32; 3]) -> [f32; 3] {
     let t = unpack(base);
     let t = [t[0], t[1], t[2] + 1.0];
     let u = unpack(detail);

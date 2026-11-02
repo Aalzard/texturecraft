@@ -76,6 +76,22 @@ pub struct Windows {
     /// The start window: new, open, recent projects (the app opens it at launch).
     #[serde(skip)]
     pub start: bool,
+    /// What waits on the unsaved-changes dialog: save, don't save or cancel.
+    #[serde(skip)]
+    pub unsaved: Option<Unsaved>,
+}
+
+/// An action that replaces or ends the project, held while the project has unsaved changes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Unsaved {
+    Quit,
+    /// A menu command (New project, Open, Close, Open sample project).
+    Command(String),
+    /// Open this project or mesh file.
+    #[cfg(not(target_arch = "wasm32"))]
+    Open(String),
+    /// Open a project or mesh file's bytes (picked or dropped in the browser): its name and bytes.
+    Load(String, std::sync::Arc<Vec<u8>>),
 }
 
 /// Edit › Settings.

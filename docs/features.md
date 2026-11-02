@@ -32,21 +32,24 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   duplicate, group, flatten, cut, copy and paste across texture sets, and **geometry masks** that
   show a layer only on the mesh parts you pick (right-click a layer, or click parts with the
   **Geometry mask** tool, 8).
-- **Filters and content effects** on any layer or mask: **28 filters** (HSL, levels,
-  contrast/luminosity, color balance, gradient map, posterize, clamp, invert, threshold,
-  grayscale, replace color, edge detect, normal invert, baked lighting, blur, directional and
-  slope blur, sharpen, high pass, bevel, glow, warp, directional warp, mosaic and four material
-  finishes), fills and paint.
+- **Filters and content effects** on any layer or mask: **31 filters** (HSL, levels,
+  contrast/luminosity, color balance, gradient map, posterize, clamp, histogram scan, range and
+  shift, invert, threshold, grayscale, replace color, edge detect, normal invert, baked lighting,
+  blur, directional and slope blur, sharpen, high pass, bevel, glow, warp, directional warp,
+  mosaic and four material finishes), fills and paint. **Levels** shows a histogram of what it
+  reads (the mask below it, or a content channel you pick) with its input range marked.
   **Anchor points** record the stack at a layer so masks and fills higher up can react to it.
 - **Masks** with a white or black background and a stack of effects: painted strokes, fills,
   **mesh-map generators** (edge wear, dirt, thin areas, curvature, AO, position and direction
   gradients, all with world-space noise), filters, ID color selection and compare. Alt+click a
   mask to view it alone.
-- **Fill layers** take uniform values, **22 procedurals** (clouds, cells, grunge, scratches, wood
-  grain, bricks, fabric weave, leather grain, marble veins, Voronoi, paint chips…) or your own
+- **Fill layers** take uniform values, **23 procedurals** (clouds, cells, grunge, scratches, wood
+  grain, bricks, fabric weave, twill, leather grain, marble veins, Voronoi, paint chips…) or your own
   **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.
-- **54 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
-  velvet, skin, wax, glass, woods, stone, plastics, fabric, leather, ceramic, rust, cork, paper), **21 smart
+  Alt+click a material channel (of a fill or the brush) to keep that channel alone.
+- **63 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
+  velvet, skin, wax, glass, ice, woods, bark, stone, sand, mud, snow, bone, plastics, fabric,
+  leather, ceramic, rust, cork, paper), **21 smart
   materials** (rusted iron, worn paint, oxidized copper, bronze statue, weathered wood, mossy
   brick and stone, sun-faded paint…) and **18 smart masks**, all procedural, so they work at any
   resolution. Drag them from the tabbed, searchable shelf onto the layer stack or straight onto
@@ -63,9 +66,13 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **UDIM / UV tiles:** detected on import or switched on later, with a resolution per tile and one
   texture per tile on export (`$udim`).
 - **Texture sets** from 128 to 8192 px per material, resampled when you change them, with 21
-  channel types to add or remove.
+  channel types to add or remove. Show, hide or invert them all at once, or **focus** on the
+  active one.
 - **Projects** are a single `.tcraft` file: the mesh, every layer (sparse and lossless), baked maps
-  and imported images. **Project templates** start new work from a saved setup.
+  and imported images. **Project templates** start new work from a saved setup. Closing the app,
+  or opening, starting or closing another project, with unsaved changes asks whether to save them
+  first (in the browser too, where Save downloads the project and closing or reloading the tab
+  asks before the changes are lost).
 
 ## Bake and export
 

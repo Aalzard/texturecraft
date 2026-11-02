@@ -13,6 +13,8 @@ Everything TextureCraft does is an engine command with a stable id (`layer.add.f
 Programmatic calls never open dialogs: a command runs with its defaults. Only `ui.menu.invoke`
 behaves like a menu click. `session.inspect` shows every layer, mask, effect, fill source and
 painted tile count, so an agent can verify its work without a screenshot.
+`effect.histogram {effect, channel?, bins?}` counts the values an effect reads (a levels
+effect's input), so an agent can pick its input range from the data.
 
 ## Control channel (desktop app)
 
@@ -100,15 +102,17 @@ print(call("command.run", {"id": "layer.add.fill", "params": {"color": [0.8, 0.1
 - **Headless** (default): an in-process session that starts on the material ball (1024).
   Files are reachable only below the roots given at launch, as forward-slash paths relative to
   them: `--read-root <dir>` for `project_open` / `mesh_import` / `mesh_reimport` / `bake_mesh_add`,
-  `--write-root <dir>` for `project_save` / `material_save` / `textures_export` / `mesh_export`. Without roots there is no file access. `..`, absolute
+  `--write-root <dir>` for `project_save` / `material_save` / `textures_export` / `mesh_export`
+  (`--automation-read-root` / `--automation-write-root`, as in the other crafting apps, are the
+  same flags). Without roots there is no file access. `..`, absolute
   paths, drive letters, device names and symlink or junction escapes are refused.
 - **Bridge**: `--bridge <port>` forwards to a running `texturecraft --control <port>` (token from
   `--token`, `TEXTURECRAFT_CONTROL_TOKEN` or the app's token file). The app reads and writes its
   own files, so the path tools are unavailable there; `project_save` without a path invokes
   File › Save.
 
-Through `command_run`, every `file.*` command but `file.close` (and `file.reimportMesh` without
-a `path`) is refused, and so is any command given a `path` or `dir` (`resource.import`,
+Through `command_run`, every `file.*` command but `file.close` and `file.removeUnused` (and
+`file.reimportMesh` without a `path`) is refused, and so is any command given a `path` or `dir` (`resource.import`,
 `material.save`, `material.load`, …), in both modes: use the workspace tools below. `resource.text`
 takes a font family, not a path: it reads only the system's font folders.
 
@@ -218,7 +222,7 @@ texturecraft-cli --version                                   # TextureCraft 0.1.
 texturecraft-cli info model.glb                              # triangles, materials, UV report
 texturecraft-cli info project.tcraft                         # texture sets, layers, baked maps
 texturecraft-cli commands --filter mask
-texturecraft-cli new builtin:material_ball ball.tcraft --resolution 1024 --sample
+texturecraft-cli new builtin:material_ball ball.tcraft --resolution 1024 --sample   # mesh maps baked at ≤ 1024 px
 texturecraft-cli new model.glb model.tcraft --resolution 2048
 texturecraft-cli run ball.tcraft layer.add.fill '{"color":"#c08040","metallic":1}' -o ball.tcraft
 texturecraft-cli batch script.json

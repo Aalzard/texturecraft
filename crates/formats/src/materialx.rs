@@ -9,8 +9,9 @@
 //! `displacement` shader on the material and `geometry_normal` goes through a `normalmap` node
 //! (OpenGL, +Y up, which is what that node expects).
 //!
-//! Colour textures (base, fuzz and emission colour) are tagged `srgb_texture`; every data map is
-//! left untagged (linear). UDIM sets write the `<UDIM>` filename token MaterialX defines.
+//! Colour textures (base, fuzz and emission colour) are tagged with their file's colour space
+//! (`srgb_texture` for 8/16-bit files, `lin_rec709` for float ones); every data map is left
+//! untagged (linear). UDIM sets write the `<UDIM>` filename token MaterialX defines.
 //! Texture file names are relative to the document.
 
 use std::collections::HashSet;
@@ -57,6 +58,9 @@ const PREFIX: &str = "$mesh_$textureSet_";
 pub struct Texture {
     pub input: String,
     pub file: String,
+    /// The MaterialX colour space of the file's values (`srgb_texture`, `lin_rec709`, ...);
+    /// used for colour inputs only, data maps are always linear.
+    pub colorspace: &'static str,
 }
 
 /// The OpenPBR input a preset map's file template feeds (`$mesh_$textureSet_base_color` →
@@ -129,7 +133,7 @@ pub fn write(name: &str, textures: &[Texture], physical_size_cm: Option<[f32; 2]
 
     for (t, kind) in &tex {
         let (ty, space) = match kind {
-            Kind::Color => ("color3", Some("srgb_texture")),
+            Kind::Color => ("color3", Some(t.colorspace)),
             Kind::Normal => ("vector3", None),
             Kind::Float | Kind::Height => ("float", None),
         };
@@ -176,7 +180,7 @@ mod tests {
     use super::*;
 
     fn tex(input: &str, file: &str) -> Texture {
-        Texture { input: input.into(), file: file.into() }
+        Texture { input: input.into(), file: file.into(), colorspace: "srgb_texture" }
     }
 
     /// Every start tag is closed or self-closed, in order: enough to catch a malformed writer.
@@ -242,6 +246,13 @@ mod tests {
         assert!(x.contains("<surfacematerial name=\"m\" type=\"material\">"));
         let none = write("m", &[], None);
         assert!(balanced(&none) && none.contains("<open_pbr_surface") && !none.contains("tiledimage"));
+    }
+
+    #[test]
+    fn colour_inputs_carry_their_files_space_and_data_inputs_none() {
+        let lin = |input: &str, file: &str| Texture { colorspace: "lin_rec709", ..tex(input, file) };
+        let x = write("m", &[lin("base_color", "c.exr"), lin("specular_roughness", "r.exr")], None);
+        assert!(x.contains("value=\"c.exr\" colorspace=\"lin_rec709\"") && x.contains("value=\"r.exr\" />"), "{x}");
     }
 
     #[test]

@@ -42,7 +42,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "procedural": BrushAlpha::ALL.map(BrushAlpha::label),
             "library": alphas::library().iter().map(|a| json!({"id": a.id, "label": a.label, "category": a.category})).collect::<Vec<_>>(),
         }))),
-        cmd!("tool.material", "Tool material", [], None, "{channel, color?|value?, enabled?} or {maskValue?: 0..1}", always, material),
+        cmd!(
+            "tool.material",
+            "Tool material",
+            [],
+            None,
+            "{channel, color?|value?, enabled?, solo?: true (paint this channel only)} or {maskValue?: 0..1}",
+            always,
+            material
+        ),
         cmd!(
             "tool.stencil",
             "Projection stencil",
@@ -231,6 +239,9 @@ fn material(s: &mut Session, p: &Value) -> Result<Value> {
                 s.tool.enabled.remove(&c);
             }
             None => {}
+        }
+        if boolp(p, "solo") == Some(true) {
+            s.tool.enabled = std::iter::once(c).collect();
         }
     }
     s.revision = s.revision.wrapping_add(1);

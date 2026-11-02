@@ -6,10 +6,26 @@ use texturecraft_engine::{Session, execute};
 
 const OPENPBR: &str = "OpenPBR (separate maps)";
 
-fn temp(tag: &str) -> std::path::PathBuf {
+/// A scratch folder that is removed when it goes out of scope, so a failing test leaves nothing behind.
+struct Scratch(std::path::PathBuf);
+
+impl std::ops::Deref for Scratch {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp(tag: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("tc_mtlx_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    dir
+    Scratch(dir)
 }
 
 fn export(s: &mut Session, dir: &std::path::Path, preset: &str, mtlx: bool) -> Value {
@@ -43,7 +59,6 @@ fn writes_a_material_that_names_the_exported_textures() {
         assert!(refs >= 3, "base colour, roughness and normal at least: {text}");
         assert!(text.contains("name=\"base_color\"") && text.contains("name=\"geometry_normal\""), "{text}");
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -51,12 +66,32 @@ fn off_by_default_and_warns_without_openpbr_maps() {
     let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
     let dir = temp("off");
     assert!(!files(&export(&mut s, &dir, OPENPBR, false)).iter().any(|f| f.ends_with(".mtlx")));
-    let _ = std::fs::remove_dir_all(&dir);
     let dir = temp("other");
     let r = export(&mut s, &dir, "Document channels + Normal + AO", true);
     assert!(!files(&r).iter().any(|f| f.ends_with(".mtlx")));
     assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("OpenPBR")), "{r}");
-    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn float_colour_maps_are_tagged_linear() {
+    let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
+    let dir = temp("exr");
+    let r = execute(&mut s, "file.exportTextures", &json!({"dir": dir.display().to_string(), "preset": OPENPBR, "format": "exr", "materialX": true})).unwrap();
+    let mtlx = files(&r).into_iter().find(|f| f.ends_with(".mtlx")).unwrap();
+    let text = std::fs::read_to_string(mtlx).unwrap();
+    assert!(text.contains("_base_color.exr\" colorspace=\"lin_rec709\"") && !text.contains("srgb_texture"), "{text}");
+}
+
+#[test]
+fn sets_with_the_same_file_name_warn_instead_of_overwriting() {
+    let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
+    assert!(s.set_count() >= 2);
+    execute(&mut s, "textureSet.rename", &json!({"ts": 0, "name": "a b"})).unwrap();
+    execute(&mut s, "textureSet.rename", &json!({"ts": 1, "name": "A_B"})).unwrap();
+    let dir = temp("clash");
+    let r = execute(&mut s, "file.exportTextures", &json!({"dir": dir.display().to_string(), "preset": OPENPBR, "ts": "all", "materialX": true})).unwrap();
+    assert_eq!(files(&r).iter().filter(|f| f.ends_with(".mtlx")).count(), s.set_count() - 1, "{r}");
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("\"A_B\"")), "{r}");
 }
 
 #[test]
@@ -70,5 +105,4 @@ fn udim_sets_use_the_udim_token() {
     assert!(text.contains(".&lt;UDIM&gt;.png"), "{text}");
     assert!(!text.contains(".1001.") && !text.contains(".1002."), "{text}");
     assert!(all.iter().any(|f| f.ends_with(".1001.png")) && all.iter().any(|f| f.ends_with(".1002.png")));
-    let _ = std::fs::remove_dir_all(&dir);
 }

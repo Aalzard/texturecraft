@@ -4,7 +4,7 @@
 use serde_json::{Value, json};
 #[cfg(not(target_arch = "wasm32"))]
 use texturecraft_core::PROJECT_EXT;
-use texturecraft_core::{NormalFormat, TextureSet};
+use texturecraft_core::{NormalFormat, Project, TextureSet};
 use texturecraft_formats::{ExportInput, ExportOptions, ExportedFile, FileFormat, Padding, ProjectFile};
 use texturecraft_geom::{Mesh, primitives};
 
@@ -79,6 +79,18 @@ fn stem_of(name: &str) -> String {
     std::path::Path::new(name).file_stem().and_then(|e| e.to_str()).unwrap_or("Untitled").to_string()
 }
 
+/// The leaf of an imported mesh file's name (kept in [`Project::mesh_file`]).
+fn leaf_of(name: &str) -> String {
+    std::path::Path::new(name).file_name().and_then(|e| e.to_str()).unwrap_or_default().to_string()
+}
+
+/// Read the project's stored mesh `bytes` (extension `ext`) under the name it was imported
+/// with, so its unnamed parts keep their names (and the geometry masks that use them).
+fn read_stored_mesh(project: &Project, ext: &str, bytes: &[u8]) -> Result<texturecraft_formats::ImportedMesh> {
+    let stem = std::path::Path::new(&project.mesh_file).file_stem().and_then(|s| s.to_str()).filter(|s| !s.is_empty()).unwrap_or("mesh");
+    texturecraft_formats::import_mesh_bytes(&format!("{stem}.{ext}"), bytes).map_err(fe)
+}
+
 impl Session {
     /// The working mesh as Wavefront OBJ (with its own UVs, UDIM tiles included).
     pub fn mesh_obj_bytes(&self) -> Vec<u8> {
@@ -122,6 +134,7 @@ impl Session {
         let imported = texturecraft_formats::import_mesh_bytes(file_name, bytes).map_err(fe)?;
         let ext = ext_of(file_name);
         let mut s = Session::new_project_tiled(name, imported.mesh, &format!("mesh.{ext}"), Some((ext, bytes.to_vec())), resolution, uv_tiles)?;
+        s.doc.project.mesh_file = leaf_of(file_name);
         s.doc.project.cameras = imported.cameras;
         s.log.extend(imported.report.warnings.iter().cloned());
         s.log.push(format!(
@@ -143,7 +156,7 @@ impl Session {
     pub fn from_project_file(pf: ProjectFile) -> Result<Session> {
         let mesh = match (&pf.mesh, pf.project.mesh.strip_prefix("builtin:")) {
             (_, Some(id)) => primitives::builtin(id).ok_or_else(|| EngineError::Other(format!("unknown built-in mesh `{id}`")))?,
-            (Some((ext, bytes)), None) => texturecraft_formats::import_mesh_bytes(&format!("mesh.{ext}"), bytes).map_err(fe)?.mesh,
+            (Some((ext, bytes)), None) => read_stored_mesh(&pf.project, ext, bytes)?.mesh,
             (None, None) => return Err(EngineError::Other("the project has no mesh".into())),
         };
         check_materials(&pf.project, &mesh)?;
@@ -390,14 +403,14 @@ impl Session {
     /// With `preserve_strokes`, painted pixels follow the surface where the UVs changed. Replies
     /// like `file.reimportMesh`: `{preserved?}`.
     pub fn reimport_mesh(&mut self, file: Option<texturecraft_formats::MeshFile>, preserve_strokes: bool) -> Result<Value> {
-        let (mesh, source, warnings) = match file {
+        let (mesh, source, warnings, mesh_file) = match file {
             Some(f) => {
                 let m = texturecraft_formats::import_mesh_bytes(&f.name, &f.bytes).map_err(fe)?.mesh;
-                (m, Some((ext_of(&f.name), f.bytes)), f.warnings)
+                (m, Some((ext_of(&f.name), f.bytes)), f.warnings, leaf_of(&f.name))
             }
             None => match &self.mesh_source {
                 Some((ext, bytes)) => {
-                    (texturecraft_formats::import_mesh_bytes(&format!("mesh.{ext}"), bytes).map_err(fe)?.mesh, self.mesh_source.clone(), Vec::new())
+                    (read_stored_mesh(&self.doc.project, ext, bytes)?.mesh, self.mesh_source.clone(), Vec::new(), self.doc.project.mesh_file.clone())
                 }
                 None => return Err(bad("file.reimportMesh", "built-in meshes can't be reimported; give `path`")),
             },
@@ -406,6 +419,7 @@ impl Session {
         let mut doc = self.doc.clone();
         if let Some((ext, _)) = &source {
             doc.project.mesh = format!("mesh.{ext}");
+            doc.project.mesh_file = mesh_file;
         }
         let mut next = Session::new(doc, mesh, source)?;
         next.log.extend(warnings);
@@ -423,8 +437,7 @@ fn export_textures(s: &mut Session, p: &Value) -> Result<Value> {
     let sets = sets_param(s, p, "file.exportTextures")?;
     std::fs::create_dir_all(&dir).map_err(|e| bad("file.exportTextures", format!("cannot create {dir}: {e}")))?;
     let files = s.export_files(&sets, &opts)?;
-    let warnings: Vec<String> = files.iter().flat_map(|f| f.warnings.iter().cloned()).collect();
-    let mut warnings = warnings;
+    let mut warnings: Vec<String> = files.iter().flat_map(|f| f.warnings.iter().cloned()).collect();
     let mut written = texturecraft_formats::write_files(&files, std::path::Path::new(&dir)).map_err(fe)?;
     if p.get("materialX").and_then(Value::as_bool).unwrap_or(false) {
         written.extend(write_materialx(s, &sets, &opts, std::path::Path::new(&dir), &mut warnings)?);
@@ -435,7 +448,8 @@ fn export_textures(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// One `<mesh>_<set>.mtlx` per texture set, next to the textures `opts` just wrote: the
 /// OpenPBR inputs those textures feed (see `texturecraft_formats::materialx`). UDIM sets name
-/// their files with the `<UDIM>` token. Sets with no recognised map are skipped with a warning.
+/// their files with the `<UDIM>` token. Sets with no recognised map, or whose name gives the
+/// same file name as an earlier set's, are skipped with a warning.
 #[cfg(not(target_arch = "wasm32"))]
 fn write_materialx(s: &Session, sets: &[usize], opts: &ExportOptions, dir: &std::path::Path, warnings: &mut Vec<String>) -> Result<Vec<std::path::PathBuf>> {
     use texturecraft_formats::materialx::{self, Texture};
@@ -444,6 +458,7 @@ fn write_materialx(s: &Session, sets: &[usize], opts: &ExportOptions, dir: &std:
         warnings.push("MaterialX: the normalmap node reads OpenGL (+Y) normals; this export wrote DirectX normals, so flip the green channel".into());
     }
     let mut out = Vec::new();
+    let mut stems = std::collections::HashSet::new();
     for &ts in sets {
         let set = s.doc.project.texture_set(ts).map_err(|e| EngineError::Other(e.to_string()))?;
         let mut textures: Vec<Texture> = Vec::new();
@@ -454,8 +469,10 @@ fn write_materialx(s: &Session, sets: &[usize], opts: &ExportOptions, dir: &std:
                 Some(t) => f.name.replacen(&format!(".{t}."), ".<UDIM>.", 1),
                 None => f.name.clone(),
             };
+            // Float files hold linear values; 8/16-bit colour maps are sRGB encoded.
+            let colorspace = if f.format.is_float() { "lin_rec709" } else { "srgb_texture" };
             if !textures.iter().any(|t| t.input == input) {
-                textures.push(Texture { input: input.to_owned(), file });
+                textures.push(Texture { input: input.to_owned(), file, colorspace });
             }
         }
         if textures.is_empty() {
@@ -463,9 +480,16 @@ fn write_materialx(s: &Session, sets: &[usize], opts: &ExportOptions, dir: &std:
             continue;
         }
         let stem = texturecraft_formats::export::sanitize_file_stem(&format!("{mesh_name}_{}", set.name));
+        // Case-insensitive: Windows and macOS file systems are.
+        if !stems.insert(stem.to_ascii_lowercase()) {
+            warnings.push(format!(
+                "MaterialX: texture set \"{}\" exports as \"{stem}\" like an earlier set, so its .mtlx was not written; rename one of them",
+                set.name
+            ));
+            continue;
+        }
         let path = dir.join(format!("{stem}.mtlx"));
-        std::fs::write(&path, materialx::write(&format!("{mesh_name}_{}", set.name), &textures, None))
-            .map_err(|e| bad("file.exportTextures", format!("cannot write {}: {e}", path.display())))?;
+        texturecraft_formats::write_atomic(&path, materialx::write(&format!("{mesh_name}_{}", set.name), &textures, None).as_bytes()).map_err(fe)?;
         out.push(path);
     }
     Ok(out)
@@ -602,5 +626,50 @@ mod tests {
             assert!(t.is_file() && text.contains(&format!("@./{}@", t.file_name().unwrap().to_str().unwrap())));
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unnamed_parts_keep_their_names_and_masks_through_save_and_reopen() {
+        // A GLB quad whose mesh and node have no name: its one part is named after the file.
+        let mut bin: Vec<u8> = [-1.0f32, -1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 1.0, 0.0, -1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .chain([0u16, 1, 2, 0, 2, 3].iter().flat_map(|i| i.to_le_bytes()))
+            .collect();
+        bin.resize(92, 0);
+        let mut gltf = json!({
+            "asset": {"version": "2.0"}, "buffers": [{"byteLength": 92}],
+            "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 48}, {"buffer": 0, "byteOffset": 48, "byteLength": 32}, {"buffer": 0, "byteOffset": 80, "byteLength": 12}],
+            "accessors": [{"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": [-1, -1, 0], "max": [1, 1, 0]},
+                {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC2"}, {"bufferView": 2, "componentType": 5123, "count": 6, "type": "SCALAR"}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}, "indices": 2}]}],
+            "nodes": [{"mesh": 0}], "scenes": [{"nodes": [0]}], "scene": 0
+        })
+        .to_string()
+        .into_bytes();
+        gltf.resize(gltf.len().div_ceil(4) * 4, b' ');
+        let mut glb = b"glTF".to_vec();
+        glb.extend(2u32.to_le_bytes());
+        glb.extend(((12 + 8 + gltf.len() + 8 + bin.len()) as u32).to_le_bytes());
+        glb.extend((gltf.len() as u32).to_le_bytes());
+        glb.extend(b"JSON");
+        glb.extend(gltf);
+        glb.extend((bin.len() as u32).to_le_bytes());
+        glb.extend(b"BIN\0");
+        glb.extend(bin);
+        let mut s = Session::from_mesh_bytes("dir/quad.glb", &glb, 128, "quad").unwrap();
+        let parts = |s: &mut Session| crate::execute(s, "textureSet.parts", &Value::Null).unwrap();
+        assert_eq!(parts(&mut s), json!(["quad"]));
+        crate::execute(&mut s, "layer.add.fill", &json!({"color": [1.0, 0.0, 0.0]})).unwrap();
+        crate::execute(&mut s, "layer.set", &json!({"geometryMask": ["quad"]})).unwrap();
+        let mut back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
+        assert_eq!(parts(&mut back), json!(["quad"]), "the reopened mesh names its part as the import did");
+        crate::execute(&mut back, "file.reimportMesh", &Value::Null).unwrap();
+        assert_eq!(parts(&mut back), json!(["quad"]), "and so does a reimport of the stored mesh");
+        // Projects saved before the file name was kept read the mesh as before.
+        let mut old = back.project_file();
+        old.project.mesh_file.clear();
+        let mut old = Session::from_project_bytes(&texturecraft_formats::save_project_bytes(&old).unwrap()).unwrap();
+        assert_eq!(parts(&mut old), json!(["mesh"]));
     }
 }

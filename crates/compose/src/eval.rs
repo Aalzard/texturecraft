@@ -1846,6 +1846,101 @@ pub fn mask_image(inp: &Inputs, id: LayerId, size: u32) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Tiles [`effect_histogram`] samples at most (a million texels).
+const HISTOGRAM_TILES: usize = 256;
+
+/// The tiles [`effect_histogram`] reads: an even sample of at most [`HISTOGRAM_TILES`], which
+/// keeps the cost flat up to 8K. The stride is odd: a power of two would divide the row length
+/// and sample the same few columns.
+fn histogram_tiles(width: u32, height: u32) -> Vec<(u32, u32)> {
+    let all = all_tiles(width, height);
+    let stride = all.len().div_ceil(HISTOGRAM_TILES).max(1) | 1;
+    all.into_iter().step_by(stride).collect()
+}
+
+/// Histogram (`bins` buckets over 0..1) of the values entering effect `effect`: its layer's mask
+/// below it, or (a content effect) the layer's `channel` below it where the layer has content,
+/// color components pooled and signed values mapped to 0..1. Over the texels the mesh covers
+/// (in an even sample of tiles on large sets); None for an unknown effect.
+pub fn effect_histogram(inp: &Inputs, effect: LayerId, channel: Channel, bins: usize) -> Option<Vec<u32>> {
+    let (owner, _) = inp.project.effect(effect)?;
+    let bins = bins.max(1);
+    // Evaluate the layer forced visible, its mask enabled, cut just below the effect.
+    let mut cut = inp.project.clone();
+    let l = cut.layers.get_mut(&owner)?;
+    l.visible = true;
+    let in_mask = match l.mask.as_mut().and_then(|m| m.effects.iter().position(|e| e.id == effect).map(|k| (m, k))) {
+        Some((m, k)) => {
+            m.enabled = true;
+            m.effects.truncate(k);
+            true
+        }
+        None => {
+            let k = l.content_effects.iter().position(|e| e.id == effect)?;
+            l.content_effects.truncate(k);
+            false
+        }
+    };
+    let cut_inp = Inputs { project: &cut, preview: None, ..*inp };
+    let channels = cut.texture_set(inp.ts).map(|t| t.channel_list()).unwrap_or_default();
+    let tiles = histogram_tiles(inp.gbuf.width, inp.gbuf.height);
+    // A field covers the bounding box of the tiles it is built for, which for a scattered sample
+    // is the whole set: with a neighbourhood filter below, each tile gets its own.
+    let probe = neighbourhood_fields(&cut_inp, &channels, tiles.get(..1).unwrap_or_default());
+    let shared = probe.is_empty().then_some(probe);
+    let bin = |v: f32| ((v.clamp(0.0, 1.0) * bins as f32) as usize).min(bins - 1);
+    let hist = tiles
+        .par_iter()
+        .map(|&(tx, ty)| {
+            let own;
+            let fields = match &shared {
+                Some(f) => f,
+                None => {
+                    own = neighbourhood_fields(&cut_inp, &channels, &[(tx, ty)]);
+                    &own
+                }
+            };
+            let mut h = vec![0u32; bins];
+            // The mask is planned on its own: a layer with nothing drawn plans no node.
+            let mask = if in_mask { layer_mask(&cut, owner).and_then(|m| mask_plan(&cut_inp, owner, m, tx, ty, Some(fields))) } else { None };
+            let nodes = if in_mask { Vec::new() } else { plan(&cut_inp, &[owner], &channels, tx, ty, 0, Some(fields)) };
+            let content = nodes.first().and_then(|n| n.chans.iter().find(|c| Channel::ALL.get(c.ch) == Some(&channel)).map(|c| (n, c)));
+            if mask.is_none() && content.is_none() {
+                return h;
+            }
+            let full = anchor_plan(&cut_inp, owner, &channels, tx, ty, Some(fields));
+            for (x, y, o) in tile_texels(inp.gbuf, tx, ty) {
+                let mut tex = Texel::new(&cut_inp, x, y, o, 0.0);
+                if !full.is_empty() {
+                    tex.anchors_below(&full, owner);
+                }
+                if let Some(m) = &mask {
+                    if let Some(b) = h.get_mut(bin(tex.mask(m))) {
+                        *b += 1;
+                    }
+                } else if let Some((n, c)) = content
+                    && let Some((v, _)) = tex.content(&n.content, c)
+                {
+                    // As levels reads them (`per_unit`); normal maps pass through levels unchanged.
+                    let (vals, signed) = match c.kind {
+                        ChannelKind::Color => (&v[..], false),
+                        ChannelKind::Scalar => (&v[..1], false),
+                        ChannelKind::Signed => (&v[..1], true),
+                        ChannelKind::NormalMap => (&v[..0], false),
+                    };
+                    for x in vals {
+                        if let Some(b) = h.get_mut(bin(if signed { x * 0.5 + 0.5 } else { *x })) {
+                            *b += 1;
+                        }
+                    }
+                }
+            }
+            h
+        })
+        .reduce(|| vec![0u32; bins], |a, b| a.iter().zip(&b).map(|(x, y)| x.saturating_add(*y)).collect());
+    Some(hist)
+}
+
 /// One flattened tile of one channel: (channel, tile, premultiplied value + coverage data).
 pub type FlatTile = (Channel, (u32, u32), Vec<u16>);
 
@@ -1960,6 +2055,17 @@ mod tests {
 
     fn close(a: [f32; 3], b: [f32; 3]) -> bool {
         (0..3).all(|i| (a[i] - b[i]).abs() < 2e-4)
+    }
+
+    #[test]
+    fn histogram_samples_spread_over_every_column() {
+        assert_eq!(histogram_tiles(1024, 1024), all_tiles(1024, 1024), "small sets are read whole");
+        for size in [2048, 4096, 8192] {
+            let tiles = histogram_tiles(size, size);
+            let columns: std::collections::BTreeSet<u32> = tiles.iter().map(|t| t.0).collect();
+            assert!(tiles.len() <= HISTOGRAM_TILES, "{size}: {} tiles", tiles.len());
+            assert!(columns.len() as u32 >= size / TILE / 2, "{size}: only {} columns", columns.len());
+        }
     }
 
     #[test]
