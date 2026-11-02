@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set fill projection",
             [],
             None,
-            "{layer? | effect?: content fill effect id, projection: uv|triplanar|planar|spherical|cylindrical, scale?, rotation?, sharpness?, axis?}",
+            "{layer? | effect?: content fill effect id, projection?: uv|triplanar|planar|spherical|cylindrical (default: the current one), scale?: number | [u, v] (uv), rotation?: degrees (uv), offset?: [u, v] (uv) | [x, y, z] (triplanar, planar), sharpness?: 1..64 (triplanar), axis?: 0|1|2 (planar, cylindrical)} — what is not given keeps its value",
             has_layer,
             fill_projection
         ),
@@ -374,23 +374,71 @@ fn fill_set(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
-pub(crate) fn projection_from(p: &Value, cmd: &str) -> Result<Projection> {
-    let scale = f32p(p, "scale").unwrap_or(1.0).clamp(0.001, 1000.0);
-    Ok(match strp(p, "projection").unwrap_or("uv") {
-        "uv" => Projection::Uv { scale: [scale, scale], rotation: f32p(p, "rotation").unwrap_or(0.0), offset: [0.0, 0.0] },
-        "triplanar" | "tri-planar" => Projection::Triplanar { scale, sharpness: f32p(p, "sharpness").unwrap_or(8.0).clamp(1.0, 64.0), offset: [0.0; 3] },
-        "planar" => Projection::Planar { scale, axis: u64p(p, "axis").unwrap_or(2).min(2) as u8, offset: [0.0; 3] },
-        "spherical" => Projection::Spherical { scale },
-        "cylindrical" => Projection::Cylindrical { scale, axis: u64p(p, "axis").unwrap_or(1).min(2) as u8 },
-        other => return Err(bad(cmd, format!("unknown projection `{other}`"))),
-    })
+/// The projection `p` asks for. Fields it does not give keep their values from `current` when
+/// that is of the same kind (or `p` names no kind), and the kind's defaults otherwise.
+pub(crate) fn projection_from(p: &Value, cmd: &str, current: Option<&Projection>) -> Result<Projection> {
+    let named = match strp(p, "projection") {
+        None => None,
+        Some("uv") => Some(Projection::default()),
+        Some("triplanar" | "tri-planar") => Some(Projection::Triplanar { scale: 1.0, sharpness: 8.0, offset: [0.0; 3] }),
+        Some("planar") => Some(Projection::Planar { scale: 1.0, axis: 2, offset: [0.0; 3] }),
+        Some("spherical") => Some(Projection::Spherical { scale: 1.0 }),
+        Some("cylindrical") => Some(Projection::Cylindrical { scale: 1.0, axis: 1 }),
+        Some(other) => return Err(bad(cmd, format!("unknown projection `{other}`"))),
+    };
+    let mut proj = match (named, current) {
+        (Some(n), Some(c)) if std::mem::discriminant(&n) == std::mem::discriminant(c) => c.clone(),
+        (Some(n), _) => n,
+        (None, c) => c.cloned().unwrap_or_default(),
+    };
+    let scale = floats::<2>(p, "scale", 0.001, 1000.0);
+    let axis = u64p(p, "axis").map(|a| a.min(2) as u8);
+    match &mut proj {
+        Projection::Uv { scale: s, rotation, offset } => {
+            *s = scale.unwrap_or(*s);
+            *rotation = f32p(p, "rotation").map_or(*rotation, |r| r.rem_euclid(360.0));
+            *offset = floats(p, "offset", -1000.0, 1000.0).unwrap_or(*offset);
+        }
+        Projection::Triplanar { scale: s, sharpness, offset } => {
+            *s = scale.map_or(*s, |v| v[0]);
+            *sharpness = f32p(p, "sharpness").map_or(*sharpness, |v| v.clamp(1.0, 64.0));
+            *offset = floats(p, "offset", -1000.0, 1000.0).unwrap_or(*offset);
+        }
+        Projection::Planar { scale: s, axis: a, offset } => {
+            *s = scale.map_or(*s, |v| v[0]);
+            *a = axis.unwrap_or(*a);
+            *offset = floats(p, "offset", -1000.0, 1000.0).unwrap_or(*offset);
+        }
+        Projection::Spherical { scale: s } => *s = scale.map_or(*s, |v| v[0]),
+        Projection::Cylindrical { scale: s, axis: a } => {
+            *s = scale.map_or(*s, |v| v[0]);
+            *a = axis.unwrap_or(*a);
+        }
+        Projection::Decal(_) => {}
+    }
+    Ok(proj)
+}
+
+/// `key` as `N` finite numbers clamped to `lo..=hi`: an array of `N`, or one number for all.
+fn floats<const N: usize>(p: &Value, key: &str, lo: f32, hi: f32) -> Option<[f32; N]> {
+    let one = |x: &Value| x.as_f64().map(|f| f as f32).filter(|f| f.is_finite()).map(|f| f.clamp(lo, hi));
+    match p.get(key)? {
+        Value::Array(a) if a.len() == N => {
+            let mut out = [0.0; N];
+            for (o, x) in out.iter_mut().zip(a) {
+                *o = one(x)?;
+            }
+            Some(out)
+        }
+        v => one(v).map(|f| [f; N]),
+    }
 }
 
 fn fill_projection(s: &mut Session, p: &Value) -> Result<Value> {
     let target = fill_target(s, p, "layer.fill.projection")?;
-    let proj = projection_from(p, "layer.fill.projection")?;
     s.edit("Fill projection", |s| {
-        fill_mut(s, target)?.projection = proj;
+        let fill = fill_mut(s, target)?;
+        fill.projection = projection_from(p, "layer.fill.projection", Some(&fill.projection))?;
         Ok(())
     })?;
     Ok(Value::Null)

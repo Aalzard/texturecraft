@@ -109,6 +109,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Automatische Sicherungen, Smart-Materialien, Vorgaben, Vorlagen und UI-Layouts werden im Datenordner gespeichert. Ein neuer Ordner gilt nach einem Neustart; bereits gespeicherte Dateien bleiben, wo sie sind.",
     ),
     ("Average normals", "Normalen mitteln"),
+    ("Axis", "Achse"),
     ("Back to painting", "Zurück zum Malen"),
     ("Backface culling", "Rückseiten-Culling"),
     ("Bake Mesh Maps", "Mesh-Maps backen"),
@@ -129,6 +130,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Bent normals", "Gebogene Normalen"),
     ("Bevel", "Abschrägung"),
     ("Black", "Schwarz"),
+    ("Blend sharpness", "Übergangsschärfe"),
     ("Blending", "Überblendung"),
     ("Blending mode of the displayed channel", "Füllmethode des angezeigten Kanals"),
     ("Blur", "Weichzeichnen"),
@@ -595,6 +597,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Offset", "Versatz"),
     ("Offset right", "Versatz rechts"),
     ("Offset up", "Versatz oben"),
+    ("Offset {axis}", "Versatz {axis}"),
     (
         "Offsets the textures by the height channel, at the height to normal strength",
         "Verschiebt die Texturen anhand des Höhenkanals, mit der Stärke Höhe zu Normale",

@@ -1,6 +1,6 @@
 //! The filter library, geometry decals, cloning from the selected layer, placing saved smart
-//! materials, anchors inside a content stack, instances across texture set resolutions and mesh
-//! maps from images, through engine commands.
+//! materials, anchors inside a content stack, instances across texture set resolutions, mesh
+//! maps from images and fill projection transforms, through engine commands.
 
 use serde_json::{Value, json};
 use texturecraft_engine::core::{Channel, EffectKind, Filter, LayerId, LayerKind, Projection};
@@ -408,4 +408,41 @@ fn images_fill_mesh_map_slots() {
     // The maps are saved with the project.
     let back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
     assert_eq!(back.doc.baked, s.doc.baked);
+}
+
+#[test]
+fn fill_projection_edits_keep_what_they_do_not_change() {
+    let mut s = session();
+    let layer = id(execute(&mut s, "layer.add.fill", &json!({"color": [0.5, 0.2, 0.1]})).unwrap(), "layer");
+    let proj = |s: &Session| match &s.doc.project.layer(layer).unwrap().kind {
+        LayerKind::Fill(f) => f.projection.clone(),
+        _ => panic!("a fill layer"),
+    };
+    let set = |s: &mut Session, mut p: Value| {
+        p["layer"] = json!(layer.0);
+        execute(s, "layer.fill.projection", &p)
+    };
+    set(&mut s, json!({"rotation": 390, "offset": [0.25, 0.5]})).unwrap();
+    set(&mut s, json!({"scale": 2})).unwrap();
+    assert_eq!(proj(&s), Projection::Uv { scale: [2.0, 2.0], rotation: 30.0, offset: [0.25, 0.5] }, "a scale keeps the rotation and offset");
+    set(&mut s, json!({"projection": "uv", "scale": [2, 3], "offset": "far"})).unwrap();
+    assert_eq!(proj(&s), Projection::Uv { scale: [2.0, 3.0], rotation: 30.0, offset: [0.25, 0.5] }, "the same kind keeps its fields; a bad offset is ignored");
+    set(&mut s, json!({"projection": "triplanar", "offset": [1, 2, 3]})).unwrap();
+    set(&mut s, json!({"sharpness": 100})).unwrap();
+    assert_eq!(proj(&s), Projection::Triplanar { scale: 1.0, sharpness: 64.0, offset: [1.0, 2.0, 3.0] }, "a new kind starts from its defaults");
+    set(&mut s, json!({"projection": "planar", "axis": 7, "offset": [1e9, 0, 0]})).unwrap();
+    assert_eq!(proj(&s), Projection::Planar { scale: 1.0, axis: 2, offset: [1000.0, 0.0, 0.0] }, "hostile values are clamped");
+    assert!(set(&mut s, json!({"projection": "hexagonal"})).is_err());
+    // The offset moves the pattern: a UV offset changes what the composite shows.
+    set(&mut s, json!({"projection": "uv", "scale": 1})).unwrap();
+    execute(
+        &mut s,
+        "layer.fill.set",
+        &json!({"layer": layer.0, "channel": "baseColor", "procedural": "Checker", "scale": 8, "low": [0, 0, 0], "high": [1, 1, 1]}),
+    )
+    .unwrap();
+    let before = at(&mut s, Channel::BaseColor, 200.0, 200.0);
+    set(&mut s, json!({"offset": [0.125, 0.0]})).unwrap();
+    let after = at(&mut s, Channel::BaseColor, 200.0, 200.0);
+    assert!((before[0] - after[0]).abs() > 0.5, "one checker cell over: {before:?} -> {after:?}");
 }

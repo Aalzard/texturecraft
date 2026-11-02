@@ -1601,7 +1601,9 @@ fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value
     }
 }
 
-/// The projection of a fill (other than a decal): kind and scale.
+/// The projection of a fill (other than a decal): kind, scale, and what the kind adds (UV
+/// rotation and offset, tri-planar sharpness, an axis, a world offset). Each edit sends only the
+/// field it changed; the command keeps the others.
 fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value) {
     use texturecraft_engine::core::Projection;
     let proj_label = fill.projection.label();
@@ -1618,17 +1620,73 @@ fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: 
             }
         }
     });
-    let (mut scale, proj_id) = match &fill.projection {
-        Projection::Uv { scale, .. } => (scale[0], "uv"),
-        Projection::Triplanar { scale, .. } => (*scale, "triplanar"),
-        Projection::Planar { scale, .. } => (*scale, "planar"),
-        Projection::Spherical { scale } => (*scale, "spherical"),
-        Projection::Cylindrical { scale, .. } => (*scale, "cylindrical"),
+    let mut scale = match &fill.projection {
+        Projection::Uv { scale, .. } => scale[0],
+        Projection::Triplanar { scale, .. } | Projection::Planar { scale, .. } | Projection::Spherical { scale } | Projection::Cylindrical { scale, .. } => {
+            *scale
+        }
         Projection::Decal(_) => return,
     };
+    let mut edit = |extra: Value| app.run("layer.fill.projection", with(base, extra));
     if slider_edit(ui, tr("Scale / tiling"), &mut scale, 0.01..=20.0, 2) {
-        app.run("layer.fill.projection", with(base, json!({"projection": proj_id, "scale": scale})));
+        edit(json!({"scale": scale}));
     }
+    match &fill.projection {
+        Projection::Uv { rotation, offset, .. } => {
+            let mut r = *rotation;
+            if slider_edit(ui, tr("Rotation"), &mut r, 0.0..=360.0, 0) {
+                edit(json!({"rotation": r}));
+            }
+            if let Some(o) = offset_sliders(ui, ["U", "V"], *offset) {
+                edit(json!({"offset": o}));
+            }
+        }
+        Projection::Triplanar { sharpness, offset, .. } => {
+            let mut s = *sharpness;
+            if slider_edit(ui, tr("Blend sharpness"), &mut s, 1.0..=64.0, 1) {
+                edit(json!({"sharpness": s}));
+            }
+            if let Some(o) = offset_sliders(ui, ["X", "Y", "Z"], *offset) {
+                edit(json!({"offset": o}));
+            }
+        }
+        Projection::Planar { axis, offset, .. } => {
+            if let Some(a) = axis_combo(ui, *axis) {
+                edit(json!({"axis": a}));
+            }
+            if let Some(o) = offset_sliders(ui, ["X", "Y", "Z"], *offset) {
+                edit(json!({"offset": o}));
+            }
+        }
+        Projection::Cylindrical { axis, .. } => {
+            if let Some(a) = axis_combo(ui, *axis) {
+                edit(json!({"axis": a}));
+            }
+        }
+        Projection::Spherical { .. } | Projection::Decal(_) => {}
+    }
+}
+
+/// A slider per offset component ("Offset U", …): the whole offset once one is edited.
+fn offset_sliders<const N: usize>(ui: &mut Ui, axes: [&str; N], mut v: [f32; N]) -> Option<[f32; N]> {
+    let mut done = false;
+    for (axis, x) in axes.iter().zip(v.iter_mut()) {
+        done |= slider_edit(ui, &trf("Offset {axis}", &[("axis", axis)]), x, -1.0..=1.0, 2);
+    }
+    done.then_some(v)
+}
+
+/// The axis a planar or cylindrical projection runs along: the one picked, if any.
+fn axis_combo(ui: &mut Ui, axis: u8) -> Option<u8> {
+    let mut picked = None;
+    combo(ui, tr("Axis"), ["X", "Y", "Z"].get(usize::from(axis)).copied().unwrap_or("Z"), |ui| {
+        for (i, name) in (0u8..).zip(["X", "Y", "Z"]) {
+            if ui.selectable_label(i == axis, name).clicked() && i != axis {
+                picked = Some(i);
+            }
+        }
+    });
+    picked
 }
 
 /// A decal's frame: place it with a click in the 3D view, then size, turn and shift it.

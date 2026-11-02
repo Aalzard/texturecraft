@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use texturecraft_compose::ImageRes;
-use texturecraft_core::{Channel, Fill, Layer, LayerKind, Projection, Source};
+use texturecraft_core::{Channel, Fill, Layer, LayerKind, Source};
 
 use crate::commands::{CommandSpec, always, bad, channel_param, strp};
 use crate::{EngineError, Result, Session, cmd};
@@ -153,7 +153,7 @@ fn add_image_fill(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("layer.add.image", format!("no resource `{name}`")));
     }
     let ch = channel_param("layer.add.image", p, "channel")?.unwrap_or(Channel::BaseColor);
-    let projection = if p.get("projection").is_some() { crate::layer_cmds::projection_from(p, "layer.add.image")? } else { Projection::default() };
+    let projection = crate::layer_cmds::projection_from(p, "layer.add.image", None)?;
     let ts = s.ts();
     let label = std::path::Path::new(&name).file_stem().and_then(|n| n.to_str()).unwrap_or("Image").to_string();
     let layer_name = s.doc.project.next_layer_name(ts, &label);
