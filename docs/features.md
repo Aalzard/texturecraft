@@ -79,8 +79,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   OBJ, PLY and STL, or a built-in mesh; UVs are generated when a mesh has none. A `.gltf`'s buffers
   and images and a loose USD layer's textures are read from its folder and kept in the project.
   Reimport a changed mesh and your painted strokes stay on the surface.
-- **UDIM / UV tiles:** detected on import or switched on later, with a resolution per tile and one
-  texture per tile on export (`$udim`).
+- **UDIM / UV tiles:** detected on import or switched on later, with a resolution per tile (blurs,
+  other filters and height-to-normal slopes keep their size in UV space at any tile resolution)
+  and one texture per tile on export (`$udim`).
 - **Texture sets** from 128 to 8192 px per material, resampled when you change them, with 21
   channel types to add or remove. Show, hide or invert them all at once, or **focus** on the
   active one. The project's **normal map format** (OpenGL or DirectX, in Texture Set Settings)
