@@ -117,3 +117,23 @@ fn a_set_without_the_map_baked_is_left_alone() {
     execute(&mut s, "bake.settings", &json!({ "maxFrontal": 0.3 })).unwrap();
     assert!(due(&mut s).is_empty(), "Auto-rebake keeps a bake up to date, it doesn't start one");
 }
+
+#[test]
+fn undoing_a_rebake_brings_back_a_stale_map_and_it_is_due_again() {
+    let (mut s, dir) = baked_session("undo");
+    execute(&mut s, "bake.autoRebake", &json!({ "map": "height" })).unwrap();
+    assert!(due(&mut s).is_empty());
+    execute(&mut s, "bake.settings", &json!({ "maxFrontal": 0.2 })).unwrap();
+    assert_eq!(due(&mut s), [0]);
+    execute(&mut s, "bake.autoRebake.run", &json!({ "cpu": true })).unwrap();
+    assert!(due(&mut s).is_empty());
+    // Undo the bake: the older map is back, baked with the older settings, which no longer match.
+    let newer = image(&s, BakedMap::Height);
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert!(!Arc::ptr_eq(&newer, &image(&s, BakedMap::Height)), "undo restored the older map");
+    assert_eq!(due(&mut s), [0], "the restored map is out of date and rebakes");
+    // Redo brings the newer map back, which does match.
+    execute(&mut s, "edit.redo", &Value::Null).unwrap();
+    assert!(due(&mut s).is_empty(), "the newer map matches the current settings");
+    let _ = std::fs::remove_dir_all(dir);
+}

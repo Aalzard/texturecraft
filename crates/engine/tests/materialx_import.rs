@@ -122,3 +122,28 @@ fn bad_documents_and_paths_are_errors_that_change_nothing() {
     assert_eq!((layers(&s), s.doc.resources.len()), (n, res), "refused imports leave the project alone");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_image_that_is_not_a_regular_file_is_skipped_with_a_warning() {
+    let dir = folder("irregular");
+    png(&dir.join("tex/base.png"), [10, 20, 30]);
+    // A folder where an image should be (a pipe or device would hang the read; a folder is the portable stand-in).
+    std::fs::create_dir_all(dir.join("tex/rough.png")).unwrap();
+    let doc = r#"<?xml version="1.0"?>
+<materialx version="1.39" fileprefix="tex/">
+  <open_pbr_surface name="S" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="a" />
+    <input name="specular_roughness" type="float" nodename="b" />
+  </open_pbr_surface>
+  <tiledimage name="a" type="color3"><input name="file" type="filename" value="base.png" /></tiledimage>
+  <tiledimage name="b" type="float"><input name="file" type="filename" value="rough.png" /></tiledimage>
+  <surfacematerial name="M" type="material"><input name="surfaceshader" type="surfaceshader" nodename="S" /></surfacematerial>
+</materialx>"#;
+    let mtlx = dir.join("m.mtlx");
+    std::fs::write(&mtlx, doc).unwrap();
+    let mut s = session();
+    let r = execute(&mut s, "file.importMaterialX", &json!({ "path": mtlx.display().to_string() })).unwrap();
+    assert_eq!(r["channels"], json!(["baseColor"]), "{r}");
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("regular file")), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
