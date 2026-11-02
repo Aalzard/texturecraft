@@ -399,6 +399,27 @@ impl TileGrid {
     }
 }
 
+/// The fraction of its atlas block the UV tile of each block fills ([`TextureSet::tile_scale`]):
+/// such a tile has fewer texels per UV unit, so filter radii and height slopes shrink with it.
+/// Empty (every scale 1) unless a tile is smaller than its block.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BlockScales {
+    block: u32,
+    cols: u32,
+    scales: Vec<f32>,
+}
+
+impl BlockScales {
+    /// The scale at atlas texel (x, y).
+    pub fn at(&self, x: u32, y: u32) -> f32 {
+        let (bx, by) = (x / self.block.max(1), y / self.block.max(1));
+        if bx >= self.cols {
+            return 1.0;
+        }
+        self.scales.get(by as usize * self.cols as usize + bx as usize).copied().unwrap_or(1.0)
+    }
+}
+
 fn one() -> f32 {
     1.0
 }
@@ -465,6 +486,13 @@ impl TextureSet {
             return 1.0;
         }
         (self.tile_resolution(udim) as f32 / self.block_resolution().max(1) as f32).clamp(1e-3, 1.0)
+    }
+
+    /// [`TextureSet::tile_scale`] of every atlas block, to look up by atlas texel.
+    pub fn block_scales(&self) -> BlockScales {
+        let Some(g) = self.tile_grid().filter(|_| !self.tile_resolutions.is_empty()) else { return BlockScales::default() };
+        let scales = (0..g.rows).flat_map(|by| (0..g.cols).map(move |bx| g.udim(bx, by))).map(|u| self.tile_scale(u)).collect();
+        BlockScales { block: self.block_resolution(), cols: g.cols, scales }
     }
 
     /// Scale of the tile holding mesh UV `uv` (v down) and that tile's origin corner.
