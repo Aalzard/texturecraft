@@ -79,7 +79,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Bake mesh maps** on the GPU (ray traced, about 12× the CPU path) or on every CPU core: ambient
   occlusion, curvature, thickness, world-space normal, position, ID, bent normals, opacity, color
   and direction maps, and normal and height maps from high-poly meshes, with a cage, ray distances
-  and matching by mesh name.
+  and matching by mesh name. Or **use your own images** as mesh maps (baked in another app, or
+  edited): drop one from the Assets panel on a slot of the Texture Set Settings, or pick it from
+  the slot's menu.
 - **Export presets** for glTF PBR Metal Roughness, Unreal Engine (packed), Unity HDRP (mask map),
   Unity Standard, Blender (Principled BSDF), Godot 4 (ORM), OpenPBR (with the coat, fuzz,
   anisotropy, transmission and subsurface maps), separate maps, mesh maps and document channels, in

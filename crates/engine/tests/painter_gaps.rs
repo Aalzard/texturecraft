@@ -1,6 +1,6 @@
 //! The filter library, geometry decals, cloning from the selected layer, placing saved smart
-//! materials, anchors inside a content stack and instances across texture set resolutions,
-//! through engine commands.
+//! materials, anchors inside a content stack, instances across texture set resolutions and mesh
+//! maps from images, through engine commands.
 
 use serde_json::{Value, json};
 use texturecraft_engine::core::{Channel, EffectKind, Filter, LayerId, LayerKind, Projection};
@@ -374,4 +374,38 @@ fn geometry_mask_tool_toggles_the_clicked_part() {
     execute(&mut s, "edit.undo", &Value::Null).unwrap();
     assert_eq!(s.doc.project.layer(layer).unwrap().geometry_mask, Some(vec!["Lid".to_string()]));
     assert!(execute(&mut s, "tool.click", &json!({"x": 1, "y": 1})).is_err(), "nothing under the point");
+}
+
+#[test]
+fn images_fill_mesh_map_slots() {
+    use texturecraft_engine::core::BakedMap;
+    let mut s = session();
+    // Dark on the left, light on the right.
+    let ao = s.import_resource_bytes("ao.png", png(8, 8, |x, _| if x < 4 { [64, 64, 64, 255] } else { [192, 192, 192, 255] })).unwrap();
+    let r = execute(&mut s, "textureSet.meshMap.set", &json!({"map": "ambient_occlusion", "image": ao})).unwrap();
+    let res = s.doc.project.texture_sets[0].bake.resolution;
+    assert_eq!(r, json!({"map": "ambient_occlusion", "resolution": res}));
+    assert!(s.doc.project.texture_sets[0].baked.contains(&BakedMap::AmbientOcclusion));
+    let sample = |s: &Session, m: BakedMap, x: u32| s.baked(0).unwrap().sample(m, x, 50, 100).unwrap();
+    assert!((sample(&s, BakedMap::AmbientOcclusion, 10)[0] - 64.0 / 255.0).abs() < 1e-3, "raw file values, not linearized");
+    assert!((sample(&s, BakedMap::AmbientOcclusion, 90)[0] - 192.0 / 255.0).abs() < 1e-3);
+    // A normal map is read in the project's normal format (DirectX: green flipped).
+    execute(&mut s, "textureSet.settings", &json!({"normalFormat": "directX"})).unwrap();
+    let n = s.import_resource_bytes("n.png", png(2, 2, |_, _| [128, 64, 255, 255])).unwrap();
+    execute(&mut s, "textureSet.meshMap.set", &json!({"map": "normal", "image": n})).unwrap();
+    let v = sample(&s, BakedMap::Normal, 50);
+    assert!((v[1] - (1.0 - 64.0 / 255.0)).abs() < 1e-3 && (v[2] - 1.0).abs() < 1e-3, "{v:?}");
+    // Clearing empties the slot (one undo step); bad params are errors.
+    execute(&mut s, "textureSet.meshMap.clear", &json!({"map": "ambient_occlusion"})).unwrap();
+    assert!(s.baked(0).unwrap().sample(BakedMap::AmbientOcclusion, 0, 0, 100).is_none());
+    assert!(!s.doc.project.texture_sets[0].baked.contains(&BakedMap::AmbientOcclusion));
+    assert!(execute(&mut s, "textureSet.meshMap.clear", &json!({"map": "ambient_occlusion"})).is_err(), "already empty");
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert!(s.doc.project.texture_sets[0].baked.contains(&BakedMap::AmbientOcclusion));
+    assert!(execute(&mut s, "textureSet.meshMap.set", &json!({"map": "nope", "image": ao})).is_err());
+    assert!(execute(&mut s, "textureSet.meshMap.set", &json!({"map": "curvature", "image": "missing.png"})).is_err());
+    assert!(execute(&mut s, "textureSet.meshMap.set", &json!({"map": "curvature"})).is_err());
+    // The maps are saved with the project.
+    let back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
+    assert_eq!(back.doc.baked, s.doc.baked);
 }

@@ -762,10 +762,10 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
                 }
             });
         });
-        let baked = app.session.doc.baked.get(&ts);
+        let images: Vec<String> = app.session.doc.resources.keys().cloned().collect();
         for m in BakedMap::ALL {
-            let present = baked.is_some_and(|b| b.maps.contains_key(&m));
-            ui.horizontal(|ui| {
+            let present = app.session.doc.baked.get(&ts).is_some_and(|b| b.maps.contains_key(&m));
+            let row = ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
                 ui.painter().rect_filled(r, 2.0, if present { mesh_map_color(m) } else { tk.button });
                 ui.vertical(|ui| {
@@ -776,7 +776,36 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
                             .color(tk.text_dim),
                     );
                 });
+                // An image resource instead of a bake, or no map.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.menu_button(RichText::new(ic::DOTS_THREE).size(13.0), |ui| {
+                        ui.label(caption(tr("Images")));
+                        for name in &images {
+                            if ui.button(name).clicked() {
+                                app.run("textureSet.meshMap.set", json!({"ts": ts, "map": m.id(), "image": name}));
+                                ui.close();
+                            }
+                        }
+                        if ui.button(tr("Import...")).clicked() {
+                            crate::menus::invoke(app, ui.ctx(), "resource.import");
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.add_enabled(present, egui::Button::new(tr("Clear"))).clicked() {
+                            app.run("textureSet.meshMap.clear", json!({"ts": ts, "map": m.id()}));
+                            ui.close();
+                        }
+                    });
+                });
             });
+            // A shelf image dropped on the row becomes this mesh map.
+            let resp = row.response.interact(Sense::hover()).on_hover_text(tr("Drop an image from the Assets panel here to use it as this mesh map"));
+            if resp.dnd_hover_payload::<ShelfDrag>().is_some_and(|d| matches!(d.asset, Asset::Texture(_))) {
+                ui.painter().rect_stroke(resp.rect.shrink(1.0), 3.0, Stroke::new(2.0, tk.accent), egui::StrokeKind::Inside);
+            }
+            if let Some(Asset::Texture(name)) = dnd_release::<ShelfDrag>(&resp).map(|d| d.asset.clone()) {
+                app.run("textureSet.meshMap.set", json!({"ts": ts, "map": m.id(), "image": name}));
+            }
         }
     });
 }
