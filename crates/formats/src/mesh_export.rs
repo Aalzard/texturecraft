@@ -32,7 +32,7 @@ pub fn obj_bytes(mesh: &Mesh, name: &str) -> Vec<u8> {
 pub fn obj_with_mtl(mesh: &Mesh, name: &str, stem: &str, textures: &[Vec<ExportedFile>]) -> (Vec<u8>, NamedFiles) {
     let stem = sanitize_file_stem(stem);
     let (maps, mut files) = usd::material_maps(mesh, &stem, textures);
-    let mut mtl = format!("# {name}, exported by TextureCraft\n");
+    let mut mtl = format!("# {}, exported by TextureCraft\n", token(name));
     for (material, maps) in unique_ids(&mesh.materials, token).iter().zip(&maps) {
         let _ = writeln!(mtl, "\nnewmtl {material}\nKd 1 1 1");
         for (slot, file) in maps {
@@ -60,7 +60,7 @@ pub fn obj_with_mtl(mesh: &Mesh, name: &str, stem: &str, textures: &[Vec<Exporte
 
 fn obj_text(mesh: &Mesh, name: &str, mtllib: Option<&str>) -> String {
     let mut s = String::with_capacity(mesh.positions.len() * 96 + mesh.indices.len() * 12);
-    let _ = writeln!(s, "# {name}, exported by TextureCraft");
+    let _ = writeln!(s, "# {}, exported by TextureCraft", token(name));
     if let Some(lib) = mtllib {
         let _ = writeln!(s, "mtllib {lib}");
     }
@@ -378,6 +378,19 @@ fn token(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn name_with_newline_stays_in_the_header_comment() {
+        let mesh = texturecraft_geom::primitives::cube(1.0);
+        let name = "a\nv 9 9 9\r\nmtllib x";
+        let obj = String::from_utf8(obj_bytes(&mesh, name)).unwrap();
+        assert!(obj.lines().all(|l| !l.starts_with("v 9 9 9") && !l.starts_with("mtllib x")));
+        let (obj, files) = obj_with_mtl(&mesh, name, "m", &[]);
+        let obj = String::from_utf8(obj).unwrap();
+        assert!(obj.lines().all(|l| !l.starts_with("v 9 9 9") && !l.starts_with("mtllib x")));
+        let mtl = String::from_utf8(files[0].1.clone()).unwrap();
+        assert!(mtl.lines().all(|l| !l.starts_with("v 9 9 9") && !l.starts_with("mtllib x")));
+    }
 
     #[test]
     fn materials_whose_names_collide_even_by_case_stay_apart() {
