@@ -18,8 +18,7 @@ pub struct EnvImage {
     pub data: Vec<[f32; 3]>,
 }
 
-/// Built-in environments, in menu order.
-pub const ENVIRONMENTS: [&str; 6] = ["Studio Soft", "Studio Contrast", "Overcast", "Sunset", "Warehouse", "Night"];
+pub use texturecraft_core::project::ENVIRONMENTS;
 
 pub fn dir_of(u: f32, v: f32) -> Vec3 {
     let (theta, phi) = (v * PI, u * TAU);

@@ -900,4 +900,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Style", "样式"),
     ("Use as brush alpha", "用作笔刷 Alpha"),
     ("Place as decal", "作为贴花放置"),
+    ("Click: turn this channel on or off. Alt+click: this channel only", "单击：打开或关闭此通道。Alt+单击：仅此通道"),
+    ("Show all", "全部显示"),
+    ("Hide all", "全部隐藏"),
+    ("Invert show/hide", "反转显示/隐藏"),
+    ("Show or hide texture sets", "显示或隐藏纹理集"),
+    ("Focus: show only the active texture set", "聚焦：仅显示当前纹理集"),
 ];

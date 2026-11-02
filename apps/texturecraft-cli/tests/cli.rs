@@ -98,6 +98,24 @@ fn info_on_a_mesh_reports_uvs() {
 }
 
 #[test]
+fn serve_takes_the_automation_root_spelling_too() {
+    use std::io::Write as _;
+    let d = tmp("automation-root");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_texturecraft-cli"))
+        .args(["serve", "--automation-write-root", p(&d)])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"{\"id\":1,\"method\":\"project.save\",\"params\":{\"path\":\"a.tcraft\"}}\n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    let reply: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(d.join("a.tcraft").is_file());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn render_writes_a_png() {
     let d = tmp("render");
     let out = d.join("ball.png");
