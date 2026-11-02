@@ -2,7 +2,7 @@
 //!
 //! The map is chosen with `bake.autoRebake`. From then on, [`Session::auto_rebake_due`] names the
 //! texture sets whose bake inputs (the set's bake settings except the list of maps, the low poly,
-//! the high polys and the cage) differ from those of their last bake of that map.
+//! the high polys, the cage and the skew map) differ from those of their last bake of that map.
 //! The apps poll it each frame and bake the due sets in the background; `bake.autoRebake.run`
 //! does the same thing once, blocking, for agents and scripts.
 //!
@@ -71,6 +71,7 @@ impl Session {
             (Arc::as_ptr(&m.mesh) as usize).hash(&mut h);
         }
         self.bake_meshes.cage.as_ref().map(|c| Arc::as_ptr(&c.mesh) as usize).hash(&mut h);
+        (self.bake_meshes.skew.is_some(), self.bake_meshes.skew_rev).hash(&mut h);
         Some(h.finish())
     }
 

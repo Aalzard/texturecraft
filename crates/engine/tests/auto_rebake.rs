@@ -90,3 +90,20 @@ fn a_set_without_the_map_baked_is_left_alone() {
     execute(&mut s, "bake.settings", &json!({ "maxFrontal": 0.3 })).unwrap();
     assert!(due(&mut s).is_empty(), "Auto-rebake keeps a bake up to date, it doesn't start one");
 }
+
+#[test]
+fn painting_or_clearing_the_skew_map_is_a_change() {
+    let (mut s, dir) = baked_session();
+    execute(&mut s, "bake.autoRebake", &json!({ "map": "height" })).unwrap();
+    assert!(due(&mut s).is_empty());
+    execute(&mut s, "bake.skew.set", &json!({ "value": 0.5 })).unwrap();
+    assert_eq!(due(&mut s), [0], "a skew map is a bake input");
+    execute(&mut s, "bake.autoRebake.run", &json!({ "cpu": true })).unwrap();
+    assert!(due(&mut s).is_empty());
+    execute(&mut s, "bake.skew.paint", &json!({ "points": [[0.5, 0.5]], "size": 32 })).unwrap();
+    assert_eq!(due(&mut s), [0], "so is a stroke painted into it");
+    execute(&mut s, "bake.autoRebake.run", &json!({ "cpu": true })).unwrap();
+    execute(&mut s, "bake.skew.clear", &Value::Null).unwrap();
+    assert_eq!(due(&mut s), [0], "and so is taking it away");
+    let _ = std::fs::remove_dir_all(dir);
+}
