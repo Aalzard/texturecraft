@@ -55,6 +55,20 @@ impl ColorSpace {
         self != ColorSpace::Srgb
     }
 
+    /// The red, green and blue primaries and the white point as CIE xy chromaticities.
+    pub fn chromaticities(self) -> [[f64; 2]; 4] {
+        let p = self.primaries();
+        [p.r, p.g, p.b, p.white]
+    }
+
+    /// Linear RGB of this space to CIE XYZ adapted (Bradford) to the D50 white of the ICC profile
+    /// connection space: the colorant matrix of a matrix/curve ICC profile. Columns are the
+    /// red, green and blue colorants.
+    pub fn to_xyz_d50(self) -> Option<[[f64; 3]; 3]> {
+        let p = self.primaries();
+        Some(mul(&adapt(p.white, D50)?, &rgb_to_xyz(&p)?))
+    }
+
     fn primaries(self) -> Primaries {
         match self {
             ColorSpace::Srgb | ColorSpace::LinearRec709 => REC709,
@@ -88,6 +102,8 @@ struct Primaries {
 
 const D65: [f64; 2] = [0.3127, 0.3290];
 const D60_ACES: [f64; 2] = [0.32168, 0.33767];
+/// The white of the ICC profile connection space.
+const D50: [f64; 2] = [0.3457, 0.3585];
 const REC709: Primaries = Primaries { r: [0.640, 0.330], g: [0.300, 0.600], b: [0.150, 0.060], white: D65 };
 const AP1: Primaries = Primaries { r: [0.713, 0.293], g: [0.165, 0.830], b: [0.128, 0.044], white: D60_ACES };
 const AP0: Primaries = Primaries { r: [0.7347, 0.2653], g: [0.0, 1.0], b: [0.0001, -0.0770], white: D60_ACES };
@@ -194,6 +210,22 @@ mod tests {
         assert!(close(ColorSpace::Srgb.from_linear_rec709([0.5; 3]), [linear_to_srgb(0.5); 3], 1e-6));
         assert!((srgb_to_linear(ColorSpace::Srgb.from_linear_rec709([0.25; 3])[0]) - 0.25).abs() < 1e-5);
         assert_eq!(ColorSpace::LinearRec709.from_linear_rec709([0.3, 2.0, -1.0]), [0.3, 2.0, -1.0], "linear Rec.709 is the identity, values above 1 kept");
+    }
+
+    #[test]
+    fn colorants_adapted_to_d50_add_up_to_the_d50_white_and_match_srgb() {
+        for s in ColorSpace::ALL {
+            let m = s.to_xyz_d50().unwrap();
+            let white = [0, 1, 2].map(|row| m[row][0] + m[row][1] + m[row][2]);
+            assert!((white[0] - 0.9642).abs() < 1e-3 && (white[1] - 1.0).abs() < 1e-3 && (white[2] - 0.8249).abs() < 1e-3, "{s:?} {white:?}");
+        }
+        // The colorants of the published sRGB ICC profile (D50 adapted): 0.4361 0.2225 0.0139 for red.
+        let m = ColorSpace::Srgb.to_xyz_d50().unwrap();
+        let red = [m[0][0], m[1][0], m[2][0]];
+        assert!((red[0] - 0.4361).abs() < 2e-3 && (red[1] - 0.2225).abs() < 2e-3 && (red[2] - 0.0139).abs() < 2e-3, "{red:?}");
+        let c = ColorSpace::AcesCg.chromaticities();
+        assert_eq!(c[0], [0.713, 0.293]);
+        assert_eq!(c[3], [0.32168, 0.33767]);
     }
 
     #[test]

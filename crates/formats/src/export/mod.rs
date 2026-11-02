@@ -768,7 +768,9 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
                 warnings.push(format!("\"{}\" packs colour into one channel (L), so it is written in linear Rec.709, not {}", p.name, space.name()));
             }
             let srgb: Vec<bool> = lay.iter().map(|(d, _)| *d != Dest::A && is_color(map) && !p.format.is_float() && space == ColorSpace::Srgb).collect();
-            let bytes = encode(p.format, p.bit_depth, size, n, &data, &srgb, &mut warnings)?;
+            // A colour space the user chose is written into the colour maps (data maps have none).
+            let embed = (opts.color_space.is_some() && is_color(map) && rgb).then_some(space);
+            let bytes = encode(p.format, p.bit_depth, size, n, &data, &srgb, embed, &mut warnings)?;
             Ok(ExportedFile { name: p.name, bytes, width: size.0, height: size.1, warnings })
         })
         .collect()
@@ -812,17 +814,34 @@ fn resize(data: Vec<f32>, from: (u32, u32), n: usize, to: (u32, u32)) -> Vec<f32
 
 /// Encode a `size` (width, height) image of `n` components (1 L, 2 LA, 3 RGB, 4 RGBA; linear
 /// values).
-fn encode(format: FileFormat, depth: u8, size: (u32, u32), n: usize, data: &[f32], srgb: &[bool], warnings: &mut Vec<String>) -> Result<Vec<u8>> {
+#[allow(clippy::too_many_arguments)]
+fn encode(
+    format: FileFormat,
+    depth: u8,
+    size: (u32, u32),
+    n: usize,
+    data: &[f32],
+    srgb: &[bool],
+    embed: Option<ColorSpace>,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<u8>> {
     let failed = |e: &dyn std::fmt::Display| FormatError::Invalid(format!("{} encoding failed: {e}", format.extension()));
+    // Where the colour space goes: an ICC profile in PNG, JPEG, TIFF and WebP, the chromaticities
+    // attribute in EXR. The other formats have no place for it.
+    if let Some(space) = embed
+        && matches!(format, FileFormat::Tga | FileFormat::Bmp | FileFormat::Hdr)
+    {
+        warnings.push(format!("{} files can't record a colour space; the colours are in {}", format.extension().to_ascii_uppercase(), space.name()));
+    }
     match format {
-        FileFormat::Exr => return write_exr(size, n, data, depth == 16).map_err(|e| failed(&e)),
+        FileFormat::Exr => return write_exr(size, n, data, depth == 16, embed).map_err(|e| failed(&e)),
         FileFormat::Hdr => {
             if n == 2 || n == 4 {
                 warnings.push("HDR has no alpha channel; alpha was dropped".into());
             }
             let rgb = remap(data, n, if n <= 2 { &[0, 0, 0] } else { &[0, 1, 2] });
             let bytes: Vec<u8> = rgb.iter().flat_map(|v| v.to_ne_bytes()).collect();
-            return write_image(format, &bytes, size, image::ExtendedColorType::Rgb32F).map_err(|e| failed(&e));
+            return write_image(format, &bytes, size, image::ExtendedColorType::Rgb32F, None).map_err(|e| failed(&e));
         }
         _ => {}
     }
@@ -845,7 +864,8 @@ fn encode(format: FileFormat, depth: u8, size: (u32, u32), n: usize, data: &[f32
         let b: Vec<u8> = encoded.iter().map(|v| (v * 255.0 + 0.5) as u8).collect();
         (b, [C::L8, C::La8, C::Rgb8, C::Rgba8].get(n.wrapping_sub(1)).copied().unwrap_or(C::Rgba8))
     };
-    write_image(format, &bytes, size, color).map_err(|e| failed(&e))
+    let icc = embed.and_then(crate::icc::profile);
+    write_image(format, &bytes, size, color, icc).map_err(|e| failed(&e))
 }
 
 /// Pick components `pick` from every texel of an `n`-component image.
@@ -853,12 +873,42 @@ fn remap(data: &[f32], n: usize, pick: &[usize]) -> Vec<f32> {
     data.chunks_exact(n.max(1)).flat_map(|px| pick.iter().map(|k| px.get(*k).copied().unwrap_or(0.0))).collect()
 }
 
-fn write_image(format: FileFormat, bytes: &[u8], (w, h): (u32, u32), color: image::ExtendedColorType) -> image::ImageResult<Vec<u8>> {
+/// Encode `bytes` as `format`, with `icc` (an ICC profile) embedded where the format has a place for one.
+fn write_image(format: FileFormat, bytes: &[u8], (w, h): (u32, u32), color: image::ExtendedColorType, icc: Option<Vec<u8>>) -> image::ImageResult<Vec<u8>> {
+    use image::ImageEncoder;
     let mut out = Cursor::new(Vec::new());
+    // `set_icc_profile` says no (an error to ignore) for an encoder without a place for it.
     let fmt = match format {
         FileFormat::Jpeg => {
-            use image::ImageEncoder;
-            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY).write_image(bytes, w, h, color)?;
+            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY);
+            if let Some(p) = icc {
+                let _ = enc.set_icc_profile(p);
+            }
+            enc.write_image(bytes, w, h, color)?;
+            return Ok(out.into_inner());
+        }
+        FileFormat::Png if icc.is_some() => {
+            let mut enc = image::codecs::png::PngEncoder::new(&mut out);
+            if let Some(p) = icc {
+                let _ = enc.set_icc_profile(p);
+            }
+            enc.write_image(bytes, w, h, color)?;
+            return Ok(out.into_inner());
+        }
+        FileFormat::Tiff if icc.is_some() => {
+            let mut enc = image::codecs::tiff::TiffEncoder::new(&mut out);
+            if let Some(p) = icc {
+                let _ = enc.set_icc_profile(p);
+            }
+            enc.write_image(bytes, w, h, color)?;
+            return Ok(out.into_inner());
+        }
+        FileFormat::Webp if icc.is_some() => {
+            let mut enc = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
+            if let Some(p) = icc {
+                let _ = enc.set_icc_profile(p);
+            }
+            enc.write_image(bytes, w, h, color)?;
             return Ok(out.into_inner());
         }
         FileFormat::Png => image::ImageFormat::Png,
@@ -874,7 +924,7 @@ fn write_image(format: FileFormat, bytes: &[u8], (w, h): (u32, u32), color: imag
 }
 
 /// OpenEXR with Y / YA / RGB / RGBA channels, half or full float, ZIP compression.
-fn write_exr((w, h): (u32, u32), n: usize, data: &[f32], half: bool) -> exr::error::Result<Vec<u8>> {
+fn write_exr((w, h): (u32, u32), n: usize, data: &[f32], half: bool, space: Option<ColorSpace>) -> exr::error::Result<Vec<u8>> {
     use exr::prelude::*;
     let names: &[&str] = match n {
         1 => &["Y"],
@@ -893,7 +943,12 @@ fn write_exr((w, h): (u32, u32), n: usize, data: &[f32], half: bool) -> exr::err
         .collect();
     let layer = Layer::new((w as usize, h as usize), LayerAttributes::default(), Encoding::SMALL_LOSSLESS, AnyChannels::sort(channels));
     let mut out = Cursor::new(Vec::new());
-    let image = Image::from_layer(layer);
+    let mut image = Image::from_layer(layer);
+    // The primaries and white point of the values, in the attribute OpenEXR readers look for.
+    if let Some(space) = space {
+        let [r, g, b, white] = space.chromaticities().map(|xy| Vec2(xy[0] as f32, xy[1] as f32));
+        image.attributes.chromaticities = Some(exr::meta::attribute::Chromaticities { red: r, green: g, blue: b, white });
+    }
     let writer = image.write();
     // No worker threads on the web.
     #[cfg(target_arch = "wasm32")]
