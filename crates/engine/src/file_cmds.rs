@@ -98,19 +98,24 @@ impl Session {
     }
 
     /// [`Session::mesh_obj_bytes`] with an MTL material library and each material's maps (like
-    /// [`Session::mesh_usd`]'s), to write next to it.
-    pub fn mesh_obj_with_mtl(&mut self) -> Result<(Vec<u8>, texturecraft_formats::NamedFiles)> {
+    /// [`Session::mesh_usd`]'s), to write next to it, named after `stem` (the OBJ file's).
+    pub fn mesh_obj_with_mtl(&mut self, stem: &str) -> Result<(Vec<u8>, texturecraft_formats::NamedFiles)> {
         // shortcut: UV-tiled sets get no maps (the OBJ keeps the mesh's UDIM UVs and an MTL map is
         // one image); their tiles export through Export textures with `$udim` names.
-        let files = self.material_files(texturecraft_formats::usd_export_options(), false)?;
-        Ok(texturecraft_formats::obj_with_mtl(&self.source_mesh(), &self.doc.project.name, &files))
+        let mut mesh = self.source_mesh();
+        // A mesh without materials has one implicit material (and texture set).
+        if mesh.materials.is_empty() {
+            mesh.materials.push("default".into());
+        }
+        let files = self.material_files(texturecraft_formats::usd_export_options(), false, mesh.materials.len())?;
+        Ok(texturecraft_formats::obj_with_mtl(&mesh, &self.doc.project.name, stem, &files))
     }
 
     /// The working mesh as binary glTF with each material's textures (from its texture set's
     /// composite, through the texture export pipeline) embedded. glTF has no UV tiles: a
     /// UV-tiled set embeds its tile atlas, with the mesh's UVs in atlas space.
     pub fn mesh_glb_bytes(&mut self) -> Result<Vec<u8>> {
-        let files = self.material_files(texturecraft_formats::glb_export_options(), true)?;
+        let files = self.material_files(texturecraft_formats::glb_export_options(), true, self.mesh.materials.len())?;
         let textures: Vec<_> = files.into_iter().map(texturecraft_formats::GlbTextures::from_files).collect();
         texturecraft_formats::glb_bytes(&self.mesh, &self.doc.project.name, &textures).map_err(fe)
     }
@@ -118,15 +123,15 @@ impl Session {
     /// The working mesh as USD with a UsdPreviewSurface per material (textures like
     /// [`Session::mesh_glb_bytes`]): usdz packages them, usda / usdc list them to write alongside.
     pub fn mesh_usd(&mut self, format: texturecraft_formats::UsdFormat) -> Result<texturecraft_formats::UsdExport> {
-        let files = self.material_files(texturecraft_formats::usd_export_options(), true)?;
+        let files = self.material_files(texturecraft_formats::usd_export_options(), true, self.mesh.materials.len())?;
         texturecraft_formats::usd_bytes(&self.mesh, &self.doc.project.name, &files, format).map_err(fe)
     }
 
-    /// Each material's texture set rendered with `opts` (as a tile atlas for UV-tiled sets, or
-    /// nothing for them without `tiled`).
-    fn material_files(&mut self, opts: ExportOptions, tiled: bool) -> Result<Vec<Vec<ExportedFile>>> {
+    /// The texture sets of the first `materials` materials rendered with `opts` (as a tile atlas
+    /// for UV-tiled sets, or nothing for them without `tiled`).
+    fn material_files(&mut self, opts: ExportOptions, tiled: bool, materials: usize) -> Result<Vec<Vec<ExportedFile>>> {
         let opts = ExportOptions { atlas: true, ..opts };
-        (0..self.mesh.materials.len())
+        (0..materials)
             .map(|m| match self.doc.project.texture_sets.iter().position(|t| t.material == m) {
                 Some(ts) if tiled || self.doc.project.texture_sets.get(ts).is_some_and(|t| t.tile_grid().is_none()) => self.export_files(&[ts], &opts),
                 _ => Ok(Vec::new()),
@@ -561,7 +566,7 @@ impl Session {
                 let usd = self.mesh_usd(format)?;
                 (usd.bytes, usd.textures)
             }
-            _ => self.mesh_obj_with_mtl()?,
+            _ => self.mesh_obj_with_mtl(std::path::Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("mesh"))?,
         };
         Ok(MeshExport { path, bytes, textures })
     }
@@ -608,11 +613,11 @@ mod tests {
         assert!(obj["path"].as_str().unwrap().ends_with("ball.obj"));
         // The OBJ names its MTL, which names every material and its maps, all written beside it.
         let text = std::fs::read_to_string(obj["path"].as_str().unwrap()).unwrap();
-        assert!(text.lines().any(|l| l == "mtllib t.mtl"), "{}", &text[..120]);
+        assert!(text.lines().any(|l| l == "mtllib ball.mtl"), "named after the OBJ: {}", &text[..120]);
         let files: Vec<_> = obj["textures"].as_array().unwrap().iter().map(|f| std::path::PathBuf::from(f.as_str().unwrap())).collect();
         assert!(files.iter().all(|f| f.is_file()));
         let mtl = std::fs::read_to_string(&files[0]).unwrap();
-        assert!(files[0].ends_with("t.mtl"));
+        assert!(files[0].ends_with("ball.mtl"));
         for m in &s.mesh.materials {
             assert!(mtl.contains(&format!("newmtl {m}")) && text.contains(&format!("usemtl {m}")), "{m}");
         }
@@ -633,6 +638,20 @@ mod tests {
         assert_eq!(bytes.windows(9).filter(|w| *w == b"image/png").count(), 3 * s.mesh.materials.len());
         assert!(crate::execute(&mut s, "file.exportMesh", &json!({ "path": base, "format": "fbx" })).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A mesh without materials exports its one implicit material, maps included.
+    #[test]
+    fn obj_export_declares_the_implicit_material() {
+        let mut mesh = primitives::cube(1.0);
+        mesh.materials.clear();
+        mesh.submeshes.clear();
+        let mut s = Session::new_project("t", mesh, "builtin:cube", None, 128).unwrap();
+        let (obj, files) = s.mesh_obj_with_mtl("cube").unwrap();
+        assert!(String::from_utf8(obj).unwrap().contains("usemtl default\n"));
+        let mtl = String::from_utf8(files[0].1.clone()).unwrap();
+        assert!(mtl.contains("newmtl default\nKd 1 1 1\nmap_Kd cube_default_BaseColor.png"), "{mtl}");
+        assert!(files.iter().any(|f| f.0 == "cube_default_BaseColor.png"));
     }
 
     #[test]
