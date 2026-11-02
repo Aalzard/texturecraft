@@ -945,6 +945,14 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Unsaved changes", "未保存的更改"),
     ("Don't save", "不保存"),
     ("Save the changes to {name} before closing?", "关闭前是否保存对 {name} 的更改？"),
+    ("Skew correction", "倾斜校正"),
+    ("Paint skew in the 2D view", "在 2D 视图中绘制倾斜"),
+    (
+        "Drag in the 2D view to paint where the bake rays turn onto the base normal; paint with a value of 0 to erase",
+        "在 2D 视图中拖动，绘制烘焙射线转向基础法线的位置；以值 0 绘制可擦除",
+    ),
+    ("Radius", "半径"),
+    ("Remove skew correction", "移除倾斜校正"),
     ("Twill weave", "斜纹织物"),
     ("Save the changes to {name} first?", "是否先保存对 {name} 的更改？"),
     (

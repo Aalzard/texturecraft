@@ -41,13 +41,13 @@ pub mod project_file;
 pub use export::{
     Dest, ExportInput, ExportOptions, ExportPreset, ExportedFile, FileFormat, MapSpec, Padding, PlannedFile, SourceRef, VirtualMap, list_outputs, render_maps,
 };
-pub use image_res::{DecodedImage, coverage_png, decode_image};
+pub use image_res::{DecodedImage, coverage_png, decode_image, decode_image_within};
 pub use mesh_export::{GlbTextures, UsdExport, UsdFormat, glb_bytes, glb_export_options, obj_bytes, usd_bytes, usd_export_options};
 pub use mesh_import::{HighPolyMesh, ImportedMesh, MeshFile, MeshReport, import_high_poly_bytes, import_mesh_bytes, mesh_report, self_contained_mesh};
 #[cfg(not(target_arch = "wasm32"))]
 pub use presets::load_preset;
 pub use presets::{builtin_preset, builtin_presets, preset_from_json, preset_to_json};
-pub use project_file::{ProjectFile, load_project_bytes, sanitize_resource_name, save_project_bytes};
+pub use project_file::{ProjectFile, SkewData, load_project_bytes, sanitize_resource_name, save_project_bytes};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use export::write_files;

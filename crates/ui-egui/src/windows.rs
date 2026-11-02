@@ -850,6 +850,9 @@ fn common_params(app: &mut TextureCraftApp, ui: &mut Ui, b: &mut BakeSettings) {
     });
 
     ui.add_space(6.0);
+    skew_section(app, ui);
+
+    ui.add_space(6.0);
     if ui.button(tr("Apply to all texture sets")).on_hover_text(tr("Copy these bake settings to every texture set")).clicked() {
         let mut p = bake_cmds::settings_params(b);
         p["ts"] = "all".into();
@@ -857,6 +860,27 @@ fn common_params(app: &mut TextureCraftApp, ui: &mut Ui, b: &mut BakeSettings) {
             o.remove("enabled");
         }
         app.run("bake.settings", p);
+    }
+}
+
+/// Skew correction: paint a map over the UV atlas that turns the bake rays onto the base normal.
+fn skew_section(app: &mut TextureCraftApp, ui: &mut Ui) {
+    ui.label(caption(tr("Skew correction")));
+    let has = app.session.bake_meshes.skew.is_some();
+    let mut brush = app.ui.skew_brush;
+    ui.checkbox(&mut brush.on, tr("Paint skew in the 2D view"))
+        .on_hover_text(tr("Drag in the 2D view to paint where the bake rays turn onto the base normal; paint with a value of 0 to erase"));
+    if brush.on {
+        slider(ui, tr("Radius"), &mut brush.radius, 0.002..=0.2, 3);
+        slider(ui, tr("Value"), &mut brush.value, 0.0..=1.0, 2);
+        slider(ui, tr("Hardness"), &mut brush.hardness, 0.0..=1.0, 2);
+    }
+    if brush.on && !app.ui.skew_brush.on && app.ui.layout == crate::state::ViewLayout::Only3D {
+        app.ui.layout = crate::state::ViewLayout::Split;
+    }
+    app.ui.skew_brush = brush;
+    if has && ui.button(tr("Remove skew correction")).clicked() {
+        app.run("bake.skew.clear", json!({}));
     }
 }
 

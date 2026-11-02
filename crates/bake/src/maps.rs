@@ -10,6 +10,7 @@ use texturecraft_geom::{BaseColor, Bvh, Hit, Mesh, Surface, surface_at};
 use texturecraft_texel::{linear_to_srgb, srgb_to_linear};
 
 use crate::rays::{ANY, Hemisphere, Query, Ray, RayKind, TraceMesh};
+use crate::skew::Prepared;
 use crate::{BakeError, BakeRequest};
 
 /// A mesh the bakers sample: the low poly, or the high poly detail is transferred from.
@@ -137,6 +138,7 @@ pub(crate) struct Ctx<'a> {
     low: Source<'a>,
     high: Option<Source<'a>>,
     cage: Option<&'a Mesh>,
+    skew: Option<Prepared<'a>>,
     /// Normals averaged over coincident vertices (rays don't split at hard edges); empty when off.
     ray_normals: Vec<Vec3>,
     lo: Vec3,
@@ -174,6 +176,7 @@ impl<'a> Ctx<'a> {
             }
             false => Vec::new(),
         };
+        let skew = req.skew.map(|m| Prepared::new(m, req.mesh, diag)).transpose()?;
         let eps = 1e-4 * diag;
         let pass = |map: BakedMap, r: &RaySettings, kind: RayKind| {
             let half = (r.spread.clamp(0.0, 180.0) * 0.5).to_radians();
@@ -194,6 +197,7 @@ impl<'a> Ctx<'a> {
             low,
             high,
             cage: req.cage,
+            skew,
             ray_normals,
             lo,
             extent: hi - lo,
@@ -234,7 +238,14 @@ impl<'a> Ctx<'a> {
         let cage = self.cage.and_then(|c| interpolate(c, &c.positions, s.tri, bary)).map(|c| s.pos - c).filter(|v| v.length() > self.eps);
         let (origin, dir, front) = match cage {
             Some(v) => (s.pos - v, v.normalize(), v.length()),
-            None => (s.pos + n * self.frontal, -n, self.frontal),
+            None => {
+                // Skew correction turns the averaged direction towards the base normal.
+                let up = match &self.skew {
+                    Some(k) => k.correct(self.low.mesh, s, n),
+                    None => n,
+                };
+                (s.pos + up * self.frontal, -up, self.frontal)
+            }
         };
         let key = if self.by_name { self.low.key.get(s.tri as usize).copied().unwrap_or(ANY) } else { ANY };
         let tmax = if self.by_name && key == ANY { 0.0 } else { front + self.rear };

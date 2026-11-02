@@ -86,6 +86,7 @@ impl Session {
             mesh: None,
             high_poly: Vec::new(),
             cage: None,
+            skew: None,
             thumbnail: None,
             resources,
         };

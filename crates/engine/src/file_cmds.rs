@@ -165,6 +165,7 @@ impl Session {
         let mut s = Session::new(Document { project: pf.project, pixels: pf.pixels, baked: pf.baked, resources }, mesh, source)?;
         s.sync_images();
         s.load_bake_meshes(pf.high_poly, pf.cage);
+        s.load_skew(pf.skew);
         Ok(s)
     }
 
@@ -192,6 +193,7 @@ impl Session {
             mesh: self.mesh_source.clone(),
             high_poly,
             cage,
+            skew: self.saved_skew(),
             thumbnail: None,
             resources: self.doc.resources.iter().map(|(k, v)| (k.clone(), v.as_ref().clone())).collect(),
         }

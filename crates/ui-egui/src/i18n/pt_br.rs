@@ -1032,6 +1032,14 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Unsaved changes", "Alterações não salvas"),
     ("Don't save", "Não salvar"),
     ("Save the changes to {name} before closing?", "Salvar as alterações em {name} antes de fechar?"),
+    ("Skew correction", "Correção de inclinação"),
+    ("Paint skew in the 2D view", "Pintar a inclinação na vista 2D"),
+    (
+        "Drag in the 2D view to paint where the bake rays turn onto the base normal; paint with a value of 0 to erase",
+        "Arraste na vista 2D para pintar onde os raios do bake se voltam para a normal base; pinte com valor 0 para apagar",
+    ),
+    ("Radius", "Raio"),
+    ("Remove skew correction", "Remover a correção de inclinação"),
     ("Twill weave", "Tecido sarja"),
     ("Save the changes to {name} first?", "Salvar primeiro as alterações em {name}?"),
     (

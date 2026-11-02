@@ -365,7 +365,7 @@ mod tests {
     fn run(low: &Mesh, high: Option<&Mesh>, s: &BakeSettings, tracer: Option<&GpuBaker>) -> BakeOutput {
         let (lb, hb) = (Bvh::new(low), high.map(Bvh::new));
         let high = high.zip(hb.as_ref()).map(|(mesh, bvh)| HighPoly { mesh, bvh, base_color: &[] });
-        let req = BakeRequest { mesh: low, bvh: &lb, material: 0, settings: s, high, cage: None, tiles: (1, 1) };
+        let req = BakeRequest { mesh: low, bvh: &lb, material: 0, settings: s, high, cage: None, skew: None, tiles: (1, 1) };
         match tracer {
             Some(t) => bake_on(&req, &Progress::new(), t).unwrap(),
             None => bake(&req, &Progress::new()).unwrap(),

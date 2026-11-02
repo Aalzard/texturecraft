@@ -15,11 +15,20 @@ pub struct DecodedImage {
 
 /// Decode PNG, JPEG, TGA, TIFF, BMP, WEBP, EXR or HDR bytes.
 pub fn decode_image(bytes: &[u8]) -> Result<DecodedImage> {
+    decode_image_within(bytes, u64::MAX)
+}
+
+/// [`decode_image`] for an image of at most `max_texels` (width × height), checked from the
+/// header, before any pixel is decoded or allocated.
+pub fn decode_image_within(bytes: &[u8], max_texels: u64) -> Result<DecodedImage> {
     let reader =
         image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| FormatError::Malformed { kind: "image", msg: e.to_string() })?;
     let (w, h) = reader.into_dimensions().map_err(|e| FormatError::Malformed { kind: "image", msg: e.to_string() })?;
     if w == 0 || h == 0 || w > MAX_IMAGE_SIZE || h > MAX_IMAGE_SIZE {
         return Err(FormatError::TooLarge(format!("image is {w}x{h} (limit {MAX_IMAGE_SIZE})")));
+    }
+    if u64::from(w) * u64::from(h) > max_texels {
+        return Err(FormatError::TooLarge(format!("image is {w}x{h}, more than {max_texels} texels")));
     }
     let img = crate::guard("image", || image::load_from_memory(bytes).map_err(|e| FormatError::Malformed { kind: "image", msg: e.to_string() }))?;
     let srgb = !matches!(img, image::DynamicImage::ImageRgb32F(_) | image::DynamicImage::ImageRgba32F(_));
@@ -58,5 +67,17 @@ mod tests {
         let text = decode_image(&coverage_png(2, 1, &[0, 255], [255; 3]).unwrap()).unwrap();
         assert_eq!(text.rgba, vec![[1.0, 1.0, 1.0, 0.0], [1.0; 4]]);
         assert!(coverage_png(2, 2, &[0], [255; 3]).is_err());
+    }
+
+    #[test]
+    fn decoding_within_a_texel_limit_refuses_big_images_from_the_header() {
+        let png = {
+            let mut b = Vec::new();
+            image::RgbImage::from_pixel(8, 8, image::Rgb([1, 2, 3])).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+            b
+        };
+        assert_eq!(decode_image_within(&png, 64).unwrap().width, 8);
+        assert!(matches!(decode_image_within(&png, 63), Err(FormatError::TooLarge(_))));
+        assert!(decode_image(&png).is_ok());
     }
 }

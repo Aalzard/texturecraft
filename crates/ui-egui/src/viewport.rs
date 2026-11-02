@@ -46,7 +46,9 @@ pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
     let full = ui.max_rect();
     let mode = app.ui.mode;
     path_keys(app, ui);
-    let layout = if mode == crate::state::Mode::Painting { app.ui.layout } else { ViewLayout::Only3D };
+    // Bake mode shows the 3D view alone, except while the skew brush needs the 2D view to paint in.
+    let skew_painting = mode == crate::state::Mode::Baking && app.ui.skew_brush.on;
+    let layout = if mode == crate::state::Mode::Painting || skew_painting { app.ui.layout } else { ViewLayout::Only3D };
     match layout {
         ViewLayout::Only3D => view_3d(app, ui, full, &mut sync),
         ViewLayout::Only2D => view_2d(app, ui, full, &mut sync),
@@ -959,6 +961,10 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         let uv = to_uv(p);
         app.run("tool.cloneSource", json!({"uv": [uv.x, uv.y]}));
     }
+    let skew_on = app.ui.mode == crate::state::Mode::Baking && app.ui.skew_brush.on && !alt;
+    if skew_on {
+        skew_input(app, ui, &resp, &to_uv);
+    }
     let painting = app.ui.mode == crate::state::Mode::Painting && !alt && !adjusting && !v_held;
     if painting && path_tool {
         path_input(app, ui, &resp, true, |_, p| Some(to_uv(p).extend(0.0)), show);
@@ -1021,10 +1027,61 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     if app.ui.mode == crate::state::Mode::Painting && path_tool {
         path_overlay(app, ui, rect, &resp, true, show);
     }
+    if app.ui.mode == crate::state::Mode::Baking {
+        skew_overlay(app, ui, &painter, to(0.0, 1.0), to(1.0, 0.0));
+        if skew_on && let Some(hover) = resp.hover_pos() {
+            let r = (to(app.ui.skew_brush.radius, 0.0).x - to(0.0, 0.0).x).abs().max(2.0);
+            painter.circle_stroke(hover, r, Stroke::new(1.0, Color32::from_white_alpha(200)));
+        }
+    }
     brush_readout(app, ui, &resp, adjusting);
     view_header(app, ui, rect, "v2d");
     axis_gizmo(ui, rect, app, true);
     let name = app.session.doc.project.texture_sets.get(ts).map(|t| t.name.clone()).unwrap_or_default();
     ui.painter().text(rect.right_bottom() + vec2(-10.0, -10.0), egui::Align2::RIGHT_BOTTOM, name, egui::FontId::proportional(11.0), tk.viewport_text);
     let _ = (RichText::new(""), Channel::BaseColor);
+}
+
+/// Paint the skew map under the pointer in the 2D view (a click is one dab, a drag a stroke).
+fn skew_input(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, to_uv: &dyn Fn(egui::Pos2) -> Vec2) {
+    let last = ui.scope_id().with("skew_last");
+    let brush = app.ui.skew_brush;
+    let started = resp.drag_started_by(PointerButton::Primary) || resp.clicked_by(PointerButton::Primary);
+    if !(started || resp.dragged_by(PointerButton::Primary)) {
+        return;
+    }
+    let Some(p) = resp.interact_pointer_pos() else { return };
+    let uv = to_uv(p);
+    let previous: Option<[f32; 2]> = if started { None } else { ui.data(|d| d.get_temp(last)) };
+    let points: Vec<[f32; 2]> = previous.into_iter().chain([[uv.x, uv.y]]).collect();
+    if app.run("bake.skew.paint", json!({"points": points, "radius": brush.radius, "value": brush.value, "hardness": brush.hardness})).is_some() {
+        ui.data_mut(|d| d.insert_temp(last, [uv.x, uv.y]));
+    }
+}
+
+/// The skew map as a translucent orange layer over the UV square from `top_left` to `bottom_right`.
+fn skew_overlay(app: &TextureCraftApp, ui: &Ui, painter: &egui::Painter, top_left: egui::Pos2, bottom_right: egui::Pos2) {
+    let Some(k) = app.session.bake_meshes.skew.as_ref().filter(|k| k.values.len() > 1) else { return };
+    let key = (app.session.bake_meshes.skew_rev, std::sync::Arc::as_ptr(k) as usize);
+    let id = ui.scope_id().with("skew_overlay_texture");
+    let cached: Option<((u64, usize), egui::TextureHandle)> = ui.data(|d| d.get_temp(id));
+    let tex = match cached {
+        Some((c, t)) if c == key => t,
+        _ => {
+            // At most 256 texels a side: the overlay is a guide, not the map.
+            let (w, h) = (k.width as usize, k.height as usize);
+            let (ow, oh) = (w.min(256), h.min(256));
+            let mut rgba = Vec::with_capacity(ow * oh * 4);
+            for y in 0..oh {
+                for x in 0..ow {
+                    let v = k.values.get((y * h / oh) * w + x * w / ow).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                    rgba.extend_from_slice(&[255, 140, 40, (v * 170.0) as u8]);
+                }
+            }
+            let tex = ui.ctx().load_texture("skew_overlay", egui::ColorImage::from_rgba_unmultiplied([ow, oh], &rgba), egui::TextureOptions::NEAREST);
+            ui.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
+            tex
+        }
+    };
+    painter.image(tex.id(), Rect::from_two_pos(top_left, bottom_right), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 }

@@ -34,6 +34,14 @@ fn sample() -> Sample {
         mesh: Some(("glb".into(), vec![1, 2, 3, 4, 5])),
         high_poly: vec![("b_high.obj".into(), vec![7; 9]), ("a_high.ply".into(), vec![6])],
         cage: Some(("cage.obj".into(), vec![5, 5])),
+        skew: Some(SkewData {
+            width: 3,
+            height: 2,
+            values: vec![0.0, 0.25, 0.5, 0.75, 1.0, 0.125],
+            edge_distance: 0.05,
+            edge_contrast: 2.0,
+            per_triangle: true,
+        }),
         thumbnail: Some(vec![137, 80, 78, 71]),
         resources: [("bricks.png".to_string(), vec![9, 8, 7])].into(),
     };
@@ -53,6 +61,7 @@ fn assert_same(a: &ProjectFile, b: &ProjectFile) {
     assert_eq!(a.baked, b.baked);
     assert_eq!(a.mesh, b.mesh);
     assert_eq!((&a.high_poly, &a.cage), (&b.high_poly, &b.cage), "bake meshes keep their order");
+    assert_eq!(a.skew, b.skew);
     assert_eq!(a.thumbnail, b.thumbnail);
     assert_eq!(a.resources, b.resources);
 }
