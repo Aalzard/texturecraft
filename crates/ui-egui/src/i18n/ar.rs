@@ -263,6 +263,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Drag the frame to move the decal, a corner to scale it, the round handle to turn it",
         "اسحب الإطار لتحريك الملصق، أو الزاوية لتغيير حجمه، أو المقبض الدائري لتدويره",
     ),
+    ("Drop an image from the Assets panel here to use it as this mesh map", "أفلت صورة من لوحة الأصول هنا لاستخدامها كخريطة المجسم هذه"),
     ("Dry streaks", "خطوط جافة"),
     ("Duplicate layer(s)", "تكرار الطبقة (الطبقات)"),
     ("Duplicate the selected template", "تكرار القالب المحدد"),

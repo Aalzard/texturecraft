@@ -62,6 +62,11 @@ fn window_snapshots() {
     h.state_mut().ui.windows.settings = true;
     save(&mut h, &dir, "window-settings");
     h.state_mut().ui.windows.settings = false;
+    // The mesh map slots, each with its menu of images (a tall window shows them all).
+    h.state_mut().ui.dock.focus(Panel::TextureSetSettings);
+    h.set_size(egui::vec2(1600.0, 1800.0));
+    save(&mut h, &dir, "panel-texture-set-settings");
+    h.set_size(egui::vec2(1600.0, 960.0));
     // A mask's levels effect over clouds: the histogram in Properties.
     let s = &mut h.state_mut().session;
     for (id, p) in [

@@ -269,6 +269,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Draws {name} of texture set \"{set}\". Edits to the source show in every instance.",
         "텍스처 세트 \"{set}\"의 {name}을(를) 그립니다. 원본을 편집하면 모든 인스턴스에 반영됩니다.",
     ),
+    ("Drop an image from the Assets panel here to use it as this mesh map", "에셋 패널의 이미지를 여기에 놓으면 이 메시 맵으로 사용합니다"),
     ("Dry streaks", "마른 붓자국"),
     ("Duplicate layer(s)", "레이어 복제"),
     ("Duplicate the selected template", "선택한 템플릿을 복제합니다"),

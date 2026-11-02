@@ -272,6 +272,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Draws {name} of texture set \"{set}\". Edits to the source show in every instance.",
         "テクスチャセット「{set}」の {name} を描画します。ソースへの編集はすべてのインスタンスに反映されます。",
     ),
+    ("Drop an image from the Assets panel here to use it as this mesh map", "アセットパネルから画像をここにドロップすると、このメッシュマップとして使用します"),
     ("Dry streaks", "かすれ"),
     ("Duplicate layer(s)", "レイヤーを複製"),
     ("Duplicate the selected template", "選択中のテンプレートを複製"),

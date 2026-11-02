@@ -278,6 +278,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Drag the frame to move the decal, a corner to scale it, the round handle to turn it",
         "Arrastra el marco para mover la calcomanía, una esquina para escalarla y el tirador redondo para girarla",
     ),
+    ("Drop an image from the Assets panel here to use it as this mesh map", "Suelta aquí una imagen del panel Recursos para usarla como este mapa de malla"),
     ("Dry streaks", "Trazos secos"),
     ("Duplicate layer(s)", "Duplicar capa(s)"),
     ("Duplicate the selected template", "Duplicar la plantilla seleccionada"),
