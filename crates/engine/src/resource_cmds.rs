@@ -160,7 +160,7 @@ fn add_image_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let id = s.edit("Add image fill", |s| {
         let id = s.doc.project.alloc_id();
         let mut fill = Fill { projection, ..Fill::default() };
-        fill.sources.insert(ch, Source::Image { name: name.clone() });
+        fill.sources.insert(ch, Source::image(name.clone()));
         crate::layer_cmds::insert_selected(s, Layer::new(id, layer_name, LayerKind::Fill(fill), &[ch]))
     })?;
     Ok(json!({ "layer": id.0 }))

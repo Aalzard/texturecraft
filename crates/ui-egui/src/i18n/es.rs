@@ -260,6 +260,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Dilation infinite", "Dilatación infinita"),
     ("Dilation width", "Ancho de dilatación"),
     ("Direction {axis}", "Dirección {axis}"),
+    ("DirectX normal map", "Mapa de normales DirectX"),
     ("Dirt", "Suciedad"),
     ("Disable", "Desactivado"),
     ("Dismiss", "Cerrar"),
@@ -346,6 +347,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Fine noise", "Ruido fino"),
     ("Fingerprints", "Huellas dactilares"),
     ("Flatten layer", "Acoplar capa"),
+    (
+        "Flips the image's green channel, for normal maps made with Y pointing down",
+        "Invierte el canal verde de la imagen, para mapas de normales hechos con Y hacia abajo",
+    ),
     ("Flow", "Flujo"),
     ("Flow and opacity", "Flujo y opacidad"),
     ("Flow jitter", "Variación de flujo"),

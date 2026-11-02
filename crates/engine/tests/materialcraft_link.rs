@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use texturecraft_engine::compose::BakedMaps;
-use texturecraft_engine::core::{BakedMap, Channel, LayerId, LayerKind, Source};
+use texturecraft_engine::core::{BakedMap, Channel, LayerId, LayerKind, NormalFormat, Source};
 use texturecraft_engine::formats::mcmat::mesh_map_png;
 use texturecraft_engine::geom::primitives;
 use texturecraft_engine::materials::Place;
@@ -68,7 +68,7 @@ fn link(s: &Session, id: LayerId) -> texturecraft_engine::core::MaterialLink {
 fn map_name(s: &Session, id: LayerId, c: Channel) -> String {
     match &s.doc.project.layer(id).unwrap().kind {
         LayerKind::Fill(f) => match f.sources.get(&c) {
-            Some(Source::Image { name }) => name.clone(),
+            Some(Source::Image { name, .. }) => name.clone(),
             other => panic!("{other:?}"),
         },
         _ => panic!("not a fill"),
@@ -97,6 +97,17 @@ fn imports_as_a_linked_fill_with_its_maps() {
     assert!(s.doc.project.layer(id).is_err() && s.doc.resources.len() < n);
     // Garbage is an error, not a layer.
     assert!(s.add_linked_material_bytes_at(b"PK not really", Place::Selection).is_err());
+}
+
+/// An image marked DirectX keeps the mark when a re-cook replaces it.
+#[test]
+fn recooks_keep_the_normal_format_of_a_map() {
+    let mut s = session();
+    let id = s.add_linked_material_bytes_at(&mcmat(0.25, 0.5), Place::Selection).unwrap();
+    execute(&mut s, "layer.fill.set", &json!({"layer": id.0, "channel": "roughness", "normalFormat": "directX"})).unwrap();
+    s.apply_link_cook(id, &mcmat(0.75, 0.5), false).unwrap();
+    let LayerKind::Fill(fill) = &s.doc.project.layer(id).unwrap().kind else { panic!("a fill") };
+    assert!(matches!(fill.sources.get(&Channel::Roughness), Some(Source::Image { normal_format: NormalFormat::DirectX, .. })));
 }
 
 #[test]

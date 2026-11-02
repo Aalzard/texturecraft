@@ -392,7 +392,8 @@ impl Session {
             }
             link.size = m.manifest.size[0];
             let stem = texturecraft_formats::sanitize_resource_name(&link.name);
-            let old: Vec<String> = fill.sources.values().filter_map(|src| if let Source::Image { name } = src { Some(name.clone()) } else { None }).collect();
+            let old: Vec<String> =
+                fill.sources.values().filter_map(|src| if let Source::Image { name, .. } = src { Some(name.clone()) } else { None }).collect();
             let names = put_maps(s, &stem, &maps, &mut fill);
             s.doc.project.layer_mut(id)?.kind = LayerKind::Fill(fill);
             // Old maps go unless another layer (a duplicate) still shows them.
@@ -433,7 +434,12 @@ fn put_maps(s: &mut Session, stem: &str, maps: &[(Channel, Vec<u8>, texturecraft
     for (c, bytes, _) in maps {
         let name = unique(s, &format!("{stem}_{}_{cook}.png", c.id()));
         s.doc.resources.insert(name.clone(), Arc::new(bytes.clone()));
-        fill.sources.insert(*c, Source::Image { name: name.clone() });
+        // A normal map the user marked DirectX stays marked through re-cooks.
+        let normal_format = match fill.sources.get(c) {
+            Some(Source::Image { normal_format, .. }) => *normal_format,
+            _ => Default::default(),
+        };
+        fill.sources.insert(*c, Source::Image { name: name.clone(), normal_format });
         names.push(name);
     }
     names

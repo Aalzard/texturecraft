@@ -446,3 +446,40 @@ fn fill_projection_edits_keep_what_they_do_not_change() {
     let after = at(&mut s, Channel::BaseColor, 200.0, 200.0);
     assert!((before[0] - after[0]).abs() > 0.5, "one checker cell over: {before:?} -> {after:?}");
 }
+
+/// A fill's normal image is OpenGL unless marked DirectX, which flips its green; inspect shows
+/// the mark, and a project saved before the mark existed reads its images as OpenGL.
+#[test]
+fn directx_normal_images_flip_green() {
+    let mut s = session();
+    let name = s.import_resource_bytes("n.png", png(4, 4, |_, _| [128, 204, 255, 255])).unwrap();
+    let layer = id(execute(&mut s, "layer.add.fill", &Value::Null).unwrap(), "layer");
+    let fill = |s: &mut Session, p: Value| {
+        let mut p = p;
+        p["layer"] = json!(layer.0);
+        p["channel"] = json!("normal");
+        execute(s, "layer.fill.set", &p)
+    };
+    let green = |s: &mut Session| at(s, Channel::Normal, 200.0, 200.0)[1];
+    fill(&mut s, json!({"image": name})).unwrap();
+    assert!((green(&mut s) - 0.8).abs() < 0.02, "OpenGL by default: {}", green(&mut s));
+    fill(&mut s, json!({"normalFormat": "directX"})).unwrap();
+    assert!((green(&mut s) - 0.2).abs() < 0.02, "DirectX flips green: {}", green(&mut s));
+    let inspect = execute(&mut s, "project.inspect", &Value::Null).unwrap();
+    let row = inspect["layers"].as_array().unwrap().iter().find(|l| l["id"] == layer.0).unwrap().clone();
+    assert_eq!(row["fill"]["sources"]["normal"], json!({"image": name, "normalFormat": "directX"}));
+    fill(&mut s, json!({"image": name, "normalFormat": "openGl"})).unwrap();
+    assert!((green(&mut s) - 0.8).abs() < 0.02);
+    assert!(fill(&mut s, json!({"normalFormat": "sideways"})).is_err());
+    assert!(fill(&mut s, json!({"image": name, "normalFormat": 1})).is_err(), "not a string");
+    assert!(fill(&mut s, json!({"value": [0.5, 0.5, 1.0], "normalFormat": "directX"})).is_err(), "not an image");
+    // Marking an image on a channel that is off leaves it off.
+    fill(&mut s, json!({"enabled": false})).unwrap();
+    fill(&mut s, json!({"normalFormat": "directX"})).unwrap();
+    assert!(!s.doc.project.layer(layer).unwrap().channels.contains_key(&Channel::Normal));
+    fill(&mut s, json!({"enabled": true})).unwrap();
+    fill(&mut s, json!({"value": [0.5, 0.5, 1.0]})).unwrap();
+    assert!(fill(&mut s, json!({"normalFormat": "directX"})).is_err(), "no image on the channel");
+    let old: texturecraft_engine::core::Source = serde_json::from_value(json!({"Image": {"name": "n"}})).unwrap();
+    assert_eq!(old, texturecraft_engine::core::Source::image("n"));
+}

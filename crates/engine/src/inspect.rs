@@ -2,7 +2,7 @@
 //! without a screenshot.
 
 use serde_json::{Value, json};
-use texturecraft_core::{Effect, EffectKind, Fill, Filter, Layer, LayerKind, Projection, Source};
+use texturecraft_core::{Effect, EffectKind, Fill, Filter, Layer, LayerKind, NormalFormat, Projection, Source};
 
 use crate::Session;
 use crate::session::StackTarget;
@@ -13,7 +13,8 @@ fn source_json(s: &Source) -> Value {
         Source::Procedural { pattern, low, high } => json!({
             "procedural": pattern.kind.label(), "scale": pattern.scale, "seed": pattern.seed, "contrast": pattern.contrast, "low": low, "high": high
         }),
-        Source::Image { name } => json!({ "image": name }),
+        Source::Image { name, normal_format: NormalFormat::OpenGl } => json!({ "image": name }),
+        Source::Image { name, normal_format: NormalFormat::DirectX } => json!({ "image": name, "normalFormat": "directX" }),
         Source::Anchor { anchor, channel } => json!({ "anchor": anchor.0, "channel": channel.id() }),
     }
 }

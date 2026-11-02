@@ -117,7 +117,7 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     let id = s.edit("Add decal", |s| {
         let id = s.doc.project.alloc_id();
         let mut fill = Fill { projection: Projection::Decal(decal), ..Fill::default() };
-        fill.sources.insert(Channel::BaseColor, Source::Image { name: image.clone() });
+        fill.sources.insert(Channel::BaseColor, Source::image(image.clone()));
         crate::layer_cmds::insert_selected(s, Layer::new(id, name, LayerKind::Fill(fill), &[Channel::BaseColor]))
     })?;
     Ok(json!({ "layer": id.0, "decal": decal }))
@@ -166,7 +166,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         if let LayerKind::Fill(f) = &mut s.doc.project.layer_mut(id)?.kind {
             f.projection = Projection::Decal(d);
             if let Some(name) = image {
-                f.sources.insert(Channel::BaseColor, Source::Image { name });
+                f.sources.insert(Channel::BaseColor, Source::image(name));
             }
         }
         Ok(())
