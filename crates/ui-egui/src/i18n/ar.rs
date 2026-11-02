@@ -248,6 +248,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Dilation infinite", "تمديد لا نهائي"),
     ("Dilation width", "عرض التمديد"),
     ("Direction {axis}", "الاتجاه {axis}"),
+    ("DirectX normal map", "خريطة نواظم DirectX"),
     ("Dirt", "أوساخ"),
     ("Disable", "تعطيل"),
     ("Dismiss", "تجاهل"),
@@ -331,6 +332,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Fine noise", "ضوضاء دقيقة"),
     ("Fingerprints", "بصمات أصابع"),
     ("Flatten layer", "تسطيح الطبقة"),
+    (
+        "Flips the image's green channel, for normal maps made with Y pointing down",
+        "يقلب القناة الخضراء للصورة، لخرائط النواظم المصنوعة ومحور Y يشير إلى الأسفل",
+    ),
     ("Flow", "التدفق"),
     ("Flow and opacity", "التدفق والعتامة"),
     ("Flow jitter", "اضطراب التدفق"),

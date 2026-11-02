@@ -4,7 +4,9 @@
 use serde_json::{Value, json};
 use texturecraft_core::{BlendMode, Channel, ChannelBlend, EffectKind, Fill, Layer, LayerId, LayerKind, Procedural, ProceduralKind, Projection, Source};
 
-use crate::commands::{CommandSpec, always, bad, blend_param, boolp, channel_param, color_param, content_param, f32p, has_layer, layer_param, strp, u64p};
+use crate::commands::{
+    CommandSpec, always, bad, blend_param, boolp, channel_param, color_param, content_param, f32p, has_layer, layer_param, normal_format_param, strp, u64p,
+};
 use crate::{EngineError, Result, Session, cmd, session::StackTarget};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -25,7 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set fill source",
             [],
             None,
-            "{layer? | effect?: content fill effect id, channel, color?|value?|procedural?: kind, scale?, seed?, contrast?, balance?, invert?, low?, high?|image?|anchor?: anchor effect id, anchorChannel?, enabled?, solo?: true (this channel on, every other one off)}",
+            "{layer? | effect?: content fill effect id, channel, color?|value?|procedural?: kind, scale?, seed?, contrast?, balance?, invert?, low?, high?|image?, normalFormat?: openGl|directX (the image's normal map convention; alone, it changes the channel's image)|anchor?: anchor effect id, anchorChannel?, enabled?, solo?: true (this channel on, every other one off)}",
             has_layer,
             fill_set
         ),
@@ -306,6 +308,7 @@ fn fill_set(s: &mut Session, p: &Value) -> Result<Value> {
     // `solo`: this channel on, every other one off.
     let solo = boolp(p, "solo") == Some(true);
     let enabled = if solo { Some(true) } else { boolp(p, "enabled") };
+    let normal_format = normal_format_param("layer.fill.set", p)?;
     let source = if let Some(kind) = strp(p, "procedural") {
         let kind = ProceduralKind::parse(kind).ok_or_else(|| bad("layer.fill.set", format!("unknown procedural `{kind}`")))?;
         let mut pr = Procedural::new(kind);
@@ -326,7 +329,7 @@ fn fill_set(s: &mut Session, p: &Value) -> Result<Value> {
     } else if let Some(c) = color_param(p, "color").or_else(|| color_param(p, "value")) {
         Some(Source::Uniform(c))
     } else if let Some(name) = strp(p, "image") {
-        Some(Source::Image { name: name.to_string() })
+        Some(Source::Image { name: name.to_string(), normal_format: normal_format.unwrap_or_default() })
     } else if let Some(a) = u64p(p, "anchor") {
         let reader = match target {
             FillTarget::Layer(id) => Some(id),
@@ -335,13 +338,25 @@ fn fill_set(s: &mut Session, p: &Value) -> Result<Value> {
         let reader = reader.ok_or_else(|| bad("layer.fill.set", "the fill is not in a layer"))?;
         let anchor_channel = channel_param("layer.fill.set", p, "anchorChannel")?.unwrap_or(ch);
         Some(crate::mask_cmds::anchor_source(s, "layer.fill.set", reader, LayerId(a), anchor_channel)?)
-    } else if enabled.is_some() {
+    } else if enabled.is_some() || normal_format.is_some() {
         None
     } else {
-        return Err(bad("layer.fill.set", "give `color`, `value`, `procedural`, `image`, `anchor`, `enabled` or `solo`"));
+        return Err(bad("layer.fill.set", "give `color`, `value`, `procedural`, `image`, `anchor`, `normalFormat`, `enabled` or `solo`"));
     };
+    if normal_format.is_some() && source.as_ref().is_some_and(|src| !matches!(src, Source::Image { .. })) {
+        return Err(bad("layer.fill.set", "`normalFormat` goes with `image` or alone"));
+    }
+    // A format-only edit leaves the channel on or off.
+    let touches_channel = source.is_some() || enabled.is_some();
     s.edit("Set fill", |s| {
         let f = fill_mut(s, target)?;
+        // `normalFormat` alone: the convention of the channel's image.
+        if let (None, Some(nf)) = (&source, normal_format) {
+            match f.sources.get_mut(&ch) {
+                Some(Source::Image { normal_format, .. }) => *normal_format = nf,
+                _ => return Err(bad("layer.fill.set", "`normalFormat` needs an image on the channel")),
+            }
+        }
         match target {
             // A fill effect's channel is on while it has a source.
             FillTarget::Effect(_) if enabled == Some(false) => {
@@ -361,7 +376,7 @@ fn fill_set(s: &mut Session, p: &Value) -> Result<Value> {
                 let l = s.doc.project.layer_mut(id)?;
                 if enabled == Some(false) {
                     l.channels.remove(&ch);
-                } else {
+                } else if touches_channel {
                     l.channels.entry(ch).or_default();
                 }
                 if solo {

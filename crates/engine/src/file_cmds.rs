@@ -8,7 +8,7 @@ use texturecraft_core::{NormalFormat, Project, TextureSet};
 use texturecraft_formats::{ExportInput, ExportOptions, ExportedFile, FileFormat, Padding, ProjectFile};
 use texturecraft_geom::{Mesh, primitives};
 
-use crate::commands::{CommandSpec, always, bad, strp, u64p};
+use crate::commands::{CommandSpec, always, bad, normal_format_param, strp, u64p};
 use crate::session::{Document, Session};
 use crate::{EngineError, Result, cmd};
 
@@ -275,12 +275,7 @@ pub fn export_options(s: &Session, p: &Value, cmd: &str) -> Result<ExportOptions
     if let Some(sz) = u64p(p, "size") {
         o.size = Some(crate::session::check_resolution(u32::try_from(sz).unwrap_or(0))?);
     }
-    o.normal_format = match strp(p, "normalFormat") {
-        Some("openGl") | Some("opengl") => Some(NormalFormat::OpenGl),
-        Some("directX") | Some("directx") => Some(NormalFormat::DirectX),
-        Some(other) => return Err(bad(cmd, format!("unknown normal format `{other}`"))),
-        None => None,
-    };
+    o.normal_format = normal_format_param(cmd, p)?;
     match p.get("colorSpace") {
         None | Some(Value::Null) => {}
         Some(Value::String(name)) => {

@@ -336,8 +336,13 @@ pub enum Source {
     Uniform([f32; 3]),
     /// A procedural pattern mixing two values.
     Procedural { pattern: Procedural, low: [f32; 3], high: [f32; 3] },
-    /// An imported image resource, by name.
-    Image { name: String },
+    /// An imported image resource, by name. `normal_format` is the convention of a normal map
+    /// image (DirectX images have their green flipped where a normal channel samples them).
+    Image {
+        name: String,
+        #[serde(default)]
+        normal_format: crate::NormalFormat,
+    },
     /// The stack value recorded by an anchor point effect (`anchor` is the effect id) for
     /// `channel`; colors read as gray where a scalar is needed.
     Anchor { anchor: LayerId, channel: Channel },
@@ -346,6 +351,11 @@ pub enum Source {
 impl Source {
     pub fn uniform_of(c: Channel) -> Source {
         Source::Uniform(c.default_value())
+    }
+
+    /// Image resource `name` (an OpenGL normal map where a normal channel samples it).
+    pub fn image(name: impl Into<String>) -> Source {
+        Source::Image { name: name.into(), normal_format: crate::NormalFormat::OpenGl }
     }
 
     /// The anchor point this source reads, if any.

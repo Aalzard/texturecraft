@@ -71,8 +71,8 @@ fn a_material_becomes_one_fill_layer_in_one_undo_step() {
     // The one image used twice is one resource; the constant is uniform.
     assert_eq!(r["resources"].as_array().unwrap().len(), 1, "{r}");
     let name = r["resources"][0].as_str().unwrap().to_string();
-    assert!(matches!(fill.sources.get(&Channel::BaseColor), Some(Source::Image { name: n }) if *n == name));
-    assert!(matches!(fill.sources.get(&Channel::Roughness), Some(Source::Image { name: n }) if *n == name));
+    assert!(matches!(fill.sources.get(&Channel::BaseColor), Some(Source::Image { name: n, .. }) if *n == name));
+    assert!(matches!(fill.sources.get(&Channel::Roughness), Some(Source::Image { name: n, .. }) if *n == name));
     assert_eq!(fill.sources.get(&Channel::Metallic), Some(&Source::Uniform([1.0; 3])));
     assert!(matches!(fill.projection, texturecraft_engine::core::Projection::Uv { scale, .. } if scale == [3.0, 3.0]), "{:?}", fill.projection);
     assert_eq!(s.doc.resources.len(), before + 1);

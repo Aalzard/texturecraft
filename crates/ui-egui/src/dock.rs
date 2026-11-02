@@ -1819,8 +1819,18 @@ fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Valu
                         }
                     }
                 }
-                Source::Image { name } => {
+                Source::Image { name, normal_format } => {
                     ui.label(trf("Image: {name}", &[("name", &name)]));
+                    if c.kind() == ChannelKind::NormalMap {
+                        let mut directx = normal_format == texturecraft_engine::core::NormalFormat::DirectX;
+                        if ui
+                            .checkbox(&mut directx, tr("DirectX normal map"))
+                            .on_hover_text(tr("Flips the image's green channel, for normal maps made with Y pointing down"))
+                            .changed()
+                        {
+                            app.run("layer.fill.set", set(json!({"normalFormat": if directx { "directX" } else { "openGl" }})));
+                        }
+                    }
                 }
                 Source::Anchor { anchor, channel } => {
                     ui.label(RichText::new(anchor_label(app, anchor, channel)).color(tk.text_dim));
@@ -1902,7 +1912,7 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
                 Source::Anchor { anchor, channel } => anchor_label(app, *anchor, *channel),
                 Source::Uniform(_) => tr("Uniform value").to_string(),
                 Source::Procedural { pattern, .. } => tr(pattern.kind.label()).to_string(),
-                Source::Image { name } => trf("Image: {name}", &[("name", name)]),
+                Source::Image { name, .. } => trf("Image: {name}", &[("name", name)]),
             };
             combo(ui, tr("Source"), current, |ui| {
                 if ui.selectable_label(matches!(source, Source::Uniform(_)), tr("Uniform value")).clicked() {
