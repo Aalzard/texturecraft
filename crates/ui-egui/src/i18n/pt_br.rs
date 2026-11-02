@@ -215,6 +215,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Crate", "Caixote"),
     ("Create", "Criar"),
     ("Create smart material", "Criar material inteligente"),
+    (
+        "Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.",
+        "Ctrl+arrastar com botão direito em uma vista ajusta o tamanho e a dureza; Ctrl+arrastar com botão esquerdo, o fluxo e o ângulo.",
+    ),
     ("Cube", "Cubo"),
     ("Current layer", "Camada atual"),
     ("Curvature", "Curvatura"),

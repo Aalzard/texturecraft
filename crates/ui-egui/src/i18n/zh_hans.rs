@@ -188,6 +188,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Crate", "箱子"),
     ("Create", "创建"),
     ("Create smart material", "创建智能材质"),
+    (
+        "Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.",
+        "在视图中按住 Ctrl 右键拖动可调整大小和硬度，Ctrl 左键拖动可调整流量和角度。",
+    ),
     ("Cube", "立方体"),
     ("Current layer", "当前图层"),
     ("Curvature", "曲率"),
