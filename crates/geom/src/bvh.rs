@@ -108,52 +108,77 @@ impl Bvh {
             if c <= LEAF {
                 continue;
             }
-            // Binned SAH along the widest centroid axis.
+            // Binned SAH across all 3 centroid axes.
             let ext = chi - clo;
-            let axis = if ext.x >= ext.y && ext.x >= ext.z {
-                0
-            } else if ext.y >= ext.z {
-                1
-            } else {
-                2
-            };
-            if ext[axis] <= 1e-12 {
-                continue;
-            }
-            let mut bins = [(0u32, Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)); BINS];
-            let bin_of = |p: Vec3| (((p[axis] - clo[axis]) / ext[axis] * BINS as f32) as usize).min(BINS - 1);
-            for &t in &order[f..f + c] {
-                let b = &mut bins[bin_of(cent[t as usize])];
-                b.0 += 1;
-                for p in tris[t as usize] {
-                    grow(&mut b.1, &mut b.2, p);
-                }
-            }
-            let (mut best, mut best_cost) = (0usize, f32::MAX);
-            for split in 1..BINS {
-                let side = |r: std::ops::Range<usize>| {
-                    r.fold((0u32, Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(n, l, h), i| (n + bins[i].0, l.min(bins[i].1), h.max(bins[i].2)))
-                };
-                let (nl, ll, lh) = side(0..split);
-                let (nr, rl, rh) = side(split..BINS);
-                if nl == 0 || nr == 0 {
+            let mut best_axis = 0;
+            let mut best_split = 0;
+            let mut best_cost = f32::MAX;
+            for axis in 0..3 {
+                if ext[axis] <= 1e-12 {
                     continue;
                 }
-                let cost = nl as f32 * area(ll, lh) + nr as f32 * area(rl, rh);
-                if cost < best_cost {
-                    best_cost = cost;
-                    best = split;
+                let mut bins = [(0u32, Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)); BINS];
+                let bin_of = |p: Vec3| (((p[axis] - clo[axis]) / ext[axis] * BINS as f32) as usize).min(BINS - 1);
+                for &t in &order[f..f + c] {
+                    let b = &mut bins[bin_of(cent[t as usize])];
+                    b.0 += 1;
+                    for p in tris[t as usize] {
+                        grow(&mut b.1, &mut b.2, p);
+                    }
+                }
+                for split in 1..BINS {
+                    let side = |r: std::ops::Range<usize>| {
+                        r.fold((0u32, Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(n, l, h), i| (n + bins[i].0, l.min(bins[i].1), h.max(bins[i].2)))
+                    };
+                    let (nl, ll, lh) = side(0..split);
+                    let (nr, rl, rh) = side(split..BINS);
+                    if nl == 0 || nr == 0 {
+                        continue;
+                    }
+                    let cost = nl as f32 * area(ll, lh) + nr as f32 * area(rl, rh);
+                    if cost < best_cost {
+                        best_cost = cost;
+                        best_axis = axis;
+                        best_split = split;
+                    }
                 }
             }
-            if best == 0 || best_cost >= c as f32 * area(lo, hi) {
-                continue;
+            let split_axis;
+            let mut fallback = false;
+            if best_split == 0 || best_cost >= c as f32 * area(lo, hi) {
+                // When large triangles (e.g. backing plates or ground planes) span the node,
+                // SAH may see no split that lowers cost. Partition along the widest centroid
+                // axis at the median so small triangles can separate from large ones on subsequent levels.
+                let widest_axis = if ext.x >= ext.y && ext.x >= ext.z {
+                    0
+                } else if ext.y >= ext.z {
+                    1
+                } else {
+                    2
+                };
+                if ext[widest_axis] <= 1e-12 {
+                    continue;
+                }
+                split_axis = widest_axis;
+                fallback = true;
+            } else {
+                split_axis = best_axis;
             }
             let slice = &mut order[f..f + c];
             let mut i = 0;
-            for j in 0..slice.len() {
-                if bin_of(cent[slice[j] as usize]) < best {
-                    slice.swap(i, j);
-                    i += 1;
+            if fallback {
+                let mid = c / 2;
+                slice.select_nth_unstable_by(mid, |&a, &b| {
+                    cent[a as usize][split_axis].partial_cmp(&cent[b as usize][split_axis]).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                i = mid;
+            } else {
+                let bin_of = |p: Vec3| (((p[split_axis] - clo[split_axis]) / ext[split_axis] * BINS as f32) as usize).min(BINS - 1);
+                for j in 0..slice.len() {
+                    if bin_of(cent[slice[j] as usize]) < best_split {
+                        slice.swap(i, j);
+                        i += 1;
+                    }
                 }
             }
             if i == 0 || i == c {
@@ -490,5 +515,52 @@ mod tests {
         assert!(!found.is_empty() && found.len() <= 8, "{found:?}");
         let empty = Bvh::new(&Mesh::default());
         assert!(empty.closest(Vec3::ZERO, Vec3::X, 1.0).is_none());
+    }
+
+    #[test]
+    fn large_coplanar_plate_does_not_degrade_leaf_sizes() {
+        let mut positions = Vec::new();
+        let mut indices = Vec::new();
+        let w = 200.0f32;
+        let h = 100.0f32;
+        // Large plate at z = 0
+        let b = positions.len() as u32;
+        positions.extend_from_slice(&[
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(w, 0.0, 0.0),
+            Vec3::new(w, h, 0.0),
+            Vec3::new(0.0, h, 0.0),
+        ]);
+        indices.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
+        // 500 small triangles sitting at z = 0.5
+        for i in 0..500 {
+            let x = 20.0 + (i % 160) as f32;
+            let y = 10.0 + ((i / 160) % 80) as f32;
+            let idx = positions.len() as u32;
+            positions.push(Vec3::new(x, y, 0.5));
+            positions.push(Vec3::new(x + 0.5, y, 0.5));
+            positions.push(Vec3::new(x, y + 0.5, 0.6));
+            indices.extend_from_slice(&[idx, idx + 1, idx + 2]);
+        }
+        let mesh = Mesh {
+            positions,
+            normals: Vec::new(),
+            uvs: Vec::new(),
+            indices,
+            tangents: Vec::new(),
+            colors: Vec::new(),
+            submeshes: Vec::new(),
+            materials: Vec::new(),
+            diagonals: Vec::new(),
+        };
+        let bvh = Bvh::new(&mesh);
+        for (_, _, _, count) in bvh.nodes() {
+            if count > 0 {
+                assert!(count <= LEAF as u32, "leaf has too many triangles: {count}");
+            }
+        }
+        // Rays hit the small triangle in front, not the plate behind
+        let hit = bvh.closest(Vec3::new(20.1, 10.1, 10.0), Vec3::NEG_Z, 100.0).unwrap();
+        assert!((hit.t - 9.5).abs() < 0.1, "hit t: {}", hit.t);
     }
 }
