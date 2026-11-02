@@ -57,9 +57,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   source menu, which also imports one, or drop it from the Assets panel onto the channel. A
   normal map image made for DirectX (Y down) is marked with **DirectX normal map** under it.
   Alt+click a material channel (of a fill or the brush) to keep that channel alone.
-- **63 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
-  velvet, skin, wax, glass, ice, woods, bark, stone, sand, mud, snow, bone, plastics, fabric,
-  leather, ceramic, rust, cork, paper), **21 smart
+- **72 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
+  velvet, skin, wax, glass, ice, woods, bamboo, bark, stone, cobblestone, gravel, plaster, sand,
+  mud, snow, bone, moss, plastics, fabric, linen, wool, leather, ceramic, rust, cork, paper), **21 smart
   materials** (rusted iron, worn paint, oxidized copper, bronze statue, weathered wood, mossy
   brick and stone, sun-faded paint…) and **18 smart masks**, all procedural, so they work at any
   resolution. Drag them from the tabbed, searchable shelf onto the layer stack or straight onto
