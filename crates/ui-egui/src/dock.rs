@@ -47,6 +47,23 @@ pub(crate) fn texture_set_list(app: &mut TextureCraftApp, ui: &mut Ui) {
         })
         .collect();
     let active = app.session.ts();
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.menu_button(RichText::new(ic::EYE).size(14.0), |ui| {
+            for (label, mode) in [(tr("Show all"), "showAll"), (tr("Hide all"), "hideAll"), (tr("Invert show/hide"), "invert")] {
+                if ui.button(label).clicked() {
+                    app.run("textureSet.visibility", json!({ "mode": mode }));
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text(tr("Show or hide texture sets"));
+        let solo = sets.iter().enumerate().all(|(i, s)| s.2 == (i == active));
+        if icon_button(ui, ic::FRAME_CORNERS, tr("Focus: show only the active texture set"), solo && sets.len() > 1, 22.0).clicked() {
+            app.run("textureSet.visibility", json!({ "mode": "solo" }));
+        }
+    });
     egui::ScrollArea::vertical().id_salt("ts_scroll").show(ui, |ui| {
         for (i, (name, size, visible)) in sets.into_iter().enumerate() {
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());

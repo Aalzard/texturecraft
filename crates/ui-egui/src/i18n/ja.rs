@@ -961,4 +961,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Use as brush alpha", "ブラシのアルファとして使用"),
     ("Place as decal", "デカールとして配置"),
     ("Click: turn this channel on or off. Alt+click: this channel only", "クリック: このチャンネルのオン/オフ。Alt+クリック: このチャンネルのみ"),
+    ("Show all", "すべて表示"),
+    ("Hide all", "すべて非表示"),
+    ("Invert show/hide", "表示/非表示を反転"),
+    ("Show or hide texture sets", "テクスチャセットの表示/非表示"),
+    ("Focus: show only the active texture set", "フォーカス: アクティブなテクスチャセットのみ表示"),
 ];
