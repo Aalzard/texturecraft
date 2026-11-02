@@ -30,7 +30,15 @@ pub fn obj_bytes(mesh: &Mesh, name: &str) -> Vec<u8> {
 /// [`usd_export_options`], named like USD's). Roughness, metallic, normal and coat maps use the
 /// MTL PBR extension's keys.
 pub fn obj_with_mtl(mesh: &Mesh, name: &str, stem: &str, textures: &[Vec<ExportedFile>]) -> (Vec<u8>, NamedFiles) {
-    let stem = sanitize_file_stem(stem);
+    let clean = sanitize_file_stem(stem);
+    // OBJ names that sanitize alike (`ball 1`, `ball_1`) must not overwrite each other's files:
+    // a changed name gets a hash of the original (FNV-1a).
+    let stem = if clean == stem {
+        clean
+    } else {
+        let hash = stem.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193));
+        format!("{clean}_{hash:08x}")
+    };
     let (maps, mut files) = usd::material_maps(mesh, &stem, textures);
     let mut mtl = format!("# {name}, exported by TextureCraft\n");
     for (material, maps) in unique_ids(&mesh.materials, token).iter().zip(&maps) {
@@ -398,6 +406,17 @@ mod tests {
             mtl.contains("newmtl Mat_A\nKd 1 1 1\nmap_Kd m_Mat_A_BaseColor.png") && mtl.contains("newmtl mat_a_2\nKd 1 1 1\nmap_Kd m_mat_a_2_BaseColor.png"),
             "{mtl}"
         );
+    }
+
+    #[test]
+    fn obj_names_that_sanitize_alike_keep_their_companions_apart() {
+        let mesh = texturecraft_geom::primitives::cube(1.0);
+        let png = || vec![ExportedFile { name: "BaseColor.png".into(), bytes: vec![1], width: 1, height: 1, warnings: Vec::new() }];
+        let names = |stem: &str| obj_with_mtl(&mesh, "p", stem, &[png()]).1.into_iter().map(|f| f.0).collect::<Vec<_>>();
+        let (spaced, plain) = (names("ball 1"), names("ball_1"));
+        assert_eq!(plain, ["ball_1.mtl", "ball_1_Cube_BaseColor.png"], "a clean name is kept");
+        assert!(spaced.iter().all(|n| n.starts_with("ball_1_") && !plain.contains(n)), "{spaced:?}");
+        assert_eq!(spaced, names("ball 1"), "the same name always maps alike");
     }
 
     #[test]
