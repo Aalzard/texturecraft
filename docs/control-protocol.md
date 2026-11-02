@@ -14,7 +14,12 @@ Programmatic calls never open dialogs: a command runs with its defaults. Only `u
 behaves like a menu click. `session.inspect` shows every layer, mask, effect, fill source and
 painted tile count, so an agent can verify its work without a screenshot.
 `effect.histogram {effect, channel?, bins?}` counts the values an effect reads (a levels
-effect's input), so an agent can pick its input range from the data.
+effect's input), so an agent can pick its input range from the data. `effect.move {effect,
+index}` reorders an effect within its stack (0 = bottom) and `effect.duplicate {effect}` copies
+one just above itself.
+
+`edit.undo {steps?}` and `edit.redo {steps?}` go back or forward several steps at once (as far
+as the history reaches); `edit.history` lists the steps done and the undone ones, next first.
 
 ## Control channel (desktop app)
 

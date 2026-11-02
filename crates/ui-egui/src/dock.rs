@@ -5,7 +5,7 @@ use egui::{Color32, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use egui_phosphor::regular as ic;
 use serde_json::{Value, json};
 use texturecraft_engine::core::{
-    BakedMap, BlendMode, Channel, Decal, EffectKind, Fill, Filter, GeneratorKind, Layer, LayerId, LayerKind, ProceduralKind, Source,
+    BakedMap, BlendMode, Channel, Decal, Effect, EffectKind, Fill, Filter, GeneratorKind, Layer, LayerId, LayerKind, ProceduralKind, Source,
 };
 use texturecraft_engine::filter_lib::{FILTERS, scalar_params};
 use texturecraft_engine::paint::{BrushAlpha, alphas};
@@ -255,11 +255,11 @@ fn layer_tree(app: &mut TextureCraftApp, ui: &mut Ui, id: LayerId, depth: usize)
     let Some(layer) = app.session.doc.project.layers.get(&id).cloned() else { return };
     layer_row(app, ui, &layer, depth);
     for e in layer.content_effects.iter().rev() {
-        effect_row(app, ui, &layer, e.id, &e.name, e.visible, depth + 1, ic::SPHERE);
+        effect_row(app, ui, &layer, &layer.content_effects, e, depth + 1, ic::SPHERE);
     }
     if let Some(m) = &layer.mask {
         for e in m.effects.iter().rev() {
-            effect_row(app, ui, &layer, e.id, &e.name, e.visible, depth + 1, ic::MAGIC_WAND);
+            effect_row(app, ui, &layer, &m.effects, e, depth + 1, ic::MAGIC_WAND);
         }
     }
     if let LayerKind::Group { children, collapsed } = &layer.kind
@@ -522,12 +522,16 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     resp.context_menu(|ui| layer_context_menu(app, ui, layer));
 }
 
-/// One effect of a layer's content (`glyph` sphere) or mask (`glyph` wand) stack.
-#[allow(clippy::too_many_arguments)]
-fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid: LayerId, name: &str, visible: bool, depth: usize, glyph: &str) {
+/// The drag-and-drop payload of an effect row (the effect id).
+struct EffectDrag(u64);
+
+/// Effect `e` of `stack`, a layer's content (`glyph` sphere) or mask (`glyph` wand) effects.
+fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, stack: &[Effect], e: &Effect, depth: usize, glyph: &str) {
     let tk = Tokens::get(ui.ctx());
+    let (eid, visible) = (e.id, e.visible);
     let selected = app.session.selected_layer() == Some(layer.id) && app.session.target == StackTarget::Effect(eid);
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::ListItem, true, selected, &e.name));
     let p = ui.painter().clone();
     p.rect_filled(
         rect.shrink2(vec2(0.0, 1.0)),
@@ -548,13 +552,40 @@ fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid: LayerI
     let er = ui.interact(eye, ui.scope_id().with(("eff_eye", eid.0)), Sense::click()).on_hover_text(tr("Enable or disable the effect"));
     p.text(eye.center(), egui::Align2::CENTER_CENTER, if visible { ic::EYE } else { ic::EYE_SLASH }, egui::FontId::proportional(12.0), tk.text_dim);
     p.text(pos2(x0 + 22.0, rect.center().y), egui::Align2::LEFT_CENTER, glyph, egui::FontId::proportional(11.0), tk.text_dim);
-    p.text(pos2(x0 + 38.0, rect.center().y), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(11.5), tk.text);
+    p.text(pos2(x0 + 38.0, rect.center().y), egui::Align2::LEFT_CENTER, &e.name, egui::FontId::proportional(11.5), tk.text);
     if er.clicked() {
         app.run("effect.set", json!({"effect": eid.0, "visible": !visible}));
     } else if resp.clicked() {
         app.run("layer.select", json!({"layer": layer.id.0, "target": eid.0}));
     }
+    // Drag to reorder within the stack: a drop lands above this row, or below it from its lower half.
+    if resp.drag_started() {
+        resp.dnd_set_drag_payload(EffectDrag(eid.0));
+    }
+    let pos = |id: u64| stack.iter().position(|x| x.id.0 == id);
+    let below = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| p.y > rect.center().y);
+    if resp.dnd_hover_payload::<EffectDrag>().is_some_and(|src| src.0 != eid.0 && pos(src.0).is_some()) {
+        let y = if below { rect.bottom() } else { rect.top() };
+        p.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(2.0, tk.accent));
+    }
+    if let Some(src) = dnd_release::<EffectDrag>(&resp)
+        && let (Some(from), Some(to)) = (pos(src.0), pos(eid.0))
+        && from != to
+    {
+        // Rows list the stack top first, so above this row is the next index up.
+        let index = match (from < to, below) {
+            (true, false) | (false, true) => to,
+            (true, true) => to - 1,
+            (false, false) => to + 1,
+        };
+        app.run("effect.move", json!({"effect": src.0, "index": index}));
+    }
     resp.context_menu(|ui| {
+        if ui.button(tr("Duplicate effect")).clicked() {
+            app.run("layer.select", json!({"layer": layer.id.0, "target": eid.0}));
+            app.run("effect.duplicate", json!({"effect": eid.0}));
+            ui.close();
+        }
         if ui.button(tr("Remove effect")).clicked() {
             app.run("effect.remove", json!({"effect": eid.0}));
             ui.close();
@@ -1056,6 +1087,8 @@ fn path_section(app: &mut TextureCraftApp, ui: &mut Ui) {
 fn brush_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     let b = &mut app.session.tool.brush;
     ui.label(caption(tr("Brush")));
+    let hint = tr("Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.");
+    ui.label(RichText::new(hint).size(10.5).color(Tokens::get(ui.ctx()).text_dim));
     section(ui, "sec_size", tr("Size"), true, |ui| {
         let mut size = b.size / 0.25 * 100.0;
         if slider(ui, tr("Size"), &mut size, 0.05..=100.0, 1).changed() {

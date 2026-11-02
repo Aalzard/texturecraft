@@ -70,6 +70,30 @@ fn layer_rename_and_undo() {
 }
 
 #[test]
+fn undo_and_redo_jump_several_steps() {
+    let mut s = session();
+    let layer = s.selected_layer().unwrap();
+    let name = |s: &Session| s.doc.project.layer(layer).unwrap().name.clone();
+    let first = name(&s);
+    for n in ["A", "B", "C"] {
+        execute(&mut s, "layer.rename", &json!({"name": n})).unwrap();
+    }
+    let base = s.history_labels().len() - 3;
+    // Two back to "A": the undone steps wait to be redone, next first.
+    assert_eq!(execute(&mut s, "edit.undo", &json!({"steps": 2})).unwrap(), json!({"undone": "Rename layer", "steps": 2}));
+    assert_eq!(name(&s), "A");
+    assert_eq!(s.redo_labels().len(), 2);
+    assert_eq!(execute(&mut s, "edit.history", &Value::Null).unwrap()["redo"].as_array().unwrap().len(), 2);
+    // Forward past the end stops at "C"; back past the start stops at the first state.
+    assert_eq!(execute(&mut s, "edit.redo", &json!({"steps": 99})).unwrap()["steps"], 2);
+    assert_eq!(name(&s), "C");
+    let r = execute(&mut s, "edit.undo", &json!({"steps": 1_000_000})).unwrap();
+    assert_eq!(r["steps"].as_u64().unwrap() as usize, base + 3);
+    assert_eq!(name(&s), first);
+    assert!(execute(&mut s, "edit.undo", &json!({"steps": 2})).is_err(), "nothing left to undo");
+}
+
+#[test]
 fn polygon_fill_and_color_picker() {
     let mut s = session();
     execute(&mut s, "tool.material", &json!({"channel": "roughness", "value": 0.9})).unwrap();

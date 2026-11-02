@@ -5,7 +5,7 @@ use texturecraft_core::project::ENVIRONMENTS;
 use texturecraft_core::{BakedMap, Channel, ToneMapping};
 use texturecraft_geom::glam::Vec3;
 
-use crate::commands::{CommandSpec, always, bad, boolp, can_redo, can_undo, color_param, f32p, strp};
+use crate::commands::{CommandSpec, always, bad, boolp, can_redo, can_undo, color_param, f32p, strp, u64p};
 use crate::session::ViewMode;
 use crate::{Result, Session, cmd};
 
@@ -35,12 +35,49 @@ pub fn specs() -> Vec<CommandSpec> {
 
 pub(crate) fn edit_specs() -> Vec<CommandSpec> {
     vec![
-        cmd!("edit.undo", "Undo", ["Edit"], Some("Ctrl+Z"), "{}", can_undo, |s, _| Ok(json!({ "undone": s.undo()? }))),
-        cmd!("edit.redo", "Redo", ["Edit"], Some("Ctrl+Y"), "{}", can_redo, |s, _| Ok(json!({ "redone": s.redo()? }))),
-        cmd!("edit.history", "History", [], None, "{}", always, |s, _| Ok(
-            json!({ "undo": s.history_labels(), "redo": s.redo.iter().rev().map(|(l, _)| l.clone()).collect::<Vec<_>>() })
+        cmd!(
+            "edit.undo",
+            "Undo",
+            ["Edit"],
+            Some("Ctrl+Z"),
+            "{steps?: 1 (as many as there are)} → {undone: the last step undone, steps}",
+            can_undo,
+            |s, p| {
+                let (last, n) = repeat(s, p, Session::undo)?;
+                Ok(json!({ "undone": last, "steps": n }))
+            }
+        ),
+        cmd!(
+            "edit.redo",
+            "Redo",
+            ["Edit"],
+            Some("Ctrl+Y"),
+            "{steps?: 1 (as many as there are)} → {redone: the last step redone, steps}",
+            can_redo,
+            |s, p| {
+                let (last, n) = repeat(s, p, Session::redo)?;
+                Ok(json!({ "redone": last, "steps": n }))
+            }
+        ),
+        cmd!("edit.history", "History", [], None, "{} → {undo: steps, oldest first, redo: undone steps, next first}", always, |s, _| Ok(
+            json!({ "undo": s.history_labels(), "redo": s.redo_labels() })
         )),
     ]
+}
+
+/// Run `step` (undo or redo) `steps` times (default 1) or until the history runs out: the last
+/// step's label and how many ran (the History panel jumps to a step this way).
+fn repeat(s: &mut Session, p: &Value, step: fn(&mut Session) -> Result<String>) -> Result<(String, u64)> {
+    let steps = u64p(p, "steps").unwrap_or(1).max(1);
+    let mut last = step(s)?;
+    let mut n = 1;
+    while n < steps
+        && let Ok(l) = step(s)
+    {
+        last = l;
+        n += 1;
+    }
+    Ok((last, n))
 }
 
 fn frame(s: &mut Session, _: &Value) -> Result<Value> {

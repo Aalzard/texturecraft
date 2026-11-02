@@ -9,13 +9,14 @@
 //! `displacement` shader on the material and `geometry_normal` goes through a `normalmap` node
 //! (OpenGL, +Y up, which is what that node expects).
 //!
-//! Colour textures (base, fuzz and emission colour) are tagged with their file's colour space
-//! (`srgb_texture` for 8/16-bit files, `lin_rec709` for float ones); every data map is left
-//! untagged (linear). UDIM sets write the `<UDIM>` filename token MaterialX defines.
+//! Colour textures (base, fuzz and emission colour) are tagged with the colour space they were
+//! exported in ([`colorspace_name`]); every data map is left untagged (linear). UDIM sets write the `<UDIM>` filename token MaterialX defines.
 //! Texture file names are relative to the document.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
+
+use texturecraft_texel::ColorSpace;
 
 /// How an OpenPBR input is typed in the document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +62,18 @@ pub struct Texture {
     /// The MaterialX colour space of the file's values (`srgb_texture`, `lin_rec709`, ...);
     /// used for colour inputs only, data maps are always linear.
     pub colorspace: &'static str,
+}
+
+/// The MaterialX colour space of colour maps written in `space`. MaterialX 1.39 defines no
+/// ACES2065-1 (AP0) space: it gets `lin_ap0_scene`, its name in later versions of the
+/// specification, which 1.39 readers may not know.
+pub fn colorspace_name(space: ColorSpace) -> &'static str {
+    match space {
+        ColorSpace::Srgb => "srgb_texture",
+        ColorSpace::LinearRec709 => "lin_rec709",
+        ColorSpace::AcesCg => "acescg",
+        ColorSpace::Aces2065 => "lin_ap0_scene",
+    }
 }
 
 /// The OpenPBR input a preset map's file template feeds (`$mesh_$textureSet_base_color` →
