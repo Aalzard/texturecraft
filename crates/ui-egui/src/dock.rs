@@ -5,7 +5,8 @@ use egui::{Color32, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use egui_phosphor::regular as ic;
 use serde_json::{Value, json};
 use texturecraft_engine::core::{
-    BakedMap, BlendMode, Channel, Decal, Effect, EffectKind, Fill, Filter, GeneratorKind, Layer, LayerId, LayerKind, ProceduralKind, Source,
+    BakedMap, BlendMode, Channel, Decal, Effect, EffectKind, Fill, Filter, GeneratorKind, Layer, LayerId, LayerKind, LinkParam, MaterialLink, ProceduralKind,
+    Source,
 };
 use texturecraft_engine::filter_lib::{FILTERS, scalar_params};
 use texturecraft_engine::paint::{BrushAlpha, alphas};
@@ -1413,9 +1414,131 @@ fn material_section(app: &mut TextureCraftApp, ui: &mut Ui) {
 
 fn fill_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
     let LayerKind::Fill(fill) = &layer.kind else { return };
+    if let Some(link) = &fill.link {
+        link_properties(app, ui, layer.id, link);
+        ui.add_space(6.0);
+    }
     let on: Vec<Channel> = layer.channels.keys().copied().collect();
     ui.label(caption(tr("Fill")));
     fill_editor(app, ui, fill, &json!({"layer": layer.id.0}), &on, layer.id);
+}
+
+/// A MaterialCraft material's presets and exposed inputs; edits store the value and re-cook the
+/// maps on a worker thread (desktop only: cooking runs MaterialCraft's command line).
+fn link_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: LayerId, link: &MaterialLink) {
+    let tk = Tokens::get(ui.ctx());
+    let base = json!({"layer": layer.0, "cook": false});
+    ui.label(caption(tr("MaterialCraft material")));
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(&link.name).strong());
+        ui.label(RichText::new(trf("Cooked at {size} px", &[("size", &link.size)])).size(10.0).color(tk.text_dim));
+        if app.link_cooks.iter().any(|c| c.layer == layer) {
+            ui.spinner();
+        }
+    });
+    let editable = cfg!(not(target_arch = "wasm32"));
+    ui.add_enabled_ui(editable, |ui| {
+        if !link.presets.is_empty() {
+            combo(ui, tr("Preset"), "", |ui| {
+                for p in &link.presets {
+                    if ui.selectable_label(false, &p.name).clicked() && app.run("material.link.preset", with(&base, json!({"name": p.name}))).is_some() {
+                        app.cook_link(layer);
+                    }
+                }
+            });
+        }
+        let mut group = "";
+        for p in &link.params {
+            if p.group != group && !p.group.is_empty() {
+                ui.label(RichText::new(p.group.to_uppercase()).size(10.0).strong().color(tk.text_dim));
+            }
+            group = &p.group;
+            if let Some(v) = link_param_editor(ui, layer, p)
+                && app.run("material.link.set", with(&base, json!({"id": p.id, "value": v}))).is_some()
+            {
+                app.cook_link(layer);
+            }
+        }
+    });
+    if !editable {
+        ui.label(RichText::new(tr("Parameters change in the desktop app, with MaterialCraft installed")).size(10.0).color(tk.text_dim));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.horizontal(|ui| {
+        if ui.button(tr("Re-cook")).clicked() {
+            app.cook_link(layer);
+        }
+        if ui.button(tr("Open in MaterialCraft")).clicked() {
+            let path = std::env::temp_dir().join(format!("{}.mcraft", texturecraft_engine::formats::export::sanitize_file_stem(&link.name)));
+            let opened = app
+                .session
+                .link_package(layer)
+                .and_then(|b| std::fs::write(&path, b.as_slice()).map_err(|e| texturecraft_engine::EngineError::Other(e.to_string())))
+                .and_then(|()| texturecraft_engine::link_cmds::open_in_materialcraft(&path));
+            match opened {
+                Ok(()) => app.toast(tr("Opened in MaterialCraft: use File > Send to TextureCraft there to bring your changes back"), false),
+                Err(e) => app.toast(e.to_string(), true),
+            }
+        }
+    });
+}
+
+/// The editor of one linked-material input; returns its new value when an edit completes.
+fn link_param_editor(ui: &mut Ui, layer: LayerId, p: &LinkParam) -> Option<Value> {
+    let t = p.default.get("t").and_then(Value::as_str).unwrap_or("");
+    let v = p.value.get("v").unwrap_or(&Value::Null);
+    let num = |x: &Value| x.as_f64().unwrap_or(0.0) as f32;
+    let (lo, hi) = if p.max > p.min { (p.min, p.max) } else { (0.0, 1.0) };
+    // A slider edit completes when the drag ends, on a click or a typed value.
+    let edit = |ui: &mut Ui, label: &str, x: f32, decimals: usize| {
+        let mut y = x;
+        let r = slider(ui, label, &mut y, lo.min(x)..=hi.max(x), decimals);
+        (r.drag_stopped() || (!r.dragged() && y != x)).then_some(y)
+    };
+    match t {
+        "bool" => {
+            let mut b = v.as_bool().unwrap_or(num(v) != 0.0);
+            ui.checkbox(&mut b, &p.label).changed().then(|| json!(b))
+        }
+        "enum" if !p.options.is_empty() => {
+            let cur = num(v).max(0.0) as usize;
+            let mut pick = None;
+            combo(ui, &p.label, p.options.get(cur).map_or("", String::as_str), |ui| {
+                for (i, o) in p.options.iter().enumerate() {
+                    if ui.selectable_label(i == cur, o).clicked() {
+                        pick = Some(json!(i));
+                    }
+                }
+            });
+            pick
+        }
+        "float" | "int" | "enum" => edit(ui, &p.label, num(v), if t == "float" { 2 } else { 0 }).map(|y| json!(y)),
+        "color" => {
+            let a = v.as_array().map(|a| a.iter().map(num).collect::<Vec<f32>>()).unwrap_or_default();
+            let mut rgb = [0, 1, 2].map(|i| a.get(i).copied().unwrap_or(1.0));
+            let mut out = None;
+            ui.horizontal(|ui| {
+                ui.label(&p.label);
+                if color_swatch(ui, &format!("link_{}_{}", layer.0, p.id), &mut rgb, ui.available_width() - 4.0) {
+                    out = Some(json!([rgb[0], rgb[1], rgb[2], a.get(3).copied().unwrap_or(1.0)]));
+                }
+            });
+            out
+        }
+        _ => {
+            // Vectors: one slider per component.
+            let mut a: Vec<f32> = v.as_array().map(|a| a.iter().map(num).collect()).unwrap_or_default();
+            let decimals = if t == "int2" { 0 } else { 2 };
+            let mut changed = false;
+            for (x, axis) in a.iter_mut().zip(["x", "y", "z", "w"]) {
+                if let Some(y) = edit(ui, &format!("{} {axis}", p.label), *x, decimals) {
+                    *x = y;
+                    changed = true;
+                }
+            }
+            changed.then(|| json!(a))
+        }
+    }
 }
 
 /// `base` with the fields of `extra` added.

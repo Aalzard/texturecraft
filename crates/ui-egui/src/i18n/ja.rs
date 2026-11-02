@@ -1019,4 +1019,15 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Save the changes to {name} before closing?", "閉じる前に {name} の変更を保存しますか？"),
     ("Twill weave", "綾織り"),
     ("Save the changes to {name} first?", "先に {name} の変更を保存しますか？"),
+    ("Import material...", "マテリアルを読み込む..."),
+    ("MaterialCraft material", "MaterialCraft マテリアル"),
+    ("Cooked at {size} px", "{size} px で計算済み"),
+    ("Preset", "プリセット"),
+    ("Re-cook", "再計算"),
+    ("Open in MaterialCraft", "MaterialCraft で開く"),
+    (
+        "Opened in MaterialCraft: use File > Send to TextureCraft there to bring your changes back",
+        "MaterialCraft で開きました。変更を戻すには、そちらで「ファイル > TextureCraft に送る」を使います",
+    ),
+    ("Parameters change in the desktop app, with MaterialCraft installed", "パラメーターは MaterialCraft をインストールしたデスクトップ版で変更できます"),
 ];

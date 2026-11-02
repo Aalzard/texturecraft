@@ -1052,4 +1052,15 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Save the changes to {name} before closing?", "Änderungen an {name} vor dem Schließen speichern?"),
     ("Twill weave", "Köperbindung"),
     ("Save the changes to {name} first?", "Änderungen an {name} zuerst speichern?"),
+    ("Import material...", "Material importieren..."),
+    ("MaterialCraft material", "MaterialCraft-Material"),
+    ("Cooked at {size} px", "Berechnet mit {size} px"),
+    ("Preset", "Vorgabe"),
+    ("Re-cook", "Neu berechnen"),
+    ("Open in MaterialCraft", "In MaterialCraft öffnen"),
+    (
+        "Opened in MaterialCraft: use File > Send to TextureCraft there to bring your changes back",
+        "In MaterialCraft geöffnet: Dort mit Datei > An TextureCraft senden die Änderungen zurückholen",
+    ),
+    ("Parameters change in the desktop app, with MaterialCraft installed", "Parameter lassen sich in der Desktop-App mit installiertem MaterialCraft ändern"),
 ];

@@ -55,6 +55,14 @@ pub struct BakeJob {
     pub only: Option<texturecraft_engine::core::BakedMap>,
 }
 
+/// A MaterialCraft material re-cooking on a worker thread (one per layer at a time).
+pub struct LinkCook {
+    pub layer: texturecraft_engine::core::LayerId,
+    /// The parameter values it cooks: a result whose values are no longer the layer's is redone.
+    pub values: serde_json::Map<String, Value>,
+    pub rx: std::sync::mpsc::Receiver<texturecraft_engine::Result<Vec<u8>>>,
+}
+
 /// The browser build's notice when WebGPU is unavailable and wgpu fell back to WebGL2.
 pub const WEBGL_NOTICE: &str = i18n::n_(
     "WebGPU isn't available in this browser, so TextureCraft runs on WebGL2: Rendering mode path traces on the CPU (slower) and large texture sets show at reduced resolution. A current Chrome, Edge or Safari has WebGPU.",
@@ -76,6 +84,7 @@ pub struct TextureCraftApp {
     pub(crate) gpu_memory: (Vec<String>, Option<String>),
     pub bake: Option<BakeJob>,
     pub resize: Option<ResizeJob>,
+    pub link_cooks: Vec<LinkCook>,
     pub thumbs: thumbs::Thumbs,
     /// Last frame's viewport rect (logical points), for scripted input.
     pub viewport_rect: egui::Rect,
@@ -108,6 +117,8 @@ pub struct TextureCraftApp {
     next_autosave: f64,
     /// The brightness and accent the style was last built for.
     styled: Option<(theme::Brightness, theme::Accent)>,
+    /// Whether the window had focus last frame.
+    focused: bool,
 }
 
 impl TextureCraftApp {
@@ -133,6 +144,7 @@ impl TextureCraftApp {
             gpu_memory: (Vec::new(), None),
             bake: None,
             resize: None,
+            link_cooks: Vec::new(),
             thumbs: thumbs::Thumbs::default(),
             viewport_rect: egui::Rect::NOTHING,
             fps: 0.0,
@@ -150,6 +162,7 @@ impl TextureCraftApp {
             last_time: 0.0,
             next_autosave,
             styled: None,
+            focused: true,
         };
         app.ui.rename = None;
         app.ui.windows.new_project = false;
@@ -197,6 +210,55 @@ impl TextureCraftApp {
         }
         let total = sets.len();
         self.bake = Some(BakeJob { queue: sets, current: None, total, only: None });
+    }
+
+    /// Re-cook MaterialCraft material layer `layer` in the background. While one cook of the layer
+    /// runs no other starts: when it ends with stale values, it is redone with the current ones.
+    pub fn cook_link(&mut self, layer: texturecraft_engine::core::LayerId) {
+        if self.link_cooks.iter().any(|c| c.layer == layer) {
+            return;
+        }
+        match self.session.link_job(layer, &serde_json::Map::new()) {
+            Ok(job) => {
+                let values = job.values.clone();
+                let rx = spawn_worker("texturecraft-link", move || job.run());
+                self.link_cooks.push(LinkCook { layer, values, rx });
+            }
+            Err(e) => self.toast(e.to_string(), true),
+        }
+    }
+
+    fn poll_link_cooks(&mut self, ctx: &egui::Context) {
+        if self.link_cooks.is_empty() {
+            return;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        let mut done = Vec::new();
+        self.link_cooks.retain(|c| match c.rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Ok(r) => {
+                done.push((c.layer, c.values.clone(), r));
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                done.push((c.layer, c.values.clone(), Err(texturecraft_engine::EngineError::Other("the MaterialCraft cook stopped".into()))));
+                false
+            }
+        });
+        for (layer, values, result) in done {
+            let current = self.session.link_values(layer);
+            match (result, current) {
+                // The layer is gone (undone, deleted): nothing to show.
+                (_, Err(_)) => {}
+                (Ok(_), Ok(now)) if now != values => self.cook_link(layer),
+                (Ok(bytes), Ok(_)) => {
+                    if let Err(e) = self.session.apply_link_cook(layer, &bytes, true) {
+                        self.toast(e.to_string(), true);
+                    }
+                }
+                (Err(e), Ok(_)) => self.toast(e.to_string(), true),
+            }
+        }
     }
 
     fn poll_bake(&mut self, ctx: &egui::Context) {
@@ -410,6 +472,13 @@ impl eframe::App for TextureCraftApp {
         self.poll_bake(ctx);
         self.drive_auto_rebake();
         self.poll_resize(ctx);
+        self.poll_link_cooks(ctx);
+        // The library shelf rescans when the window comes back (MaterialCraft may have sent a material).
+        let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        if focused && !self.focused {
+            self.library = None;
+        }
+        self.focused = focused;
         let scale = self.ui.prefs.ui_scale.clamp(0.5, 3.0);
         if (ctx.zoom_factor() - scale).abs() > 1e-3 {
             ctx.set_zoom_factor(scale);
