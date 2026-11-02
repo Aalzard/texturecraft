@@ -107,6 +107,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Assets", "アセット"),
     ("Automatic (from the mesh UVs)", "自動 (メッシュのUVから)"),
     ("Autosave every", "自動保存の間隔"),
+    (
+        "Autosaves, smart materials, presets, templates and UI layouts go to the data folder. A new folder applies on restart; files already saved stay where they are.",
+        "自動保存、スマートマテリアル、プリセット、テンプレート、UI レイアウトはデータフォルダーに保存されます。新しいフォルダーは再起動後に適用され、保存済みのファイルはそのまま残ります。",
+    ),
     ("Average normals", "法線を平均化"),
     ("Back to painting", "ペイントに戻る"),
     ("Backface culling", "背面カリング"),
@@ -237,6 +241,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cylindrical projection", "円柱投影"),
     ("Dark to light: the content's luminance picks a color along these stops.", "暗→明: コンテンツの輝度に応じて、これらのストップに沿った色が選ばれます。"),
     ("Darken (Min)", "比較(暗) (Min)"),
+    ("Data folder", "データフォルダー"),
     ("Decal", "デカール"),
     ("Decal projection", "デカール投影"),
     ("Default", "デフォルト"),

@@ -104,6 +104,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Assets", "Recursos"),
     ("Automatic (from the mesh UVs)", "Automático (das UVs da malha)"),
     ("Autosave every", "Salvar automaticamente a cada"),
+    (
+        "Autosaves, smart materials, presets, templates and UI layouts go to the data folder. A new folder applies on restart; files already saved stay where they are.",
+        "Salvamentos automáticos, materiais inteligentes, predefinições, modelos e layouts da interface vão para a pasta de dados. Uma nova pasta vale após reiniciar; os arquivos já salvos ficam onde estão.",
+    ),
     ("Average normals", "Normais médias"),
     ("Back to painting", "Voltar à pintura"),
     ("Backface culling", "Descarte de faces traseiras"),
@@ -234,6 +238,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Do escuro ao claro: a luminância do conteúdo escolhe uma cor ao longo destas paradas.",
     ),
     ("Darken (Min)", "Escurecer (Mín)"),
+    ("Data folder", "Pasta de dados"),
     ("Decal", "Decalque"),
     ("Decal projection", "Projeção de decalque"),
     ("Default", "Padrão"),

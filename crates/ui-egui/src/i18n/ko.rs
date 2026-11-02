@@ -104,6 +104,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Assets", "에셋"),
     ("Automatic (from the mesh UVs)", "자동 (메시 UV 기준)"),
     ("Autosave every", "자동 저장 간격"),
+    (
+        "Autosaves, smart materials, presets, templates and UI layouts go to the data folder. A new folder applies on restart; files already saved stay where they are.",
+        "자동 저장, 스마트 머티리얼, 프리셋, 템플릿과 UI 레이아웃은 데이터 폴더에 저장됩니다. 새 폴더는 다시 시작하면 적용되며, 이미 저장된 파일은 그대로 남습니다.",
+    ),
     ("Average normals", "노멀 평균화"),
     ("Back to painting", "페인팅으로 돌아가기"),
     ("Backface culling", "후면 컬링"),
@@ -231,6 +235,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "어두운 색에서 밝은 색 순: 콘텐츠의 휘도에 따라 이 정지점을 따라 색상이 선택됩니다.",
     ),
     ("Darken (Min)", "어둡게 하기 (최소)"),
+    ("Data folder", "데이터 폴더"),
     ("Decal", "데칼"),
     ("Decal projection", "데칼 투영"),
     ("Default", "기본값"),
