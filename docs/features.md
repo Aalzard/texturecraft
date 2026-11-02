@@ -36,7 +36,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   contrast/luminosity, color balance, gradient map, posterize, clamp, invert, threshold,
   grayscale, replace color, edge detect, normal invert, baked lighting, blur, directional and
   slope blur, sharpen, high pass, bevel, glow, warp, directional warp, mosaic and four material
-  finishes), fills and paint.
+  finishes), fills and paint. **Levels** shows a histogram of what it reads (the mask below it,
+  or a content channel you pick) with its input range marked.
   **Anchor points** record the stack at a layer so masks and fills higher up can react to it.
 - **Masks** with a white or black background and a stack of effects: painted strokes, fills,
   **mesh-map generators** (edge wear, dirt, thin areas, curvature, AO, position and direction
@@ -46,8 +47,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   grain, bricks, fabric weave, twill, leather grain, marble veins, Voronoi, paint chips…) or your own
   **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.
   Alt+click a material channel (of a fill or the brush) to keep that channel alone.
-- **54 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
-  velvet, skin, wax, glass, woods, stone, plastics, fabric, leather, ceramic, rust, cork, paper), **21 smart
+- **63 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
+  velvet, skin, wax, glass, ice, woods, bark, stone, sand, mud, snow, bone, plastics, fabric,
+  leather, ceramic, rust, cork, paper), **21 smart
   materials** (rusted iron, worn paint, oxidized copper, bronze statue, weathered wood, mossy
   brick and stone, sun-faded paint…) and **18 smart masks**, all procedural, so they work at any
   resolution. Drag them from the tabbed, searchable shelf onto the layer stack or straight onto
