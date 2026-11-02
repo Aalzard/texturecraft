@@ -394,3 +394,45 @@ fn the_skew_map_is_saved_with_the_project() {
     let opened = Session::from_project_file(pf).unwrap();
     assert!(opened.bake_meshes.skew.is_none() && opened.log.iter().any(|l| l.contains("skew")), "{:?}", opened.log);
 }
+
+#[test]
+fn painting_skew_widens_a_map_and_bad_strokes_change_nothing() {
+    let mut s = leaning_session(true);
+    // Painting with no map makes a black one at `size` and puts the dab in it.
+    let r = execute(&mut s, "bake.skew.paint", &json!({ "points": [[0.5, 0.5]], "radius": 0.1, "size": 64 })).unwrap();
+    assert_eq!(r["skew"]["width"], 64);
+    let map = s.bake_meshes.skew.clone().unwrap();
+    assert!(map.values.iter().any(|v| *v > 0.99) && map.values.iter().any(|v| *v == 0.0));
+    let rev = s.bake_meshes.skew_rev;
+    // Erasing with value 0 brings it back down; the size stays.
+    execute(&mut s, "bake.skew.paint", &json!({ "points": [[0.5, 0.5]], "radius": 0.2, "value": 0.0, "hardness": 1.0 })).unwrap();
+    let after = s.bake_meshes.skew.clone().unwrap();
+    assert_eq!(after.width, 64);
+    assert!(after.values.iter().all(|v| *v < 0.01) && s.bake_meshes.skew_rev > rev);
+    // A constant map is widened, keeping its value where nothing is painted.
+    execute(&mut s, "bake.skew.set", &json!({ "value": 0.5 })).unwrap();
+    execute(&mut s, "bake.skew.paint", &json!({ "points": [[0.1, 0.1]], "radius": 0.05, "size": 32 })).unwrap();
+    let wide = s.bake_meshes.skew.clone().unwrap();
+    assert_eq!(wide.width, 32);
+    assert!((wide.values[wide.values.len() / 2] - 0.5).abs() < 1e-5, "{}", wide.values[wide.values.len() / 2]);
+    // Hostile input is an error and leaves the map alone.
+    let before = s.bake_meshes.skew.clone();
+    for bad in [
+        json!({}),
+        json!({ "points": [] }),
+        json!({ "points": [[0.5]] }),
+        json!({ "points": [["a", "b"]] }),
+        json!({ "points": [[0.5, 0.5]], "radius": 0.0 }),
+        json!({ "points": [[0.5, 0.5]], "radius": 5.0 }),
+        json!({ "points": [[0.5, 0.5]], "radius": -1.0 }),
+        json!({ "points": [[0.5, 0.5]], "size": 2 }),
+        json!({ "points": [[0.5, 0.5]], "size": 100000 }),
+        json!({ "points": [[0.0, 0.0], [1e9, 1e9]], "radius": 1e-4 }),
+    ] {
+        assert!(execute(&mut s, "bake.skew.paint", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.bake_meshes.skew, before);
+    // And the painted map is saved with the project.
+    let back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
+    assert_eq!(back.bake_meshes.skew, s.bake_meshes.skew);
+}

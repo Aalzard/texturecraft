@@ -60,8 +60,18 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             skew_set
         ),
+        cmd!(
+            "bake.skew.paint",
+            "Paint skew correction",
+            [],
+            None,
+            "{points: [[u, v], ...] (atlas uv, a stroke), radius?: uv units (default 0.03), value?: 0..1 (1 turns rays onto the base normal, 0 erases; default 1), hardness?: 0..1 (default 0.5), strength?: 0..1 per dab (default 1), size?: px of a new or constant map (default 1024, 16..4096)} → {skew}. Paints into the skew map; a missing or constant map is first widened to `size`",
+            always,
+            skew_paint
+        ),
         cmd!("bake.skew.clear", "Remove skew correction", [], None, "{}", always, |s, _| {
             s.bake_meshes.skew = None;
+            s.bake_meshes.skew_rev += 1;
             s.modified = true;
             Ok(meshes_json(s))
         }),
@@ -105,6 +115,8 @@ pub struct BakeMeshes {
     pub cage: Option<BakeMesh>,
     /// Skew correction of the transfer rays (saved in the project as `skew.bin`).
     pub skew: Option<Arc<SkewMap>>,
+    /// Counts changes to `skew`, so a view knows when to redraw it.
+    pub skew_rev: u64,
     /// Every high poly appended into one mesh (rebuilt when the list changes).
     merged: Option<MergedHigh>,
 }
@@ -303,7 +315,10 @@ impl Session {
             per_triangle: k.per_triangle,
         };
         match map.validate() {
-            Ok(()) => self.bake_meshes.skew = Some(Arc::new(map)),
+            Ok(()) => {
+                self.bake_meshes.skew = Some(Arc::new(map));
+                self.bake_meshes.skew_rev += 1;
+            }
             Err(e) => self.log.push(format!("skipped skew map: {e}")),
         }
     }
@@ -405,6 +420,7 @@ fn skew_set(s: &mut Session, p: &Value) -> Result<Value> {
     };
     map.validate().map_err(|e| bad(cmd, e.to_string()))?;
     s.bake_meshes.skew = Some(Arc::new(map));
+    s.bake_meshes.skew_rev += 1;
     s.modified = true;
     Ok(meshes_json(s))
 }
@@ -610,4 +626,42 @@ fn bake_run(s: &mut Session, p: &Value) -> Result<Value> {
     let tracer = sets.iter().map(|&ts| s.bake_now(ts, cpu)).collect::<Result<Vec<_>>>()?;
     s.update();
     Ok(json!({ "baked": sets, "tracer": tracer }))
+}
+
+fn skew_paint(s: &mut Session, p: &Value) -> Result<Value> {
+    use texturecraft_geom::glam::Vec2;
+    let cmd = "bake.skew.paint";
+    const MAX_POINTS: usize = 100_000;
+    let points: Vec<Vec2> = p
+        .get("points")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad(cmd, "`points` is required: [[u, v], ...]"))?
+        .iter()
+        .map(|q| match (q.get(0).and_then(Value::as_f64), q.get(1).and_then(Value::as_f64)) {
+            (Some(u), Some(v)) => Ok(Vec2::new(u as f32, v as f32)),
+            _ => Err(bad(cmd, "each point is [u, v]")),
+        })
+        .collect::<Result<_>>()?;
+    if points.is_empty() || points.len() > MAX_POINTS {
+        return Err(bad(cmd, format!("give 1 to {MAX_POINTS} points")));
+    }
+    let size = p.get("size").and_then(Value::as_u64).unwrap_or(1024);
+    if !(16..=4096).contains(&size) {
+        return Err(bad(cmd, "`size` is 16 to 4096"));
+    }
+    let mut map = match s.bake_meshes.skew.as_deref() {
+        // A constant map has no resolution to paint at: widen it, keeping its value everywhere.
+        Some(k) if k.values.len() > 1 => k.clone(),
+        Some(k) => k.resized(size as u32, size as u32).map_err(|e| bad(cmd, e.to_string()))?,
+        None => SkewMap::constant(0.0).resized(size as u32, size as u32).map_err(|e| bad(cmd, e.to_string()))?,
+    };
+    let (value, radius) = (f32p(p, "value").unwrap_or(1.0), f32p(p, "radius").unwrap_or(0.03));
+    if !(radius.is_finite() && radius > 0.0 && radius <= 1.0) {
+        return Err(bad(cmd, "`radius` is above 0 and at most 1 (uv units)"));
+    }
+    map.paint(&points, radius, value, f32p(p, "hardness").unwrap_or(0.5), f32p(p, "strength").unwrap_or(1.0)).map_err(|e| bad(cmd, e.to_string()))?;
+    s.bake_meshes.skew = Some(Arc::new(map));
+    s.bake_meshes.skew_rev += 1;
+    s.modified = true;
+    Ok(meshes_json(s))
 }

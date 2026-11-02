@@ -15,6 +15,9 @@ use texturecraft_geom::glam::{Vec2, Vec3};
 
 use crate::{BakeError, MAX_TEXELS};
 
+/// Most dabs one [`SkewMap::paint`] call places.
+pub const MAX_DABS: usize = 200_000;
+
 /// Edges steeper than this cosine between two faces count as hard (about 30 degrees).
 const HARD_EDGE_COS: f32 = 0.866;
 
@@ -53,6 +56,71 @@ impl SkewMap {
         }
         if self.values.iter().any(|v| !v.is_finite()) {
             return invalid("the skew map has a value that is not a finite number");
+        }
+        Ok(())
+    }
+
+    /// The map resampled (bilinear) to `width` × `height`; the other settings carry over.
+    pub fn resized(&self, width: u32, height: u32) -> Result<SkewMap, BakeError> {
+        let texels = u64::from(width) * u64::from(height);
+        if width == 0 || height == 0 || texels > MAX_TEXELS {
+            return Err(BakeError::Invalid(format!("a {width} × {height} skew map is outside the supported size")));
+        }
+        let mut values = Vec::with_capacity(texels as usize);
+        for y in 0..height {
+            let v = 1.0 - (y as f32 + 0.5) / height as f32;
+            for x in 0..width {
+                values.push(self.at(Vec2::new((x as f32 + 0.5) / width as f32, v)));
+            }
+        }
+        Ok(SkewMap { width, height, values, ..self.clone() })
+    }
+
+    /// Paint round dabs along `points` (atlas uv): `value` is blended in with `strength` (0..=1),
+    /// fully inside `hardness` (0..=1) of `radius` (in uv units) and fading to nothing at the rim.
+    /// Dabs are placed a quarter radius apart along each segment; `MAX_DABS` bounds one call.
+    pub fn paint(&mut self, points: &[Vec2], radius: f32, value: f32, hardness: f32, strength: f32) -> Result<(), BakeError> {
+        let ok = radius.is_finite() && radius > 0.0 && value.is_finite() && hardness.is_finite() && strength.is_finite();
+        if !ok || points.iter().any(|p| !p.is_finite()) {
+            return Err(BakeError::Invalid("the skew brush needs finite numbers and a radius above 0".into()));
+        }
+        self.validate()?;
+        let (value, hardness, strength) = (value.clamp(0.0, 1.0), hardness.clamp(0.0, 0.999), strength.clamp(0.0, 1.0));
+        let step = (radius * 0.25).max(1e-5);
+        let mut dabs = Vec::new();
+        for (i, p) in points.iter().enumerate() {
+            match i.checked_sub(1).and_then(|j| points.get(j)) {
+                Some(prev) => {
+                    let n = ((*p - *prev).length() / step).ceil().clamp(1.0, MAX_DABS as f32) as usize;
+                    dabs.extend((1..=n).map(|k| *prev + (*p - *prev) * (k as f32 / n as f32)));
+                }
+                None => dabs.push(*p),
+            }
+            if dabs.len() > MAX_DABS {
+                return Err(BakeError::Invalid(format!("a skew stroke is limited to {MAX_DABS} dabs; use a larger radius or fewer points")));
+            }
+        }
+        let (w, h) = (self.width as usize, self.height as usize);
+        for c in dabs {
+            // The texel box of the dab, row 0 at the top (v = 1).
+            let x0 = (((c.x - radius) * w as f32).floor().max(0.0)) as usize;
+            let x1 = (((c.x + radius) * w as f32).ceil().min(w as f32)).max(0.0) as usize;
+            let y0 = ((((1.0 - c.y) - radius) * h as f32).floor().max(0.0)) as usize;
+            let y1 = ((((1.0 - c.y) + radius) * h as f32).ceil().min(h as f32)).max(0.0) as usize;
+            for y in y0..y1 {
+                let dv = (1.0 - (y as f32 + 0.5) / h as f32) - c.y;
+                for x in x0..x1 {
+                    let du = (x as f32 + 0.5) / w as f32 - c.x;
+                    let t = (du * du + dv * dv).sqrt() / radius;
+                    if t >= 1.0 {
+                        continue;
+                    }
+                    let fall = if t <= hardness { 1.0 } else { let k = (1.0 - t) / (1.0 - hardness); k * k * (3.0 - 2.0 * k) };
+                    if let Some(v) = self.values.get_mut(y * w + x) {
+                        *v += (value - *v) * fall * strength;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -209,5 +277,48 @@ mod tests {
         let guarded = SkewMap { edge_distance: 0.5, ..SkewMap::constant(1.0) };
         assert!((go(&guarded, Vec3::new(0.5, 0.0, 0.0)) - up).length() < 1e-6, "on the hard edge the ray stays on the cage direction");
         assert!((go(&guarded, Vec3::new(0.3, 0.9, 0.0)) - base).length() < 1e-6, "away from every hard edge the correction is full");
+    }
+
+    #[test]
+    fn painting_blends_dabs_in_and_resizing_keeps_the_picture() {
+        let mut map = SkewMap::constant(0.0).resized(64, 64).unwrap();
+        assert!(map.values.iter().all(|v| *v == 0.0));
+        // One hard dab at the centre: white inside, untouched outside, in between at the rim.
+        map.paint(&[Vec2::new(0.5, 0.5)], 0.2, 1.0, 1.0, 1.0).unwrap();
+        let at = |m: &SkewMap, u: f32, v: f32| m.at(Vec2::new(u, v));
+        assert!(at(&map, 0.5, 0.5) > 0.99 && at(&map, 0.95, 0.95) == 0.0, "{} {}", at(&map, 0.5, 0.5), at(&map, 0.95, 0.95));
+        // Strength blends one dab in part of the way; a stroke's overlapping dabs build up towards the value; v is up.
+        let mut dab = SkewMap::constant(0.0).resized(64, 64).unwrap();
+        dab.paint(&[Vec2::new(0.5, 0.5)], 0.1, 0.8, 1.0, 0.5).unwrap();
+        assert!((at(&dab, 0.5, 0.5) - 0.4).abs() < 0.02, "{}", at(&dab, 0.5, 0.5));
+        let mut line = SkewMap::constant(0.0).resized(64, 64).unwrap();
+        line.paint(&[Vec2::new(0.1, 0.9), Vec2::new(0.9, 0.9)], 0.05, 0.5, 1.0, 0.5).unwrap();
+        assert!(at(&line, 0.5, 0.9) > 0.45 && at(&line, 0.5, 0.9) <= 0.5 + 1e-4, "{}", at(&line, 0.5, 0.9));
+        assert!(at(&line, 0.5, 0.1) == 0.0, "the other end of v is untouched");
+        // Erasing (value 0) brings a painted area back down.
+        map.paint(&[Vec2::new(0.5, 0.5)], 0.2, 0.0, 1.0, 1.0).unwrap();
+        assert!(at(&map, 0.5, 0.5) < 0.01);
+        // Resampling keeps the picture and the edge settings.
+        let mut small = SkewMap { edge_distance: 0.1, ..SkewMap::constant(0.0).resized(8, 8).unwrap() };
+        small.paint(&[Vec2::new(0.25, 0.75)], 0.2, 1.0, 1.0, 1.0).unwrap();
+        let big = small.resized(32, 32).unwrap();
+        assert_eq!(big.edge_distance, 0.1);
+        assert!((at(&big, 0.25, 0.75) - at(&small, 0.25, 0.75)).abs() < 0.1 && at(&big, 0.9, 0.1) == 0.0);
+    }
+
+    #[test]
+    fn hostile_brushes_are_refused_and_change_nothing() {
+        let mut map = SkewMap::constant(0.3).resized(16, 16).unwrap();
+        let before = map.clone();
+        let c = [Vec2::new(0.5, 0.5)];
+        for (pts, r, v) in [(&c[..], 0.0, 1.0), (&c[..], -1.0, 1.0), (&c[..], f32::NAN, 1.0), (&c[..], 0.1, f32::INFINITY), (&[Vec2::new(f32::NAN, 0.0)][..], 0.1, 1.0)] {
+            assert!(map.paint(pts, r, v, 0.5, 1.0).is_err(), "{pts:?} {r} {v}");
+        }
+        // Points far outside the atlas are harmless; a huge stroke is refused before any dab lands.
+        map.paint(&[Vec2::new(1e6, -1e6)], 0.1, 1.0, 0.5, 1.0).unwrap();
+        assert_eq!(map, before);
+        assert!(map.paint(&[Vec2::ZERO, Vec2::new(1e6, 1e6)], 1e-4, 1.0, 0.5, 1.0).is_err());
+        assert_eq!(map, before);
+        assert!(SkewMap::constant(0.0).resized(0, 4).is_err() && SkewMap::constant(0.0).resized(100_000, 100_000).is_err());
     }
 }
