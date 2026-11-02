@@ -990,4 +990,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Invert show/hide", "Inverter mostrar/ocultar"),
     ("Show or hide texture sets", "Mostrar ou ocultar conjuntos de texturas"),
     ("Focus: show only the active texture set", "Foco: mostrar só o conjunto de texturas ativo"),
+    ("Unsaved changes", "Alterações não salvas"),
+    ("Don't save", "Não salvar"),
+    ("Save the changes to {name} before closing?", "Salvar as alterações em {name} antes de fechar?"),
 ];

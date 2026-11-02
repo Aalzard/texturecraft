@@ -975,4 +975,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Invert show/hide", "表示/非表示を反転"),
     ("Show or hide texture sets", "テクスチャセットの表示/非表示"),
     ("Focus: show only the active texture set", "フォーカス: アクティブなテクスチャセットのみ表示"),
+    ("Unsaved changes", "未保存の変更"),
+    ("Don't save", "保存しない"),
+    ("Save the changes to {name} before closing?", "閉じる前に {name} の変更を保存しますか？"),
 ];
