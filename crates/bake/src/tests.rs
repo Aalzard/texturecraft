@@ -81,12 +81,146 @@ fn thin_slab_is_thinner_than_a_block() {
 }
 
 #[test]
-fn sphere_curvature_is_nearly_constant() {
-    let m = primitives::sphere(1.0, 64, 32);
+fn sphere_curvature_stays_calm() {
+    // A smooth sphere has no edges to draw: a soft value, no lines, whatever the triangle size.
+    for (rings, res) in [(64, 64), (12, 128)] {
+        let m = primitives::sphere(1.0, rings * 2, rings);
+        let s = settings(res, &[BakedMap::Curvature]);
+        let out = run(&m, &s).unwrap();
+        let c: Vec<f32> = covered_values(&m, &out, BakedMap::Curvature).into_iter().map(|v| v.1).collect();
+        let (lo, hi) = c.iter().fold((1.0f32, 0.0f32), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+        // Convex all over, so a little above grey is right; a line would be a jump between texels.
+        assert!(lo >= 0.5 && hi < 0.6 && hi - lo < 0.08, "{rings} rings: {lo}..{hi}");
+    }
+}
+
+#[test]
+fn flat_surface_is_exactly_mid_grey() {
+    let m = quad();
     let out = run(&m, &settings(64, &[BakedMap::Curvature])).unwrap();
-    let c: Vec<f32> = covered_values(&m, &out, BakedMap::Curvature).into_iter().map(|v| v.1).collect();
-    let (lo, hi) = c.iter().fold((1.0f32, 0.0f32), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
-    assert!(lo >= 0.5 && hi < 0.6 && hi - lo < 0.03, "{lo}..{hi}");
+    let c = covered_values(&m, &out, BakedMap::Curvature);
+    assert!(c.iter().filter(|(p, _)| p.x.abs() < 0.9 && p.z.abs() < 0.9).all(|(_, v)| *v == 0.5));
+}
+
+#[test]
+fn contact_with_a_wall_is_a_dark_line_and_the_rest_stays_flat() {
+    let m = floor_and_wall(false);
+    let s = settings(128, &[BakedMap::Curvature]);
+    let line = floor_mean(&m, &s, BakedMap::Curvature, 0.96..1.0);
+    assert!(line < 0.47, "beside the wall {line}");
+    assert_eq!(floor_mean(&m, &s, BakedMap::Curvature, -0.9..0.5), 0.5);
+}
+
+/// A box whose corners share one smooth normal per corner, each face in its own UV cell.
+fn smooth_shaded_box() -> Mesh {
+    let (mut pos, mut nrm, mut uvs, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let faces: [(Vec3, Vec3, Vec3); 6] = [
+        (Vec3::X, Vec3::Y, Vec3::Z),
+        (Vec3::NEG_X, Vec3::Z, Vec3::Y),
+        (Vec3::Y, Vec3::Z, Vec3::X),
+        (Vec3::NEG_Y, Vec3::X, Vec3::Z),
+        (Vec3::Z, Vec3::X, Vec3::Y),
+        (Vec3::NEG_Z, Vec3::Y, Vec3::X),
+    ];
+    for (f, (n, a, b)) in faces.iter().enumerate() {
+        let base = pos.len() as u32;
+        let cell = Vec2::new((f % 3) as f32 / 3.0, (f / 3) as f32 / 2.0);
+        for (u, v) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            let p = *n + *a * u + *b * v;
+            pos.push(p);
+            nrm.push(p.normalize());
+            uvs.push(cell + Vec2::new((u * 0.5 + 0.5) * 0.3 + 0.015, (v * 0.5 + 0.5) * 0.45 + 0.025));
+        }
+        idx.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    Mesh::from_parts(pos, Some(nrm), uvs, idx, "Smooth box").unwrap()
+}
+
+/// Largest distance from mid grey among samples within `band` of a box edge (half extent 1).
+fn edge_peak(m: &Mesh, res: u32, band: f32) -> f32 {
+    let c = covered_values(m, &run(m, &settings(res, &[BakedMap::Curvature])).unwrap(), BakedMap::Curvature);
+    c.iter().filter(|(p, _)| p.abs().to_array().iter().filter(|v| **v > 1.0 - band).count() >= 2).map(|(_, v)| (v - 0.5).abs()).fold(0.0, f32::max)
+}
+
+#[test]
+fn smooth_shaded_corners_draw_no_hard_line() {
+    // The same geometry: hard shading has a real edge, smooth shading has none to draw.
+    let (hard, smooth) = (edge_peak(&primitives::cube(2.0), 256, 0.03), edge_peak(&smooth_shaded_box(), 256, 0.03));
+    assert!(hard > 0.05, "hard {hard}");
+    assert!(smooth < hard * 0.5, "smooth {smooth} hard {hard}");
+}
+
+#[test]
+fn lines_are_as_wide_in_texels_at_any_scale_of_the_part() {
+    // The radius follows the texels of the triangle: twice the map, half the world width.
+    let width = |res: u32| {
+        let m = primitives::cube(2.0);
+        let c = covered_values(&m, &run(&m, &settings(res, &[BakedMap::Curvature])).unwrap(), BakedMap::Curvature);
+        c.iter()
+            .filter(|(p, v)| (v - 0.5).abs() > 0.02 && p.abs().to_array().iter().filter(|a| **a > 0.999).count() == 1)
+            .map(|(p, _)| {
+                let mut a = p.abs().to_array();
+                a.sort_by(f32::total_cmp);
+                1.0 - a[1]
+            })
+            .fold(0.0, f32::max)
+    };
+    let (coarse, fine) = (width(128), width(256));
+    assert!(fine > 0.0 && (fine / coarse - 0.5).abs() < 0.2, "world widths {coarse} and {fine}");
+}
+
+/// A dense smooth cylinder along Y with UVs that unwrap its side.
+fn barrel(radius: f32) -> Mesh {
+    const N: u32 = 128;
+    let (mut pos, mut nrm, mut uvs, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for i in 0..=N {
+        let u = i as f32 / N as f32;
+        let (s, c) = (u * std::f32::consts::TAU).sin_cos();
+        for (y, v) in [(-1.0f32, 0.0f32), (1.0, 1.0)] {
+            pos.push(Vec3::new(c * radius, y, s * radius));
+            nrm.push(Vec3::new(c, 0.0, s));
+            uvs.push(Vec2::new(u, v));
+        }
+    }
+    for i in 0..N {
+        let b = i * 2;
+        idx.extend([b, b + 1, b + 2, b + 1, b + 3, b + 2]);
+    }
+    Mesh::from_parts(pos, Some(nrm), uvs, idx, "Barrel").unwrap()
+}
+
+#[test]
+fn a_gently_round_barrel_stays_below_the_wear_masks() {
+    // Edge masks start around 0.6 with their noise: a plain round surface must stay well under them.
+    let m = barrel(0.1);
+    let c = covered_values(&m, &run(&m, &settings(512, &[BakedMap::Curvature])).unwrap(), BakedMap::Curvature);
+    let (lo, hi) = c.iter().filter(|(p, _)| p.y.abs() < 0.9).fold((1.0f32, 0.0f32), |(lo, hi), (_, v)| (lo.min(*v), hi.max(*v)));
+    assert!(hi < 0.53 && hi - lo < 0.02, "{lo}..{hi}");
+}
+
+#[test]
+fn a_rounded_bevel_reads_the_same_at_any_map_size() {
+    let m = primitives::rounded_box(Vec3::ONE, 0.05);
+    let peak = |res: u32| {
+        let c = covered_values(&m, &run(&m, &settings(res, &[BakedMap::Curvature])).unwrap(), BakedMap::Curvature);
+        let mut v: Vec<f32> = c.iter().filter(|(p, _)| p.abs().to_array().iter().filter(|a| **a > 0.97).count() >= 2).map(|v| v.1).collect();
+        v.sort_by(f32::total_cmp);
+        v.get(v.len() / 2).copied().unwrap_or(0.5)
+    };
+    let (coarse, fine) = (peak(512), peak(1024));
+    assert!(coarse > 0.58, "bevel at 512: {coarse}");
+    assert!((coarse - fine).abs() < 0.1, "512: {coarse}, 1024: {fine}");
+}
+
+#[test]
+fn curvature_strength_scales_the_result_and_zero_is_flat() {
+    let m = primitives::cube(2.0);
+    let peak = |strength: f32| {
+        let s = BakeSettings { curvature_strength: strength, ..settings(128, &[BakedMap::Curvature]) };
+        covered_values(&m, &run(&m, &s).unwrap(), BakedMap::Curvature).iter().map(|(_, v)| (v - 0.5).abs()).fold(0.0, f32::max)
+    };
+    assert_eq!(peak(0.0), 0.0);
+    assert!(peak(1.0) > peak(0.25));
 }
 
 /// Bevel / edge texels (two coordinates near the half extent) are convex-bright; face centres
@@ -156,6 +290,27 @@ fn cancel_and_progress() {
     bake(&req, &p).unwrap();
     assert_eq!(p.done.load(Relaxed), 10_000);
     assert_eq!(p.fraction(), 1.0);
+}
+
+#[test]
+fn a_curvature_bake_can_be_cancelled_midway_and_reports_progress() {
+    let m = primitives::rounded_box(Vec3::ONE, 0.15);
+    let bvh = Bvh::new(&m);
+    let s = settings(2048, &[BakedMap::Curvature]);
+    let req = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, skew: None, tiles: (1, 1) };
+    let p = Progress::new();
+    std::thread::scope(|t| {
+        let baking = t.spawn(|| bake(&req, &p));
+        let start = std::time::Instant::now();
+        while p.done.load(Relaxed) == 0 {
+            assert!(!baking.is_finished() && start.elapsed().as_secs() < 120, "the bake ended or stalled before reporting progress");
+            std::thread::yield_now();
+        }
+        let partway = p.fraction();
+        p.cancel();
+        assert!(partway < 1.0, "{partway}");
+        assert!(matches!(baking.join().unwrap(), Err(BakeError::Cancelled)));
+    });
 }
 
 #[test]
@@ -268,6 +423,44 @@ fn transfer(low: &Mesh, high: &Mesh, cage: Option<&Mesh>, s: &BakeSettings) -> R
         },
         &Progress::new(),
     )
+}
+
+/// The same box as its own high poly: its edges still read bright and its faces stay flat.
+#[test]
+fn a_high_poly_box_has_bright_edges_and_flat_faces() {
+    let s = BakeSettings { max_frontal: 0.06, max_rear: 0.02, dilation: 4, ..settings(128, &[BakedMap::Curvature]) };
+    for (m, edge) in [(primitives::cube(2.0), 0.97), (primitives::rounded_box(Vec3::ONE, 0.15), 0.9)] {
+        let c = covered_values(&m, &transfer(&m, &m, None, &s).unwrap(), BakedMap::Curvature);
+        let near = |p: Vec3, t: f32| p.abs().to_array().iter().filter(|c| **c > t).count();
+        let brightest = c.iter().filter(|(p, _)| near(*p, edge) >= 2).map(|v| v.1).fold(0.0, f32::max);
+        assert!(brightest > 0.55, "edge {brightest}");
+        assert!(c.iter().filter(|(p, _)| near(*p, 0.5) == 1).all(|v| (0.45..=0.55).contains(&v.1)), "faces");
+    }
+}
+
+/// A narrow high poly bevel keeps a bright line. Wide ones read softer, like any gentle curve.
+#[test]
+fn a_narrow_high_poly_bevel_stays_bright() {
+    let s = BakeSettings { max_frontal: 0.06, max_rear: 0.02, dilation: 4, ..settings(1024, &[BakedMap::Curvature]) };
+    let brightest = |bevel: f32| {
+        let m = primitives::rounded_box(Vec3::ONE, bevel);
+        let c = covered_values(&m, &transfer(&m, &m, None, &s).unwrap(), BakedMap::Curvature);
+        let edge = 1.0 - bevel * 0.7;
+        c.iter().filter(|(p, _)| p.abs().to_array().iter().filter(|c| **c > edge).count() >= 2).map(|v| v.1).fold(0.0, f32::max)
+    };
+    let (narrow, wide) = (brightest(0.01), brightest(0.05));
+    assert!(narrow > 0.8, "narrow: {narrow}");
+    assert!(wide > 0.55, "wide: {wide}");
+}
+
+/// A gently round high poly stays below the wear masks' thresholds.
+#[test]
+fn a_gently_round_high_poly_stays_below_the_wear_masks() {
+    let m = primitives::sphere(1.0, 96, 48);
+    let s = BakeSettings { max_frontal: 0.06, max_rear: 0.02, dilation: 4, ..settings(256, &[BakedMap::Curvature]) };
+    let c = covered_values(&m, &transfer(&m, &m, None, &s).unwrap(), BakedMap::Curvature);
+    let over = c.iter().filter(|v| v.1 > 0.65).count() as f32 / c.len() as f32;
+    assert!(over < 0.01, "{over}");
 }
 
 /// Texel (x, y) of a `res`² bake of [`quad`] sits over world (2u − 1, 0, 2v − 1).
@@ -478,6 +671,23 @@ fn uv_tiles_bake_side_by_side_in_one_atlas() {
     }
     let too_many = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, skew: None, tiles: (0, 1) };
     assert!(bake(&too_many, &Progress::new()).is_err());
+}
+
+/// On a UV tile grid, curvature lines keep their width in texels of the tile.
+#[test]
+fn curvature_on_uv_tiles_matches_a_single_tile() {
+    let one = primitives::rounded_box(Vec3::ONE, 0.15);
+    let mut two = one.clone();
+    two.uvs.iter_mut().for_each(|uv| uv.x *= 0.5);
+    let s = BakeSettings { dilation: 0, ..settings(64, &[BakedMap::Curvature]) };
+    let bake_tiles = |m: &Mesh, tiles| {
+        let bvh = Bvh::new(m);
+        bake(&BakeRequest { mesh: m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, skew: None, tiles }, &Progress::new()).unwrap()
+    };
+    let (a, b) = (bake_tiles(&one, (1, 1)), bake_tiles(&two, (2, 1)));
+    let (a, b) = (&a.maps[&BakedMap::Curvature], &b.maps[&BakedMap::Curvature]);
+    let worst = (0..64 * 64).map(|i| (a[i] - b[(i / 64) * 128 + i % 64]).abs()).fold(0.0, f32::max);
+    assert!(worst < 1e-3, "{worst}");
 }
 
 /// A floor ([`quad`], part "Quad") with a wall (part "Wall") standing at x = +1, facing the

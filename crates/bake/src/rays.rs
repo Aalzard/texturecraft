@@ -34,12 +34,13 @@ impl TraceMesh<'_> {
     }
 }
 
-/// A closest-hit ray (the high-poly transfer).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A closest-hit ray. Laid out as the GPU reads it, so a batch uploads without a copy.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Ray {
     pub origin: Vec3,
-    pub dir: Vec3,
     pub tmax: f32,
+    pub dir: Vec3,
     /// Only triangles with this part key are hit ([`ANY`]: all).
     pub key: u32,
 }

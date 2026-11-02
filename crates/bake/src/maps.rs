@@ -9,7 +9,9 @@ use texturecraft_geom::glam::{Vec2, Vec3, Vec4};
 use texturecraft_geom::{BaseColor, Bvh, Hit, Mesh, Surface, surface_at};
 use texturecraft_texel::{linear_to_srgb, srgb_to_linear};
 
-use crate::rays::{ANY, Hemisphere, Query, Ray, RayKind, TraceMesh};
+use rayon::prelude::*;
+
+use crate::rays::{ANY, Hemisphere, Query, Ray, RayKind, RayScene, TraceMesh};
 use crate::skew::Prepared;
 use crate::{BakeError, BakeRequest};
 
@@ -17,8 +19,6 @@ use crate::{BakeError, BakeRequest};
 struct Source<'a> {
     mesh: &'a Mesh,
     bvh: &'a Bvh,
-    /// Per-vertex curvature offset from 0.5 (empty unless mesh curvature is baked).
-    curvature: Vec<f32>,
     /// Submesh (part) index of each triangle ([`ANY`] outside every part).
     part: Vec<u32>,
     /// Match key of each triangle: its part name without the low / high suffix.
@@ -28,16 +28,7 @@ struct Source<'a> {
 }
 
 impl<'a> Source<'a> {
-    fn new(
-        mesh: &'a Mesh,
-        bvh: &'a Bvh,
-        base_color: &'a [Option<Arc<BaseColor>>],
-        s: &BakeSettings,
-        diag: f32,
-        suffix: &str,
-        keys: &mut HashMap<String, u32>,
-    ) -> Source<'a> {
-        let mesh_curvature = s.maps.contains(&BakedMap::Curvature) && !s.curvature_from_normal;
+    fn new(mesh: &'a Mesh, bvh: &'a Bvh, base_color: &'a [Option<Arc<BaseColor>>], suffix: &str, keys: &mut HashMap<String, u32>) -> Source<'a> {
         let tris = mesh.triangle_count();
         let mut part = vec![ANY; tris];
         for (i, sm) in mesh.submeshes.iter().enumerate() {
@@ -46,16 +37,11 @@ impl<'a> Source<'a> {
         }
         let ids: Vec<u32> = mesh.submeshes.iter().map(|sm| match_key(&sm.name, suffix, keys)).collect();
         let key = part.iter().map(|p| ids.get(*p as usize).copied().unwrap_or(ANY)).collect();
-        let curvature = if mesh_curvature { vertex_curvature(mesh, diag, s.curvature_strength) } else { Vec::new() };
-        Source { mesh, bvh, curvature, part, key, base_color }
+        Source { mesh, bvh, part, key, base_color }
     }
 
     fn trace(&self) -> TraceMesh<'_> {
         TraceMesh { mesh: self.mesh, bvh: self.bvh, keys: &self.key }
-    }
-
-    fn curvature(&self, s: &Surface, bary: [f32; 2]) -> f32 {
-        (0.5 + interpolate(self.mesh, &self.curvature, s.tri, bary).unwrap_or(0.0)).clamp(0.0, 1.0)
     }
 
     /// Vertex color times the material's base color (color sRGB-encoded like a base color
@@ -101,6 +87,217 @@ fn match_key(name: &str, suffix: &str, keys: &mut HashMap<String, u32>) -> u32 {
     *keys.entry(base).or_insert(next)
 }
 
+/// Mesh curvature from short rays around each sample, in batches, so the GPU casts them when there
+/// is one. The result does not depend on how big the triangles are, and it reads across UV seams and
+/// between separate parts. Line radii are in texels of the low poly triangle under the sample, so a
+/// line is as wide on a small densely unwrapped part as on a big plate.
+struct Curvature {
+    on: bool,
+    strength: f32,
+    /// Sampling radius of the walls, and of the smooth normals, in texels.
+    walls: f32,
+    spread: f32,
+    /// World size of a texel on triangles without usable UVs.
+    fallback: f32,
+    /// World size of one texel on each low poly triangle; empty when off.
+    texels: Vec<f32>,
+    /// Cosine and sine of each direction of a ring.
+    ring: [(f32, f32); CURVATURE_RAYS],
+    /// Read from the low poly itself, and from a high poly.
+    low: Tuning,
+    high: Tuning,
+}
+
+/// What differs between reading the low poly and reading a high poly.
+struct Tuning {
+    convex: f32,
+    /// World radius of the true curvature: wider than the facets of a dense mesh, so it averages
+    /// across them, and the same at any map size.
+    true_radius: f32,
+    true_strength: f32,
+}
+
+/// Rays per ring around a sample.
+const CURVATURE_RAYS: usize = 8;
+/// Samples whose curvature rays are cast at once: bounds their memory (about 2 MB of rays and hits
+/// per thousand samples) and a GPU submission, at any resolution and antialiasing.
+const CURVATURE_CHUNK: usize = 1 << 15;
+/// Rings: wall above, wall below, smooth normals, true curvature.
+const CURVATURE_RINGS: usize = 4;
+/// Sampling radius of the walls, in texels of the low poly triangle.
+const CURVATURE_WALLS: f32 = 1.5;
+/// Weight of the concave walls, and of the convex edges from the low poly itself and a high poly.
+const CURVATURE_CONCAVE: f32 = 1.5;
+const CURVATURE_CONVEX: f32 = 1.5;
+const CURVATURE_CONVEX_HIGH: f32 = 0.5;
+/// Radius of the true curvature, as a fraction of the model size, and its strength, from the low
+/// poly itself and from a high poly. A high poly's small radius keeps a line along a whole edge and
+/// its dense detail from wearing in patches.
+const CURVATURE_TRUE_RADIUS: f32 = 0.003;
+const CURVATURE_TRUE: f32 = 1.3;
+const CURVATURE_TRUE_RADIUS_HIGH: f32 = 0.0007;
+const CURVATURE_TRUE_HIGH: f32 = 1.6;
+/// How much the shading normal must turn (1 − cos) for a corner to count as hard.
+const CURVATURE_HARD_EDGE: f32 = 0.05;
+/// Map value below which true curvature counts as gently round.
+const CURVATURE_GENTLE: f32 = 0.1;
+
+fn triangle_normal(mesh: &Mesh, tri: u32) -> Option<Vec3> {
+    let [a, b, c] = mesh.tri(tri as usize)?;
+    let p = |i: usize| mesh.positions.get(i).copied();
+    (p(b)? - p(a)?).cross(p(c)? - p(a)?).try_normalize()
+}
+
+/// The geometric normal on the side of the shading normal, and two directions along the surface.
+fn surface_frame(surf: &Surface) -> (Vec3, Vec3, Vec3) {
+    let geo = if surf.geo_nrm.dot(surf.nrm) < 0.0 { -surf.geo_nrm } else { surf.geo_nrm };
+    let (t, b) = geo.any_orthonormal_pair();
+    (geo, t, b)
+}
+
+/// Only tight curves count: a gently round surface like a barrel is not an edge. Lifting it would put
+/// it on a wear mask's threshold, and the mask's noise would show as patches.
+fn tight(v: f32) -> f32 {
+    v.signum() * (v.abs() - CURVATURE_GENTLE).max(0.0)
+}
+
+/// What shading and faces agree on. A flat low poly face only turns in its shading, a smooth shaded
+/// low poly corner only in its faces; a real rounded surface turns in both.
+fn agreed(shading: f32, faces: f32) -> f32 {
+    if shading * faces <= 0.0 { 0.0 } else { shading.abs().min(faces.abs()).copysign(shading) }
+}
+
+impl Curvature {
+    fn new(s: &BakeSettings, low: &Mesh, diag: f32, tiles: (u32, u32)) -> Curvature {
+        let on = s.maps.contains(&BakedMap::Curvature) && !s.curvature_from_normal && s.curvature_strength != 0.0;
+        // UVs are in atlas space: across the whole tile grid, each tile `resolution` texels wide.
+        let resolution = s.resolution.max(1) as f32 * ((tiles.0.max(1) * tiles.1.max(1)) as f32).sqrt();
+        let texel = |tri: usize| {
+            let [a, b, c] = low.tri(tri)?;
+            let (pa, pb, pc) = (*low.positions.get(a)?, *low.positions.get(b)?, *low.positions.get(c)?);
+            let (ua, ub, uc) = (*low.uvs.get(a)?, *low.uvs.get(b)?, *low.uvs.get(c)?);
+            let world = (pb - pa).cross(pc - pa).length();
+            let uv = (ub - ua).perp_dot(uc - ua).abs();
+            (uv > 1e-12 && world > 0.0).then(|| (world / uv).sqrt() / resolution)
+        };
+        let fallback = diag * 1e-3;
+        let tris = if on { low.triangle_count() } else { 0 };
+        let walls = CURVATURE_WALLS;
+        Curvature {
+            on,
+            strength: s.curvature_strength,
+            walls,
+            spread: walls * 4.0 / 3.0,
+            fallback,
+            texels: (0..tris).into_par_iter().map(|t| texel(t).filter(|v| v.is_finite()).unwrap_or(fallback)).collect(),
+            low: Tuning { convex: CURVATURE_CONVEX, true_radius: diag * CURVATURE_TRUE_RADIUS, true_strength: CURVATURE_TRUE },
+            high: Tuning { convex: CURVATURE_CONVEX_HIGH, true_radius: diag * CURVATURE_TRUE_RADIUS_HIGH, true_strength: CURVATURE_TRUE_HIGH },
+            ring: std::array::from_fn(|i| {
+                let a = std::f32::consts::TAU * i as f32 / CURVATURE_RAYS as f32;
+                (a.cos(), a.sin())
+            }),
+        }
+    }
+
+    /// World size of one texel on low poly triangle `tri`.
+    fn texel(&self, tri: u32) -> f32 {
+        self.texels.get(tri as usize).copied().unwrap_or(self.fallback)
+    }
+
+    /// The rings' radii around a sample whose low poly texel is `texel`.
+    fn radii(&self, tuning: &Tuning, texel: f32) -> [f32; CURVATURE_RINGS] {
+        let r = self.walls * texel;
+        [r, r, self.spread * texel, tuning.true_radius]
+    }
+
+    /// The directions of a ring around a surface.
+    fn directions(&self, t: Vec3, b: Vec3) -> [Vec3; CURVATURE_RAYS] {
+        self.ring.map(|(cos, sin)| t * cos + b * sin)
+    }
+
+    /// Every ring's rays of one sample, in order, hitting only triangles of `key`.
+    fn rays(&self, tuning: &Tuning, surf: &Surface, texel: f32, key: u32, out: &mut [Ray]) {
+        let (geo, t, b) = surface_frame(surf);
+        let directions = self.directions(t, b);
+        let radii = self.radii(tuning, texel);
+        for (ring, (rays, r)) in out.chunks_exact_mut(CURVATURE_RAYS).zip(radii).enumerate() {
+            for (ray, d) in rays.iter_mut().zip(directions) {
+                *ray = match ring {
+                    0 => Ray { origin: surf.pos + geo * (0.15 * r), dir: d, tmax: r, key },
+                    1 => Ray { origin: surf.pos - geo * (0.15 * r), dir: d, tmax: r, key },
+                    _ => Ray { origin: surf.pos + d * r + geo * (0.25 * r), dir: -geo, tmax: 2.25 * r, key },
+                };
+            }
+        }
+    }
+
+    /// The check of each wall above: a contact stands on this surface, so just before the wall the
+    /// ground is still there. `None` for a ray that hit no wall.
+    fn ground_rays(&self, surf: &Surface, texel: f32, key: u32, walls: &[Option<Hit>], out: &mut Vec<Ray>) {
+        let (geo, t, b) = surface_frame(surf);
+        let r = self.walls * texel;
+        for (w, d) in walls.iter().zip(self.directions(t, b)) {
+            if let Some(h) = w {
+                out.push(Ray { origin: surf.pos + geo * (0.15 * r) + d * (h.t * 0.85), dir: -geo, tmax: 0.5 * r, key });
+            }
+        }
+    }
+
+    /// How much wall stands around the sample. A hit counts by how upright the surface hit is and by
+    /// how far the shading normal really breaks there: a smooth shaded corner is a smooth surface,
+    /// however low poly. `keep`: whether each hit counts at all.
+    fn wall(&self, src: &Source, surf: &Surface, geo: Vec3, r: f32, hits: &[Option<Hit>], keep: &mut dyn FnMut() -> bool) -> f32 {
+        let mut sum = 0.0;
+        for h in hits.iter().flatten() {
+            if !keep() {
+                continue;
+            }
+            let upright = triangle_normal(src.mesh, h.tri).map_or(1.0, |n| (1.0 - n.dot(geo).powi(2)).max(0.0).sqrt());
+            let shaded = interpolate(src.mesh, &src.mesh.normals, h.tri, [h.u, h.v]).and_then(Vec3::try_normalize).unwrap_or(surf.nrm);
+            let hard = ((1.0 - shaded.dot(surf.nrm)) / CURVATURE_HARD_EDGE).clamp(0.0, 1.0);
+            sum += (1.0 - h.t / r) * upright * hard;
+        }
+        sum / CURVATURE_RAYS as f32
+    }
+
+    /// How the normals spread apart (positive, convex) or lean together around the sample, as the
+    /// mean turn along the ring: of the smooth shading, and of the faces. `turn`: the most the shading
+    /// may turn (1 − cos) for a sample to count.
+    fn spread(&self, src: &Source, surf: &Surface, geo: Vec3, directions: &[Vec3; CURVATURE_RAYS], hits: &[Option<Hit>], turn: f32) -> (f32, f32) {
+        let (mut shading, mut faces) = (0.0, 0.0);
+        for (h, dir) in hits.iter().zip(directions) {
+            let Some(h) = h else { continue };
+            let n = interpolate(src.mesh, &src.mesh.normals, h.tri, [h.u, h.v]).and_then(Vec3::try_normalize).unwrap_or(surf.nrm);
+            if 1.0 - n.dot(surf.nrm) <= turn {
+                shading += (n - surf.nrm).dot(*dir);
+                if let Some(f) = triangle_normal(src.mesh, h.tri) {
+                    let f = if f.dot(geo) < 0.0 { -f } else { f };
+                    faces += (f - geo).dot(*dir);
+                }
+            }
+        }
+        (shading / CURVATURE_RAYS as f32, faces / CURVATURE_RAYS as f32)
+    }
+
+    /// The value of one sample from its rings' hits, and whether each wall above stands on the ground.
+    fn value(&self, tuning: &Tuning, src: &Source, surf: &Surface, texel: f32, hits: &[Option<Hit>], grounds: &[Option<Hit>]) -> f32 {
+        let (geo, t, b) = surface_frame(surf);
+        let directions = self.directions(t, b);
+        let ring = |n: usize| hits.get(n * CURVATURE_RAYS..(n + 1) * CURVATURE_RAYS).unwrap_or_default();
+        let r = self.walls * texel;
+        let mut next = grounds.iter();
+        let above = self.wall(src, surf, geo, r, ring(0), &mut || next.next().copied().flatten().is_some_and(|g| g.t < 0.3 * r));
+        let below = self.wall(src, surf, geo, r, ring(1), &mut || true);
+        let (shading, _) = self.spread(src, surf, geo, &directions, ring(2), 2.0);
+        let (true_shading, true_faces) = self.spread(src, surf, geo, &directions, ring(3), 2.0);
+        let v = -above * CURVATURE_CONCAVE
+            + (below - above).max(0.0) * tuning.convex
+            + shading * 0.5
+            + tight(agreed(true_shading, true_faces) * tuning.true_strength);
+        (0.5 + v * self.strength).clamp(0.0, 1.0)
+    }
+}
+
 /// Barycentric interpolation of a per-vertex attribute over triangle `tri`.
 fn interpolate<T: Copy + Mul<f32, Output = T> + Add<Output = T>>(mesh: &Mesh, v: &[T], tri: u32, [b1, b2]: [f32; 2]) -> Option<T> {
     let [a, b, c] = mesh.tri(tri as usize)?;
@@ -131,6 +328,7 @@ pub(crate) struct Traced {
     /// None when bent normals are not baked.
     pub bent: Option<Vec3>,
     pub thickness: f32,
+    pub curvature: f32,
 }
 
 /// Everything a sample needs, computed once per bake.
@@ -152,6 +350,7 @@ pub(crate) struct Ctx<'a> {
     direction_mode: DirectionMode,
     position_mode: PositionMode,
     curvature_from_normal: bool,
+    curvature: Curvature,
     /// Secondary-ray passes of the requested maps.
     pub ao: Option<Hemisphere>,
     pub bent: Option<Hemisphere>,
@@ -167,8 +366,8 @@ impl<'a> Ctx<'a> {
             return Err(BakeError::Invalid("mesh bounds are too large".into()));
         }
         let mut keys = HashMap::new();
-        let low = Source::new(req.mesh, req.bvh, &[], s, diag, &s.low_suffix, &mut keys);
-        let high = req.high.map(|h| Source::new(h.mesh, h.bvh, h.base_color, s, diag, &s.high_suffix, &mut keys));
+        let low = Source::new(req.mesh, req.bvh, &[], &s.low_suffix, &mut keys);
+        let high = req.high.map(|h| Source::new(h.mesh, h.bvh, h.base_color, &s.high_suffix, &mut keys));
         let ray_normals = match s.average_normals && high.is_some() {
             true => {
                 let (weld, _, nrm) = welded(req.mesh, diag);
@@ -209,6 +408,7 @@ impl<'a> Ctx<'a> {
             direction_mode: s.direction_mode,
             position_mode: s.position_mode,
             curvature_from_normal: s.curvature_from_normal,
+            curvature: Curvature::new(s, req.mesh, diag, req.tiles),
             ao: pass(BakedMap::AmbientOcclusion, &s.ao, RayKind::Occlusion),
             bent: pass(BakedMap::BentNormal, &s.bent_normal, RayKind::Occlusion),
             thickness: pass(BakedMap::Thickness, &s.thickness, RayKind::Thickness),
@@ -221,7 +421,7 @@ impl<'a> Ctx<'a> {
 
     /// Whether the bake casts any ray.
     pub(crate) fn casts_rays(&self) -> bool {
-        self.has_high() || self.ao.is_some() || self.bent.is_some() || self.thickness.is_some()
+        self.has_high() || self.curvature.on || self.ao.is_some() || self.bent.is_some() || self.thickness.is_some()
     }
 
     /// The meshes rays are cast against: the low poly, then the high poly.
@@ -272,6 +472,79 @@ impl<'a> Ctx<'a> {
         Query { pos: surf.pos, nrm: surf.nrm, geo, rot, key: src.key.get(surf.tri as usize).copied().unwrap_or(ANY), mesh }
     }
 
+    /// Whether this bake traces curvature rays.
+    pub(crate) fn traces_curvature(&self) -> bool {
+        self.curvature.on
+    }
+
+    /// Curvature of every sample: `(low poly surface, transfer)`. Rays go in batches per mesh, the
+    /// ground checks in a second pass.
+    pub(crate) fn trace_curvature(&self, scene: &mut dyn RayScene, samples: &[(&Surface, Option<&Transfer>)]) -> Result<Vec<f32>, BakeError> {
+        let mut out = vec![0.5; samples.len()];
+        let c = &self.curvature;
+        for mesh in [0usize, 1] {
+            let Some(src) = (if mesh == 0 { Some(&self.low) } else { self.high.as_ref() }) else { continue };
+            let tuning = if mesh == 0 { &c.low } else { &c.high };
+            // Matched by name, a high poly part only reads itself, like its transfer rays.
+            let key = |surf: &Surface| if mesh == 1 && self.by_name { src.key.get(surf.tri as usize).copied().unwrap_or(ANY) } else { ANY };
+            let chosen: Vec<(usize, &Surface, f32)> = samples
+                .par_iter()
+                .enumerate()
+                .filter_map(|(k, (s, tr))| {
+                    let surf = match (mesh, tr) {
+                        (1, Some(t)) => &t.surf,
+                        (0, None) => *s,
+                        _ => return None,
+                    };
+                    Some((k, surf, c.texel(s.tri)))
+                })
+                .collect();
+            let per = CURVATURE_RINGS * CURVATURE_RAYS;
+            // A batch can hold whole rows of a big supersampled map: cast them in chunks.
+            for chunk in chosen.chunks(CURVATURE_CHUNK) {
+                let mut rays: Vec<Ray> = bytemuck::zeroed_vec(chunk.len() * per);
+                rays.par_chunks_mut(per).zip(chunk).for_each(|(out, (_, surf, texel))| c.rays(tuning, surf, *texel, key(surf), out));
+                let hits = scene.closest(mesh, &rays)?;
+                let walls = |i: usize| hits.get(i * per..i * per + CURVATURE_RAYS).unwrap_or_default();
+                let grounds: Vec<Ray> = chunk
+                    .par_iter()
+                    .enumerate()
+                    .flat_map_iter(|(i, (_, surf, texel))| {
+                        let mut v = Vec::new();
+                        c.ground_rays(surf, *texel, key(surf), walls(i), &mut v);
+                        v
+                    })
+                    .collect();
+                let ground_hits = scene.closest(mesh, &grounds)?;
+                // Each sample's share of the ground checks.
+                let firsts: Vec<usize> = (0..chunk.len())
+                    .scan(0, |first, i| {
+                        let at = *first;
+                        *first += walls(i).iter().flatten().count();
+                        Some(at)
+                    })
+                    .collect();
+                let values: Vec<(usize, f32)> = chunk
+                    .par_iter()
+                    .zip(&firsts)
+                    .enumerate()
+                    .map(|(i, ((k, surf, texel), first))| {
+                        let n = walls(i).iter().flatten().count();
+                        let g = ground_hits.get(*first..*first + n).unwrap_or_default();
+                        let h = hits.get(i * per..(i + 1) * per).unwrap_or_default();
+                        (*k, c.value(tuning, src, surf, *texel, h, g))
+                    })
+                    .collect();
+                for (k, v) in values {
+                    if let Some(o) = out.get_mut(k) {
+                        *o = v;
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Every map of `maps` at one low-poly sample, into `out` (scalars fill all three).
     pub(crate) fn evaluate(&self, maps: &[BakedMap], s: &Surface, bary: [f32; 2], transfer: Option<&Transfer>, traced: &Traced, out: &mut [[f32; 3]]) {
         // The surface the bakers read: the high poly where a ray found it, else the low poly.
@@ -286,7 +559,7 @@ impl<'a> Ctx<'a> {
                 BakedMap::BentNormal => pack(traced.bent.unwrap_or(surf.nrm)),
                 BakedMap::Thickness => [traced.thickness; 3],
                 BakedMap::Curvature if self.curvature_from_normal => [0.5; 3],
-                BakedMap::Curvature => [src.curvature(surf, sb); 3],
+                BakedMap::Curvature => [traced.curvature; 3],
                 BakedMap::WorldNormal => pack(surf.nrm),
                 BakedMap::Position => self.position(surf.pos),
                 BakedMap::Id => material_color(src.part.get(surf.tri as usize).copied().unwrap_or(0) as usize),
@@ -379,41 +652,6 @@ fn welded(mesh: &Mesh, diag: f32) -> (Vec<u32>, Vec<Vec3>, Vec<Vec3>) {
         .collect();
     let nrm = nrm.into_iter().map(|n| n.try_normalize().unwrap_or(Vec3::ZERO)).collect();
     (weld, pos, nrm)
-}
-
-/// Per-vertex curvature offset `−k · avg_edge · strength`, where `k` is the mean of
-/// `n·(p_j − p_i)/|p_j − p_i|²` over the 1-ring of the welded mesh. Convex edges give a
-/// positive offset.
-fn vertex_curvature(mesh: &Mesh, diag: f32, strength: f32) -> Vec<f32> {
-    let q = diag * 1e-5;
-    let (weld, pos, nrm) = welded(mesh, diag);
-    let (mut ksum, mut kcnt) = (vec![0.0f32; pos.len()], vec![0u32; pos.len()]);
-    let (mut edge_sum, mut edge_cnt) = (0.0f64, 0u64);
-    for t in mesh.indices.chunks_exact(3) {
-        for (a, b) in [(0, 1), (1, 2), (2, 0), (1, 0), (2, 1), (0, 2)] {
-            let (Some(&wa), Some(&wb)) = (t.get(a).and_then(|v| weld.get(*v as usize)), t.get(b).and_then(|v| weld.get(*v as usize))) else { continue };
-            let (Some(pa), Some(pb), Some(na)) = (pos.get(wa as usize), pos.get(wb as usize), nrm.get(wa as usize)) else { continue };
-            let d = *pb - *pa;
-            let l2 = d.length_squared();
-            if wa == wb || l2 <= q * q {
-                continue;
-            }
-            if let (Some(k), Some(c)) = (ksum.get_mut(wa as usize), kcnt.get_mut(wa as usize)) {
-                *k += na.dot(d) / l2;
-                *c += 1;
-            }
-            edge_sum += f64::from(l2.sqrt());
-            edge_cnt += 1;
-        }
-    }
-    let scale = (edge_sum / edge_cnt.max(1) as f64) as f32 * strength;
-    weld.iter()
-        .map(|w| {
-            let i = *w as usize;
-            let k = ksum.get(i).copied().unwrap_or(0.0) / kcnt.get(i).copied().unwrap_or(0).max(1) as f32;
-            if k.is_finite() { -k * scale } else { 0.0 }
-        })
-        .collect()
 }
 
 /// A well-separated hue per part (golden-ratio steps around the HSV wheel).

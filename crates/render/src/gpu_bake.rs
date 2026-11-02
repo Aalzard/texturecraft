@@ -232,10 +232,17 @@ impl GpuScene<'_> {
     }
 
     /// Run `pipeline` over `n` items (`items`: their rows) once per pass in one submission, and
-    /// read back one result row per item and pass (pass after pass).
-    fn run(&mut self, pipeline: &wgpu::ComputePipeline, items: &[[u32; 4]], n: usize, passes: &[Pass]) -> Result<Vec<[u32; 4]>, BakeError> {
+    /// hand `read` one result row per item and pass (pass after pass).
+    fn run<R: Default>(
+        &mut self,
+        pipeline: &wgpu::ComputePipeline,
+        items: &[u8],
+        n: usize,
+        passes: &[Pass],
+        read: impl FnOnce(&[[u32; 4]]) -> R,
+    ) -> Result<R, BakeError> {
         if n == 0 || passes.is_empty() {
-            return Ok(Vec::new());
+            return Ok(R::default());
         }
         let g = self.gpu;
         let max_groups = g.device.limits().max_compute_workgroups_per_dimension as usize;
@@ -250,14 +257,14 @@ impl GpuScene<'_> {
                 blocks.resize(blocks.len().next_multiple_of(g.stride), 0);
             }
         }
-        let (in_bytes, out_bytes) = (items.len() as u64 * 16, (n * passes.len()) as u64 * 16);
+        let (in_bytes, out_bytes) = (items.len() as u64, (n * passes.len()) as u64 * 16);
         if in_bytes.max(out_bytes) > g.max_buffer() {
             return Err(err("a batch exceeds this GPU's buffer limit"));
         }
         let io = self.io(in_bytes, out_bytes, blocks.len() as u64)?;
         let dev = &g.device;
         scoped(dev, "GPU baking: dispatch", || {
-            g.queue.write_buffer(&io.items, 0, bytemuck::cast_slice(items));
+            g.queue.write_buffer(&io.items, 0, items);
             g.queue.write_buffer(&io.params, 0, &blocks);
             let mut enc = dev.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("tc_bake") });
             {
@@ -280,7 +287,7 @@ impl GpuScene<'_> {
         dev.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).map_err(err)?;
         rx.recv().map_err(err)?.map_err(err)?;
         let data = slice.get_mapped_range().map_err(err)?;
-        let out = bytemuck::try_cast_slice::<u8, [u32; 4]>(&data).map(<[_]>::to_vec).map_err(err);
+        let out = bytemuck::try_cast_slice::<u8, [u32; 4]>(&data).map(read).map_err(err);
         drop(data);
         io.staging.unmap();
         out
@@ -294,11 +301,11 @@ fn row(v: Vec3, w: u32) -> [u32; 4] {
 
 impl RayScene for GpuScene<'_> {
     fn closest(&mut self, mesh: usize, rays: &[Ray]) -> Result<Vec<Option<Hit>>, BakeError> {
-        let items: Vec<[u32; 4]> = rays.par_iter().flat_map_iter(|r| [row(r.origin, r.tmax.to_bits()), row(r.dir, r.key)]).collect();
         let pass = Pass { params: Params { root: self.root(mesh)?, ..Params::default() }, per_dispatch: RAYS_PER_DISPATCH, per_group: WORKGROUP as usize };
         let gpu = self.gpu;
-        let out = self.run(&gpu.transfer, &items, rays.len(), &[pass])?;
-        Ok(out.into_iter().map(|[t, u, v, tri]| (tri != NONE).then(|| Hit { t: f32::from_bits(t), tri, u: f32::from_bits(u), v: f32::from_bits(v) })).collect())
+        self.run(&gpu.transfer, bytemuck::cast_slice(rays), rays.len(), &[pass], |out| {
+            out.par_iter().map(|&[t, u, v, tri]| (tri != NONE).then(|| Hit { t: f32::from_bits(t), tri, u: f32::from_bits(u), v: f32::from_bits(v) })).collect()
+        })
     }
 
     fn hemispheres(&mut self, passes: &[Hemisphere], queries: &[Query]) -> Result<Vec<Vec<[f32; 4]>>, BakeError> {
@@ -335,8 +342,9 @@ impl RayScene for GpuScene<'_> {
             })
             .collect();
         let gpu = self.gpu;
-        let out = self.run(&gpu.hemisphere, &items, queries.len(), &passes)?;
-        Ok(out.chunks(queries.len().max(1)).map(|c| c.iter().map(|v| v.map(f32::from_bits)).collect()).collect())
+        self.run(&gpu.hemisphere, bytemuck::cast_slice(&items), queries.len(), &passes, |out| {
+            out.chunks(queries.len().max(1)).map(|c| c.iter().map(|v| v.map(f32::from_bits)).collect()).collect()
+        })
     }
 }
 
@@ -417,7 +425,7 @@ mod tests {
         let s = BakeSettings {
             resolution: 128,
             dilation: 0,
-            maps: [BakedMap::Normal, BakedMap::Height, BakedMap::Id, BakedMap::Opacity, BakedMap::AmbientOcclusion, BakedMap::WorldNormal]
+            maps: [BakedMap::Normal, BakedMap::Height, BakedMap::Id, BakedMap::Opacity, BakedMap::AmbientOcclusion, BakedMap::WorldNormal, BakedMap::Curvature]
                 .into_iter()
                 .collect(),
             max_frontal: 0.02,

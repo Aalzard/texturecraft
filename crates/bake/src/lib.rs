@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use rayon::prelude::*;
 use texturecraft_core::{BakeSettings, BakedMap};
 use texturecraft_geom::glam::{Vec2, Vec3};
-use texturecraft_geom::{BaseColor, Bvh, Mesh, NO_TRI, UvGBuffer};
+use texturecraft_geom::{BaseColor, Bvh, Mesh, NO_TRI, Surface, UvGBuffer};
 use texturecraft_texel::DilationMap;
 
 use crate::rays::{CpuTracer, RayScene, Tracer};
@@ -42,6 +42,9 @@ pub const MAX_TEXELS: u64 = 1 << 27;
 const STRIP_TEXELS: usize = 1 << 24;
 /// Supersamples ray-cast per batch: bounds the per-sample buffers (~40 MB) and a GPU submission.
 const BATCH: usize = 1 << 18;
+/// The same with curvature rays, which take far longer per sample: smaller batches keep progress and
+/// cancel responsive (their rays are cast in bounded chunks either way).
+const CURVATURE_BATCH: usize = 1 << 15;
 
 /// Shared progress / cancellation flag of a running bake.
 #[derive(Debug, Default)]
@@ -226,7 +229,9 @@ fn bake_in_strips(req: &BakeRequest, progress: &Progress, strip_texels: usize, t
     // UVs shifted so that y = v*H - strip_top, which keeps memory bounded at 8K x 8 AA.
     let (sw, full_h) = (w * aa, h * aa);
     let strip_rows = (strip_texels / (sw * aa)).max(1).min(h);
-    let batch_rows = (BATCH / (sw * aa)).max(1);
+    // Curvature casts many rays per sample: smaller batches keep progress moving.
+    let batch = if ctx.traces_curvature() { CURVATURE_BATCH } else { BATCH };
+    let batch_rows = (batch / (sw * aa)).max(1);
     let mut strip_mesh = Mesh { indices: req.mesh.indices.clone(), submeshes: req.mesh.submeshes.clone(), ..Mesh::default() };
     for y0 in (0..h).step_by(strip_rows) {
         let rows = strip_rows.min(h - y0);
@@ -329,6 +334,14 @@ fn bake_rows(
         false => Vec::new(),
     };
     let transfer = |k: usize| transfers.get(k).and_then(Option::as_ref);
+    let curvature = match ctx.traces_curvature() {
+        true => {
+            let items: Vec<(&Surface, Option<&maps::Transfer>)> =
+                per_row.iter().zip(&starts).flat_map(|(r, &first)| r.iter().zip(first..)).map(|(p, k)| (&p.surf, transfer(k))).collect();
+            ctx.trace_curvature(scene, &items)?
+        }
+        false => Vec::new(),
+    };
     let queries: Vec<rays::Query> = match ctx.ao.is_some() || ctx.bent.is_some() || ctx.thickness.is_some() {
         true => {
             per_row.par_iter().zip(&starts).flat_map_iter(|(r, &first)| r.iter().zip(first..)).map(|(p, k)| ctx.query(transfer(k), &p.surf, p.seed)).collect()
@@ -355,6 +368,7 @@ fn bake_rows(
                     ao: ao.get(k).map_or(1.0, |v| v[0]),
                     bent: bent.get(k).map(|v| Vec3::new(v[1], v[2], v[3])),
                     thickness: thickness.get(k).map_or(1.0, |v| v[0]),
+                    curvature: curvature.get(k).copied().unwrap_or(0.5),
                 };
                 ctx.evaluate(maps, &p.surf, p.bary, transfer(k), &traced, &mut sample);
                 for (a, v) in acc.iter_mut().zip(&sample) {
