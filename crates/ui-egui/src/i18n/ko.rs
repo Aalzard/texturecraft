@@ -1003,4 +1003,15 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Save the changes to {name} before closing?", "닫기 전에 {name}의 변경 사항을 저장할까요?"),
     ("Twill weave", "능직"),
     ("Save the changes to {name} first?", "먼저 {name}의 변경 사항을 저장할까요?"),
+    ("Import material...", "머티리얼 가져오기..."),
+    ("MaterialCraft material", "MaterialCraft 머티리얼"),
+    ("Cooked at {size} px", "{size} px로 계산됨"),
+    ("Preset", "프리셋"),
+    ("Re-cook", "다시 계산"),
+    ("Open in MaterialCraft", "MaterialCraft에서 열기"),
+    (
+        "Opened in MaterialCraft: use File > Send to TextureCraft there to bring your changes back",
+        "MaterialCraft에서 열었습니다. 변경 내용을 가져오려면 그곳에서 파일 > TextureCraft로 보내기를 사용하세요",
+    ),
+    ("Parameters change in the desktop app, with MaterialCraft installed", "매개변수는 MaterialCraft가 설치된 데스크톱 앱에서 바꿀 수 있습니다"),
 ];

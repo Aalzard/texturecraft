@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add smart material from file",
             [],
             None,
-            "{path: .tcmat file, above?: layer id, inside?: bool, index?: n} — above the selection by default, or placed like material.apply",
+            "{path: .tcmat smart material, .mcmat MaterialCraft material or .mcraft package, above?: layer id, inside?: bool, index?: n} — above the selection by default, or placed like material.apply",
             always,
             load
         ),
@@ -48,6 +48,7 @@ pub(crate) fn images_used(p: &Project, id: LayerId, out: &mut Vec<String>, depth
                 out.push(name.clone());
             }
         }
+        out.extend(f.link.as_ref().map(|link| link.package.clone()));
     }
     for e in l.mask.iter().flat_map(|m| m.effects.iter()) {
         if let EffectKind::Fill { source: Source::Image { name }, .. } = &e.kind {
@@ -96,8 +97,12 @@ impl Session {
         self.add_smart_material_bytes_at(bytes, Place::Selection)
     }
 
-    /// [`Session::add_smart_material_bytes`] at `place` (shelf drag and drop).
+    /// [`Session::add_smart_material_bytes`] at `place` (shelf drag and drop). MaterialCraft
+    /// portable materials and packages become linked fill layers.
     pub fn add_smart_material_bytes_at(&mut self, bytes: &[u8], place: Place) -> Result<LayerId> {
+        if texturecraft_formats::mcmat::is_mcmat(bytes) || texturecraft_formats::mcmat::is_mcraft(bytes) {
+            return self.add_linked_material_bytes_at(bytes, place);
+        }
         let pf = texturecraft_formats::load_project_bytes(bytes).map_err(fe)?;
         let root = pf
             .project
