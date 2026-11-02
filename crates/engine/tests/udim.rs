@@ -131,3 +131,27 @@ fn baking_covers_every_tile() {
     assert!(x_at(10) < 0.3 && x_at(250) > 0.7, "{} {}", x_at(10), x_at(250));
     s.update();
 }
+
+/// A UV-tiled set takes a mesh map from one image per tile, found by the tile number in the
+/// name; each tile's block of the atlas reads its own image.
+#[test]
+fn mesh_maps_from_images_take_one_image_per_tile() {
+    let mut s = session();
+    let png = |v: u8| {
+        let mut out = Vec::new();
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([v, v, v, 255])).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+        out
+    };
+    let set = |s: &mut Session, image: &str| execute(s, "textureSet.meshMap.set", &json!({"map": "ambient_occlusion", "image": image}));
+    let left = s.import_resource_bytes("ao.1001.png", png(255)).unwrap();
+    assert!(set(&mut s, &left).unwrap_err().to_string().contains("ao.1002.png"), "tile 1002 has no image yet");
+    let plain = s.import_resource_bytes("ao.png", png(255)).unwrap();
+    assert!(set(&mut s, &plain).is_err(), "no tile number in the name");
+    s.import_resource_bytes("ao.1002.png", png(0)).unwrap();
+    let r = set(&mut s, &left).unwrap()["resolution"].as_u64().unwrap() as usize;
+    let ao = &s.doc.baked[&0].maps[&BakedMap::AmbientOcclusion];
+    let h = ao.len() / r;
+    assert_eq!(r, 2 * h, "a block of the bake size per tile, side by side");
+    let at = |x: usize| ao[(h / 2) * r + x];
+    assert!(at(r / 4) > 0.95 && at(3 * r / 4) < 0.05, "1001 on the left, 1002 on the right: {} {}", at(r / 4), at(3 * r / 4));
+}
