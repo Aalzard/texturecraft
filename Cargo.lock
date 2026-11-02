@@ -3818,6 +3818,7 @@ dependencies = [
  "egui",
  "image",
  "log",
+ "rfd",
  "ron",
  "serde_json",
  "texturecraft-automation",
