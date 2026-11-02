@@ -28,6 +28,7 @@ pub mod export;
 pub mod fonts;
 pub mod image_res;
 pub mod materialx;
+pub mod materialx_read;
 pub mod mesh_export;
 pub mod mesh_import;
 pub mod presets;

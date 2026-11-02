@@ -425,6 +425,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Import images to use them in fills and masks", "画像をインポートして塗りつぶしやマスクで使用"),
     ("Import resources...", "リソースをインポート..."),
+    ("Import MaterialX material...", "MaterialX マテリアルをインポート..."),
+    ("MaterialX materials", "MaterialX マテリアル"),
     ("Import...", "インポート..."),
     ("Imported template \"{name}\"", "テンプレート「{name}」をインポートしました"),
     ("Imported {name}", "{name} をインポートしました"),

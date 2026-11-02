@@ -419,6 +419,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Import an image (File > Import resources) to project it onto the mesh.", "메시에 투영할 이미지를 가져오세요 (파일 > 리소스 가져오기)."),
     ("Import images to use them in fills and masks", "채우기와 마스크에 사용할 이미지를 가져옵니다"),
     ("Import resources...", "리소스 가져오기..."),
+    ("Import MaterialX material...", "MaterialX 머티리얼 가져오기..."),
+    ("MaterialX materials", "MaterialX 머티리얼"),
     ("Import...", "가져오기..."),
     ("Imported template \"{name}\"", "템플릿 \"{name}\" 가져옴"),
     ("Imported {name}", "가져옴: {name}"),
