@@ -309,6 +309,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Folder", "文件夹"),
     ("Folders", "文件夹"),
     ("Follow path", "跟随路径"),
+    (
+        "For the whole project: how normal map images set as mesh maps are read (set them again after a change), and the default for export",
+        "整个项目：设为网格贴图的法线贴图图像的读取方式（更改后请重新设置），以及导出的默认值",
+    ),
     ("Free and open source (MIT OR Apache-2.0), written in Rust.", "免费开源（MIT OR Apache-2.0），使用 Rust 编写。"),
     ("From normal map", "基于法线贴图"),
     ("From normal map: curvature of the baked normal map's detail instead of the mesh.", "基于法线贴图：使用烘焙法线贴图细节的曲率，而非网格的曲率。"),

@@ -801,6 +801,17 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
         if slider(ui, tr("Height to normal strength"), &mut hs, 0.0..=10.0, 2).changed() {
             app.run("textureSet.settings", json!({"ts": ts, "heightStrength": hs}));
         }
+        let directx = app.session.doc.project.normal_format == texturecraft_engine::core::NormalFormat::DirectX;
+        combo(ui, tr("Normal map format"), if directx { "DirectX" } else { "OpenGL" }, |ui| {
+            for (id, label, on) in [("openGl", "OpenGL", !directx), ("directX", "DirectX", directx)] {
+                if ui.selectable_label(on, label).clicked() && !on {
+                    app.run("textureSet.settings", json!({"ts": ts, "normalFormat": id}));
+                }
+            }
+        })
+        .on_hover_text(tr(
+            "For the whole project: how normal map images set as mesh maps are read (set them again after a change), and the default for export",
+        ));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.label(caption(tr("Mesh maps")));
