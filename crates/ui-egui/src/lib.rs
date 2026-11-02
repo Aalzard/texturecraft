@@ -381,7 +381,10 @@ impl eframe::App for TextureCraftApp {
         self.autosave(now);
         i18n::set_language(&self.ui.prefs.language);
         #[cfg(target_arch = "wasm32")]
-        keymap::sync_captured(&self.ui.keymap);
+        {
+            keymap::sync_captured(&self.ui.keymap);
+            web_files::sync_unsaved(self);
+        }
         self.fonts.update(ctx, i18n::current().code, self.ui.windows.settings);
         menus::shortcuts(self, ctx);
         profile::drive(self, ctx);

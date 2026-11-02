@@ -60,6 +60,21 @@ fn closing_without_changes_does_not_ask() {
     assert!(h.state().ui.windows.unsaved.is_none());
 }
 
+/// A project picked or dropped in the browser arrives as bytes; it waits on the same dialog.
+#[test]
+fn a_dropped_project_waits_on_the_dialog() {
+    let mut h = harness(true);
+    let dropped = texturecraft_engine::Session::new_project("Dropped", texturecraft_engine::geom::primitives::cube(1.0), "builtin:cube", None, 128).unwrap();
+    texturecraft_ui_egui::web_files::load(h.state_mut(), "dropped.tcraft", dropped.to_project_bytes().unwrap());
+    h.run_steps(4);
+    assert!(matches!(h.state().ui.windows.unsaved, Some(Unsaved::Load(ref name, _)) if name == "dropped.tcraft"), "the dialog is open");
+    assert_ne!(h.state().session.doc.project.name, "Dropped", "the project stays until answered");
+    h.get_by_label("Don't save").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc.project.name, "Dropped", "Don't save opens it");
+    assert!(h.state().ui.windows.unsaved.is_none());
+}
+
 #[test]
 fn closing_the_project_with_changes_asks_first() {
     let mut h = harness(true);
