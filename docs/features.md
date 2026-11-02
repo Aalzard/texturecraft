@@ -49,7 +49,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   effect selected, Ctrl+D and Delete duplicate or remove it.
 - **Fill layers** take uniform values, **23 procedurals** (clouds, cells, grunge, scratches, wood
   grain, bricks, fabric weave, twill, leather grain, marble veins, Voronoi, paint chips…) or your own
-  **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.
+  **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection. Each
+  channel takes its own image (a normal, roughness or height map, say): pick it in the channel's
+  source menu, which also imports one, or drop it from the Assets panel onto the channel.
   Alt+click a material channel (of a fill or the brush) to keep that channel alone.
 - **63 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
   velvet, skin, wax, glass, ice, woods, bark, stone, sand, mud, snow, bone, plastics, fabric,
@@ -123,6 +125,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   them.
 - A **start window** at launch: a new project, a project file, a recent project or the sample
   (Settings › Interface › Start window).
+- A **data folder** of your choice for autosaves, smart materials, presets, templates and UI
+  layouts, on any drive (Settings › Folders; `Documents/TextureCraft` by default).
 - A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.
 - A **History** panel: click any step to go back to it, or forward again to an undone one.
 - **10 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese,

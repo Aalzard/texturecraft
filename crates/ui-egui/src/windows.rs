@@ -586,12 +586,30 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
             ui.add_space(8.0);
             ui.label(caption(tr("Folders")));
             form("settings_folders").show(ui, |ui| {
+                ui.label(tr("Data folder"));
+                ui.horizontal(|ui| {
+                    let default = crate::data_folder("").display().to_string();
+                    ui.add(egui::TextEdit::singleline(&mut p.data_folder).hint_text(default).desired_width(260.0));
+                    if ui.button("...").clicked()
+                        && let Some(d) = rfd::FileDialog::new().set_directory(crate::data_folder(&p.data_folder)).pick_folder()
+                    {
+                        p.data_folder = d.display().to_string();
+                    }
+                });
+                ui.end_row();
                 for (label, dir) in [(tr("Smart materials"), crate::library_dir()), (tr("UI layouts"), crate::user_dir("layouts"))] {
                     ui.label(label);
                     ui.label(RichText::new(dir.display().to_string()).small().color(tk.text_dim));
                     ui.end_row();
                 }
             });
+            ui.label(
+                RichText::new(tr(
+                    "Autosaves, smart materials, presets, templates and UI layouts go to the data folder. A new folder applies on restart; files already saved stay where they are.",
+                ))
+                .small()
+                .color(tk.text_dim),
+            );
             ui.add_space(8.0);
         }
         ui.label(caption(tr("Keyboard")));
