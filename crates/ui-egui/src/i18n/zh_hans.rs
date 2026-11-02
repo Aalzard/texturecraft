@@ -940,4 +940,15 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Save the changes to {name} before closing?", "关闭前是否保存对 {name} 的更改？"),
     ("Twill weave", "斜纹织物"),
     ("Save the changes to {name} first?", "是否先保存对 {name} 的更改？"),
+    ("Import material...", "导入材质..."),
+    ("MaterialCraft material", "MaterialCraft 材质"),
+    ("Cooked at {size} px", "已按 {size} px 计算"),
+    ("Preset", "预设"),
+    ("Re-cook", "重新计算"),
+    ("Open in MaterialCraft", "在 MaterialCraft 中打开"),
+    (
+        "Opened in MaterialCraft: use File > Send to TextureCraft there to bring your changes back",
+        "已在 MaterialCraft 中打开：在其中使用“文件 > 发送到 TextureCraft”即可带回更改",
+    ),
+    ("Parameters change in the desktop app, with MaterialCraft installed", "参数可在安装了 MaterialCraft 的桌面版中修改"),
 ];
