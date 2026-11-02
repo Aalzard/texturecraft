@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use rayon::prelude::*;
 use texturecraft_core::{
     BakedMap, BlendMode, Channel, ChannelKind, CompareOp, Effect, EffectKind, Fill, Filter, Generator, GeneratorKind, HeightMask, Layer, LayerId, LayerKind,
-    Mask, MaskBackground, Project, Projection, Source, TextureSet, TileGrid, blend1, blend3, lum, mix3, per_unit,
+    Mask, MaskBackground, NormalFormat, Project, Projection, Source, TextureSet, TileGrid, blend1, blend3, lum, mix3, per_unit,
 };
 use texturecraft_geom::glam::{Vec2, Vec3};
 use texturecraft_geom::{Mesh, NO_TRI, UvGBuffer};
@@ -1063,6 +1063,8 @@ impl<'a, 'b> Texel<'a, 'b> {
                 }
                 match kind {
                     ChannelKind::Color if img.srgb => [acc[0], acc[1], acc[2]].map(texturecraft_texel::srgb_to_linear),
+                    // Normal maps are kept as OpenGL (+Y); a DirectX project's images point green down.
+                    ChannelKind::NormalMap if self.inp.project.normal_format == NormalFormat::DirectX => [acc[0], 1.0 - acc[1], acc[2]],
                     ChannelKind::Color | ChannelKind::NormalMap => [acc[0], acc[1], acc[2]],
                     ChannelKind::Scalar => [acc[0]; 3],
                     ChannelKind::Signed => [acc[0] * 2.0 - 1.0; 3],
@@ -2475,6 +2477,42 @@ soft {soft:?}"
         assert!(close(out.value(Channel::BaseColor, 2, 2), [0.5; 3]), "outside the frame");
         let half = composite(0.5);
         assert!(close(half.value(Channel::BaseColor, 32, 32), [0.75, 0.25, 0.25]), "the image alpha shapes the decal");
+    }
+
+    #[test]
+    fn normal_images_are_read_in_the_projects_normal_format() {
+        let mut f = fixture();
+        let id = f.project.alloc_id();
+        let mut fill = Fill::default();
+        fill.sources.insert(Channel::Normal, Source::Image { name: "n".into() });
+        f.project.insert_layer(0, Layer::new(id, "N", LayerKind::Fill(fill), &[Channel::Normal]), None, false).unwrap();
+        let img = crate::store::ImageRes { width: 1, height: 1, rgba: vec![[0.5, 0.8, 0.9, 1.0]], srgb: false };
+        let images: ImageStore = [("n".to_string(), std::sync::Arc::new(img))].into_iter().collect();
+        let green = |f: &Fixture| {
+            let inp = Inputs {
+                project: &f.project,
+                ts: 0,
+                mesh: &f.mesh,
+                gbuf: &f.gbuf,
+                pixels: &f.pixels,
+                baked: &f.baked,
+                preview: None,
+                images: &images,
+                bounds: f.mesh.bounds(),
+            };
+            let mut out = Composite::new(&f.project.texture_sets[0].channel_list(), 64);
+            composite_tiles(&inp, &mut out, &all_tiles(64, 64));
+            out.value(Channel::Normal, 32, 32)[1]
+        };
+        let opengl = green(&f);
+        assert!((opengl - 0.8).abs() < 0.02, "an OpenGL project reads the image as is: {opengl}");
+        f.project.normal_format = NormalFormat::DirectX;
+        let directx = green(&f);
+        assert!((directx - 0.2).abs() < 0.02, "a DirectX project flips green: {directx}");
+        let key = |p: &Project| crate::StackKey::new(p, &f.pixels, &f.baked, &images, 0, &[id]);
+        let mut opengl_project = f.project.clone();
+        opengl_project.normal_format = NormalFormat::OpenGl;
+        assert_ne!(key(&f.project), key(&opengl_project), "a format change recomposites");
     }
 
     #[test]

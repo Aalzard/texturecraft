@@ -343,6 +343,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Folder", "フォルダー"),
     ("Folders", "フォルダー"),
     ("Follow path", "パスに沿う"),
+    (
+        "For the whole project: how normal map images (mesh maps and fills) are read, and the default for export",
+        "プロジェクト全体: ノーマルマップ画像 (メッシュマップと塗りつぶし) の読み取り方と、書き出しの既定値",
+    ),
     ("Free and open source (MIT OR Apache-2.0), written in Rust.", "無料のオープンソース (MIT OR Apache-2.0)、Rustで開発。"),
     ("From normal map", "ノーマルマップから"),
     (

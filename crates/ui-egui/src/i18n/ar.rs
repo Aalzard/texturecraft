@@ -331,6 +331,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Folder", "مجلد"),
     ("Folders", "مجلدات"),
     ("Follow path", "اتباع المسار"),
+    (
+        "For the whole project: how normal map images (mesh maps and fills) are read, and the default for export",
+        "للمشروع كله: طريقة قراءة صور خرائط النواظم (خرائط المجسم والتعبئات) والقيمة الافتراضية للتصدير",
+    ),
     ("Free and open source (MIT OR Apache-2.0), written in Rust.", "مجاني ومفتوح المصدر (MIT أو Apache-2.0)، كُتب بلغة Rust."),
     ("From normal map", "من خريطة النواظم"),
     (

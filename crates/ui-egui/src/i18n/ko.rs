@@ -340,6 +340,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Folder", "폴더"),
     ("Folders", "폴더"),
     ("Follow path", "패스 따라가기"),
+    (
+        "For the whole project: how normal map images (mesh maps and fills) are read, and the default for export",
+        "프로젝트 전체: 노멀 맵 이미지(메시 맵과 채우기)를 읽는 방식과 내보내기 기본값",
+    ),
     ("Free and open source (MIT OR Apache-2.0), written in Rust.", "Rust로 작성된 무료 오픈 소스 소프트웨어입니다 (MIT OR Apache-2.0)."),
     ("From normal map", "노멀 맵에서"),
     ("From normal map: curvature of the baked normal map's detail instead of the mesh.", "노멀 맵에서: 메시 대신 베이크된 노멀 맵 디테일의 곡률을 사용합니다."),
