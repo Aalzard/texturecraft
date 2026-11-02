@@ -219,6 +219,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Crate", "木箱"),
     ("Create", "作成"),
     ("Create smart material", "スマートマテリアルを作成"),
+    (
+        "Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.",
+        "ビューでCtrl+右ドラッグでサイズと硬さ、Ctrl+左ドラッグでフローと角度を設定します。",
+    ),
     ("Cube", "立方体"),
     ("Current layer", "現在のレイヤー"),
     ("Curvature", "曲率"),
@@ -679,6 +683,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "サイズ変更中"),
     ("Restore every default shortcut", "すべてのショートカットをデフォルトに戻す"),
     ("Return to painting mode", "ペイントモードに戻る"),
+    ("Return to this step", "このステップに戻る"),
     ("Right-click a layer > Create smart material", "レイヤーを右クリック > スマートマテリアルを作成"),
     ("Rotation", "回転"),
     ("Rotation (degrees)", "回転 (度)"),

@@ -216,6 +216,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Crate", "Caja"),
     ("Create", "Crear"),
     ("Create smart material", "Crear material inteligente"),
+    (
+        "Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.",
+        "Ctrl+arrastrar con botón der. en una vista ajusta el tamaño y la dureza; Ctrl+arrastrar con botón izq., el flujo y el ángulo.",
+    ),
     ("Cube", "Cubo"),
     ("Current layer", "Capa actual"),
     ("Curvature", "Curvatura"),
@@ -691,6 +695,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "Redimensionando"),
     ("Restore every default shortcut", "Restaurar todos los atajos predeterminados"),
     ("Return to painting mode", "Volver al modo de pintura"),
+    ("Return to this step", "Volver a este paso"),
     ("Right-click a layer > Create smart material", "Clic derecho en una capa > Crear material inteligente"),
     ("Rotation", "Rotación"),
     ("Rotation (degrees)", "Rotación (grados)"),

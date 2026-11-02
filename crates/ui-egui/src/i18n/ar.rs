@@ -207,6 +207,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Crate", "صندوق"),
     ("Create", "إنشاء"),
     ("Create smart material", "إنشاء مادة ذكية"),
+    (
+        "Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.",
+        "Ctrl+السحب بالزر الأيمن في عرض يضبط الحجم والصلابة، وCtrl+السحب بالزر الأيسر يضبط التدفق والزاوية.",
+    ),
     ("Cube", "مكعب"),
     ("Current layer", "الطبقة الحالية"),
     ("Curvature", "الانحناء"),
@@ -661,6 +665,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "تغيير الحجم"),
     ("Restore every default shortcut", "استعادة كل الاختصارات الافتراضية"),
     ("Return to painting mode", "العودة إلى نمط الرسم"),
+    ("Return to this step", "العودة إلى هذه الخطوة"),
     ("Right-click a layer > Create smart material", "انقر بزر الفأرة الأيمن على طبقة > إنشاء مادة ذكية"),
     ("Rotation", "التدوير"),
     ("Rotation (degrees)", "التدوير (بالدرجات)"),

@@ -189,6 +189,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Crate", "箱子"),
     ("Create", "创建"),
     ("Create smart material", "创建智能材质"),
+    (
+        "Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.",
+        "在视图中按住 Ctrl 右键拖动可调整大小和硬度，Ctrl 左键拖动可调整流量和角度。",
+    ),
     ("Cube", "立方体"),
     ("Current layer", "当前图层"),
     ("Curvature", "曲率"),
@@ -619,6 +623,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "正在调整大小"),
     ("Restore every default shortcut", "恢复所有默认快捷键"),
     ("Return to painting mode", "返回绘画模式"),
+    ("Return to this step", "返回到此步骤"),
     ("Right-click a layer > Create smart material", "右键单击图层 > 创建智能材质"),
     ("Rotation", "旋转"),
     ("Rotation (degrees)", "旋转（度）"),

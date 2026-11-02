@@ -219,6 +219,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Crate", "Kiste"),
     ("Create", "Erstellen"),
     ("Create smart material", "Smart-Material erstellen"),
+    (
+        "Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.",
+        "Strg+Ziehen mit RMT in einer Ansicht stellt Größe und Härte ein, Strg+Ziehen mit LMT Fluss und Winkel.",
+    ),
     ("Cube", "Würfel"),
     ("Current layer", "Aktuelle Ebene"),
     ("Curvature", "Krümmung"),
@@ -703,6 +707,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "Größe wird geändert"),
     ("Restore every default shortcut", "Alle Standard-Tastenkürzel wiederherstellen"),
     ("Return to painting mode", "Zurück zum Malmodus"),
+    ("Return to this step", "Zu diesem Schritt zurückkehren"),
     ("Right-click a layer > Create smart material", "Rechtsklick auf eine Ebene > Smart-Material erstellen"),
     ("Rotation", "Drehung"),
     ("Rotation (degrees)", "Drehung (Grad)"),

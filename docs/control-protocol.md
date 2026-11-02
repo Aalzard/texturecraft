@@ -19,6 +19,9 @@ index}` reorders an effect within its stack (0 = bottom) and `effect.duplicate {
 one just above itself. `effect.copy {effect?}` and `effect.cut {effect?}` put an effect on the
 layer clipboard, and `effect.paste {layer?, target?}` adds it to another layer's content or mask.
 
+`edit.undo {steps?}` and `edit.redo {steps?}` go back or forward several steps at once (as far
+as the history reaches); `edit.history` lists the steps done and the undone ones, next first.
+
 ## Control channel (desktop app)
 
 ```sh

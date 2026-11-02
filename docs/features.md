@@ -7,6 +7,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Brushes** with size, flow, stroke opacity, spacing, hardness, angle and follow path; size,
   angle, flow and position jitter; tangent or camera alignment, angle fade, backface culling, lazy
   mouse, X/Y/Z mirror and radial symmetry (copies paint the far side too) and pen pressure.
+  Ctrl+drag in a view sets them on the fly: right-drag the size and hardness, left-drag the flow
+  and angle.
   **67 procedural brush alphas** in their own shelf tab, or any imported image as the alpha.
   **18 brush presets** (basic, wear and grunge, details) in the shelf's Brushes tab set the
   stroke and keep the size; save your own brushes there too.
@@ -122,6 +124,7 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - A **start window** at launch: a new project, a project file, a recent project or the sample
   (Settings › Interface › Start window).
 - A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.
+- A **History** panel: click any step to go back to it, or forward again to an undone one.
 - **10 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese,
   Korean and Arabic, switchable live.
 - **In the browser:** the same app compiled to WebAssembly, on WebGPU or WebGL2, with touch

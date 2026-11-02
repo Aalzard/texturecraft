@@ -210,6 +210,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Crate", "상자"),
     ("Create", "만들기"),
     ("Create smart material", "스마트 머티리얼 만들기"),
+    (
+        "Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.",
+        "뷰에서 Ctrl+오른쪽 드래그로 크기와 경도를, Ctrl+왼쪽 드래그로 흐름과 각도를 설정합니다.",
+    ),
     ("Cube", "큐브"),
     ("Current layer", "현재 레이어"),
     ("Curvature", "곡률"),
@@ -670,6 +674,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "크기 조정 중"),
     ("Restore every default shortcut", "모든 기본 단축키를 복원합니다"),
     ("Return to painting mode", "페인팅 모드로 돌아가기"),
+    ("Return to this step", "이 단계로 돌아가기"),
     ("Right-click a layer > Create smart material", "레이어 마우스 오른쪽 클릭 > 스마트 머티리얼 만들기"),
     ("Rotation", "회전"),
     ("Rotation (degrees)", "회전 (도)"),
