@@ -1,9 +1,11 @@
-//! Closing the app with unsaved changes asks whether to save them first.
+//! Closing the app, or opening or closing a project, with unsaved changes asks whether to save
+//! them first.
 
 use egui::{ViewportCommand, ViewportEvent, ViewportId};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use texturecraft_ui_egui::TextureCraftApp;
+use texturecraft_ui_egui::state::Unsaved;
 
 fn harness(modified: bool) -> Harness<'static, TextureCraftApp> {
     let mut session = texturecraft_engine::sample_session(256, 64).unwrap();
@@ -31,11 +33,11 @@ fn closing_with_changes_asks_and_dont_save_closes() {
     request_close(&mut h);
     assert!(sent(&h, &ViewportCommand::CancelClose), "the close waits for an answer");
     h.run_steps(2);
-    assert!(h.state().ui.windows.confirm_close, "the dialog is open");
+    assert_eq!(h.state().ui.windows.unsaved, Some(Unsaved::Quit), "the dialog is open");
     h.get_by_label("Don't save").click();
     h.step();
     assert!(sent(&h, &ViewportCommand::Close), "Don't save closes the app");
-    assert!(!h.state().ui.windows.confirm_close);
+    assert!(h.state().ui.windows.unsaved.is_none());
 }
 
 #[test]
@@ -46,7 +48,7 @@ fn cancel_keeps_the_app_open() {
     h.get_by_label("Cancel").click();
     h.step();
     assert!(!sent(&h, &ViewportCommand::Close));
-    assert!(!h.state().ui.windows.confirm_close, "Cancel closes the dialog");
+    assert!(h.state().ui.windows.unsaved.is_none(), "Cancel closes the dialog");
     assert!(h.state().session.modified, "and keeps the changes");
 }
 
@@ -55,5 +57,21 @@ fn closing_without_changes_does_not_ask() {
     let mut h = harness(false);
     request_close(&mut h);
     assert!(!sent(&h, &ViewportCommand::CancelClose));
-    assert!(!h.state().ui.windows.confirm_close);
+    assert!(h.state().ui.windows.unsaved.is_none());
+}
+
+#[test]
+fn closing_the_project_with_changes_asks_first() {
+    let mut h = harness(true);
+    h.state_mut().session.doc.project.name = "Edited".into();
+    let name = |h: &Harness<'_, TextureCraftApp>| h.state().session.doc.project.name.clone();
+    let ctx = h.ctx.clone();
+    texturecraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "file.close");
+    h.run_steps(4);
+    assert_eq!(h.state().ui.windows.unsaved, Some(Unsaved::Command("file.close".into())), "the dialog is open");
+    assert_eq!(name(&h), "Edited", "the project stays until answered");
+    h.get_by_label("Don't save").click();
+    h.run_steps(2);
+    assert_ne!(name(&h), "Edited", "Don't save closes the project");
+    assert!(h.state().ui.windows.unsaved.is_none() && !h.state().session.modified);
 }
