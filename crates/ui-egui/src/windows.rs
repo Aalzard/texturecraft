@@ -1142,6 +1142,9 @@ pub(crate) fn export_params(app: &TextureCraftApp) -> serde_json::Value {
     if !e.normal_format.is_empty() {
         p["normalFormat"] = json!(e.normal_format);
     }
+    if !e.color_space.is_empty() {
+        p["colorSpace"] = json!(e.color_space);
+    }
     p
 }
 
@@ -1238,6 +1241,15 @@ fn export_settings_tab(app: &mut TextureCraftApp, ui: &mut Ui, presets: &[textur
         egui::ComboBox::from_id_salt("exp_nf").selected_text(nf).show_ui(ui, |ui| {
             for (v, l) in [("", tr("From template / project")), ("openGl", "OpenGL"), ("directX", "DirectX")] {
                 ui.selectable_value(&mut app.ui.export.normal_format, v.to_string(), l);
+            }
+        });
+        ui.end_row();
+        ui.label(tr("Color space"));
+        let shown = if app.ui.export.color_space.is_empty() { tr("Default") } else { app.ui.export.color_space.as_str() };
+        egui::ComboBox::from_id_salt("exp_cs").selected_text(shown).show_ui(ui, |ui| {
+            ui.selectable_value(&mut app.ui.export.color_space, String::new(), tr("Default"));
+            for name in ["sRGB", "Linear Rec.709", "ACEScg", "ACES2065-1"] {
+                ui.selectable_value(&mut app.ui.export.color_space, name.to_string(), name);
             }
         });
         ui.end_row();

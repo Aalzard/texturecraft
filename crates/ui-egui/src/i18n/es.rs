@@ -552,6 +552,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal from height", "Normal desde altura"),
     ("Normal map combine", "Combinar mapa de normales"),
     ("Normal map detail", "Detalle de mapa de normales"),
+    ("Color space", "Espacio de color"),
     ("Normal map format", "Formato del mapa de normales"),
     ("Normal map inverse detail", "Detalle inverso de mapa de normales"),
     ("Normal: painting uses the flat normal", "Normal: la pintura usa la normal plana"),

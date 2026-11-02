@@ -537,6 +537,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal from height", "높이에서 노멀"),
     ("Normal map combine", "노멀 맵 결합"),
     ("Normal map detail", "노멀 맵 디테일"),
+    ("Color space", "색 공간"),
     ("Normal map format", "노멀 맵 형식"),
     ("Normal map inverse detail", "노멀 맵 역 디테일"),
     ("Normal: painting uses the flat normal", "노멀: 평면 노멀로 페인팅합니다"),
