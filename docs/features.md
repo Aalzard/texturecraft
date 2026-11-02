@@ -47,8 +47,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   grain, bricks, fabric weave, twill, leather grain, marble veins, Voronoi, paint chips…) or your own
   **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.
   Alt+click a material channel (of a fill or the brush) to keep that channel alone.
-- **54 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
-  velvet, skin, wax, glass, woods, stone, plastics, fabric, leather, ceramic, rust, cork, paper), **21 smart
+- **63 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
+  velvet, skin, wax, glass, ice, woods, bark, stone, sand, mud, snow, bone, plastics, fabric,
+  leather, ceramic, rust, cork, paper), **21 smart
   materials** (rusted iron, worn paint, oxidized copper, bronze statue, weathered wood, mossy
   brick and stone, sun-faded paint…) and **18 smart masks**, all procedural, so they work at any
   resolution. Drag them from the tabbed, searchable shelf onto the layer stack or straight onto
