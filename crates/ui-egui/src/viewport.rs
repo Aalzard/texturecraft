@@ -903,17 +903,32 @@ fn brush_cursor(app: &TextureCraftApp, ui: &Ui, rect: Rect, pos: Vec3, nrm: Vec3
 }
 
 /// This frame's pen pressure (0..1), or 1 without a pen. Pressure arrives as touch force: the
-/// windowing layer reports it for Windows Ink pens and in the browser; Linux and macOS pens come
-/// through as a mouse.
+/// windowing layer reports it for Windows Ink pens, and in the browser for pens that send touch
+/// events (tablets and phones); other pens come through as a mouse.
 /// shortcut: the windowing layer reports no pen tilt, so tilt can't drive the brush angle yet.
 fn pen_pressure(ui: &Ui) -> f32 {
-    ui.input(|i| {
+    let id = egui::Id::unique("pen_pressure");
+    let touch = ui.input(|i| {
         i.raw.events.iter().rev().find_map(|e| match e {
-            egui::Event::Touch { force: Some(f), .. } if f.is_finite() => Some(f.clamp(0.0, 1.0)),
+            egui::Event::Touch { phase, force, .. } => Some((*phase, force.filter(|f| f.is_finite()))),
             _ => None,
         })
-    })
-    .unwrap_or(1.0)
+    });
+    match touch {
+        Some((_, Some(f))) => {
+            let f = f.clamp(0.0, 1.0);
+            ui.data_mut(|d| d.insert_temp(id, f));
+            f
+        }
+        // A pen lifts with no pressure, and a tap paints on that frame: keep its contact pressure.
+        Some((egui::TouchPhase::End, None)) => ui.data(|d| d.get_temp(id)).unwrap_or(1.0),
+        // A touch without pressure (a finger) must not inherit an earlier pen's.
+        Some((egui::TouchPhase::Start, None)) => {
+            ui.data_mut(|d| d.remove_temp::<f32>(id));
+            1.0
+        }
+        _ => 1.0,
+    }
 }
 
 fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut PendingSync) {
