@@ -103,7 +103,7 @@ pub fn install_gpu_tracer(tracer: Arc<dyn Tracer>) {
 pub struct BakeMeshes {
     pub high: Vec<BakeMesh>,
     pub cage: Option<BakeMesh>,
-    /// Skew correction of the transfer rays (not saved in the project).
+    /// Skew correction of the transfer rays (saved in the project as `skew.bin`).
     pub skew: Option<Arc<SkewMap>>,
     /// Every high poly appended into one mesh (rebuilt when the list changes).
     merged: Option<MergedHigh>,
@@ -289,6 +289,36 @@ impl Session {
         {
             self.log.push(format!("skipped cage mesh: {e}"));
         }
+    }
+
+    /// The skew map of a project file, if it passes the baker's checks.
+    pub(crate) fn load_skew(&mut self, skew: Option<texturecraft_formats::SkewData>) {
+        let Some(k) = skew else { return };
+        let map = SkewMap {
+            width: k.width,
+            height: k.height,
+            values: k.values,
+            edge_distance: k.edge_distance,
+            edge_contrast: k.edge_contrast,
+            per_triangle: k.per_triangle,
+        };
+        match map.validate() {
+            Ok(()) => self.bake_meshes.skew = Some(Arc::new(map)),
+            Err(e) => self.log.push(format!("skipped skew map: {e}")),
+        }
+    }
+
+    /// The skew map for a project file.
+    pub(crate) fn saved_skew(&self) -> Option<texturecraft_formats::SkewData> {
+        let k = self.bake_meshes.skew.as_ref()?;
+        Some(texturecraft_formats::SkewData {
+            width: k.width,
+            height: k.height,
+            values: k.values.clone(),
+            edge_distance: k.edge_distance,
+            edge_contrast: k.edge_contrast,
+            per_triangle: k.per_triangle,
+        })
     }
 
     /// The bake meshes for a project file: (high polys, cage).

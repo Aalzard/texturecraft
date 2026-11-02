@@ -378,3 +378,19 @@ fn skew_correction_turns_the_transfer_rays_onto_the_base_normal() {
     assert!(s.bake_meshes.skew.as_ref().is_some_and(|k| k.values == [0.5]), "a refused skew keeps the previous one");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_skew_map_is_saved_with_the_project() {
+    let mut s = leaning_session(false);
+    execute(&mut s, "bake.skew.set", &json!({ "value": 0.25, "edgeDistance": 0.1, "edgeContrast": 3.0, "base": "triangle" })).unwrap();
+    let back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
+    assert_eq!(back.bake_meshes.skew, s.bake_meshes.skew);
+    // No skew: none comes back.
+    execute(&mut s, "bake.skew.clear", &Value::Null).unwrap();
+    assert!(Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap().bake_meshes.skew.is_none());
+    // A map with a non-finite value is skipped with a log line, and the project still opens.
+    let mut pf = s.project_file();
+    pf.skew = Some(texturecraft_formats::SkewData { width: 1, height: 1, values: vec![f32::NAN], edge_distance: 0.0, edge_contrast: 1.0, per_triangle: false });
+    let opened = Session::from_project_file(pf).unwrap();
+    assert!(opened.bake_meshes.skew.is_none() && opened.log.iter().any(|l| l.contains("skew")), "{:?}", opened.log);
+}
