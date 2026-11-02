@@ -16,7 +16,8 @@ painted tile count, so an agent can verify its work without a screenshot.
 `effect.histogram {effect, channel?, bins?}` counts the values an effect reads (a levels
 effect's input), so an agent can pick its input range from the data. `effect.move {effect,
 index}` reorders an effect within its stack (0 = bottom) and `effect.duplicate {effect}` copies
-one just above itself.
+one just above itself. `effect.copy {effect?}` and `effect.cut {effect?}` put an effect on the
+layer clipboard, and `effect.paste {layer?, target?}` adds it to another layer's content or mask.
 
 ## Control channel (desktop app)
 

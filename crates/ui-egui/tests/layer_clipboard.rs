@@ -43,3 +43,20 @@ fn ctrl_c_then_ctrl_v_pastes_a_copy() {
     h.run_steps(3);
     assert!(count(&h) > before, "Ctrl+V pastes the layer");
 }
+
+#[test]
+fn ctrl_c_and_ctrl_v_copy_and_paste_a_selected_effect() {
+    let mut session = texturecraft_engine::sample_session(256, 64).unwrap();
+    let id = |v: serde_json::Value, key: &str| LayerId(v[key].as_u64().unwrap());
+    let layer = id(texturecraft_engine::execute(&mut session, "layer.add.fill", &serde_json::Value::Null).unwrap(), "layer");
+    let p = serde_json::json!({"target": "content", "filter": "invert"});
+    let effect = id(texturecraft_engine::execute(&mut session, "effect.add.filter", &p).unwrap(), "effect");
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 960.0)).build_eframe(|cc| TextureCraftApp::new(cc, session));
+    h.run_steps(4);
+    h.event(egui::Event::Copy);
+    h.run_steps(3);
+    assert_eq!(h.state().session.clipboard.as_ref().map(|(_, id)| *id), Some(effect), "Ctrl+C copies the selected effect");
+    h.event(egui::Event::Paste("Fill".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc.project.layers[&layer].content_effects.len(), 2, "Ctrl+V pastes it above");
+}

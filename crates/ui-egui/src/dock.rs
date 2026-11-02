@@ -581,14 +581,26 @@ fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, stack: &[Ef
         app.run("effect.move", json!({"effect": src.0, "index": index}));
     }
     resp.context_menu(|ui| {
-        if ui.button(tr("Duplicate effect")).clicked() {
-            app.run("layer.select", json!({"layer": layer.id.0, "target": eid.0}));
-            app.run("effect.duplicate", json!({"effect": eid.0}));
-            ui.close();
-        }
-        if ui.button(tr("Remove effect")).clicked() {
-            app.run("effect.remove", json!({"effect": eid.0}));
-            ui.close();
+        let keymap = app.ui.keymap.clone();
+        let paste = crate::menus::enabled(app, "effect.paste");
+        // The clipboard items show the layer clipboard's shortcuts, which act on a selected effect.
+        for (label, id, keys, enabled) in [
+            (tr("Copy effect"), "effect.copy", Some("layer.copy"), true),
+            (tr("Cut effect"), "effect.cut", Some("layer.cut"), true),
+            (tr("Paste effect"), "effect.paste", Some("layer.paste"), paste),
+            (tr("Duplicate effect"), "effect.duplicate", None, true),
+            (tr("Remove effect"), "effect.remove", None, true),
+        ] {
+            let mut b = egui::Button::new(label);
+            if let Some(sc) = keys.and_then(|k| crate::keymap::shortcut_of(&keymap, k)) {
+                b = b.shortcut_text(sc);
+            }
+            if ui.add_enabled(enabled, b).clicked() {
+                // Selected first: a paste lands above it, a duplicate takes the selection.
+                app.run("layer.select", json!({"layer": layer.id.0, "target": eid.0}));
+                app.run(id, json!({"effect": eid.0}));
+                ui.close();
+            }
         }
     });
 }
@@ -681,7 +693,9 @@ fn layer_context_menu(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
     ui.separator();
     run(app, ui, tr("Cut layer(s)"), "layer.cut", json!({"layer": lid}), true);
     run(app, ui, tr("Copy layer(s)"), "layer.copy", json!({"layer": lid}), true);
-    run(app, ui, tr("Paste layer(s)"), "layer.paste", json!({}), app.session.clipboard.is_some());
+    let (paste_layer, paste_effect) = (crate::menus::enabled(app, "layer.paste"), crate::menus::enabled(app, "effect.paste"));
+    run(app, ui, tr("Paste layer(s)"), "layer.paste", json!({}), paste_layer);
+    run(app, ui, tr("Paste effect"), "effect.paste", json!({}), paste_effect);
     let paste_instance = crate::menus::enabled(app, "layer.pasteInstance");
     run(app, ui, tr("Paste as instance"), "layer.pasteInstance", json!({}), paste_instance);
     run(app, ui, tr("Duplicate layer(s)"), "layer.duplicate", json!({"layer": lid}), true);

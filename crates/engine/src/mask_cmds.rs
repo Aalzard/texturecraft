@@ -211,7 +211,7 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Whether `effect.add.*` targets the layer content (`target: "content"`) or its mask (the
 /// default).
-fn content_target(p: &Value, cmd: &str) -> Result<bool> {
+pub(crate) fn content_target(p: &Value, cmd: &str) -> Result<bool> {
     match strp(p, "target") {
         None | Some("mask") => Ok(false),
         Some("content") => Ok(true),
