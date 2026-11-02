@@ -277,6 +277,7 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     let selected = app.session.selected_layer() == Some(layer.id);
     let h = 38.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::ListItem, true, selected, &layer.name));
     let p = ui.painter().clone();
     let bg = if selected && app.session.target == StackTarget::Content {
         tk.row_selected

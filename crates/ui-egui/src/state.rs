@@ -76,6 +76,9 @@ pub struct Windows {
     /// The start window: new, open, recent projects (the app opens it at launch).
     #[serde(skip)]
     pub start: bool,
+    /// Closing with unsaved changes: save, don't save or cancel (desktop).
+    #[serde(skip)]
+    pub confirm_close: bool,
 }
 
 /// Edit › Settings.

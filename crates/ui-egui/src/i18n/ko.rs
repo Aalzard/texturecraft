@@ -951,5 +951,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Invert show/hide", "표시/숨기기 반전"),
     ("Show or hide texture sets", "텍스처 세트 표시 또는 숨기기"),
     ("Focus: show only the active texture set", "포커스: 활성 텍스처 세트만 표시"),
+    ("Unsaved changes", "저장되지 않은 변경 사항"),
+    ("Don't save", "저장 안 함"),
+    ("Save the changes to {name} before closing?", "닫기 전에 {name}의 변경 사항을 저장할까요?"),
     ("Twill weave", "능직"),
 ];
