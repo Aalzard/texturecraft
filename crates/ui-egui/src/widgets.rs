@@ -14,23 +14,25 @@ pub fn dnd_release<T: std::any::Any + Send + Sync>(resp: &Response) -> Option<st
 }
 
 /// A labelled slider in two rows: "Label ........ value" over a slim track with a round knob.
-/// Returns the response of the track (`.changed()` while dragged); for a value that is applied
-/// once the edit is done, use [`slider_edit`].
+/// Returns the response of the track (`.changed()` while dragged); for a value kept in the
+/// document, use [`slider_edit`].
 pub fn slider(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) -> Response {
     slider_inner(ui, label, value, range, decimals).0
 }
 
-/// [`slider`] for a value re-read from the document every frame: true on the frame an edit is
-/// done (a drag released, a click on the track, a typed value), with `value` holding the result.
-pub fn slider_edit(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) -> bool {
+/// [`slider`] for a value re-read from the document every frame: `Some(merge)` on every frame
+/// that changes `value` (live while dragging, a click on the track, a typed value). `merge` is
+/// true for the later changes of one drag, so the edit that applies them (with the command's
+/// `merge` param) continues the drag's first undo step.
+pub fn slider_edit(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) -> Option<bool> {
     slider_inner(ui, label, value, range, decimals).1
 }
 
-fn slider_inner(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) -> (Response, bool) {
+fn slider_inner(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) -> (Response, Option<bool>) {
     let tk = Tokens::get(ui.ctx());
     let (lo, hi) = (*range.start(), *range.end());
     let w = ui.available_width();
-    let mut done = false;
+    let mut edit = None;
     ui.horizontal(|ui| {
         ui.label(RichText::new(label).color(tk.text));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -41,7 +43,7 @@ fn slider_inner(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::Rang
                 && v.is_finite()
             {
                 *value = v.clamp(lo, hi);
-                done = true;
+                edit = Some(false);
             }
         });
     });
@@ -51,22 +53,19 @@ fn slider_inner(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::Rang
     {
         let t = ((p.x - rect.left() - 5.0) / (rect.width() - 10.0).max(1.0)).clamp(0.0, 1.0);
         let v = lo + (hi - lo) * t;
-        // Remembered for the release frame, where the pointer no longer drags.
-        ui.data_mut(|d| d.insert_temp(resp.id, v));
         if (v - *value).abs() > f32::EPSILON {
             *value = v;
             resp.mark_changed();
+            // Whether this drag already applied a value (cleared when it ends).
+            edit = Some(ui.data_mut(|d| std::mem::replace(d.get_temp_mut_or_default::<bool>(resp.id), true)));
         }
     }
     if resp.drag_stopped() || resp.clicked() {
-        if let Some(v) = ui.data_mut(|d| d.remove_temp::<f32>(resp.id)) {
-            *value = v;
-        }
-        done = true;
+        ui.data_mut(|d| d.remove_temp::<bool>(resp.id));
     }
     let t = if hi > lo { ((*value - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 };
     track(ui, &resp, rect.left() + 5.0..=rect.right() - 5.0, rect.center().y, t, 2.0, 4.5);
-    (resp, done)
+    (resp, edit)
 }
 
 /// A small inline slider for the top tool bar: "Label value" above a short track.

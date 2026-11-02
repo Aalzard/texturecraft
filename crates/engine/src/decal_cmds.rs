@@ -162,7 +162,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(bad(cmd, format!("no image resource `{name}`")));
     }
-    s.edit_merging("Edit decal", crate::commands::boolp(p, "merge").unwrap_or(false), |s| {
+    s.edit("Edit decal", |s| {
         if let LayerKind::Fill(f) = &mut s.doc.project.layer_mut(id)?.kind {
             f.projection = Projection::Decal(d);
             if let Some(name) = image {

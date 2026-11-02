@@ -325,6 +325,9 @@ pub struct Session {
     pub caches: Vec<SetCache>,
     pub(crate) undo: Vec<(String, Document)>,
     pub(crate) redo: Vec<(String, Document)>,
+    /// Set by [`crate::execute`] from a command's `merge` param: its edits continue the previous
+    /// undo step with the same label (a slider drag is one step however many values it applies).
+    pub(crate) merge_edits: bool,
     pub tool: ToolState,
     pub active_set: usize,
     /// Selected layer per texture set.
@@ -385,6 +388,7 @@ impl Session {
             caches,
             undo: Vec::new(),
             redo: Vec::new(),
+            merge_edits: false,
             tool: ToolState::default(),
             active_set: 0,
             selected,
@@ -480,7 +484,7 @@ impl Session {
 
     /// Run an undoable edit. On error the document is left untouched.
     pub fn edit<T>(&mut self, label: &str, f: impl FnOnce(&mut Session) -> Result<T>) -> Result<T> {
-        self.edit_merging(label, false, f)
+        self.edit_merging(label, self.merge_edits, f)
     }
 
     /// [`Session::edit`] that, with `merge`, continues the previous undo step when it has the
