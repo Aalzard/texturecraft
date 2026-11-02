@@ -140,6 +140,12 @@ fn histogram_counts_what_an_effect_reads() {
     assert_eq!(target, "mask");
     assert!(one(&bins, 1), "mask 0.3: {bins:?}");
     assert_eq!(hist(&mut s, json!({"effect": ml})).1.len(), 64);
+    // A paint layer with nothing painted yet still has its mask.
+    execute(&mut s, "layer.add.paint", &Value::Null).unwrap();
+    execute(&mut s, "mask.add.black", &Value::Null).unwrap();
+    execute(&mut s, "effect.add.fill", &json!({"target": "mask", "value": 0.6})).unwrap();
+    let pl = id(execute(&mut s, "effect.add.levels", &json!({"target": "mask"})).unwrap(), "effect");
+    assert!(one(&hist(&mut s, json!({"effect": pl, "bins": 4})).1, 2), "an empty paint layer's mask");
     assert!(execute(&mut s, "effect.histogram", &json!({"effect": 999_999})).is_err());
     assert!(execute(&mut s, "effect.histogram", &json!({"effect": lv, "channel": "nope"})).is_err());
 }
