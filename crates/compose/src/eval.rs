@@ -1846,6 +1846,81 @@ pub fn mask_image(inp: &Inputs, id: LayerId, size: u32) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Tiles [`effect_histogram`] samples at most (a million texels).
+const HISTOGRAM_TILES: usize = 256;
+
+/// Histogram (`bins` buckets over 0..1) of the values entering effect `effect`: its layer's mask
+/// below it, or (a content effect) the layer's `channel` below it where the layer has content,
+/// color components pooled and signed values mapped to 0..1. Over the texels the mesh covers
+/// (in an even sample of tiles on large sets); None for an unknown effect.
+pub fn effect_histogram(inp: &Inputs, effect: LayerId, channel: Channel, bins: usize) -> Option<Vec<u32>> {
+    let (owner, _) = inp.project.effect(effect)?;
+    let bins = bins.max(1);
+    // Evaluate the layer forced visible, its mask enabled, cut just below the effect.
+    let mut cut = inp.project.clone();
+    let l = cut.layers.get_mut(&owner)?;
+    l.visible = true;
+    let in_mask = match l.mask.as_mut().and_then(|m| m.effects.iter().position(|e| e.id == effect).map(|k| (m, k))) {
+        Some((m, k)) => {
+            m.enabled = true;
+            m.effects.truncate(k);
+            true
+        }
+        None => {
+            let k = l.content_effects.iter().position(|e| e.id == effect)?;
+            l.content_effects.truncate(k);
+            false
+        }
+    };
+    let cut_inp = Inputs { project: &cut, preview: None, ..*inp };
+    let channels = cut.texture_set(inp.ts).map(|t| t.channel_list()).unwrap_or_default();
+    // An even sample of at most HISTOGRAM_TILES tiles keeps the cost flat up to 8K.
+    let all = all_tiles(inp.gbuf.width, inp.gbuf.height);
+    let tiles: Vec<(u32, u32)> = all.iter().copied().step_by(all.len().div_ceil(HISTOGRAM_TILES).max(1)).collect();
+    let fields = neighbourhood_fields(&cut_inp, &channels, &tiles);
+    let bin = |v: f32| ((v.clamp(0.0, 1.0) * bins as f32) as usize).min(bins - 1);
+    let hist = tiles
+        .par_iter()
+        .map(|&(tx, ty)| {
+            let mut h = vec![0u32; bins];
+            let nodes = plan(&cut_inp, &[owner], &channels, tx, ty, 0, Some(&fields));
+            let Some(n) = nodes.first() else { return h };
+            let c = n.chans.iter().find(|c| Channel::ALL.get(c.ch) == Some(&channel));
+            let full = anchor_plan(&cut_inp, owner, &channels, tx, ty, Some(&fields));
+            for (x, y, o) in tile_texels(inp.gbuf, tx, ty) {
+                let mut tex = Texel::new(&cut_inp, x, y, o, 0.0);
+                if !full.is_empty() {
+                    tex.anchors_below(&full, owner);
+                }
+                if in_mask {
+                    if let Some(m) = &n.mask
+                        && let Some(b) = h.get_mut(bin(tex.mask(m)))
+                    {
+                        *b += 1;
+                    }
+                } else if let Some(c) = c
+                    && let Some((v, _)) = tex.content(&n.content, c)
+                {
+                    // As levels reads them (`per_unit`); normal maps pass through levels unchanged.
+                    let (vals, signed) = match c.kind {
+                        ChannelKind::Color => (&v[..], false),
+                        ChannelKind::Scalar => (&v[..1], false),
+                        ChannelKind::Signed => (&v[..1], true),
+                        ChannelKind::NormalMap => (&v[..0], false),
+                    };
+                    for x in vals {
+                        if let Some(b) = h.get_mut(bin(if signed { x * 0.5 + 0.5 } else { *x })) {
+                            *b += 1;
+                        }
+                    }
+                }
+            }
+            h
+        })
+        .reduce(|| vec![0u32; bins], |a, b| a.iter().zip(&b).map(|(x, y)| x.saturating_add(*y)).collect());
+    Some(hist)
+}
+
 /// One flattened tile of one channel: (channel, tile, premultiplied value + coverage data).
 pub type FlatTile = (Channel, (u32, u32), Vec<u16>);
 

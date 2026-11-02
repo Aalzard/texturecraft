@@ -111,3 +111,35 @@ fn painting_into_a_content_paint_effect() {
     assert!(s.doc.pixels.layer(LayerId(e), Channel::Roughness).is_none());
     assert!(center(&mut s, Channel::Roughness)[0] > 0.85);
 }
+
+#[test]
+fn histogram_counts_what_an_effect_reads() {
+    let mut s = session();
+    let hist = |s: &mut Session, p: Value| {
+        let r = execute(s, "effect.histogram", &p).unwrap();
+        let bins: Vec<u64> = r["bins"].as_array().unwrap().iter().map(|b| b.as_u64().unwrap()).collect();
+        (r["target"].as_str().unwrap().to_string(), bins)
+    };
+    // Only the bucket holding the value is filled.
+    let one = |bins: &[u64], k: usize| bins.iter().enumerate().all(|(i, b)| (*b > 0) == (i == k));
+    execute(&mut s, "layer.add.fill", &json!({"color": [0.25, 0.25, 0.25], "roughness": 0.75})).unwrap();
+    let lv = id(execute(&mut s, "effect.add.levels", &json!({"target": "content", "inLow": 0.5})).unwrap(), "effect");
+    execute(&mut s, "effect.add.filter", &json!({"target": "content", "filter": "invert"})).unwrap();
+    let (target, bins) = hist(&mut s, json!({"effect": lv, "channel": "roughness", "bins": 4}));
+    assert_eq!(target, "content");
+    assert!(one(&bins, 3), "roughness 0.75: {bins:?}");
+    // The effect itself and those above it are left out; the default channel is the first.
+    let (_, bins) = hist(&mut s, json!({"effect": lv, "bins": 4}));
+    assert!(one(&bins, 1), "base color 0.25, components pooled: {bins:?}");
+    assert_eq!(bins.iter().sum::<u64>() % 3, 0);
+    // A mask's levels reads the mask below it.
+    execute(&mut s, "mask.add.black", &Value::Null).unwrap();
+    execute(&mut s, "effect.add.fill", &json!({"target": "mask", "value": 0.3})).unwrap();
+    let ml = id(execute(&mut s, "effect.add.levels", &json!({"target": "mask"})).unwrap(), "effect");
+    let (target, bins) = hist(&mut s, json!({"effect": ml, "bins": 4}));
+    assert_eq!(target, "mask");
+    assert!(one(&bins, 1), "mask 0.3: {bins:?}");
+    assert_eq!(hist(&mut s, json!({"effect": ml})).1.len(), 64);
+    assert!(execute(&mut s, "effect.histogram", &json!({"effect": 999_999})).is_err());
+    assert!(execute(&mut s, "effect.histogram", &json!({"effect": lv, "channel": "nope"})).is_err());
+}
