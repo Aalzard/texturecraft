@@ -93,6 +93,15 @@ key-light shadow pass (`shaders/displace.wgsl`, shared by both). Rendering mode'
 (`render::trace` on the CPU, `render::gpu_trace` on the GPU) trace the same displaced copy, built
 on the CPU by `render::displace` from the composited height.
 
+## MaterialCraft materials
+
+A fill can carry a `MaterialLink` (`core::layer`): a MaterialCraft graph whose cooked maps are the
+fill's image sources. `engine::link_cmds` imports `.mcmat` files (`formats::mcmat`), keeps the
+`.mcraft` package as a resource, and re-cooks by running `materialcraft-cli` with the link's
+values, the texture set's resolution and its baked mesh maps (`LinkJob::run`, on a worker thread
+in the UI). Every cook stores its maps under fresh resource names, so undo, redo and the decoded
+image cache never disagree. The apps share the file format and the command line, never code.
+
 ## Commands and automation
 
 Every action is a `CommandSpec` in `engine::commands` (id, label, menu path, shortcut, params doc,

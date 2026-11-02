@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
 /// Largest accepted resource file.
 const MAX_BYTES: usize = 512 << 20;
 
-fn decoded(d: texturecraft_formats::DecodedImage) -> Arc<ImageRes> {
+pub(crate) fn decoded(d: texturecraft_formats::DecodedImage) -> Arc<ImageRes> {
     Arc::new(ImageRes { width: d.width, height: d.height, rgba: d.rgba, srgb: d.srgb })
 }
 
@@ -63,8 +63,14 @@ impl Session {
     pub fn sync_images(&mut self) {
         let keep: Vec<String> = self.doc.resources.keys().cloned().collect();
         self.images.retain(|k, _| keep.contains(k));
-        let missing: Vec<(String, Arc<Vec<u8>>)> =
-            self.doc.resources.iter().filter(|(k, _)| !self.images.contains_key(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        // Linked materials' packages are resources too, not images.
+        let missing: Vec<(String, Arc<Vec<u8>>)> = self
+            .doc
+            .resources
+            .iter()
+            .filter(|(k, _)| !self.images.contains_key(*k) && !k.ends_with(&format!(".{}", texturecraft_formats::mcmat::MCRAFT_EXT)))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         for (k, bytes) in missing {
             match texturecraft_formats::decode_image(&bytes) {
                 Ok(d) => {

@@ -932,4 +932,15 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Green", "グリーン"),
     ("Amber", "アンバー"),
     ("Pink", "ピンク"),
+    ("Import material...", "マテリアルを読み込む..."),
+    ("MaterialCraft material", "MaterialCraft マテリアル"),
+    ("Cooked at {size} px", "{size} px で計算済み"),
+    ("Preset", "プリセット"),
+    ("Re-cook", "再計算"),
+    ("Open in MaterialCraft", "MaterialCraft で開く"),
+    (
+        "Opened in MaterialCraft: use File > Send to TextureCraft there to bring your changes back",
+        "MaterialCraft で開きました。変更を戻すには、そちらで「ファイル > TextureCraft に送る」を使います",
+    ),
+    ("Parameters change in the desktop app, with MaterialCraft installed", "パラメーターは MaterialCraft をインストールしたデスクトップ版で変更できます"),
 ];

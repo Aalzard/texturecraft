@@ -25,6 +25,10 @@ pub const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "tga", "tif", "tiff", "b
 /// Equirect HDR images Display settings › Import HDR accepts.
 pub const ENV_EXTS: &[&str] = &["hdr", "exr"];
 
+/// Materials File › Import material adds as layers: smart materials, MaterialCraft portable
+/// materials and MaterialCraft packages.
+pub const MATERIAL_EXTS: &[&str] = &["tcmat", "mcmat", "mcraft"];
+
 /// Texture size of a project made from an opened mesh (smaller on the single-threaded web).
 const MESH_RESOLUTION: u32 = if cfg!(target_arch = "wasm32") { 1024 } else { 2048 };
 
@@ -120,6 +124,12 @@ pub fn load(app: &mut TextureCraftApp, name: &str, bytes: &[u8]) {
         }
         return;
     }
+    if MATERIAL_EXTS.contains(&ext.as_str()) {
+        if let Err(e) = app.session.add_smart_material_bytes(bytes) {
+            app.toast(trf("Couldn't import {name}: {error}", &[("name", &name), ("error", &e)]), true);
+        }
+        return;
+    }
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
     let next = if ext == PROJECT_EXT { Session::from_project_bytes(bytes) } else { Session::from_mesh_bytes(name, bytes, MESH_RESOLUTION, stem) };
     match next {
@@ -139,7 +149,9 @@ pub fn dropped(app: &mut TextureCraftApp, ctx: &egui::Context, file: &egui::Drop
         let path = file.path();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
         let path = path.display().to_string();
-        if IMAGE_EXTS.contains(&ext.as_str()) {
+        if MATERIAL_EXTS.contains(&ext.as_str()) {
+            app.run("material.load", serde_json::json!({ "path": path }));
+        } else if IMAGE_EXTS.contains(&ext.as_str()) {
             if let Some(r) = app.run("resource.import", serde_json::json!({ "path": path })) {
                 let name = r.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
                 app.ui.dock.focus(crate::docking::Panel::Assets);
@@ -183,7 +195,9 @@ fn zip_files(files: &[ExportedFile]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{download, export_mesh, export_textures, import_bake_mesh, import_environment, import_images, import_preset, open, save_project};
+pub use web::{
+    download, export_mesh, export_textures, import_bake_mesh, import_environment, import_images, import_material, import_preset, open, save_project,
+};
 
 #[cfg(target_arch = "wasm32")]
 mod web {
@@ -194,6 +208,11 @@ mod web {
     /// File › Open: the browser's file picker; the file loads on a later frame (see [`poll`]).
     pub fn open(ctx: &egui::Context) {
         pick(ctx, tr("Projects and meshes"), OPEN_EXTS, false, Pick::Open);
+    }
+
+    /// File › Import material: pick materials; they add as layers on a later frame.
+    pub fn import_material(ctx: &egui::Context) {
+        pick(ctx, tr("Materials"), MATERIAL_EXTS, true, Pick::Open);
     }
 
     /// File › Import resources: pick images; they import on a later frame.

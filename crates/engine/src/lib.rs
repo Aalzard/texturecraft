@@ -18,6 +18,7 @@ pub mod inspect;
 pub mod instance_cmds;
 pub mod layer_cmds;
 pub mod layer_ops;
+pub mod link_cmds;
 pub mod mask_cmds;
 pub mod material_lib;
 pub mod materials;

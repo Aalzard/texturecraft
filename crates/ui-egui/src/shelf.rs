@@ -9,6 +9,8 @@ use egui_phosphor::regular as ic;
 use serde_json::json;
 use texturecraft_engine::core::ProceduralKind;
 use texturecraft_engine::filter_lib::FILTERS;
+#[cfg(not(target_arch = "wasm32"))]
+use texturecraft_engine::formats::mcmat::MCMAT_EXT;
 use texturecraft_engine::materials::MATERIALS;
 use texturecraft_engine::paint::alphas;
 use texturecraft_engine::smart_masks::SMART_MASKS;
@@ -246,7 +248,7 @@ fn library(app: &mut TextureCraftApp, ui: &mut Ui, filter: &str) {
     let tk = Tokens::get(ui.ctx());
     if app.library.is_none() {
         let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(crate::library_dir())
-            .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "tcmat")).collect())
+            .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "tcmat" || x == MCMAT_EXT)).collect())
             .unwrap_or_default();
         files.sort();
         app.library = Some(files);
@@ -268,7 +270,9 @@ fn library(app: &mut TextureCraftApp, ui: &mut Ui, filter: &str) {
     }
     for f in shown {
         let (label, asset) = (name(f), Asset::Library(f.display().to_string()));
-        let r = ui.add(egui::Button::selectable(false, format!("{}  {label}", ic::SPHERE)).sense(Sense::click_and_drag())).on_hover_ui(|ui| {
+        // MaterialCraft materials (sent from MaterialCraft) show a graph.
+        let glyph = if f.extension().is_some_and(|x| x == MCMAT_EXT) { ic::GRAPH } else { ic::SPHERE };
+        let r = ui.add(egui::Button::selectable(false, format!("{glyph}  {label}")).sense(Sense::click_and_drag())).on_hover_ui(|ui| {
             ui.label(crate::i18n::trf(
                 "{file}: add above the selected layer (or drag it into the layer stack or onto the viewport)",
                 &[("file", &f.display())],

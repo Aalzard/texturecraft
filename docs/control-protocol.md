@@ -119,7 +119,7 @@ a `path`) is refused, and so is any command given a `path` or `dir` (`resource.i
 | `bake_mesh_add` | `{path, cage?}` | Add a high-definition mesh for baking, or set the cage → `{name, meshes}` |
 | `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil` |
 | `material_save` | `{path, layer?, name?}` | A layer or folder as a `.tcmat` smart material below the write root |
-| `material_load` | `{path}` | Add a `.tcmat` smart material above the selection |
+| `material_load` | `{path}` | Add a `.tcmat` smart material, a MaterialCraft `.mcmat` material or a `.mcraft` package above the selection |
 | `textures_export` | `{dir, preset?, ts?, format?, padding?, size?}` | Writes files below the write root |
 | `bake` | `{ts?, resolution?, maps?, cpu?}` | Mesh maps for generators and smart materials; rays on the GPU when there is one (`cpu: true`: on the CPU). Per-map ray settings (`ao`, `thickness`, `bentNormal`: rays, maxDistance, spread, distribution; AO ignoreBackface, selfOcclusion) are `bake.settings` parameters |
 | `paint_stroke` | `{points, viewport?, color?, roughness?, metallic?, height?, size?, hardness?}` | Paint tool + brush material + `tool.stroke`; points in viewport pixels |
@@ -202,6 +202,31 @@ File access follows `--read-root` / `--write-root` as for MCP.
 printf '%s\n' '{"id":1,"method":"command.run","params":{"id":"project.new","params":{"mesh":"torus"}}}' \
               '{"id":2,"method":"render","params":{"width":512,"height":512}}' | texturecraft-cli serve
 ```
+
+## MaterialCraft materials
+
+A `.mcmat` portable material (MaterialCraft's format, read here by `formats::mcmat`; the manifest is
+documented in MaterialCraft's `docs/control-protocol.md` § Portable materials) becomes a fill layer
+whose channel sources are its cooked maps and whose `link` (shown by `project.inspect`) holds the
+graph's exposed inputs, presets and image inputs. The apps share the format and the command line,
+not code.
+
+| Command | Params |
+|---|---|
+| `material.load` | `{path, above?, inside?, index?}`: `.tcmat`, `.mcmat` or `.mcraft` (cooked first) |
+| `material.link.set` | `{layer?, id, value, cook?: true}`: a number, `[..]`, a bool, `"#rrggbb"` or a typed `{"t", "v"}`; re-cooks unless `cook: false` |
+| `material.link.preset` | `{layer?, name, cook?: true}` |
+| `material.link.cook` | `{layer?}`: re-cook at the texture set's resolution with its baked mesh maps (after a bake or a resize) |
+| `material.link.saveSource` | `{layer?, path}`: the `.mcraft` package, to open in MaterialCraft |
+
+Re-cooks run `materialcraft-cli run <package> file.exportMaterial {path, size, values, inputs}`:
+`$MATERIALCRAFT_CLI`, else `materialcraft-cli` next to the TextureCraft executable, else on `PATH`
+(the app is `$MATERIALCRAFT` / `materialcraft`). Baked maps feed graph input nodes whose identifier
+matches the map's shared id (`ambientOcclusion`, `curvature`, `thickness`, `position`,
+`worldNormal`, `normal`, `height`, `id`, `bentNormal`, `opacity`, `colorMap`, `worldDirection`;
+case and underscores ignored). Usages map to channels of the same id (`baseColor`, `normal` in
+OpenGL convention, `roughness`, `metallic`, `height`, `ambientOcclusion`, `emissive`, `opacity`,
+`specular`); missing channels join the texture set.
 
 ## CLI
 

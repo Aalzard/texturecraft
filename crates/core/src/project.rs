@@ -85,6 +85,30 @@ impl BakedMap {
             BakedMap::WorldDirection => "world_space_direction",
         }
     }
+    /// The identifier shared with MaterialCraft (graph inputs fed from this map).
+    pub fn interop_id(self) -> &'static str {
+        match self {
+            BakedMap::Normal => "normal",
+            BakedMap::WorldNormal => "worldNormal",
+            BakedMap::Id => "id",
+            BakedMap::AmbientOcclusion => "ambientOcclusion",
+            BakedMap::Curvature => "curvature",
+            BakedMap::Position => "position",
+            BakedMap::Thickness => "thickness",
+            BakedMap::Height => "height",
+            BakedMap::BentNormal => "bentNormal",
+            BakedMap::Opacity => "opacity",
+            BakedMap::ColorMap => "colorMap",
+            BakedMap::WorldDirection => "worldDirection",
+        }
+    }
+    /// The map a MaterialCraft graph input `identifier` reads: its shared or own id, ignoring
+    /// case and underscores (`ambient_occlusion` = `ambientOcclusion`).
+    pub fn for_input(identifier: &str) -> Option<BakedMap> {
+        let norm = |x: &str| x.to_ascii_lowercase().replace(['_', '-', ' '], "");
+        let want = norm(identifier);
+        BakedMap::ALL.into_iter().find(|m| norm(m.interop_id()) == want || norm(m.id()) == want)
+    }
     /// Components stored (3 for vector maps, 1 for scalar maps).
     pub fn components(self) -> usize {
         match self {

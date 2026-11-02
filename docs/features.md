@@ -48,6 +48,14 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   the model.
 - **Your own library:** right-click a layer or folder, choose *Create smart material*, and it
   appears under *My smart materials*, pixels and images included.
+- **MaterialCraft materials:** *File › Import material*, a drop on the window, or MaterialCraft's
+  *File › Send to TextureCraft* (it lands under *My smart materials*) adds a `.mcmat` portable
+  material, or a `.mcraft` package, as a fill layer. Its exposed graph inputs (numbers, vectors,
+  toggles, options, colors) and presets show in the layer's properties; every change re-cooks
+  the maps through MaterialCraft's command line at the texture set's resolution, on a worker
+  thread, with the set's baked mesh maps (curvature, AO, thickness…) feeding graph inputs of the
+  same name. *Open in MaterialCraft* edits the graph itself. In the browser the cooked maps paint,
+  but the inputs are read-only.
 
 ## Files and texture sets
 

@@ -126,6 +126,11 @@ textures or models from anywhere else) and path traced on the GPU by `texturecra
 - **Open.** glTF/GLB, FBX, COLLADA, USD, Alembic, OBJ, PLY and STL in; PNG, JPEG, TGA, TIFF, BMP,
   WEBP, EXR and HDR textures out at 8, 16 or 32 bits, with UDIM tiles; OBJ, textured GLB and USD
   mesh export. Every material, environment, brush alpha and built-in mesh is procedural.
+- **Works with MaterialCraft.** Node-based materials from
+  [MaterialCraft](https://github.com/storytold/materialcraft) (`.mcmat`, sent straight to the
+  shelf) paint and fill like any material, and their graph inputs stay sliders, colors and
+  presets here: each change re-cooks the material at the texture set's resolution, with this
+  mesh's baked maps feeding the graph.
 - **Agent-native.** Every menu item and tool is a command you can drive from the CLI, a JSON
   control channel or an **MCP server**, so Claude and other agents can paint, bake and export the
   way a person does.

@@ -124,7 +124,12 @@ panic. The shared standard is `../craftrules/standards/never-crash.md`.
    alternatives.
 7. **Performance is a feature.** Never scan a full texture set per frame; work on dirty tiles.
    Benchmark heavy paths (bake, composite, export) in release and record numbers in the dev log.
-8. **Verify UI changes visually.** Launch with `--control <port>` and call `ui.screenshot` (whole
+8. **Cross-app formats are shared conventions.** MaterialCraft's `.mcmat` portable materials are
+   read here with our own code (`formats::mcmat`): keep the manifest fields, usage ids and
+   mesh-map identifiers (`BakedMap::interop_id`) in step with MaterialCraft's
+   `docs/control-protocol.md`, and never depend on MaterialCraft's crates; talk to it through
+   `materialcraft-cli`.
+9. **Verify UI changes visually.** Launch with `--control <port>` and call `ui.screenshot` (whole
    window) or `viewport.screenshot`; look at the PNG.
 
 ## 4. Picking work

@@ -956,4 +956,15 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Green", "Verde"),
     ("Amber", "Ambra"),
     ("Pink", "Rosa"),
+    ("Import material...", "Importa materiale..."),
+    ("MaterialCraft material", "Materiale MaterialCraft"),
+    ("Cooked at {size} px", "Calcolato a {size} px"),
+    ("Preset", "Preset"),
+    ("Re-cook", "Ricalcola"),
+    ("Open in MaterialCraft", "Apri in MaterialCraft"),
+    (
+        "Opened in MaterialCraft: use File > Send to TextureCraft there to bring your changes back",
+        "Aperto in MaterialCraft: usa lì File > Invia a TextureCraft per riportare le modifiche",
+    ),
+    ("Parameters change in the desktop app, with MaterialCraft installed", "I parametri si modificano nell'app desktop, con MaterialCraft installato"),
 ];
