@@ -13,6 +13,8 @@ Everything TextureCraft does is an engine command with a stable id (`layer.add.f
 Programmatic calls never open dialogs: a command runs with its defaults. Only `ui.menu.invoke`
 behaves like a menu click. `session.inspect` shows every layer, mask, effect, fill source and
 painted tile count, so an agent can verify its work without a screenshot.
+`effect.histogram {effect, channel?, bins?}` counts the values an effect reads (a levels
+effect's input), so an agent can pick its input range from the data.
 
 ## Control channel (desktop app)
 

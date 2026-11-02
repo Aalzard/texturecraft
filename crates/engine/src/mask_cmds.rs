@@ -6,7 +6,7 @@ use texturecraft_core::{
     Source,
 };
 
-use crate::commands::{CommandSpec, bad, blend_param, boolp, channel_param, color_param, f32p, has_layer, layer_param, strp, u64p};
+use crate::commands::{CommandSpec, always, bad, blend_param, boolp, channel_param, color_param, f32p, has_layer, layer_param, strp, u64p};
 use crate::layer_cmds::projection_from;
 use crate::session::StackTarget;
 use crate::{EngineError, Result, Session, cmd};
@@ -99,6 +99,15 @@ pub fn specs() -> Vec<CommandSpec> {
             set
         ),
         cmd!("effect.remove", "Remove effect", [], None, "{effect}", has_layer, remove_effect),
+        cmd!(
+            "effect.histogram",
+            "Effect input histogram",
+            [],
+            None,
+            "{effect, channel?: for content effects (default: the layer's first channel), bins?: 2..256 (64)} → {target: mask|content, channel?, bins: [count per bucket over 0..1]}",
+            always,
+            histogram
+        ),
     ]
 }
 
@@ -371,6 +380,22 @@ fn add_compare(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn effect_id(p: &Value, cmd: &str) -> Result<LayerId> {
     u64p(p, "effect").map(LayerId).ok_or_else(|| bad(cmd, "`effect` id is required"))
+}
+
+/// The distribution of the values entering an effect (what a levels effect remaps).
+fn histogram(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "effect.histogram";
+    let eid = effect_id(p, CMD)?;
+    let (owner, _) = s.doc.project.effect(eid).ok_or_else(|| bad(CMD, format!("no effect {}", eid.0)))?;
+    let l = s.doc.project.layer(owner)?;
+    let content = l.content_effects.iter().any(|e| e.id == eid);
+    let channel = match channel_param(CMD, p, "channel")? {
+        Some(c) => c,
+        None => l.channels.keys().next().copied().unwrap_or(Channel::BaseColor),
+    };
+    let bins = u64p(p, "bins").unwrap_or(64).clamp(2, 256) as usize;
+    let counts = s.effect_histogram(eid, channel, bins).ok_or_else(|| bad(CMD, "the texture set is not ready"))?;
+    Ok(if content { json!({"target": "content", "channel": channel.id(), "bins": counts}) } else { json!({"target": "mask", "bins": counts}) })
 }
 
 fn set(s: &mut Session, p: &Value) -> Result<Value> {

@@ -36,7 +36,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   contrast/luminosity, color balance, gradient map, posterize, clamp, histogram scan, range and
   shift, invert, threshold, grayscale, replace color, edge detect, normal invert, baked lighting,
   blur, directional and slope blur, sharpen, high pass, bevel, glow, warp, directional warp,
-  mosaic and four material finishes), fills and paint.
+  mosaic and four material finishes), fills and paint. **Levels** shows a histogram of what it
+  reads (the mask below it, or a content channel you pick) with its input range marked.
   **Anchor points** record the stack at a layer so masks and fills higher up can react to it.
 - **Masks** with a white or black background and a stack of effects: painted strokes, fills,
   **mesh-map generators** (edge wear, dirt, thin areas, curvature, AO, position and direction
