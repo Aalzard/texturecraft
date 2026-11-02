@@ -343,6 +343,8 @@ pub struct Session {
     pub quick_mask: crate::quick_mask::QuickMask,
     /// A path sublayer is being repainted from its paths (the only way to paint into one).
     pub(crate) painting_paths: bool,
+    /// Pixels of the paths below the one being edited, so live edits skip repainting them.
+    pub(crate) path_cache: Option<crate::path_tool::PathCache>,
     pub path: Option<String>,
     pub modified: bool,
     /// Bumps on every document change.
@@ -395,6 +397,7 @@ impl Session {
             images: Default::default(),
             quick_mask: Default::default(),
             painting_paths: false,
+            path_cache: None,
             path: None,
             modified: false,
             revision: 1,

@@ -55,6 +55,19 @@ impl PathState {
     }
 }
 
+/// A path sublayer's pixels after painting its first paths (`below`), with the mesh and
+/// texture size they were painted for.
+#[derive(Clone)]
+// shortcut: the key doesn't cover image resources a path's brush alpha reads; replacing one
+// leaves cached paths with the old alpha until a path below the edited one changes.
+pub(crate) struct PathCache {
+    eid: LayerId,
+    key: (u64, Option<(u32, u32)>),
+    below: Vec<PathShape>,
+    mask: Option<texturecraft_texel::TileImage>,
+    layers: Vec<((LayerId, Channel), texturecraft_texel::TileImage)>,
+}
+
 /// What a stored path is painted with ([`PathShape::paint`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct PathPaint {
@@ -181,7 +194,7 @@ fn remove_path(s: &mut Session, p: &Value) -> Result<Value> {
         {
             shapes.remove(index);
         }
-        s.render_paths(eid)
+        s.render_paths(eid, index)
     })?;
     if s.tool.path.editing.is_some_and(|(e, _)| e == eid) {
         s.stop_path_edit();
@@ -339,18 +352,32 @@ impl Session {
             },
             _ => return Err(EngineError::Other(format!("{} is not a path sublayer", eid.0))),
         };
-        let mut out = self.render_paths(eid)?.get(index).cloned().unwrap_or_else(|| json!({}));
+        let mut out = self.render_paths(eid, index)?.get(index).cloned().unwrap_or_else(|| json!({}));
         out["effect"] = json!(eid.0);
         out["index"] = json!(index);
         Ok(out)
     }
 
-    /// Repaint path sublayer `eid` from scratch with its stored paths, bottom to top. Runs
-    /// inside the caller's undo step.
-    fn render_paths(&mut self, eid: LayerId) -> Result<Vec<Value>> {
+    /// Repaint path sublayer `eid` from its stored paths, bottom to top, where paths before
+    /// `from` are unchanged: their pixels come from [`PathCache`] when it holds them, and are
+    /// cached for the next repaint otherwise, so editing a path repaints it and the paths above
+    /// only. Runs inside the caller's undo step. Returns each painted path's report (null for
+    /// the cached ones).
+    fn render_paths(&mut self, eid: LayerId, from: usize) -> Result<Vec<Value>> {
         let shapes = self.paths(eid).ok_or_else(|| EngineError::Other(format!("{} is not a path sublayer", eid.0)))?.to_vec();
+        let key = (self.mesh_id, self.caches.get(self.ts()).map(|c| c.size));
         self.doc.pixels.masks.remove(&eid);
         self.doc.pixels.layers.retain(|(id, _), _| *id != eid);
+        let start = match &self.path_cache {
+            Some(c) if c.eid == eid && c.key == key && c.below.len() <= from && shapes.get(..c.below.len()) == Some(&c.below[..]) => {
+                if let Some(m) = &c.mask {
+                    self.doc.pixels.masks.insert(eid, m.clone());
+                }
+                self.doc.pixels.layers.extend(c.layers.iter().cloned());
+                c.below.len()
+            }
+            _ => 0,
+        };
         // Each path goes through the regular stroke and fill code with its own settings; their
         // own history entries are dropped (the caller records one step).
         let saved = (self.tool.clone(), self.camera, self.target, self.quick_mask.editing);
@@ -359,11 +386,27 @@ impl Session {
         self.quick_mask.editing = false;
         self.tool.tool = Tool::Path;
         self.painting_paths = true;
-        let out = shapes.iter().map(|sh| self.paint_shape(sh)).collect();
+        let mut out = vec![Value::Null; start];
+        let mut result = Ok(());
+        for i in start..=shapes.len() {
+            if i == from.min(shapes.len()) && i > start {
+                let pixels = &self.doc.pixels;
+                let layers = pixels.layers.iter().filter(|((id, _), _)| *id == eid).map(|(k, v)| (*k, v.clone())).collect();
+                self.path_cache = Some(PathCache { eid, key, below: shapes[..i].to_vec(), mask: pixels.masks.get(&eid).cloned(), layers });
+            }
+            let Some(sh) = shapes.get(i) else { break };
+            match self.paint_shape(sh) {
+                Ok(v) => out.push(v),
+                Err(e) => {
+                    result = Err(e);
+                    break;
+                }
+            }
+        }
         self.painting_paths = false;
         (self.tool, self.camera, self.target, self.quick_mask.editing) = saved;
         (self.undo, self.redo) = history;
-        out
+        result.map(|_| out)
     }
 
     fn paint_shape(&mut self, shape: &PathShape) -> Result<Value> {
@@ -438,5 +481,45 @@ impl Session {
         let tiles = canvas.dirty.len();
         self.commit_fill("Path fill", ts, &canvas)?;
         Ok(tiles)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::{Session, execute};
+
+    /// The path sublayer's pixels, comparable.
+    fn pixels(s: &Session, eid: texturecraft_core::LayerId) -> Vec<String> {
+        let mut v: Vec<String> = s.doc.pixels.layers.iter().filter(|((id, _), _)| *id == eid).map(|(k, img)| format!("{k:?}{img:?}")).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn cached_repaint_matches_a_full_repaint() {
+        let mut s = Session::new_project("t", texturecraft_geom::primitives::sphere(1.0, 24, 12), "builtin:test", None, 128).unwrap();
+        s.update();
+        execute(&mut s, "tool.brush", &json!({"size": 6})).unwrap();
+        let mut eid = 0;
+        for v in [0.2, 0.5, 0.8] {
+            let r = execute(&mut s, "tool.path", &json!({"uvPoints": [[0.1, v], [0.9, v + 0.05]], "commit": true})).unwrap();
+            eid = r["committed"]["effect"].as_u64().unwrap();
+        }
+        let eid = texturecraft_core::LayerId(eid);
+        // Live edits of the middle path reuse the bottom path's pixels.
+        execute(&mut s, "path.edit", &json!({"effect": eid.0, "index": 1})).unwrap();
+        for v in [0.4, 0.45] {
+            execute(&mut s, "tool.path", &json!({"uvPoints": [[0.1, v], [0.5, v], [0.9, v]]})).unwrap();
+        }
+        assert_eq!(s.path_cache.as_ref().map(|c| c.below.len()), Some(1));
+        let r = s.render_paths(eid, 1).unwrap();
+        assert!(r[0].is_null() && !r[1].is_null(), "the bottom path came from the cache: {r:?}");
+        let cached = pixels(&s, eid);
+        s.path_cache = None;
+        s.render_paths(eid, 0).unwrap();
+        assert_eq!(cached, pixels(&s, eid), "same pixels as painting every path");
+        assert!(!cached.is_empty());
     }
 }
