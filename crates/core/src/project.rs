@@ -230,7 +230,8 @@ impl Default for BakeSettings {
             ao: RaySettings::default(),
             ao_ignore_backface: false,
             ao_self_occlusion: SelfOcclusion::Always,
-            thickness: RaySettings::default(),
+            // Thickness is hit distance / max distance: long rays turn thin parts almost black.
+            thickness: RaySettings { max_distance: 0.1, ..RaySettings::default() },
             bent_normal: RaySettings::default(),
             curvature_strength: 1.0,
             curvature_from_normal: false,

@@ -177,6 +177,7 @@ impl Session {
     /// Store a finished bake (one undo step).
     pub fn apply_bake(&mut self, ts: usize, out: BakeOutput) -> Result<()> {
         self.log.push(format!("Baked texture set {ts} ({})", out.tracer));
+        let made: Vec<BakedMap> = out.maps.keys().copied().collect();
         self.edit("Bake mesh maps", |s| {
             let maps: BTreeSet<BakedMap> = out.maps.keys().copied().collect();
             let entry = s.doc.baked.entry(ts).or_default();
@@ -186,11 +187,14 @@ impl Session {
             }
             s.doc.project.texture_set_mut(ts)?.baked.extend(maps);
             Ok(())
-        })
+        })?;
+        self.note_baked(ts, made.into_iter());
+        Ok(())
     }
 
     /// Bake texture set `ts` now (blocking), on the CPU when `cpu`; returns where the rays ran.
     pub fn bake_now(&mut self, ts: usize, cpu: bool) -> Result<String> {
+        self.begin_bake(ts);
         let mut task = self.bake_task(ts)?;
         if cpu {
             task.tracer = None;

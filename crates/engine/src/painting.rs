@@ -65,7 +65,10 @@ impl Session {
                 Some((_, eff)) if matches!(eff.kind, EffectKind::Path(_)) => {
                     Err(EngineError::Other("a path sublayer holds paths only: edit them with the Path tool, or paint on a paint sublayer".into()))
                 }
-                _ => Err(EngineError::Other("the selected effect is not a paint effect".into())),
+                // A filter (or another effect) is selected, e.g. just added from the shelf: paint
+                // what lies beneath it, so the new paint goes through it.
+                Some((owner, _)) => self.paint_target_below(owner, e),
+                None => Err(EngineError::Other("the selected effect is not a paint effect".into())),
             },
             StackTarget::Mask => {
                 let eid = self.doc.project.alloc_id();
@@ -78,6 +81,36 @@ impl Session {
                 Ok(PaintTarget::Mask(eid))
             }
         }
+    }
+
+    /// What a stroke paints while non-paint effect `effect` of layer `owner` is selected: the
+    /// nearest paint effect below it in the same stack, else the paint layer's own pixels (for
+    /// content) or a new paint effect inserted just below it (for a mask).
+    fn paint_target_below(&mut self, owner: LayerId, effect: LayerId) -> Result<PaintTarget> {
+        let eid = self.doc.project.alloc_id();
+        let layer = self.doc.project.layer_mut(owner)?;
+        let below = |effects: &[Effect], at: usize| effects.get(..at).and_then(|b| b.iter().rev().find(|x| matches!(x.kind, EffectKind::Paint))).map(|x| x.id);
+        if let Some(at) = layer.content_effects.iter().position(|x| x.id == effect) {
+            if let Some(id) = below(&layer.content_effects, at) {
+                return Ok(PaintTarget::Layer(id));
+            }
+            return if matches!(layer.kind, LayerKind::Paint) {
+                Ok(PaintTarget::Layer(owner))
+            } else {
+                Err(EngineError::Other(format!(
+                    "\"{}\" is a {} layer: paint on a paint layer or on its mask (a filter changes what lies below it)",
+                    layer.name,
+                    layer.kind.name()
+                )))
+            };
+        }
+        let mask = layer.mask.as_mut().ok_or_else(|| EngineError::Other("the selected effect is not a paint effect".into()))?;
+        let at = mask.effects.iter().position(|x| x.id == effect).ok_or_else(|| EngineError::Other("the selected effect is not a paint effect".into()))?;
+        if let Some(id) = below(&mask.effects, at) {
+            return Ok(PaintTarget::Mask(id));
+        }
+        mask.effects.insert(at, Effect::new(eid, EffectKind::Paint));
+        Ok(PaintTarget::Mask(eid))
     }
 
     fn stroke_values(&self, target: PaintTarget) -> BTreeMap<Channel, [f32; 3]> {

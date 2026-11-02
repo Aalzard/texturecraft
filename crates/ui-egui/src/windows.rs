@@ -281,16 +281,27 @@ pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
 /// The History panel body (a dock tab).
 pub(crate) fn history(app: &mut TextureCraftApp, ui: &mut Ui) {
     let tk = Tokens::get(ui.ctx());
-    let labels = app.session.history_labels();
+    let (done, undone) = (app.session.history_labels(), app.session.redo_labels());
+    // A click on a step goes back (or forward) to it: steps to undo, or to redo when negative.
+    let mut jump = 0i64;
     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-        ui.label(RichText::new(tr("Project opened")).color(tk.text_dim));
-        for l in &labels {
-            ui.label(l);
-        }
-        if let Some(r) = app.session.redo_label() {
-            ui.label(RichText::new(trf("{action} (undone)", &[("action", &r)])).color(tk.text_dim));
+        let n = done.len() as i64;
+        let rows = std::iter::once(RichText::new(tr("Project opened")).color(tk.text_dim))
+            .chain(done.iter().map(RichText::new))
+            .chain(undone.iter().map(|l| RichText::new(trf("{action} (undone)", &[("action", l)])).color(tk.text_dim)));
+        for (i, text) in rows.enumerate() {
+            // Row i is the state after i steps.
+            let steps = n - i as i64;
+            if ui.selectable_label(steps == 0, text).on_hover_text(tr("Return to this step")).clicked() {
+                jump = steps;
+            }
         }
     });
+    if jump > 0 {
+        app.run("edit.undo", json!({ "steps": jump }));
+    } else if jump < 0 {
+        app.run("edit.redo", json!({ "steps": -jump }));
+    }
     ui.horizontal(|ui| {
         if ui.add_enabled(app.session.can_undo(), egui::Button::new(format!("{} {}", ic::ARROW_COUNTER_CLOCKWISE, tr("Undo")))).clicked() {
             app.run("edit.undo", json!({}));
@@ -712,7 +723,17 @@ fn bake_panel(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.separator();
     match selected {
         None => common_params(app, ui, &mut b),
-        Some(m) => map_params(ui, m, &mut b),
+        Some(m) => {
+            let mut auto = app.session.auto_rebake.map == Some(m);
+            if ui
+                .checkbox(&mut auto, tr("Auto-rebake"))
+                .on_hover_text(tr("Bake this map again by itself when its bake settings, the low poly or the high polys change"))
+                .changed()
+            {
+                app.run("bake.autoRebake", if auto { json!({ "map": m.id() }) } else { json!({ "off": true }) });
+            }
+            map_params(ui, m, &mut b)
+        }
     }
     if b.direction == [0.0; 3] {
         b.direction = before.direction;
@@ -1027,6 +1048,19 @@ pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) ->
             app.ui.dock.focus(crate::docking::Panel::Assets);
             true
         }
+        "file.importMaterialX" => {
+            if let Some(p) = rfd::FileDialog::new().add_filter(tr("MaterialX materials"), &["mtlx"]).pick_file()
+                && let Some(r) = app.run("file.importMaterialX", json!({"path": p.display().to_string()}))
+            {
+                let name = r.get("material").and_then(|n| n.as_str()).unwrap_or_default().to_string();
+                for w in r.get("warnings").and_then(|w| w.as_array()).into_iter().flatten().filter_map(|w| w.as_str()) {
+                    app.session.log.push(format!("MaterialX {name}: {w}"));
+                }
+                app.toast(trf("Imported {name}", &[("name", &name)]), false);
+                app.ui.dock.focus(crate::docking::Panel::Layers);
+            }
+            true
+        }
         "file.exportMesh" => {
             let name = format!("{}.obj", texturecraft_engine::formats::export::sanitize_file_stem(&app.session.doc.project.name));
             if let Some(p) = rfd::FileDialog::new()
@@ -1131,6 +1165,9 @@ pub(crate) fn export_params(app: &TextureCraftApp) -> serde_json::Value {
     if !e.normal_format.is_empty() {
         p["normalFormat"] = json!(e.normal_format);
     }
+    if !e.color_space.is_empty() {
+        p["colorSpace"] = json!(e.color_space);
+    }
     p
 }
 
@@ -1227,6 +1264,15 @@ fn export_settings_tab(app: &mut TextureCraftApp, ui: &mut Ui, presets: &[textur
         egui::ComboBox::from_id_salt("exp_nf").selected_text(nf).show_ui(ui, |ui| {
             for (v, l) in [("", tr("From template / project")), ("openGl", "OpenGL"), ("directX", "DirectX")] {
                 ui.selectable_value(&mut app.ui.export.normal_format, v.to_string(), l);
+            }
+        });
+        ui.end_row();
+        ui.label(tr("Color space"));
+        let shown = if app.ui.export.color_space.is_empty() { tr("Default") } else { app.ui.export.color_space.as_str() };
+        egui::ComboBox::from_id_salt("exp_cs").selected_text(shown).show_ui(ui, |ui| {
+            ui.selectable_value(&mut app.ui.export.color_space, String::new(), tr("Default"));
+            for name in ["sRGB", "Linear Rec.709", "ACEScg", "ACES2065-1"] {
+                ui.selectable_value(&mut app.ui.export.color_space, name.to_string(), name);
             }
         });
         ui.end_row();

@@ -3968,6 +3968,7 @@ dependencies = [
  "bytemuck",
  "half",
  "image",
+ "log",
  "pollster 0.4.0",
  "rayon",
  "texturecraft-bake",
@@ -3975,6 +3976,7 @@ dependencies = [
  "texturecraft-core",
  "texturecraft-geom",
  "texturecraft-texel",
+ "wasm-bindgen-futures",
  "wgpu",
 ]
 

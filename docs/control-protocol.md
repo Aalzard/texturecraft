@@ -14,7 +14,13 @@ Programmatic calls never open dialogs: a command runs with its defaults. Only `u
 behaves like a menu click. `session.inspect` shows every layer, mask, effect, fill source and
 painted tile count, so an agent can verify its work without a screenshot.
 `effect.histogram {effect, channel?, bins?}` counts the values an effect reads (a levels
-effect's input), so an agent can pick its input range from the data.
+effect's input), so an agent can pick its input range from the data. `effect.move {effect,
+index}` reorders an effect within its stack (0 = bottom) and `effect.duplicate {effect}` copies
+one just above itself. `effect.copy {effect?}` and `effect.cut {effect?}` put an effect on the
+layer clipboard, and `effect.paste {layer?, target?}` adds it to another layer's content or mask.
+
+`edit.undo {steps?}` and `edit.redo {steps?}` go back or forward several steps at once (as far
+as the history reaches); `edit.history` lists the steps done and the undone ones, next first.
 
 ## Control channel (desktop app)
 
@@ -129,7 +135,7 @@ takes a font family, not a path: it reads only the system's font folders.
 | `mesh_reimport` | `{path?, preserveStrokes?}` | Reimport the mesh from a file, or (no path) from the project's own copy; bridge mode supports only the latter |
 | `mesh_export` | `{path, format?}` | The mesh as obj, glb, usda, usdc or usdz below the write root (usda / usdc textures next to it) → `{path, textures?}` |
 | `bake_mesh_add` | `{path, cage?}` | Add a high-definition mesh for baking, or set the cage → `{name, meshes}` |
-| `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil` |
+| `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil`, or as a mesh map instead of baking it: `textureSet.meshMap.set {ts?, map, image}` (`textureSet.meshMap.clear {ts?, map}` empties the slot) |
 | `material_save` | `{path, layer?, name?}` | A layer or folder as a `.tcmat` smart material below the write root |
 | `material_load` | `{path}` | Add a `.tcmat` smart material above the selection |
 | `textures_export` | `{dir, preset?, ts?, format?, padding?, size?}` | Writes files below the write root |

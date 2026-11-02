@@ -140,6 +140,54 @@ pub(crate) fn scoped<T>(device: &wgpu::Device, what: &str, f: impl FnOnce() -> T
     }
 }
 
+/// What [`checked`] knows right after the call.
+pub(crate) enum Checked<T> {
+    /// wgpu answered at once (native backends, WebGL): the value, or what went wrong.
+    Done(Result<T, String>),
+    /// The browser's WebGPU answers later: the value, possibly invalid, and where the answer
+    /// arrives (`None` for success). Don't use the value until it arrives. (Native backends
+    /// never answer late; the renderer's tests build this variant by hand.)
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    Later(T, std::sync::mpsc::Receiver<Option<String>>),
+}
+
+/// [`scoped`] for work whose errors may arrive later: never takes an unanswered scope as success.
+pub(crate) fn checked<T>(device: &wgpu::Device, what: &str, f: impl FnOnce() -> T) -> Checked<T> {
+    let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let invalid = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let out = f();
+    let (invalid, oom) = (invalid.pop(), oom.pop());
+    let what = what.to_string();
+    let mut answer = Box::pin(async move {
+        let invalid = invalid.await;
+        let oom = oom.await;
+        // An allocation that ran out of memory also makes later calls on it invalid: the
+        // out-of-memory error is the cause.
+        oom.or(invalid).map(|e| format!("{what}: {e}"))
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Checked::Done(match pollster::block_on(answer.as_mut()) {
+            Some(e) => Err(e),
+            None => Ok(out),
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        match answer.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(Some(e)) => Checked::Done(Err(e)),
+            Poll::Ready(None) => Checked::Done(Ok(out)),
+            Poll::Pending => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let _ = tx.send(answer.await);
+                });
+                Checked::Later(out, rx)
+            }
+        }
+    }
+}
+
 pub(crate) fn entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::COMPUTE, ty, count: None }
 }
@@ -439,7 +487,8 @@ impl GpuTracer {
         let mut info: Vec<[f32; 3]> = sets
             .iter()
             .map(|s| {
-                let dims = s.first().map_or((1, 1), |t| (t.width(), t.height()));
+                // The set's size is its largest texture's; any kind may still be a 1×1 placeholder.
+                let dims = s.iter().fold((1, 1), |(w, h), t| (t.width().max(w), t.height().max(h)));
                 let small = s.iter().enumerate().filter(|(_, t)| (t.width(), t.height()) != dims).fold(0u32, |m, (k, _)| m | 1 << k);
                 [dims.0 as f32, dims.1 as f32, small as f32]
             })
@@ -819,6 +868,43 @@ mod tests {
             }
             assert_region_means_match(name, &gpu, &cpu.rgba8(&d), 48, 36, 3.0);
         }
+    }
+
+    #[test]
+    fn gpu_reads_full_size_channels_beside_placeholders() {
+        // Base color stays at its default (a 1×1 placeholder texture) while roughness varies
+        // across the surface (a full-size texture): the tracer must still read every texel of it.
+        use Channel::*;
+        let Some((mut h, mut t)) = gpu() else { return };
+        let mut composite = Composite::new(&[Roughness, Metallic], 64);
+        for y in 0..64 {
+            for x in 0..64 {
+                let rough = if x < 32 { 0.05 } else { 0.9 };
+                composite.channels.get_mut(&Roughness).unwrap().set(x, y, &[texturecraft_texel::to_u16(rough)]);
+                composite.channels.get_mut(&Metallic).unwrap().set(x, y, &[texturecraft_texel::to_u16(1.0)]);
+            }
+        }
+        h.renderer.set_texture_sets(&h.device, &h.queue, &[((64, 64), 0)], 1);
+        for (tx, ty) in all_tiles(64, 64) {
+            for k in DisplayKind::ALL {
+                h.renderer.upload_tile(&h.device, &h.queue, 0, k, tx, ty, &tile_bytes(&composite, &BakedMaps::default(), k, tx, ty));
+            }
+        }
+        let sizes: Vec<u32> = h.renderer.display_textures()[0].iter().map(|t| t.width()).collect();
+        assert_eq!(sizes[0], 1, "base color stays a placeholder");
+        assert_eq!(sizes[1], 64, "roughness and metallic are full size");
+        let mesh = Arc::new(primitives::sphere(1.0, 32, 16));
+        let bvh = Arc::new(Bvh::new(&mesh));
+        let env = crate::ibl::environment("Studio Contrast", 256);
+        let scene = TraceScene::new(mesh, bvh, vec![TraceSet { material: 0, composite, height_strength: 0.0 }], Arc::new(env), 0.0);
+        let d = TraceDisplay { exposure: 1.0, aces: true, env_opacity: 0.5, denoise: false };
+        let settings = TraceSettings { bounces: 4 };
+        let (_, _, gpu) = t.render(&h.device, &h.queue, &h.renderer, &scene, &camera(), &settings, &d, [48, 36], 1024).unwrap();
+        let mut cpu = Tracer::new(48, 36);
+        for _ in 0..1024 {
+            cpu.pass(&scene, &camera(), &settings);
+        }
+        assert_region_means_match("varying roughness, default base color", &gpu, &cpu.rgba8(&d), 48, 36, 3.0);
     }
 
     /// Mean luminance of each 6×6 block of two RGBA8 renders agrees within `tol` 8-bit levels.

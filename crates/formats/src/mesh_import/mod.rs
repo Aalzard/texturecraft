@@ -496,6 +496,11 @@ fn smooth_normals(mesh: &Mesh) -> Vec<Vec3> {
     weld.iter().map(|w| acc.get(*w as usize).and_then(|n| n.try_normalize()).unwrap_or(Vec3::Y)).collect()
 }
 
+/// Inspects `mesh` and generates its UV report (overlaps, out-of-range UVs, warnings).
+pub fn mesh_report(mesh: &Mesh) -> MeshReport {
+    report(mesh, false, Vec::new())
+}
+
 fn report(mesh: &Mesh, uvs_generated: bool, mut warnings: Vec<String>) -> MeshReport {
     let (mut out_of_range, mut zero_area) = (0, 0);
     for t in 0..mesh.triangle_count() {

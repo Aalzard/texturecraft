@@ -757,6 +757,8 @@ impl Filter {
                 let (lo, hi) = (min.min(*max), min.max(*max));
                 per_unit(kind, v, |x| x.max(lo).min(hi))
             }
+            // Full contrast is a threshold: the position itself goes to white.
+            Filter::HistogramScan { position, contrast } if *contrast >= 1.0 => per_unit(kind, v, |x| if x >= *position { 1.0 } else { 0.0 }),
             Filter::HistogramScan { position, contrast } => {
                 let width = (1.0 - contrast.clamp(0.0, 1.0)).max(1e-3);
                 per_unit(kind, v, |x| unit((x - position) / width + 0.5))
@@ -1029,6 +1031,7 @@ mod tests {
         let scan = |position, contrast| Filter::HistogramScan { position, contrast }.point(c, [0.2, 0.5, 0.9]).unwrap();
         assert!(close(scan(0.5, 0.0), [0.2, 0.5, 0.9]), "a full-width ramp at the middle keeps the values");
         assert!(close(scan(0.4, 1.0), [0.0, 1.0, 1.0]), "full contrast is a step at the position");
+        assert!(close(scan(0.5, 1.0), [0.0, 1.0, 1.0]), "the position itself goes to white");
         assert!(close(scan(0.7, 0.5), [0.0, 0.1, 0.9]));
         let range = |range, position| Filter::HistogramRange { range, position }.point(c, [0.2, 0.5, 0.9]).unwrap();
         assert!(close(range(1.0, 0.3), [0.2, 0.5, 0.9]) && close(range(0.0, 0.3), [0.3; 3]));

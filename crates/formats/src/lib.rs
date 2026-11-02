@@ -12,6 +12,7 @@
 //! - [`export`]: texture export from a texture set's composite through [`ExportPreset`]s (file
 //!   name templates, channel packing, virtual maps such as the final normal, padding, resizing)
 //!   to PNG, JPEG, TGA, TIFF, BMP, WebP, EXR and HDR bytes.
+//! - [`materialx`]: a MaterialX (`.mtlx`) OpenPBR document for an exported texture set.
 //! - [`presets`]: the built-in export presets and JSON (de)serialization of user presets.
 //! - [`project_file`]: the `.tcraft` project zip (project JSON, sparse lossless pixel tiles,
 //!   baked maps, the original mesh and a thumbnail).
@@ -26,6 +27,8 @@ pub mod export;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fonts;
 pub mod image_res;
+pub mod materialx;
+pub mod materialx_read;
 pub mod mesh_export;
 pub mod mesh_import;
 pub mod presets;
@@ -36,7 +39,7 @@ pub use export::{
 };
 pub use image_res::{DecodedImage, coverage_png, decode_image};
 pub use mesh_export::{GlbTextures, UsdExport, UsdFormat, glb_bytes, glb_export_options, obj_bytes, usd_bytes, usd_export_options};
-pub use mesh_import::{HighPolyMesh, ImportedMesh, MeshFile, MeshReport, import_high_poly_bytes, import_mesh_bytes, self_contained_mesh};
+pub use mesh_import::{HighPolyMesh, ImportedMesh, MeshFile, MeshReport, import_high_poly_bytes, import_mesh_bytes, mesh_report, self_contained_mesh};
 #[cfg(not(target_arch = "wasm32"))]
 pub use presets::load_preset;
 pub use presets::{builtin_preset, builtin_presets, preset_from_json, preset_to_json};
