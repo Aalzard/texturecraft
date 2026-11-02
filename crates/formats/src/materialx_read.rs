@@ -277,7 +277,8 @@ impl<'a> Doc<'a> {
                     && let Some(t) =
                         node.input("uvtiling").and_then(|t| t.attr("value")).and_then(numbers).filter(|t| t.len() == 2 && t.iter().all(|v| *v > 0.0))
                 {
-                    self.tiling = Some([t[0], t[1]]);
+                    // The range a fill's UV scale accepts (`layer.fill.projection`).
+                    self.tiling = Some([t[0].clamp(0.001, 1000.0), t[1].clamp(0.001, 1000.0)]);
                 }
                 Found::Image(format!("{}{file}", prefix.unwrap_or("")))
             }
@@ -451,6 +452,8 @@ mod tests {
         assert_eq!(get(&m, Channel::Emissive), Some(&Value::Constant([1.0, 0.5, 0.0])));
         assert_eq!(m.uv_tiling, [4.0, 2.0]);
         assert!(m.warnings.is_empty(), "{:?}", m.warnings);
+        let extreme = OPENPBR.replace(r#"value="4, 2""#, r#"value="1e9, 1e-9""#);
+        assert_eq!(read_materialx(extreme.as_bytes(), None).unwrap().uv_tiling, [1000.0, 0.001], "clamped like a fill's UV scale");
     }
 
     #[test]

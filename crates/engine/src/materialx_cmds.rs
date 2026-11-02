@@ -134,8 +134,8 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(outside.into());
         }
         let len = std::fs::metadata(&full).map_err(|e| e.to_string())?.len();
-        if len > 512 << 20 {
-            return Err("the file is over 512 MiB".into());
+        if len > crate::resource_cmds::MAX_BYTES as u64 {
+            return Err(format!("the file is over {} MB", crate::resource_cmds::MAX_BYTES >> 20));
         }
         std::fs::read(&full).map_err(|e| e.to_string())
     };
