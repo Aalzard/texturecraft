@@ -1,6 +1,7 @@
 //! Arabic UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "لا يوجد رسم على \"{layer}\" بعد: يغيّر المرشح ما ترسمه عليها."),
     ("0 turns autosave off. Copies go to {folder}", "0 يعطل الحفظ التلقائي. تُحفظ النُسخ في {folder}"),
     ("2D view only", "عرض ثنائي الأبعاد فقط"),
     ("32 bits (float)", "32 بت (فاصلة عائمة)"),

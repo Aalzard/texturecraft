@@ -1,6 +1,10 @@
 //! Korean UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    (
+        "\"{layer}\" has no paint yet: the filter changes what you paint on it.",
+        "\"{layer}\"에 아직 페인트가 없습니다: 필터는 이 레이어에 칠하는 내용을 바꿉니다.",
+    ),
     ("0 turns autosave off. Copies go to {folder}", "0으로 설정하면 자동 저장이 꺼집니다. 사본 저장 위치: {folder}"),
     ("2D view only", "2D 뷰만"),
     ("32 bits (float)", "32비트 (float)"),
