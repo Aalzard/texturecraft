@@ -130,7 +130,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cell size (texels at 2K)", "单元大小（2K 下的纹素数）"),
     ("Cells", "细胞"),
     ("Channel", "通道"),
-    ("Channel source: uniform value, procedural or anchor", "通道来源：统一值、程序纹理或锚点"),
+    ("Channel source: uniform value, procedural, image or anchor", "通道来源：统一值、程序纹理、图像或锚点"),
     ("Channels", "通道"),
     ("Checker", "棋盘格"),
     ("Clamp", "钳制"),

@@ -151,7 +151,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cell size (texels at 2K)", "Tamanho da célula (texels em 2K)"),
     ("Cells", "Células"),
     ("Channel", "Canal"),
-    ("Channel source: uniform value, procedural or anchor", "Origem do canal: valor uniforme, procedural ou âncora"),
+    ("Channel source: uniform value, procedural, image or anchor", "Origem do canal: valor uniforme, procedural, imagem ou âncora"),
     ("Channels", "Canais"),
     ("Checker", "Xadrez"),
     ("Clamp", "Limitar"),
