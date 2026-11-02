@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod auto_rebake;
 pub mod bake_cmds;
 pub mod brush_preset_cmds;
 pub mod camera_cmds;
@@ -24,6 +25,7 @@ pub mod link_cmds;
 pub mod mask_cmds;
 pub mod material_lib;
 pub mod materials;
+pub mod materialx_cmds;
 pub mod meshmap_cmds;
 pub mod painting;
 pub mod path_tool;

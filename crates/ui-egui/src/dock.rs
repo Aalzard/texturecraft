@@ -583,7 +583,8 @@ fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, stack: &[Ef
     }
     resp.context_menu(|ui| {
         let keymap = app.ui.keymap.clone();
-        let paste = crate::menus::enabled(app, "effect.paste");
+        // The row is selected before the paste runs, so a copied effect is all it needs.
+        let paste = texturecraft_engine::effect_clipboard::clipboard_effect(&app.session).is_some();
         // The clipboard items show the layer clipboard's shortcuts, which act on a selected effect.
         for (label, id, keys, enabled) in [
             (tr("Copy effect"), "effect.copy", Some("layer.copy"), true),
@@ -694,7 +695,8 @@ fn layer_context_menu(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
     ui.separator();
     run(app, ui, tr("Cut layer(s)"), "layer.cut", json!({"layer": lid}), true);
     run(app, ui, tr("Copy layer(s)"), "layer.copy", json!({"layer": lid}), true);
-    let (paste_layer, paste_effect) = (crate::menus::enabled(app, "layer.paste"), crate::menus::enabled(app, "effect.paste"));
+    let paste_layer = crate::menus::enabled(app, "layer.paste");
+    let paste_effect = texturecraft_engine::effect_clipboard::clipboard_effect(&app.session).is_some();
     run(app, ui, tr("Paste layer(s)"), "layer.paste", json!({}), paste_layer);
     run(app, ui, tr("Paste effect"), "effect.paste", json!({}), paste_effect);
     let paste_instance = crate::menus::enabled(app, "layer.pasteInstance");

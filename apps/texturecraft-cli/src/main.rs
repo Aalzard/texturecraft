@@ -10,14 +10,14 @@ use serde_json::{Value, json};
 use texturecraft_automation::security::{client_token, server_token};
 use texturecraft_automation::{AuthorizedWorkspace, BridgeClient, Filesystem, Headless, RenderOptions, TexturecraftMcp, rpc};
 use texturecraft_engine::core::PROJECT_EXT;
-use texturecraft_engine::formats::{MeshReport, import_mesh, import_mesh_bytes};
+use texturecraft_engine::formats::{MeshReport, import_mesh, import_mesh_bytes, mesh_report};
 
 const USAGE: &str = "\
 texturecraft-cli: headless TextureCraft
 
 USAGE:
   texturecraft-cli --version
-  texturecraft-cli info <project.tcraft | mesh file>
+  texturecraft-cli info <project.tcraft | mesh file | builtin:<id>>
       Texture sets, layers, triangles, materials and the UV report, as JSON.
   texturecraft-cli commands [--filter <text>]
       List the engine commands (id, label, params).
@@ -220,6 +220,14 @@ fn report_json(r: &MeshReport) -> Value {
 
 fn info(a: &Args) -> R {
     let file = a.pos(0, "<file>")?;
+    if let Some(id) = file.strip_prefix("builtin:") {
+        let m = texturecraft_engine::geom::primitives::builtin(id).ok_or_else(|| format!("unknown built-in mesh `{id}`"))?;
+        let report = mesh_report(&m);
+        return print_json(&json!({
+            "file": file, "kind": "mesh", "triangles": m.triangle_count(), "vertices": m.vertex_count(),
+            "materials": m.materials, "textureSets": m.materials, "uv": report_json(&report),
+        }));
+    }
     if !is_project(file) {
         let m = import_mesh(Path::new(file)).map_err(|e| format!("cannot read {file}: {e}"))?;
         return print_json(&json!({
