@@ -78,7 +78,7 @@ impl Session {
                             unique
                         }
                     };
-                    Source::Image { name: resource }
+                    Source::image(resource)
                 }
             };
             fill.sources.insert(*channel, source);

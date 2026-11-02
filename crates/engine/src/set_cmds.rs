@@ -1,13 +1,13 @@
 //! Texture set commands (Texture Set List / Texture Set Settings).
 
 use serde_json::{Value, json};
-use texturecraft_core::{Channel, ChannelBlend, ChannelFormat, NormalFormat};
+use texturecraft_core::{Channel, ChannelBlend, ChannelFormat};
 
 use std::sync::Arc;
 
 use texturecraft_geom::Mesh;
 
-use crate::commands::{CommandSpec, always, bad, boolp, channel_param, f32p, strp, u64p};
+use crate::commands::{CommandSpec, always, bad, boolp, channel_param, f32p, normal_format_param, strp, u64p};
 use crate::session::{Document, SetCache, StackTarget, check_resolution};
 use crate::{Result, Session, cmd};
 
@@ -258,12 +258,7 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     let ts = ts_param(s, p, "textureSet.settings")?;
-    let nf = match strp(p, "normalFormat") {
-        Some("openGl") | Some("opengl") => Some(NormalFormat::OpenGl),
-        Some("directX") | Some("directx") => Some(NormalFormat::DirectX),
-        Some(o) => return Err(bad("textureSet.settings", format!("unknown normal format `{o}`"))),
-        None => None,
-    };
+    let nf = normal_format_param("textureSet.settings", p)?;
     s.edit("Texture set settings", |s| {
         if let Some(n) = nf {
             s.doc.project.normal_format = n;

@@ -68,7 +68,7 @@ fn link(s: &Session, id: LayerId) -> texturecraft_engine::core::MaterialLink {
 fn map_name(s: &Session, id: LayerId, c: Channel) -> String {
     match &s.doc.project.layer(id).unwrap().kind {
         LayerKind::Fill(f) => match f.sources.get(&c) {
-            Some(Source::Image { name }) => name.clone(),
+            Some(Source::Image { name, .. }) => name.clone(),
             other => panic!("{other:?}"),
         },
         _ => panic!("not a fill"),

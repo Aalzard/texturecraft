@@ -392,7 +392,8 @@ impl Session {
             }
             link.size = m.manifest.size[0];
             let stem = texturecraft_formats::sanitize_resource_name(&link.name);
-            let old: Vec<String> = fill.sources.values().filter_map(|src| if let Source::Image { name } = src { Some(name.clone()) } else { None }).collect();
+            let old: Vec<String> =
+                fill.sources.values().filter_map(|src| if let Source::Image { name, .. } = src { Some(name.clone()) } else { None }).collect();
             let names = put_maps(s, &stem, &maps, &mut fill);
             s.doc.project.layer_mut(id)?.kind = LayerKind::Fill(fill);
             // Old maps go unless another layer (a duplicate) still shows them.
@@ -433,7 +434,7 @@ fn put_maps(s: &mut Session, stem: &str, maps: &[(Channel, Vec<u8>, texturecraft
     for (c, bytes, _) in maps {
         let name = unique(s, &format!("{stem}_{}_{cook}.png", c.id()));
         s.doc.resources.insert(name.clone(), Arc::new(bytes.clone()));
-        fill.sources.insert(*c, Source::Image { name: name.clone() });
+        fill.sources.insert(*c, Source::image(name.clone()));
         names.push(name);
     }
     names

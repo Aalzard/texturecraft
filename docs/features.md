@@ -52,7 +52,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection, with
   the UV scale, rotation and offset, the tri-planar blend sharpness and offset, the planar axis
   and offset, and the cylindrical axis in the fill's properties. Each channel takes its own image (a normal, roughness or height map, say): pick it in the channel's
-  source menu, which also imports one, or drop it from the Assets panel onto the channel.
+  source menu, which also imports one, or drop it from the Assets panel onto the channel. A
+  normal map image made for DirectX (Y down) is marked with **DirectX normal map** under it.
   Alt+click a material channel (of a fill or the brush) to keep that channel alone.
 - **63 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
   velvet, skin, wax, glass, ice, woods, bark, stone, sand, mud, snow, bone, plastics, fabric,

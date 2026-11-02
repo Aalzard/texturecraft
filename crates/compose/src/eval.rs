@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use rayon::prelude::*;
 use texturecraft_core::{
     BakedMap, BlendMode, Channel, ChannelKind, CompareOp, Effect, EffectKind, Fill, Filter, Generator, GeneratorKind, HeightMask, Layer, LayerId, LayerKind,
-    Mask, MaskBackground, Project, Projection, Source, TextureSet, TileGrid, blend1, blend3, lum, mix3, per_unit,
+    Mask, MaskBackground, NormalFormat, Project, Projection, Source, TextureSet, TileGrid, blend1, blend3, lum, mix3, per_unit,
 };
 use texturecraft_geom::glam::{Vec2, Vec3};
 use texturecraft_geom::{Mesh, NO_TRI, UvGBuffer};
@@ -1037,7 +1037,7 @@ impl<'a, 'b> Texel<'a, 'b> {
         }
         let (c, _, w) = self.projected(proj);
         let image = sources.find_map(|s| match s {
-            Source::Image { name } => self.inp.images.get(name),
+            Source::Image { name, .. } => self.inp.images.get(name),
             _ => None,
         });
         w * image.map_or(1.0, |img| img.sample(c.uv.x, c.uv.y)[3].clamp(0.0, 1.0))
@@ -1051,7 +1051,7 @@ impl<'a, 'b> Texel<'a, 'b> {
                 let t = procedural(pattern, proj, &c);
                 mix3(*low, *high, t)
             }
-            Source::Image { name } => {
+            Source::Image { name, normal_format } => {
                 let Some(img) = self.inp.images.get(name) else { return [0.5; 3] };
                 let (c, proj, _) = self.projected(proj);
                 let mut acc = [0.0f32; 4];
@@ -1063,6 +1063,8 @@ impl<'a, 'b> Texel<'a, 'b> {
                 }
                 match kind {
                     ChannelKind::Color if img.srgb => [acc[0], acc[1], acc[2]].map(texturecraft_texel::srgb_to_linear),
+                    // Normal channels are OpenGL (+Y up the image): a DirectX image's green flips.
+                    ChannelKind::NormalMap if *normal_format == NormalFormat::DirectX => [acc[0], 1.0 - acc[1], acc[2]],
                     ChannelKind::Color | ChannelKind::NormalMap => [acc[0], acc[1], acc[2]],
                     ChannelKind::Scalar => [acc[0]; 3],
                     ChannelKind::Signed => [acc[0] * 2.0 - 1.0; 3],
@@ -2450,7 +2452,7 @@ soft {soft:?}"
         };
         let id = f.project.alloc_id();
         let mut fill = Fill { projection: Projection::Decal(d), ..Fill::default() };
-        fill.sources.insert(Channel::BaseColor, Source::Image { name: "decal".into() });
+        fill.sources.insert(Channel::BaseColor, Source::image("decal"));
         f.project.insert_layer(0, Layer::new(id, "Decal", LayerKind::Fill(fill), &[Channel::BaseColor]), None, false).unwrap();
         let composite = |alpha: f32| {
             let img = crate::store::ImageRes { width: 2, height: 2, rgba: vec![[1.0, 0.0, 0.0, alpha]; 4], srgb: false };

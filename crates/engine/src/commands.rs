@@ -3,7 +3,7 @@
 //! the menu structure (see `menu_catalog`).
 
 use serde_json::{Value, json};
-use texturecraft_core::{BlendMode, Channel};
+use texturecraft_core::{BlendMode, Channel, NormalFormat};
 
 use crate::{EngineError, Result, Session};
 
@@ -135,6 +135,16 @@ pub(crate) fn u64p(p: &Value, key: &str) -> Option<u64> {
 
 pub(crate) fn boolp(p: &Value, key: &str) -> Option<bool> {
     p.get(key).and_then(Value::as_bool)
+}
+
+/// The `normalFormat` param (`openGl` or `directX`), if given.
+pub(crate) fn normal_format_param(cmd: &str, p: &Value) -> Result<Option<NormalFormat>> {
+    match strp(p, "normalFormat") {
+        Some("openGl") | Some("opengl") => Ok(Some(NormalFormat::OpenGl)),
+        Some("directX") | Some("directx") => Ok(Some(NormalFormat::DirectX)),
+        Some(other) => Err(bad(cmd, format!("unknown normal format `{other}`"))),
+        None => Ok(None),
+    }
 }
 
 pub(crate) fn strp<'a>(p: &'a Value, key: &str) -> Option<&'a str> {
