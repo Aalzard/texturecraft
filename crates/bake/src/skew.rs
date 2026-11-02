@@ -115,7 +115,12 @@ impl SkewMap {
                     if t >= 1.0 {
                         continue;
                     }
-                    let fall = if t <= hardness { 1.0 } else { let k = (1.0 - t) / (1.0 - hardness); k * k * (3.0 - 2.0 * k) };
+                    let fall = if t <= hardness {
+                        1.0
+                    } else {
+                        let k = (1.0 - t) / (1.0 - hardness);
+                        k * k * (3.0 - 2.0 * k)
+                    };
                     if let Some(v) = self.values.get_mut(y * w + x) {
                         *v += (value - *v) * fall * strength;
                     }
@@ -311,7 +316,9 @@ mod tests {
         let mut map = SkewMap::constant(0.3).resized(16, 16).unwrap();
         let before = map.clone();
         let c = [Vec2::new(0.5, 0.5)];
-        for (pts, r, v) in [(&c[..], 0.0, 1.0), (&c[..], -1.0, 1.0), (&c[..], f32::NAN, 1.0), (&c[..], 0.1, f32::INFINITY), (&[Vec2::new(f32::NAN, 0.0)][..], 0.1, 1.0)] {
+        for (pts, r, v) in
+            [(&c[..], 0.0, 1.0), (&c[..], -1.0, 1.0), (&c[..], f32::NAN, 1.0), (&c[..], 0.1, f32::INFINITY), (&[Vec2::new(f32::NAN, 0.0)][..], 0.1, 1.0)]
+        {
             assert!(map.paint(pts, r, v, 0.5, 1.0).is_err(), "{pts:?} {r} {v}");
         }
         // Points far outside the atlas are harmless; a huge stroke is refused before any dab lands.

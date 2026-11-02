@@ -954,4 +954,12 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Unsaved changes", "저장되지 않은 변경 사항"),
     ("Don't save", "저장 안 함"),
     ("Save the changes to {name} before closing?", "닫기 전에 {name}의 변경 사항을 저장할까요?"),
+    ("Skew correction", "스큐 보정"),
+    ("Paint skew in the 2D view", "2D 뷰에서 스큐 칠하기"),
+    (
+        "Drag in the 2D view to paint where the bake rays turn onto the base normal; paint with a value of 0 to erase",
+        "2D 뷰에서 드래그하여 베이크 레이가 기본 노멀 쪽으로 향하는 위치를 칠합니다. 값 0으로 칠하면 지워집니다",
+    ),
+    ("Radius", "반경"),
+    ("Remove skew correction", "스큐 보정 제거"),
 ];

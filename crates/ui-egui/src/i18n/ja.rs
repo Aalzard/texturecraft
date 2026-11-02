@@ -969,4 +969,12 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Unsaved changes", "未保存の変更"),
     ("Don't save", "保存しない"),
     ("Save the changes to {name} before closing?", "閉じる前に {name} の変更を保存しますか？"),
+    ("Skew correction", "スキュー補正"),
+    ("Paint skew in the 2D view", "2Dビューでスキューをペイント"),
+    (
+        "Drag in the 2D view to paint where the bake rays turn onto the base normal; paint with a value of 0 to erase",
+        "2Dビューでドラッグして、ベイクのレイがベース法線へ向かう箇所をペイントします。値0でペイントすると消去されます",
+    ),
+    ("Radius", "半径"),
+    ("Remove skew correction", "スキュー補正を削除"),
 ];

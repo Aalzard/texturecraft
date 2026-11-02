@@ -947,4 +947,12 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Unsaved changes", "تغييرات غير محفوظة"),
     ("Don't save", "عدم الحفظ"),
     ("Save the changes to {name} before closing?", "هل تريد حفظ التغييرات في {name} قبل الإغلاق؟"),
+    ("Skew correction", "تصحيح الانحراف"),
+    ("Paint skew in the 2D view", "ارسم الانحراف في العرض ثنائي الأبعاد"),
+    (
+        "Drag in the 2D view to paint where the bake rays turn onto the base normal; paint with a value of 0 to erase",
+        "اسحب في العرض ثنائي الأبعاد لرسم المواضع التي تنعطف فيها أشعة الخَبْز نحو الناظم الأساسي؛ ارسم بالقيمة 0 للمسح",
+    ),
+    ("Radius", "نصف القطر"),
+    ("Remove skew correction", "إزالة تصحيح الانحراف"),
 ];

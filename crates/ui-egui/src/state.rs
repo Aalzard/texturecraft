@@ -255,6 +255,25 @@ pub struct UiState {
     /// The baker whose parameters bake mode shows (None: the common parameters).
     #[serde(default)]
     pub bake_baker: Option<BakedMap>,
+    /// The brush that paints the skew correction map in the 2D view of bake mode.
+    #[serde(default)]
+    pub skew_brush: SkewBrush,
+}
+
+/// Settings of the skew correction brush (radius in UV units).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkewBrush {
+    pub on: bool,
+    pub radius: f32,
+    /// 1 turns the rays onto the base normal, 0 erases.
+    pub value: f32,
+    pub hardness: f32,
+}
+
+impl Default for SkewBrush {
+    fn default() -> Self {
+        SkewBrush { on: false, radius: 0.03, value: 1.0, hardness: 0.5 }
+    }
 }
 
 impl UiState {
@@ -297,6 +316,7 @@ impl Default for UiState {
             recent: Vec::new(),
             keymap: Keymap::new(),
             bake_baker: None,
+            skew_brush: SkewBrush::default(),
         }
     }
 }

@@ -1002,4 +1002,12 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Unsaved changes", "Ungespeicherte Änderungen"),
     ("Don't save", "Nicht speichern"),
     ("Save the changes to {name} before closing?", "Änderungen an {name} vor dem Schließen speichern?"),
+    ("Skew correction", "Skew-Korrektur"),
+    ("Paint skew in the 2D view", "Skew in der 2D-Ansicht malen"),
+    (
+        "Drag in the 2D view to paint where the bake rays turn onto the base normal; paint with a value of 0 to erase",
+        "In der 2D-Ansicht ziehen, um zu malen, wo sich die Bake-Strahlen zur Basisnormalen drehen; mit dem Wert 0 wird gelöscht",
+    ),
+    ("Radius", "Radius"),
+    ("Remove skew correction", "Skew-Korrektur entfernen"),
 ];
