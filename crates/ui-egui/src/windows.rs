@@ -15,7 +15,7 @@ use crate::i18n::LANGUAGES;
 use crate::i18n::{tr, trf};
 use crate::state::Mode;
 use crate::theme::{Accent, Brightness, Tokens, caption};
-use crate::widgets::{color_swatch, combo, icon_button, primary_button, slider};
+use crate::widgets::{color_swatch, combo, icon_button, primary_button, slider, slider_edit};
 
 pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
     start(app, ctx);
@@ -28,6 +28,70 @@ pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
     export_mesh(app, ctx);
     if app.ui.mode == Mode::Baking {
         bake_bar(app, ctx);
+    }
+    unsaved(app, ctx);
+}
+
+/// Hold `then` (quitting, opening or closing a project) behind the unsaved-changes dialog when
+/// the project has unsaved changes; false when it can go ahead now.
+pub(crate) fn ask_to_save(app: &mut TextureCraftApp, then: crate::state::Unsaved) -> bool {
+    if app.session.modified {
+        app.ui.windows.unsaved = Some(then);
+    }
+    app.session.modified
+}
+
+/// Quitting, opening or closing a project with unsaved changes asks whether to save them first
+/// (in the browser, Save downloads the project).
+fn unsaved(app: &mut TextureCraftApp, ctx: &egui::Context) {
+    use crate::state::Unsaved;
+    if ctx.input(|i| i.viewport().close_requested()) && ask_to_save(app, Unsaved::Quit) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+    }
+    let Some(then) = app.ui.windows.unsaved.clone() else { return };
+    let mut open = true;
+    let mut save = None;
+    let mut cancel = false;
+    let name: [(&str, &dyn std::fmt::Display); 1] = [("name", &app.session.doc.project.name)];
+    let question =
+        if then == Unsaved::Quit { trf("Save the changes to {name} before closing?", &name) } else { trf("Save the changes to {name} first?", &name) };
+    dialog("unsaved", tr("Unsaved changes"), &mut open).show(ctx, |ui| {
+        ui.label(question);
+        ui.add_space(8.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add(primary_button(ui, tr("Save"))).clicked() {
+                save = Some(true);
+            }
+            if ui.button(tr("Don't save")).clicked() {
+                save = Some(false);
+            }
+            if ui.button(tr("Cancel")).clicked() {
+                cancel = true;
+            }
+        });
+    });
+    if !open || cancel {
+        app.ui.windows.unsaved = None;
+    }
+    match save {
+        Some(true) => {
+            file_action(app, ctx, "file.save");
+        }
+        // Going ahead anyway: the changes are let go.
+        Some(false) => app.session.modified = false,
+        None => return,
+    }
+    // A cancelled or failed save keeps the project and this dialog open.
+    if app.session.modified {
+        return;
+    }
+    app.ui.windows.unsaved = None;
+    match then {
+        Unsaved::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        Unsaved::Command(id) => crate::menus::invoke(app, ctx, &id),
+        #[cfg(not(target_arch = "wasm32"))]
+        Unsaved::Open(path) => open_path(app, &path),
+        Unsaved::Load(name, bytes) => crate::web_files::load(app, &name, std::sync::Arc::unwrap_or_clone(bytes)),
     }
 }
 
@@ -204,7 +268,7 @@ pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
     let ts = app.session.ts();
     if let Some(set) = app.session.doc.project.texture_sets.get(ts) {
         let mut hs = set.height_strength;
-        if slider(ui, tr("Height to normal strength"), &mut hs, 0.0..=10.0, 2).drag_stopped() {
+        if slider_edit(ui, tr("Height to normal strength"), &mut hs, 0.0..=10.0, 2) {
             app.run("textureSet.settings", json!({"ts": ts, "heightStrength": hs}));
         }
     }
@@ -1012,6 +1076,10 @@ pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) ->
 /// Open a project or mesh by path (menus, Recent projects, drag and drop).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_path(app: &mut TextureCraftApp, path: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if ask_to_save(app, crate::state::Unsaved::Open(path.into())) {
+        return;
+    }
     if app.run("file.open", json!({"path": path})).is_some() {
         remember(app, path);
         app.ui.mode = Mode::Painting;

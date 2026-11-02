@@ -194,21 +194,8 @@ impl Session {
     /// Layer `id` of texture set `ts` alone (content times mask) as premultiplied tiles per
     /// channel over the set's covered tiles. None for folders or a set not ready.
     pub(crate) fn flatten(&self, ts: usize, id: LayerId) -> Option<Vec<texturecraft_compose::eval::FlatTile>> {
-        let cache = self.caches.get(ts)?;
-        let tiles: Vec<(u32, u32)> = cache.covered_tiles.iter().copied().collect();
-        let empty = Default::default();
-        let inputs = texturecraft_compose::Inputs {
-            project: &self.doc.project,
-            ts,
-            mesh: &self.mesh,
-            gbuf: &cache.gbuf,
-            pixels: &self.doc.pixels,
-            baked: self.doc.baked.get(&ts).unwrap_or(&empty),
-            preview: None,
-            images: &self.images,
-            bounds: self.mesh.bounds(),
-        };
-        texturecraft_compose::flatten_layer(&inputs, id, &tiles)
+        let tiles: Vec<(u32, u32)> = self.caches.get(ts)?.covered_tiles.iter().copied().collect();
+        self.with_inputs(ts, |inp| texturecraft_compose::flatten_layer(inp, id, &tiles))
     }
 }
 
