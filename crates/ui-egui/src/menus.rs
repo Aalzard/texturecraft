@@ -269,17 +269,19 @@ pub fn forwarded_shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context, event
         let event = clipboard_key(&event, held).unwrap_or(event);
         let egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } = event else { continue };
         let Some((id, _)) = active.iter().find(|(_, sc)| sc.logical_key == key && modifiers.matches_logically(sc.modifiers)) else { continue };
-        invoke(app, ctx, clipboard_command(app, id));
+        invoke(app, ctx, effect_command(app, id));
     }
 }
 
-/// The layer clipboard shortcuts copy and cut the selected effect instead of its layer, and
-/// paste a copied effect onto the selection.
-fn clipboard_command<'a>(app: &TextureCraftApp, id: &'a str) -> &'a str {
+/// Layer shortcuts act on the selected effect instead of its layer (copy, cut, duplicate,
+/// remove), and paste a copied effect onto the selection.
+fn effect_command<'a>(app: &TextureCraftApp, id: &'a str) -> &'a str {
     let effect = matches!(app.session.target, texturecraft_engine::StackTarget::Effect(_));
     match id {
         "layer.copy" if effect => "effect.copy",
         "layer.cut" if effect => "effect.cut",
+        "layer.duplicate" if effect => "effect.duplicate",
+        "layer.remove" if effect => "effect.remove",
         "layer.paste" if enabled(app, "effect.paste") => "effect.paste",
         _ => id,
     }
@@ -323,7 +325,7 @@ pub fn shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context) {
             // Ctrl+V reaches the app only while the system clipboard holds text or an image.
             ctx.copy_text(layer.name.clone());
         }
-        invoke(app, ctx, clipboard_command(app, id));
+        invoke(app, ctx, effect_command(app, id));
     }
 }
 

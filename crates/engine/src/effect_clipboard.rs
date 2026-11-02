@@ -4,9 +4,9 @@
 use serde_json::{Value, json};
 use texturecraft_core::{EffectKind, LayerId, Mask, MaskBackground, Source};
 
-use crate::commands::{CommandSpec, bad, has_layer, layer_param, strp, u64p};
+use crate::commands::{CommandSpec, bad, has_layer, layer_param, strp};
 use crate::layer_ops::{empty_texel, fit};
-use crate::mask_cmds::{anchor_source, content_target};
+use crate::mask_cmds::{anchor_source, content_target, effect_id};
 use crate::session::StackTarget;
 use crate::{EngineError, Result, Session, cmd};
 
@@ -41,11 +41,7 @@ fn can_paste(s: &Session) -> std::result::Result<(), String> {
 
 fn copy(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "effect.copy";
-    let eid = match (u64p(p, "effect"), s.target) {
-        (Some(e), _) => LayerId(e),
-        (None, StackTarget::Effect(e)) => e,
-        (None, _) => return Err(bad(CMD, "`effect` is required (no effect is selected)")),
-    };
+    let eid = effect_id(s, p, CMD)?;
     if s.doc.project.effect(eid).is_none() {
         return Err(bad(CMD, format!("no effect {}", eid.0)));
     }
