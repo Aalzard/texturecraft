@@ -8,6 +8,7 @@ use std::fmt::Display;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod ar;
 mod de;
 mod es;
 mod fr;
@@ -28,7 +29,7 @@ pub struct Language {
     pub table: &'static [(&'static str, &'static str)],
 }
 
-const COUNT: usize = 9;
+const COUNT: usize = 10;
 
 pub static LANGUAGES: [Language; COUNT] = [
     Language { code: "en", name: "English", english: "English", table: &[] },
@@ -40,6 +41,7 @@ pub static LANGUAGES: [Language; COUNT] = [
     Language { code: "ja", name: "日本語", english: "Japanese", table: ja::TABLE },
     Language { code: "zh-Hans", name: "简体中文", english: "Chinese (Simplified)", table: zh_hans::TABLE },
     Language { code: "ko", name: "한국어", english: "Korean", table: ko::TABLE },
+    Language { code: "ar", name: "العربية", english: "Arabic", table: ar::TABLE },
 ];
 
 static MAPS: [OnceLock<HashMap<&'static str, &'static str>>; COUNT] = [const { OnceLock::new() }; COUNT];
@@ -182,6 +184,7 @@ mod tests {
             "Anchor point",
             "Layer mask",
             texturecraft_engine::camera_cmds::DEFAULT_CAMERA,
+            crate::dock::SOLO_HINT,
         ]);
         k.retain(|s| !s.is_empty() && !UNTRANSLATED.contains(s));
         k
@@ -270,7 +273,8 @@ mod tests",
         assert_eq!(trf("Saved {path}", &[("path", &"a.tcraft")]), "Saved a.tcraft");
         assert_eq!(trf("{a} of {b} {c}", &[("a", &1), ("b", &2)]), "1 of 2 {c}");
         assert_eq!(trf("{unclosed", &[]), "{unclosed");
-        for (locale, code) in [("de-AT", "de"), ("pt_PT.UTF-8", "pt-BR"), ("zh-Hant-TW", "zh-Hans"), ("ja", "ja"), ("ko_KR", "ko"), ("nl-NL", "en"), ("", "en")]
+        for (locale, code) in
+            [("de-AT", "de"), ("pt_PT.UTF-8", "pt-BR"), ("zh-Hant-TW", "zh-Hans"), ("ja", "ja"), ("ko_KR", "ko"), ("ar-EG", "ar"), ("nl-NL", "en"), ("", "en")]
         {
             assert_eq!(language_for_locale(locale), code, "{locale}");
         }

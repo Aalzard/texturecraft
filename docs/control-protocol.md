@@ -13,6 +13,14 @@ Everything TextureCraft does is an engine command with a stable id (`layer.add.f
 Programmatic calls never open dialogs: a command runs with its defaults. Only `ui.menu.invoke`
 behaves like a menu click. `session.inspect` shows every layer, mask, effect, fill source and
 painted tile count, so an agent can verify its work without a screenshot.
+`effect.histogram {effect, channel?, bins?}` counts the values an effect reads (a levels
+effect's input), so an agent can pick its input range from the data. `effect.move {effect,
+index}` reorders an effect within its stack (0 = bottom) and `effect.duplicate {effect}` copies
+one just above itself. `effect.copy {effect?}` and `effect.cut {effect?}` put an effect on the
+layer clipboard, and `effect.paste {layer?, target?}` adds it to another layer's content or mask.
+
+`edit.undo {steps?}` and `edit.redo {steps?}` go back or forward several steps at once (as far
+as the history reaches); `edit.history` lists the steps done and the undone ones, next first.
 
 ## Control channel (desktop app)
 
@@ -31,9 +39,16 @@ Loopback TCP (`127.0.0.1` only), one JSON object per line each way. Requests are
 {"id": 0, "method": "auth", "params": {"token": "<token>"}}
 ```
 
-The token is `TEXTURECRAFT_CONTROL_TOKEN` when that is set (16 characters or more), otherwise a
-fresh random token the app writes to `<temp>/texturecraft-control-<port>.token` (`<temp>` is
-`%TEMP%` on Windows, `$TMPDIR` or `/tmp` elsewhere). Any other first request is refused.
+The token is `TEXTURECRAFT_CONTROL_TOKEN` when that is set (16 to 1024 printable ASCII
+characters; surrounding whitespace is ignored), otherwise a fresh random 256-bit token the app
+writes to `<temp>/texturecraft-control-<port>.token` (`<temp>` is `%TEMP%` on Windows, `$TMPDIR`
+or `/tmp` elsewhere). On Unix the file is created new and readable by its owner only; when an
+existing file there cannot be replaced (another user's, in a shared `/tmp`), the control server
+stays off: set `TEXTURECRAFT_CONTROL_TOKEN` instead. Clients (`texturecraft-cli mcp --bridge`)
+only read a token file that is a regular file owned by them with no group or other permissions.
+
+A connection must authenticate within 10 seconds. Any other first request, or a wrong token, is
+refused and the connection closed. At most 16 connections are served at once.
 
 Scripted runs (agents, recordings, tests) can set `TEXTURECRAFT_NO_PREFS` (any value) so the app
 neither reads nor overwrites the user's saved layout and settings: it starts from the defaults and
@@ -45,10 +60,10 @@ keeps its state in a throwaway file.
 | `command.run` | `{id, params?}` | the command's JSON result |
 | `command.list` | `{filter?}` | `[{id, label, menu, shortcut, params, enabled}]` |
 | `session.inspect` | | project, mesh, texture sets, layer stack, tool, camera, display, history |
-| `ui.inspect` | | UI state, viewport rect, fps, bake progress, toasts |
+| `ui.inspect` | | UI state, viewport rect, fps, bake progress, toasts, `titleBar` (who draws the title bar this run: `app`, `integrated` on macOS, or `system`) |
 | `ui.menu.list` | | the menu catalog: `{menu, submenu, label, id, shortcut, implemented, enabled}` |
 | `ui.menu.invoke` | `{id}` | behaves like a menu click (may open a window) |
-| `ui.set` | fields of the UI state, e.g. `{"layout": "Only3D"}`; `dock` is the panel layout, a craft-ui docking `Workspace` (`{version, layout: {root, floating}, hidden}`; `root` is a tree of `Split`, `Tabs` and `Stack` nodes over the panels `Viewport`, `Assets`, `TextureSetList`, `Layers`, `TextureSetSettings`, `Properties`, `Display`, `Shader`, `History` and `Log`; `hidden` lists where each closed panel was, so reopening it puts it back; a layout that does not read or has no docked `Viewport` becomes the default), `prefs` the settings (`{"language": "ja", "viewport_texture": 1, "brightness": "light", "accent": "blue"}`; missing fields take their defaults; `brightness` is `dark`, `mediumDark` (default), `mediumLight` or `light`, `accent` `copper` (default), `coral`, `blue`, `violet`, `green`, `amber` or `pink`, applied on the next frame), `keymap` the custom shortcuts (`{"file.save": "F5"}`, `""` unbinds) | `null` |
+| `ui.set` | fields of the UI state, e.g. `{"layout": "Only3D"}`; `dock` is the panel layout, a craft-ui docking `Workspace` (`{version, layout: {root, floating}, hidden}`; `root` is a tree of `Split`, `Tabs` and `Stack` nodes over the panels `Viewport`, `Assets`, `TextureSetList`, `Layers`, `TextureSetSettings`, `Properties`, `Display`, `Shader`, `History` and `Log`; `hidden` lists where each closed panel was, so reopening it puts it back; a layout that does not read or has no docked `Viewport` becomes the default), `prefs` the settings (`{"language": "ja", "viewport_texture": 1, "brightness": "light", "accent": "blue"}`; missing fields take their defaults; `brightness` is `dark`, `mediumDark` (default), `mediumLight` or `light`, `accent` `copper` (default), `coral`, `blue`, `violet`, `green`, `amber` or `pink`, applied on the next frame; `system_title_bar` `true` has the system draw the title bar from the next start), `keymap` the custom shortcuts (`{"file.save": "F5"}`, `""` unbinds) | `null` |
 | `viewport.screenshot` | `{view?: "3d" \| "2d"}` | `{width, height, png}` (PNG, base64) |
 | `ui.screenshot` | | `{width, height, png}` of the whole window, after the next frame |
 | `ui.resize` | `{width, height}` | Sets the window's inner size in points (640–7680), leaving maximized state; for recordings and screenshots at a fixed size |
@@ -93,16 +108,19 @@ print(call("command.run", {"id": "layer.add.fill", "params": {"color": [0.8, 0.1
 - **Headless** (default): an in-process session that starts on the material ball (1024).
   Files are reachable only below the roots given at launch, as forward-slash paths relative to
   them: `--read-root <dir>` for `project_open` / `mesh_import` / `mesh_reimport` / `bake_mesh_add`,
-  `--write-root <dir>` for `project_save` / `material_save` / `textures_export` / `mesh_export`. Without roots there is no file access. `..`, absolute
+  `--write-root <dir>` for `project_save` / `material_save` / `textures_export` / `mesh_export`
+  (`--automation-read-root` / `--automation-write-root`, as in the other crafting apps, are the
+  same flags). Without roots there is no file access. `..`, absolute
   paths, drive letters, device names and symlink or junction escapes are refused.
 - **Bridge**: `--bridge <port>` forwards to a running `texturecraft --control <port>` (token from
   `--token`, `TEXTURECRAFT_CONTROL_TOKEN` or the app's token file). The app reads and writes its
   own files, so the path tools are unavailable there; `project_save` without a path invokes
   File › Save.
 
-Through `command_run`, every `file.*` command but `file.close` (and `file.reimportMesh` without
-a `path`) is refused, and so is any command given a `path` or `dir` (`resource.import`,
-`material.save`, `material.load`, …), in both modes: use the workspace tools below.
+Through `command_run`, every `file.*` command but `file.close` and `file.removeUnused` (and
+`file.reimportMesh` without a `path`) is refused, and so is any command given a `path` or `dir` (`resource.import`,
+`material.save`, `material.load`, …), in both modes: use the workspace tools below. `resource.text`
+takes a font family, not a path: it reads only the system's font folders.
 
 | Tool | Params | Notes |
 |---|---|---|
@@ -117,7 +135,7 @@ a `path`) is refused, and so is any command given a `path` or `dir` (`resource.i
 | `mesh_reimport` | `{path?, preserveStrokes?}` | Reimport the mesh from a file, or (no path) from the project's own copy; bridge mode supports only the latter |
 | `mesh_export` | `{path, format?}` | The mesh as obj, glb, usda, usdc or usdz below the write root (usda / usdc textures next to it) → `{path, textures?}` |
 | `bake_mesh_add` | `{path, cage?}` | Add a high-definition mesh for baking, or set the cage → `{name, meshes}` |
-| `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil` |
+| `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil`, or as a mesh map instead of baking it: `textureSet.meshMap.set {ts?, map, image}` (`textureSet.meshMap.clear {ts?, map}` empties the slot) |
 | `material_save` | `{path, layer?, name?}` | A layer or folder as a `.tcmat` smart material below the write root |
 | `material_load` | `{path}` | Add a `.tcmat` smart material, a MaterialCraft `.mcmat` material or a `.mcraft` package above the selection |
 | `textures_export` | `{dir, preset?, ts?, format?, padding?, size?}` | Writes files below the write root |
@@ -235,13 +253,14 @@ texturecraft-cli --version                                   # TextureCraft 0.1.
 texturecraft-cli info model.glb                              # triangles, materials, UV report
 texturecraft-cli info project.tcraft                         # texture sets, layers, baked maps
 texturecraft-cli commands --filter mask
-texturecraft-cli new builtin:material_ball ball.tcraft --resolution 1024 --sample
+texturecraft-cli new builtin:material_ball ball.tcraft --resolution 1024 --sample   # mesh maps baked at ≤ 1024 px
 texturecraft-cli new model.glb model.tcraft --resolution 2048
 texturecraft-cli run ball.tcraft layer.add.fill '{"color":"#c08040","metallic":1}' -o ball.tcraft
 texturecraft-cli batch script.json
 texturecraft-cli bake model.tcraft --resolution 2048 --maps ambientOcclusion,curvature,thickness
 texturecraft-cli export model.tcraft out/ --preset "Unreal Engine (Packed)" --format png --size 2048
 texturecraft-cli render ball.tcraft ball.png --size 1280x800 --view 3d --yaw 30 --pitch 15
+texturecraft-cli render scene.tcraft hero.png --size 1200x900 --camera Hero --samples 2048   # a saved camera (camera.add), path traced
 ```
 
 `<input>` is a `.tcraft` project, a mesh file or `builtin:<id>`. A batch script is a list of

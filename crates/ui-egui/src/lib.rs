@@ -23,6 +23,7 @@ pub mod shelf;
 pub mod state;
 pub mod theme;
 pub mod thumbs;
+pub mod titlebar;
 pub mod toolbar;
 pub mod viewport;
 pub mod web_files;
@@ -77,6 +78,8 @@ pub struct TextureCraftApp {
     pub gpu: Option<gpu::GpuLink>,
     pub control: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     pub toasts: Vec<Toast>,
+    /// Texture sets the GPU could not hold, and the text of the one sticky toast naming them.
+    pub(crate) gpu_memory: (Vec<String>, Option<String>),
     pub bake: Option<BakeJob>,
     pub resize: Option<ResizeJob>,
     pub link_cooks: Vec<LinkCook>,
@@ -86,6 +89,8 @@ pub struct TextureCraftApp {
     pub fps: f32,
     /// User smart materials found in the library folder (refreshed on demand).
     pub library: Option<Vec<std::path::PathBuf>>,
+    /// User brush presets found in the brushes folder (refreshed on demand).
+    pub brushes: Option<Vec<std::path::PathBuf>>,
     /// Rendering mode's path tracer.
     pub render: render_mode::RenderView,
     /// Smoothed CPU time spent building the UI per frame (ms).
@@ -102,6 +107,8 @@ pub struct TextureCraftApp {
     pub fonts: fonts::UiFonts,
     /// A notice across the top of the window until dismissed (English key, shown translated).
     pub banner: Option<&'static str>,
+    /// Who draws the window's title bar (decided at startup, before the window opens).
+    pub title_bar: titlebar::TitleBar,
     last_time: f64,
     /// When the next autosave is due (seconds of app time; desktop only).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -118,7 +125,7 @@ impl TextureCraftApp {
         // Bakes cast their rays on a GPU device of their own (created on the first bake).
         #[cfg(not(target_arch = "wasm32"))]
         texturecraft_engine::bake_cmds::install_gpu_tracer(Arc::new(texturecraft_render::gpu_bake::GpuBaker::new()));
-        let gpu = cc.wgpu_render_state.as_ref().map(gpu::init);
+        let gpu = cc.wgpu_render_state.as_ref().map(|rs| gpu::init(rs, &cc.egui_ctx));
         // The first run speaks the OS (or browser) language.
         let ui = cc.storage.and_then(|s| eframe::get_value::<UiState>(s, "ui")).unwrap_or_else(|| {
             let mut ui = UiState::default();
@@ -132,6 +139,7 @@ impl TextureCraftApp {
             gpu,
             control: None,
             toasts: Vec::new(),
+            gpu_memory: (Vec::new(), None),
             bake: None,
             resize: None,
             link_cooks: Vec::new(),
@@ -141,12 +149,14 @@ impl TextureCraftApp {
             ui_ms: 0.0,
             profiler: profile::Profiler::default(),
             library: None,
+            brushes: None,
             render: render_mode::RenderView::default(),
             last_paint_point: None,
             placing_decal: None,
             render_state: cc.wgpu_render_state.clone(),
             fonts: fonts::UiFonts::default(),
             banner: None,
+            title_bar: titlebar::TitleBar::default(),
             last_time: 0.0,
             next_autosave,
             styled: None,
@@ -177,6 +187,12 @@ impl TextureCraftApp {
 
     pub fn toast(&mut self, text: impl Into<String>, error: bool) {
         self.toasts.push(Toast { text: text.into(), error, until: self.last_time + if error { 6.0 } else { 3.0 } });
+    }
+
+    /// An error toast that stays until the user dismisses it (for a problem that persists and
+    /// is reported once, like a texture set the GPU could not hold).
+    pub fn toast_sticky(&mut self, text: impl Into<String>) {
+        self.toasts.push(Toast { text: text.into(), error: true, until: f64::INFINITY });
     }
 
     /// Start baking texture sets in the background (one after another).
@@ -443,7 +459,10 @@ impl eframe::App for TextureCraftApp {
         self.autosave(now);
         i18n::set_language(&self.ui.prefs.language);
         #[cfg(target_arch = "wasm32")]
-        keymap::sync_captured(&self.ui.keymap);
+        {
+            keymap::sync_captured(&self.ui.keymap);
+            web_files::sync_unsaved(self);
+        }
         self.fonts.update(ctx, i18n::current().code, self.ui.windows.settings);
         menus::shortcuts(self, ctx);
         profile::drive(self, ctx);
@@ -455,7 +474,7 @@ impl eframe::App for TextureCraftApp {
         let ctx = ui.ctx().clone();
         let t0 = now_ms();
         if !self.ui.hide_ui {
-            menus::menu_bar(self, ui);
+            titlebar::show(self, ui);
             banner(self, ui);
             toolbar::top_bar(self, ui);
             toolbar::status_bar(self, ui);
@@ -467,12 +486,10 @@ impl eframe::App for TextureCraftApp {
             toolbar::rail(self, ui);
         }
         let hide = self.ui.hide_ui;
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill({
-                let tk = theme::Tokens::get(&ctx);
-                if hide { tk.viewport } else { tk.chrome }
-            }))
-            .show(ui, |ui| if hide { viewport::central(self, ui) } else { docking::show(self, ui) });
+        let tk = theme::Tokens::get(&ctx);
+        // The dock keeps the cards' gutter from the bars and rails around it.
+        let frame = if hide { egui::Frame::NONE.fill(tk.viewport) } else { egui::Frame::NONE.fill(tk.chrome).inner_margin(theme::GUTTER) };
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| if hide { viewport::central(self, ui) } else { docking::show(self, ui) });
         windows::show(self, &ctx);
         toasts(self, &ctx);
         let end = now_ms();
@@ -510,29 +527,41 @@ pub fn now_ms() -> f64 {
 fn banner(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     let Some(text) = app.banner else { return };
     let tk = theme::Tokens::get(ui.ctx());
-    egui::Panel::top("banner").frame(egui::Frame::NONE.fill(tk.row_selected).inner_margin(egui::Margin::symmetric(10, 5))).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(egui_phosphor::regular::INFO).color(tk.accent));
-            // The text wraps in the width the dismiss button leaves.
-            let width = (ui.available_width() - 28.0).max(80.0);
-            ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(i18n::tr(text)).color(tk.text_strong)).wrap());
+    egui::Panel::top("banner").show_separator_line(false).frame(egui::Frame::NONE.fill(tk.row_selected).inner_margin(egui::Margin::symmetric(10, 5))).show(
+        ui,
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(egui_phosphor::regular::INFO).color(tk.accent));
+                // The text wraps in the width the dismiss button leaves.
+                let width = (ui.available_width() - 28.0).max(80.0);
+                ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.add(egui::Label::new(egui::RichText::new(i18n::tr(text)).color(tk.text_strong)).wrap());
+                });
+                if widgets::icon_button(ui, egui_phosphor::regular::X, i18n::tr("Dismiss"), false, 18.0).clicked() {
+                    app.banner = None;
+                }
             });
-            if widgets::icon_button(ui, egui_phosphor::regular::X, i18n::tr("Dismiss"), false, 18.0).clicked() {
-                app.banner = None;
-            }
-        });
-    });
+        },
+    );
 }
 
 fn toasts(app: &mut TextureCraftApp, ctx: &egui::Context) {
     if app.toasts.is_empty() {
         return;
     }
-    ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    // Expiring toasts need frames to disappear on time; sticky ones wait for a click.
+    if app.toasts.iter().any(|t| t.until.is_finite()) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    }
     let tk = theme::Tokens::get(ctx);
+    let mut dismissed = None;
+    // Toasts fit the window: at most 360 points wide and, for their text, a part of its height
+    // (longer text scrolls), so a sticky toast's dismiss button always stays on screen.
+    let screen = ctx.content_rect().size();
+    let max_width = (screen.x - 52.0).clamp(120.0, 360.0);
+    let max_text_height = (screen.y * 0.35).clamp(48.0, 220.0);
     egui::Area::new(egui::Id::unique("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -36.0)).show(ctx, |ui| {
-        for t in &app.toasts {
+        for (i, t) in app.toasts.iter().enumerate() {
             egui::Frame::NONE
                 .fill(tk.panel)
                 .stroke(egui::Stroke::new(1.0, if t.error { tk.danger } else { tk.accent }))
@@ -540,10 +569,26 @@ fn toasts(app: &mut TextureCraftApp, ctx: &egui::Context) {
                 .shadow(ui.visuals().popup_shadow)
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
-                    ui.set_max_width(360.0);
-                    ui.label(egui::RichText::new(&t.text).color(tk.text_strong));
+                    ui.set_max_width(max_width);
+                    let sticky = t.until.is_infinite();
+                    ui.horizontal_top(|ui| {
+                        // The text wraps in the width the dismiss button leaves.
+                        let width = if sticky { max_width - 28.0 } else { max_width };
+                        ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                            egui::ScrollArea::vertical().id_salt(("toast", i)).max_height(max_text_height).show(ui, |ui| {
+                                ui.set_max_width(width);
+                                ui.add(egui::Label::new(egui::RichText::new(&t.text).color(tk.text_strong)).wrap());
+                            });
+                        });
+                        if sticky && widgets::icon_button(ui, egui_phosphor::regular::X, i18n::tr("Dismiss"), false, 18.0).clicked() {
+                            dismissed = Some(i);
+                        }
+                    });
                 });
             ui.add_space(4.0);
         }
     });
+    if let Some(i) = dismissed.filter(|i| *i < app.toasts.len()) {
+        app.toasts.remove(i);
+    }
 }

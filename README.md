@@ -48,7 +48,7 @@
 <br>
 
 <p align="center">
-  <img src="docs/images/texturecraft-workspace.png" alt="The TextureCraft workspace: the material library on the left; the 3D viewport and the 2D UV view of a material ball in chipped red paint with grime and a hand-painted gold stripe, on a rusted iron base; and the texture set list, layer stack and brush properties on the right" width="100%">
+  <img src="docs/images/texturecraft-workspace.png" alt="The TextureCraft workspace: the material library on the left; the 3D viewport and the 2D UV view of a 1970s portable TV in aged cream plastic with a hand-drawn crayon flower; and the texture set list, the layer stack with its Crayon doodle and Wear and dirt folders, and the fill layer properties on the right" width="100%">
   <br><sub><b>The workspace</b>: asset shelf, 3D viewport, 2D UV view, texture sets, layer stack and properties</sub>
 </p>
 
@@ -73,7 +73,7 @@
 <table>
 <tr>
 <td width="50%" valign="top">
-  <img src="docs/images/texturecraft-bake.png" alt="Bake mode: the texture sets and mesh map bakers on the left, the common bake parameters below them, and the Bake selected textures button under the viewport" width="100%">
+  <img src="docs/images/texturecraft-bake.png" alt="Bake mode on the portable TV: its seven texture sets and the mesh map bakers on the left, the common bake parameters below them, and the Bake selected textures button under the viewport" width="100%">
   <p align="center"><sub><b>Bake mesh maps</b>: ambient occlusion, curvature, thickness and more, ray traced on the GPU</sub></p>
 </td>
 <td width="50%" valign="top">
@@ -83,11 +83,11 @@
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <img src="docs/images/texturecraft-rendering.png" alt="Rendering mode: the material ball path traced on the GPU at 256 samples with denoising, the gold stripe catching the studio light, and the render settings in a card over the viewport" width="100%">
+  <img src="docs/images/texturecraft-rendering.png" alt="Rendering mode: the portable TV path traced on the GPU at 256 samples with denoising, the curved screen catching the studio light, and the render settings in a card over the viewport" width="100%">
   <p align="center"><sub><b>Rendering mode</b> (F10): your textures path traced on the GPU, with a denoiser</sub></p>
 </td>
 <td width="50%" valign="top">
-  <img src="docs/images/texturecraft-light.png" alt="TextureCraft in the light brightness level with the blue accent: the same panels as rounded cards on a light background around the dark 3D viewport" width="100%">
+  <img src="docs/images/texturecraft-light.png" alt="TextureCraft in the light brightness level with the blue accent: the same panels as tiles on a light background around the dark 3D viewport" width="100%">
   <p align="center"><sub><b>Light theme</b>: four brightness levels and seven accent colours</sub></p>
 </td>
 </tr>
@@ -95,18 +95,19 @@
 
 ## Made in TextureCraft
 
-Both pieces below were textured with TextureCraft's procedural materials and smart materials (no
-textures or models from anywhere else) and path traced on the GPU by `texturecraft-cli render`.
+Two original props, modelled procedurally by contributors, textured layer by layer with TextureCraft's
+own materials, masks and mesh-map generators (no textures or models from anywhere else) and path
+traced on the GPU by `texturecraft-cli render`.
 
 <table>
 <tr>
 <td width="50%" valign="top">
-  <img src="docs/images/texturecraft-crate.png" alt="A path-traced crate: teal paint chipping off wooden planks, a rusted iron lid and a tarnished brass handle" width="100%">
-  <p align="center"><sub><b>Crate</b>: chipped paint on wood, rusted iron and tarnished brass smart materials, one per texture set</sub></p>
+  <img src="docs/images/texturecraft-lantern.png" alt="A path-traced storm lantern on a dark stage: red enamel chipped to bare steel on the edges, rust and grime in the seams, a cream pinstripe, a tarnished brass burner and knob, rusty guard wires and a glowing flame behind the glass globe" width="100%">
+  <p align="center"><sub><b>Storm lantern</b>: chipped enamel, rust, soot and a lit flame over eight texture sets</sub></p>
 </td>
 <td width="50%" valign="top">
-  <img src="docs/images/texturecraft-materials.png" alt="Three path-traced material balls: glossy red car paint with a clear coat, purple velvet with sheen, and brushed steel with anisotropic highlights" width="100%">
-  <p align="center"><sub><b>Shading lobes</b>: car paint (clear coat), velvet (sheen) and brushed steel (anisotropy)</sub></p>
+  <img src="docs/images/texturecraft-camera.png" alt="A path-traced vintage rangefinder camera: black enamel worn through to brass along the edges and corners of the top plate, cognac leatherette, knurled chrome dials, a black lens barrel with an engraved distance scale and a coated front element" width="100%">
+  <p align="center"><sub><b>Rangefinder camera</b>: black paint brassing, leatherette, chrome and coated glass</sub></p>
 </td>
 </tr>
 </table>
@@ -155,10 +156,10 @@ cd apps/texturecraft-web && trunk serve                      # web build
 cargo xtask ci                                               # fmt, clippy, tests, layering, wasm
 ```
 
-You need Rust 1.95 or newer. The app opens with a baked sample project; **File ▸ New project** starts
+You need Rust 1.95 or newer. The app opens with a baked sample project and a start window (new project, open, recent projects); **File ▸ New project** starts
 from a built-in mesh, a project template or your own mesh file (UVs are generated if it has none).
 
-Japanese, Chinese and Korean interface text uses the fonts of
+Japanese, Chinese, Korean and Arabic interface text uses the fonts of
 [storytold/craft-fonts](https://github.com/storytold/craft-fonts) where it has them, an optional
 build input (releases always use it): `CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p texturecraft`
 (an absolute path). Without it, the desktop app uses the installed system fonts.
@@ -188,7 +189,7 @@ area, the remaining work and what's next.
 to end, weighted by how much of the day each area carries: importing meshes, texture sets and UDIM
 tiles, the layer stack with masks, effects and smart materials, every painting tool, baking, the PBR
 viewport and Rendering mode, export presets and templates, and the full menu set. The interface
-speaks English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese and Korean;
+speaks English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese, Korean and Arabic;
 [localization-parity.md](docs/localization-parity.md) has the details. The scores are self-assessed
 from our code against public documentation.
 
@@ -265,13 +266,20 @@ stand on its own.
 |:-:|---|---|---|---|
 | <img src="https://raw.githubusercontent.com/storytold/photocraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.photocraft.png" alt="" width="32" height="32"> | **PhotoCraft** | Image editing: layers, masks, type and real PSD files | [GitHub](https://github.com/storytold/photocraft) | [Website](https://getartcraft.com/apps/photocraft) |
 | <img src="https://raw.githubusercontent.com/storytold/vectorcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.vectorcraft.png" alt="" width="32" height="32"> | **VectorCraft** | Vector illustration | [GitHub](https://github.com/storytold/vectorcraft) | [Website](https://getartcraft.com/apps/vectorcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/texturecraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.texturecraft.png" alt="" width="32" height="32"> | **TextureCraft** | **3D texture painting · you are here** | [GitHub](https://github.com/storytold/texturecraft) | [Website](https://getartcraft.com/apps/texturecraft) |
 | <img src="https://raw.githubusercontent.com/storytold/filmcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.filmcraft.png" alt="" width="32" height="32"> | **FilmCraft** | Video editing, color and sound | [GitHub](https://github.com/storytold/filmcraft) | [Website](https://getartcraft.com/apps/filmcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/lightcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.lightcraft.png" alt="" width="32" height="32"> | **LightCraft** | Photo library and raw development | [GitHub](https://github.com/storytold/lightcraft) | [Website](https://getartcraft.com/apps/lightcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/pdfcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.pdfcraft.png" alt="" width="32" height="32"> | **PdfCraft** | Reading, organizing and protecting PDFs | [GitHub](https://github.com/storytold/pdfcraft) | [Website](https://getartcraft.com/apps/pdfcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/effectcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.effectcraft.png" alt="" width="32" height="32"> | **EffectCraft** | Motion graphics and visual effects | [GitHub](https://github.com/storytold/effectcraft) | [Website](https://getartcraft.com/apps/effectcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/designcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.designcraft.png" alt="" width="32" height="32"> | **DesignCraft** | Page layout and publishing | [GitHub](https://github.com/storytold/designcraft) | [Website](https://getartcraft.com/apps/designcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/figcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.figcraft.png" alt="" width="32" height="32"> | **FigCraft** | Interface design and prototyping | [GitHub](https://github.com/storytold/figcraft) | [Website](https://getartcraft.com/apps/figcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/wordcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.wordcraft.png" alt="" width="32" height="32"> | **WordCraft** | Word processing and documents | [GitHub](https://github.com/storytold/wordcraft) | [Website](https://getartcraft.com/apps/wordcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/soundcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.soundcraft.png" alt="" width="32" height="32"> | **SoundCraft** | Audio recording and editing | [GitHub](https://github.com/storytold/soundcraft) | [Website](https://getartcraft.com/apps/soundcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/deckcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.deckcraft.png" alt="" width="32" height="32"> | **DeckCraft** | Presentations and slide decks | [GitHub](https://github.com/storytold/deckcraft) | [Website](https://getartcraft.com/apps/deckcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/cadcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.cadcraft.png" alt="" width="32" height="32"> | **CADCraft** | Computer-aided design | [GitHub](https://github.com/storytold/cadcraft) | [Website](https://getartcraft.com/apps/cadcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/gridcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.gridcraft.png" alt="" width="32" height="32"> | **GridCraft** | Spreadsheets and data | [GitHub](https://github.com/storytold/gridcraft) | [Website](https://getartcraft.com/apps/gridcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/texturecraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.texturecraft.png" alt="" width="32" height="32"> | **TextureCraft** | 3D texture painting | [GitHub](https://github.com/storytold/texturecraft) | [Website](https://getartcraft.com/apps/texturecraft) |
+| <img src="https://raw.githubusercontent.com/storytold/craft-anything/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.craft-anything.png" alt="" width="32" height="32"> | **Craft Anything** | See how any software works, then build your own | [GitHub](https://github.com/storytold/craft-anything) | [Website](https://getartcraft.com/apps/craft-anything) |
+| <img src="https://raw.githubusercontent.com/tangency-labs/solidcraft/main/assets/icons/app/linux/exports/hicolor/64x64/apps/io.tangencylabs.solidcraft.png" alt="" width="32" height="32"> | **SolidCraft** | Parametric 3D CAD by Tangency Labs (community app) | [GitHub](https://github.com/tangency-labs/solidcraft) | |
 
 And [**ArtCraft**](https://getartcraft.com/) itself, our AI image and video studio for artists who want real control.
 

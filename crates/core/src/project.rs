@@ -254,7 +254,8 @@ impl Default for BakeSettings {
             ao: RaySettings::default(),
             ao_ignore_backface: false,
             ao_self_occlusion: SelfOcclusion::Always,
-            thickness: RaySettings::default(),
+            // Thickness is hit distance / max distance: long rays turn thin parts almost black.
+            thickness: RaySettings { max_distance: 0.1, ..RaySettings::default() },
             bent_normal: RaySettings::default(),
             curvature_strength: 1.0,
             curvature_from_normal: false,
@@ -592,6 +593,9 @@ impl Default for Camera {
     }
 }
 
+/// Built-in environments, in menu order.
+pub const ENVIRONMENTS: [&str; 6] = ["Studio Soft", "Studio Contrast", "Overcast", "Sunset", "Warehouse", "Night"];
+
 /// Prefix of [`DisplaySettings::environment`] naming an image resource.
 pub const ENV_RESOURCE_PREFIX: &str = "resource:";
 
@@ -637,6 +641,10 @@ pub struct Project {
     pub name: String,
     /// Path of the mesh inside the project file (or a built-in primitive id `builtin:<name>`).
     pub mesh: String,
+    /// File name the mesh was imported from (`quad.gltf`). The stored mesh is read again under
+    /// it, so parts the file leaves unnamed get the same name (from it) as on import.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mesh_file: String,
     pub normal_format: NormalFormat,
     pub texture_sets: Vec<TextureSet>,
     pub layers: BTreeMap<LayerId, Layer>,
@@ -653,6 +661,7 @@ impl Project {
             format_version: FORMAT_VERSION,
             name: name.into(),
             mesh: mesh.into(),
+            mesh_file: String::new(),
             normal_format: NormalFormat::OpenGl,
             texture_sets: Vec::new(),
             layers: BTreeMap::new(),

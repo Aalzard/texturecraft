@@ -445,7 +445,7 @@ pub(crate) fn read(bytes: &[u8]) -> Result<RawMesh> {
         if zip.len() > MAX_ZIP_ENTRIES {
             return Err(FormatError::TooLarge(format!("the FBX package has more than {MAX_ZIP_ENTRIES} entries")));
         }
-        let name = zip.file_names().filter(|n| super::extension(n) == "fbx").min_by_key(|n| zip.index_for_name(n)).map(str::to_string);
+        let name = zip.file_names().flatten().filter(|n| super::extension(n) == "fbx").min_by_key(|n| zip.index_for_name(n)).map(Cow::into_owned);
         let name = name.ok_or_else(|| malformed(KIND, "the package contains no FBX file"))?;
         let fbx = zip_entry(&mut zip, &name, MAX_MESH_FILE_BYTES)
             .ok_or_else(|| FormatError::TooLarge("the packaged FBX is unreadable or larger than 2 GiB".into()))?;

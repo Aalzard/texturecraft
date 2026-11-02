@@ -9,9 +9,11 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod bake_cmds;
+pub mod brush_preset_cmds;
 pub mod camera_cmds;
 pub mod commands;
 pub mod decal_cmds;
+pub mod effect_clipboard;
 pub mod file_cmds;
 pub mod filter_lib;
 pub mod inspect;
@@ -22,6 +24,7 @@ pub mod link_cmds;
 pub mod mask_cmds;
 pub mod material_lib;
 pub mod materials;
+pub mod meshmap_cmds;
 pub mod painting;
 pub mod path_tool;
 // Mesh reimport reads files: native only.
@@ -36,6 +39,7 @@ pub mod session;
 pub mod set_cmds;
 pub mod smart_masks;
 pub mod template_cmds;
+pub mod text_cmds;
 pub mod tool_cmds;
 pub mod uv_tile_cmds;
 pub mod view_cmds;

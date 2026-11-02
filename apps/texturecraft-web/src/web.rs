@@ -1,5 +1,6 @@
 //! The eframe web runner: canvas lookup, backend selection, the loading screen's startup steps,
-//! browser shortcuts the app takes over, and startup errors shown in the page.
+//! browser shortcuts the app takes over, the unsaved-changes guard on close, and startup errors
+//! shown in the page.
 
 use texturecraft_engine::Session;
 use texturecraft_ui_egui::TextureCraftApp;
@@ -14,6 +15,7 @@ const PROGRESS_ID: &str = "texturecraft_progress";
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
     capture_app_shortcuts();
+    guard_unsaved_changes();
     wasm_bindgen_futures::spawn_local(async {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else {
             log::error!("no document");
@@ -54,6 +56,7 @@ async fn run(canvas: web_sys::HtmlCanvasElement) -> Result<(), String> {
             options,
             Box::new(|cc| {
                 let mut app = TextureCraftApp::new(cc, session);
+                app.ui.windows.start = app.ui.prefs.start_window;
                 if let Some(rs) = &cc.wgpu_render_state {
                     let backend = rs.adapter.get_info().backend;
                     log::info!("TextureCraft: wgpu backend {backend:?}");
@@ -115,6 +118,23 @@ fn capture_app_shortcuts() {
     }
     // The listener lives as long as the page.
     on_key.forget();
+}
+
+/// Closing or reloading the tab with unsaved changes makes the browser ask first (it shows its
+/// own message; pages can't word it).
+fn guard_unsaved_changes() {
+    let Some(window) = web_sys::window() else { return };
+    let on_unload = Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(|e: web_sys::BeforeUnloadEvent| {
+        if texturecraft_ui_egui::web_files::unsaved() {
+            e.prevent_default();
+            // Browsers that predate `preventDefault` here read the return value.
+            e.set_return_value("unsaved");
+        }
+    });
+    if let Err(e) = window.add_event_listener_with_callback("beforeunload", on_unload.as_ref().unchecked_ref()) {
+        log::warn!("couldn't guard unsaved changes on close: {e:?}");
+    }
+    on_unload.forget();
 }
 
 /// The baked sample project, or an empty material ball if that fails. Texture and bake sizes are

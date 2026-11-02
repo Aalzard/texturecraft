@@ -65,6 +65,9 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("chrome", "Chrome", METAL, [0.55, 0.556, 0.554], 1.0, 0.05),
     m("titanium", "Titanium", METAL, [0.542, 0.497, 0.449], 1.0, 0.32),
     m("nickel", "Nickel", METAL, [0.66, 0.609, 0.526], 1.0, 0.25),
+    m("platinum", "Platinum", METAL, [0.673, 0.637, 0.585], 1.0, 0.2),
+    m("zinc", "Zinc", METAL, [0.664, 0.824, 0.85], 1.0, 0.38),
+    m("cobalt", "Cobalt", METAL, [0.662, 0.655, 0.634], 1.0, 0.3),
     m("galvanized", "Steel Galvanized", METAL, [0.69, 0.71, 0.72], 1.0, 0.4),
     m("rust", "Rust", METAL, [0.3, 0.1, 0.03], 0.0, 0.85),
     // Woods.
@@ -73,6 +76,7 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("wood_walnut", "Walnut", WOOD, [0.12, 0.06, 0.03], 0.0, 0.5),
     m("wood_pine", "Pine", WOOD, [0.52, 0.33, 0.16], 0.0, 0.65),
     m("plywood", "Plywood", WOOD, [0.55, 0.38, 0.21], 0.0, 0.75),
+    m("bark", "Bark", WOOD, [0.14, 0.1, 0.07], 0.0, 0.9),
     m("wood_painted", "Wood Painted", WOOD, [0.61, 0.59, 0.54], 0.0, 0.48),
     // Stone, masonry and earth.
     m("concrete", "Concrete", STONE, [0.27, 0.26, 0.25], 0.0, 0.9),
@@ -86,6 +90,8 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("slate", "Slate", STONE, [0.11, 0.115, 0.13], 0.0, 0.72),
     m("sandstone", "Sandstone", STONE, [0.52, 0.38, 0.23], 0.0, 0.9),
     m("terrazzo", "Terrazzo", STONE, [0.7, 0.69, 0.66], 0.0, 0.3),
+    m("sand", "Sand", STONE, [0.52, 0.41, 0.26], 0.0, 0.95),
+    m("mud", "Mud", STONE, [0.12, 0.08, 0.05], 0.0, 0.6),
     // Plastics, rubber, composites.
     m("plastic_glossy", "Plastic Glossy", PLASTIC, [0.8, 0.12, 0.08], 0.0, 0.16),
     m("plastic_matte", "Plastic Matte", PLASTIC, [0.18, 0.18, 0.19], 0.0, 0.6),
@@ -102,12 +108,15 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("ceramic", "Ceramic White", GLASS, [0.8, 0.8, 0.78], 0.0, 0.08),
     m("glass", "Glass Clear", GLASS, [0.88, 0.9, 0.9], 0.0, 0.03),
     m("glass_frosted", "Glass Frosted", GLASS, [0.84, 0.88, 0.88], 0.0, 0.45),
+    m("ice", "Ice", GLASS, [0.72, 0.82, 0.88], 0.0, 0.12),
     m("car_paint", "Car Paint", PLASTIC, [0.45, 0.025, 0.03], 0.0, 0.4),
     // Organic.
     m("skin", "Skin", ORGANIC, [0.56, 0.35, 0.27], 0.0, 0.5),
     m("wax", "Candle Wax", ORGANIC, [0.8, 0.72, 0.55], 0.0, 0.35),
     m("cork", "Cork", ORGANIC, [0.36, 0.21, 0.1], 0.0, 0.85),
     m("paper", "Paper", ORGANIC, [0.82, 0.81, 0.77], 0.0, 0.92),
+    m("snow", "Snow", ORGANIC, [0.85, 0.87, 0.9], 0.0, 0.6),
+    m("bone", "Bone", ORGANIC, [0.7, 0.63, 0.5], 0.0, 0.55),
     // Smart materials.
     sm("steel_painted_worn", "Steel Painted Worn", METAL, [0.42, 0.06, 0.04], 0.2, 0.45),
     sm("steel_painted_rust", "Steel Painted Rust Leaks", METAL, [0.62, 0.62, 0.6], 0.1, 0.5),
@@ -232,10 +241,11 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
     let clouds_rough = |seed: u32| gray(P::Clouds, 6.0, seed, r * 0.85, (r * 1.2).min(1.0));
     match m.id {
         // ---- Metals -------------------------------------------------------------------------
-        "steel" | "steel_dark" | "iron" | "copper" | "brass" | "bronze" | "gold_polished" | "silver" | "aluminium" | "chrome" | "nickel" => {
-            plain_metal(b, clouds_rough(7))
-        }
+        "steel" | "steel_dark" | "iron" | "copper" | "brass" | "bronze" | "gold_polished" | "silver" | "aluminium" | "chrome" | "nickel" | "platinum"
+        | "cobalt" => plain_metal(b, clouds_rough(7)),
         "steel_stainless" | "aluminium_brushed" | "titanium" => plain_metal(b, gray(P::Brushed, 3.0, 3, r * 0.75, r * 1.25)),
+        // Zinc plate: large crystalline spangles.
+        "zinc" => one(b, metal(pat(P::Voronoi, 6.0, 21, 1.0, m.base.map(|v| v * 0.8), m.base), gray(P::Voronoi, 6.0, 21, r * 1.5, r * 0.6))),
         // Brushing lines run along X; the highlights stretch across them (a quarter turn).
         "steel_brushed_aniso" => one(
             b,
@@ -275,6 +285,19 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
         }
         // Stone chips in a pale binder, polished flat.
         "terrazzo" => one(b, dielectric(pat(P::Voronoi, 18.0, 9, 1.0, [0.55, 0.55, 0.53], [0.85, 0.84, 0.8]), gray(P::Voronoi, 18.0, 9, 0.34, 0.26))),
+        // Fine grains in soft wind ripples.
+        "sand" => one(
+            b,
+            plus(dielectric(pat(P::Noise, 12.0, 27, 1.0, [0.42, 0.32, 0.19], [0.6, 0.48, 0.31]), u(0.95)), height(gray(P::Perlin, 4.0, 27, -0.012, 0.0))),
+        ),
+        // Glossy wet patches over rougher, drier mud.
+        "mud" => one(
+            b,
+            plus(
+                dielectric(pat(P::Clouds, 3.0, 29, 1.0, [0.05, 0.035, 0.02], [0.17, 0.12, 0.075]), gray(P::Grunge, 3.0, 29, 0.85, 0.2)),
+                height(gray(P::Clouds, 3.0, 29, -0.03, 0.0)),
+            ),
+        ),
         "cork" => {
             one(b, plus(dielectric(pat(P::Noise, 6.0, 17, 1.0, [0.25, 0.14, 0.06], [0.45, 0.28, 0.13]), u(0.85)), height(gray(P::Pores, 20.0, 17, -0.01, 0.0))))
         }
@@ -310,6 +333,11 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
             ),
         ),
         "plywood" => one(b, dielectric(pat(P::Wood, 1.2, 15, 0.6, [0.42, 0.27, 0.13], [0.66, 0.47, 0.27]), gray(P::Wood, 1.2, 15, 0.8, 0.7))),
+        // Dark, deep furrows between gray-brown ridges.
+        "bark" => one(
+            b,
+            plus(dielectric(pat(P::Streaks, 8.0, 25, 1.4, [0.13, 0.105, 0.08], [0.03, 0.022, 0.015]), u(0.9)), height(gray(P::Streaks, 8.0, 25, 0.0, -0.06))),
+        ),
         "wood_painted" => one(
             b,
             plus(
@@ -357,15 +385,21 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
         "plastic_glossy" | "plastic_matte" | "ceramic" => one(b, dielectric(rgb(m.base), clouds_rough(9))),
         "plastic_textured" => one(b, plus(dielectric(rgb(m.base), gray(P::Leather, 40.0, 5, 0.66, 0.5)), height(gray(P::Leather, 40.0, 5, -0.01, 0.0)))),
         "rubber" => one(b, dielectric(pat(P::Noise, 0.5, 3, 1.0, [0.025; 3], [0.035; 3]), gray(P::Noise, 0.5, 3, 0.84, 0.94))),
-        "carbon_fiber" => {
-            one(b, plus(dielectric(pat(P::Weave, 24.0, 1, 1.0, [0.01, 0.01, 0.012], [0.06, 0.06, 0.065]), u(r)), height(gray(P::Weave, 24.0, 1, 0.0, 0.006))))
-        }
+        // Twill-woven tows under a clear coat: the warp catches the light, the weft stays dark.
+        "carbon_fiber" => one(
+            b,
+            plus(
+                dielectric(pat(P::Twill, 12.0, 1, 1.0, [0.004, 0.004, 0.005], [0.08, 0.08, 0.085]), gray(P::Twill, 12.0, 1, 0.5, 0.28)),
+                [(CoatWeight, u(1.0)), (CoatRoughness, u(r * 0.2)), (Height, gray(P::Twill, 12.0, 1, 0.0, 0.002))],
+            ),
+        ),
         // ---- Fabric and leather -------------------------------------------------------------
         "fabric" => {
             one(b, plus(dielectric(pat(P::Weave, 18.0, 2, 1.0, [0.27, 0.29, 0.34], [0.6, 0.62, 0.7]), u(r)), height(gray(P::Weave, 18.0, 2, -0.01, 0.0))))
         }
+        // Indigo twill: diagonal ribs.
         "denim" => {
-            one(b, plus(dielectric(pat(P::Weave, 22.0, 5, 1.0, [0.02, 0.03, 0.08], [0.12, 0.16, 0.3]), u(r)), height(gray(P::Weave, 22.0, 5, -0.01, 0.0))))
+            one(b, plus(dielectric(pat(P::Twill, 22.0, 5, 1.0, [0.015, 0.025, 0.07], [0.15, 0.2, 0.38]), u(r)), height(gray(P::Twill, 22.0, 5, -0.01, 0.0))))
         }
         "leather" => one(
             b,
@@ -384,8 +418,9 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
         "velvet" => one(
             b,
             plus(
-                dielectric(pat(P::Weave, 30.0, 3, 1.0, [0.07, 0.008, 0.05], m.base), u(r)),
-                [(SheenWeight, u(1.0)), (SheenColor, rgb([0.95, 0.55, 0.85])), (SheenRoughness, u(0.35)), (Height, gray(P::Weave, 30.0, 3, -0.004, 0.0))],
+                // A pile, not a weave: soft crushed patches under a bright sheen.
+                dielectric(pat(P::Clouds, 3.0, 3, 1.0, [0.06, 0.006, 0.045], m.base), u(r)),
+                [(SheenWeight, u(1.0)), (SheenColor, rgb([0.95, 0.55, 0.85])), (SheenRoughness, u(0.35)), (Height, gray(P::Noise, 1.0, 3, -0.002, 0.0))],
             ),
         ),
         // ---- Coated and translucent ---------------------------------------------------------
@@ -406,6 +441,27 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
         "wax" => one(b, plus(dielectric(pat(P::Clouds, 2.0, 11, 1.0, [0.74, 0.66, 0.5], m.base), clouds_rough(11)), [(ScatterWeight, u(1.0))])),
         // ---- Glass (the Transmission channel; the base color tints the light going through) ----
         "glass" => one(b, plus(dielectric(rgb(m.base), u(r)), [(Transmission, u(1.0))])),
+        // Clear with cloudy patches of trapped air.
+        "ice" => one(
+            b,
+            plus(dielectric(pat(P::Clouds, 4.0, 31, 1.0, m.base, [0.84, 0.88, 0.9]), clouds_rough(31)), [(Transmission, gray(P::Clouds, 4.0, 31, 0.9, 0.5))]),
+        ),
+        // Bright, rough and slightly translucent.
+        "snow" => one(
+            b,
+            plus(
+                dielectric(pat(P::Clouds, 4.0, 33, 1.0, [0.8, 0.82, 0.86], [0.88, 0.89, 0.9]), gray(P::Noise, 1.0, 33, 0.5, 0.7)),
+                [(ScatterWeight, u(0.5)), (Height, gray(P::Perlin, 3.0, 33, -0.02, 0.0))],
+            ),
+        ),
+        // Porous, ivory to tan, with a little light under the surface.
+        "bone" => one(
+            b,
+            plus(
+                dielectric(pat(P::Clouds, 5.0, 35, 1.0, [0.58, 0.5, 0.37], m.base), clouds_rough(35)),
+                [(ScatterWeight, u(0.3)), (Height, gray(P::Pores, 16.0, 35, -0.006, 0.0))],
+            ),
+        ),
         "glass_frosted" => one(b, plus(dielectric(rgb(m.base), gray(P::Noise, 1.0, 2, 0.4, 0.5)), [(Transmission, u(1.0))])),
         // ---- Smart materials ----------------------------------------------------------------
         "steel_painted_worn" => {

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::i18n::n_;
 
 /// Settings › Interface › Brightness: the greys of the interface. The 3D and 2D views keep their
-/// studio grey in every level (they show a render, not chrome).
+/// studio slate in every level (they show a render, not chrome).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Brightness {
@@ -135,9 +135,10 @@ pub struct Tokens {
     pub danger: Color32,
     /// Warnings and the mask-view marker.
     pub warning: Color32,
-    /// The 3D and 2D views' background: a neutral studio grey in every brightness.
+    /// The 3D and 2D views' background (the middle of the renderer's studio backdrop): a dark,
+    /// faintly cool slate in every brightness, so colors are judged against the same ground.
     pub viewport: Color32,
-    /// Lettering drawn over the views (always on their dark grey).
+    /// Lettering drawn over the views (always on their dark slate).
     pub viewport_text: Color32,
     /// The accent drawn over the views (its dark-panel shade, whatever the brightness).
     pub viewport_accent: Color32,
@@ -175,8 +176,8 @@ impl Tokens {
             tool_active: hex(0x2f3541),
             danger: hex(0xe0554a),
             warning: hex(0xe0b040),
-            viewport: hex(0x2a2a2a),
-            viewport_text: hex(0x969696),
+            viewport: hex(0x272b31),
+            viewport_text: hex(0x9aa1ad),
             viewport_accent: hex(0xe58a4e),
             radius: 5,
         };
@@ -258,11 +259,15 @@ impl Tokens {
     }
 }
 
-/// The corner radius of [`card`]s.
+/// The corner radius of floating windows and menus.
 pub const CARD_RADIUS: u8 = 8;
 
+/// The window-frame gap between neighbouring cards and dock groups (the dock's own gap).
+pub const GUTTER: i8 = 6;
+
 /// The tool bar, the tool shelf, the rail and side panels are cards: `body` drawn `padding` inside
-/// the panel colour with soft corners, `margin` of the window's frame colour around it.
+/// the panel colour, `margin` of the window's frame colour around it. Square like the dock's
+/// groups, so the frame reads as one set of tiles with even gutters.
 pub fn card<R>(ui: &mut egui::Ui, t: &Tokens, margin: egui::Margin, padding: egui::Margin, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::Frame::NONE
         .fill(t.chrome)
@@ -270,7 +275,6 @@ pub fn card<R>(ui: &mut egui::Ui, t: &Tokens, margin: egui::Margin, padding: egu
         .show(ui, |ui| {
             egui::Frame::NONE
                 .fill(t.panel)
-                .corner_radius(CARD_RADIUS)
                 .inner_margin(padding)
                 .show(ui, |ui| {
                     ui.set_min_size(ui.available_size());
@@ -281,10 +285,39 @@ pub fn card<R>(ui: &mut egui::Ui, t: &Tokens, margin: egui::Margin, padding: egu
         .inner
 }
 
-/// The app's fonts: egui's defaults and the Phosphor icon font (`fonts::UiFonts` adds CJK).
+/// Interface text in the semibold weight: headings and window titles.
+pub fn semibold(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(SEMIBOLD.into()))
+}
+
+/// The semibold family: Inter SemiBold, the regular font without it.
+pub(crate) const SEMIBOLD: &str = "ui-semibold";
+
+/// The app's fonts: Inter (regular and semibold) when built with craft-fonts, egui's defaults
+/// otherwise, egui's monospace face for values, and the Phosphor icon font (`fonts::UiFonts`
+/// adds CJK).
 pub fn font_definitions() -> egui::FontDefinitions {
+    use std::sync::Arc;
     let mut fonts = egui::FontDefinitions::default();
+    let face = |style: &str| crate::fonts::CRAFT_FONTS.iter().find(|f| f.family == "Inter" && f.style == style && !f.bytes.is_empty());
+    // Inter is drawn a little under its size, as in VectorCraft: its letters are wide.
+    let inter = |bytes: &'static [u8]| Arc::new(egui::FontData::from_static(bytes).tweak(egui::FontTweak { scale: 0.92, ..Default::default() }));
+    let mut semibold = None;
+    if let (Some(regular), Some(bold)) = (face("Regular"), face("SemiBold")) {
+        fonts.font_data.insert("inter".into(), inter(regular.bytes));
+        fonts.font_data.insert("inter-semibold".into(), inter(bold.bytes));
+        if let Some(list) = fonts.families.get_mut(&FontFamily::Proportional) {
+            list.insert(0, "inter".into());
+        }
+        semibold = Some("inter-semibold");
+    }
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    // The semibold family: the regular family with its first face swapped for the weight.
+    let mut list = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    if let (Some(w), Some(first)) = (semibold, list.first_mut()) {
+        *first = w.to_string();
+    }
+    fonts.families.insert(FontFamily::Name(SEMIBOLD.into()), list);
     fonts
 }
 
@@ -299,20 +332,23 @@ pub fn apply(ctx: &egui::Context, b: Brightness, accent: Accent) {
     let t = Tokens::for_brightness(b).with_accent(accent);
     ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, t));
     ctx.all_styles_mut(|s| {
+        // VectorCraft's type scale: 11 small print, 13 body and controls, 15 headings (semibold),
+        // 11.5 values in the monospace face.
         s.text_styles = [
-            (TextStyle::Small, FontId::new(10.0, FontFamily::Proportional)),
-            (TextStyle::Body, FontId::new(12.0, FontFamily::Proportional)),
-            (TextStyle::Button, FontId::new(12.0, FontFamily::Proportional)),
-            (TextStyle::Heading, FontId::new(14.0, FontFamily::Proportional)),
+            (TextStyle::Small, FontId::new(11.0, FontFamily::Proportional)),
+            (TextStyle::Body, FontId::new(13.0, FontFamily::Proportional)),
+            (TextStyle::Button, FontId::new(13.0, FontFamily::Proportional)),
+            (TextStyle::Heading, semibold(15.0)),
             (TextStyle::Monospace, FontId::new(11.5, FontFamily::Monospace)),
         ]
         .into();
-        s.spacing.item_spacing = egui::vec2(6.0, 5.0);
-        s.spacing.button_padding = egui::vec2(6.0, 2.0);
+        // A 2-4-6-8-12 spacing scale: 6 between items, 4 between rows, controls 24 high.
+        s.spacing.item_spacing = egui::vec2(6.0, 4.0);
+        s.spacing.button_padding = egui::vec2(8.0, 3.0);
         s.spacing.interact_size = egui::vec2(24.0, 24.0);
         s.spacing.slider_width = 120.0;
         s.spacing.menu_margin = egui::Margin::same(6);
-        s.spacing.window_margin = egui::Margin::same(8);
+        s.spacing.window_margin = egui::Margin::same(12);
         s.animation_time = 0.08;
         let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
         v.panel_fill = t.panel;
@@ -322,12 +358,14 @@ pub fn apply(ctx: &egui::Context, b: Brightness, accent: Accent) {
         v.faint_bg_color = t.row;
         v.code_bg_color = t.field;
         v.window_stroke = Stroke::new(1.0, t.separator);
-        v.window_corner_radius = CornerRadius::same(10);
+        v.window_corner_radius = CornerRadius::same(CARD_RADIUS);
         v.menu_corner_radius = CornerRadius::same(CARD_RADIUS);
         v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(if t.dark { 120 } else { 60 }) };
         v.window_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(if t.dark { 140 } else { 70 }) };
         v.selection.bg_fill = t.accent_dim;
-        v.selection.stroke = Stroke::new(1.0, t.accent);
+        // Selected options and selected text are lettered in the strong colour: the accent on its
+        // own tint is hard to read.
+        v.selection.stroke = Stroke::new(1.0, t.text_strong);
         v.hyperlink_color = t.accent;
         let w = &mut v.widgets;
         craft_ui::theme::WidgetPalette { noninteractive: t.panel, inactive: t.button, hovered: t.row_hover, active: t.tool_active, open: t.row_hover }
@@ -346,9 +384,9 @@ pub fn apply(ctx: &egui::Context, b: Brightness, accent: Accent) {
     });
 }
 
-/// Uppercase panel caption (the strong text colour).
+/// A section caption inside a panel: semibold in the strong colour, as written (no capitals).
 pub fn caption(text: &str) -> egui::RichText {
-    egui::RichText::new(text.to_uppercase()).size(10.5).strong()
+    egui::RichText::new(text).font(semibold(12.5)).strong()
 }
 
 #[cfg(test)]
@@ -391,6 +429,7 @@ mod tests {
                 assert!(contrast(t.text, t.panel) >= 7.0, "{b:?}: text on panel");
                 assert!(contrast(t.text_dim, t.panel) >= 4.5, "{b:?}: dim text on panel");
                 assert!(contrast(t.text, t.row_selected) >= 4.5, "{b:?} {a:?}: text on a selected row");
+                assert!(contrast(t.text_strong, t.accent_dim) >= 4.5, "{b:?} {a:?}: a selected option's lettering");
                 assert!(contrast(t.danger, t.panel) >= 3.0 && contrast(t.warning, t.panel) >= 3.0, "{b:?}: warnings on panel");
                 assert!(contrast(t.accent, t.panel) >= 2.5, "{b:?} {a:?}: accent on panel");
                 assert!(contrast(Color32::WHITE, t.accent_strong) >= 2.5, "{b:?} {a:?}: white on accent button");
@@ -399,7 +438,7 @@ mod tests {
                 assert!(contrast(t.button_border, t.panel) >= 1.6, "{b:?}: rail on panel");
             }
         }
-        // The views keep their studio grey.
+        // The views keep their studio slate.
         assert_eq!(Tokens::for_brightness(Brightness::Light).viewport, Tokens::for_brightness(Brightness::Dark).viewport);
     }
 }

@@ -57,6 +57,18 @@ impl Writer {
         i
     }
 
+    /// Index of `s` in the string table (which holds token indices).
+    fn string(&mut self, s: &str) -> u32 {
+        let t = self.token(s);
+        match self.strings.iter().position(|x| *x == t) {
+            Some(i) => i as u32,
+            None => {
+                self.strings.push(t);
+                (self.strings.len() - 1) as u32
+            }
+        }
+    }
+
     fn add_path(&mut self, parent: usize, parent_text: &str, name: &str, prop: bool) -> (usize, String) {
         let text = match (prop, parent_text) {
             (true, _) => format!("{parent_text}.{name}"),
@@ -127,6 +139,7 @@ impl Writer {
         Ok(match v {
             UsdValue::Token(t) => rep(ty::TOKEN, codec::IS_INLINED, u64::from(self.token(t))),
             UsdValue::Asset(a) => rep(ty::ASSET_PATH, codec::IS_INLINED, u64::from(self.token(a))),
+            UsdValue::Str(s) => rep(ty::STRING, codec::IS_INLINED, u64::from(self.string(s))),
             UsdValue::Int(i) => rep(ty::INT, codec::IS_INLINED, u64::from(*i as u32)),
             UsdValue::Double(d) => {
                 let at = self.offset();

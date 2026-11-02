@@ -20,7 +20,9 @@ use serde_json::{Value, json};
 
 use crate::budgets::json_text;
 use crate::headless::RenderOptions;
-use crate::security::{ConnectionLimiter, LineRead, MAX_BATCH_STEPS, MAX_CONNECTIONS, MAX_REQUEST_BYTES, read_bounded_line, token_matches};
+use crate::security::{
+    AUTH_TIMEOUT, AuthDeadline, ConnectionLimiter, LineRead, MAX_BATCH_STEPS, MAX_CONNECTIONS, MAX_REQUEST_BYTES, read_bounded_line, token_matches,
+};
 use crate::{AutomationError, Headless, bad};
 
 pub const METHODS: &[&str] = &[
@@ -170,6 +172,7 @@ fn serve_connection(h: &Mutex<Headless>, stream: std::net::TcpStream, token: &st
     let mut w = stream;
     let mut line = String::new();
     let mut authed = false;
+    let mut deadline = Some(AuthDeadline::start(&w, AUTH_TIMEOUT)?);
     loop {
         match read_bounded_line(&mut r, &mut line)? {
             LineRead::Eof => return Ok(()),
@@ -188,15 +191,26 @@ fn serve_connection(h: &Mutex<Headless>, stream: std::net::TcpStream, token: &st
         if !authed {
             return write_reply(&mut w, &json!({"id": id, "ok": false, "error": "authenticate first: {\"method\":\"auth\",\"params\":{\"token\":…}}"}));
         }
+        drop(deadline.take());
         write_reply(&mut w, &json!({"id": id, "ok": true}))?;
     }
+}
+
+/// Listen on `127.0.0.1:port` (0 picks a port).
+pub fn bind_tcp(port: u16) -> Result<TcpListener, AutomationError> {
+    TcpListener::bind(("127.0.0.1", port)).map_err(|e| AutomationError::Io(format!("cannot listen on 127.0.0.1:{port}: {e}")))
 }
 
 /// Serve authenticated JSON lines on `127.0.0.1:port` (0 picks a port) with one shared
 /// session. `ready` gets the bound address.
 pub fn serve_tcp(port: u16, h: Arc<Mutex<Headless>>, token: String, ready: impl FnOnce(std::net::SocketAddr)) -> Result<(), AutomationError> {
-    let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| AutomationError::Io(format!("cannot listen on 127.0.0.1:{port}: {e}")))?;
+    let listener = bind_tcp(port)?;
     ready(listener.local_addr().map_err(|e| AutomationError::Io(e.to_string()))?);
+    serve_listener(listener, h, token)
+}
+
+/// Serve authenticated JSON lines on a bound listener (see [`bind_tcp`]) with one shared session.
+pub fn serve_listener(listener: TcpListener, h: Arc<Mutex<Headless>>, token: String) -> Result<(), AutomationError> {
     let limiter = ConnectionLimiter::default();
     let token = Arc::new(token);
     for stream in listener.incoming() {

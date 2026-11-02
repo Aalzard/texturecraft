@@ -98,6 +98,24 @@ fn info_on_a_mesh_reports_uvs() {
 }
 
 #[test]
+fn serve_takes_the_automation_root_spelling_too() {
+    use std::io::Write as _;
+    let d = tmp("automation-root");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_texturecraft-cli"))
+        .args(["serve", "--automation-write-root", p(&d)])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"{\"id\":1,\"method\":\"project.save\",\"params\":{\"path\":\"a.tcraft\"}}\n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    let reply: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(d.join("a.tcraft").is_file());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn render_writes_a_png() {
     let d = tmp("render");
     let out = d.join("ball.png");
@@ -128,6 +146,12 @@ fn path_traced_render_needs_no_gpu() {
         let lum = |x, y| img.get_pixel(x, y).0.iter().map(|v| *v as u32).sum::<u32>();
         assert!(lum(48, 28) > lum(1, 1) + 60);
     }
+    // --camera looks through a camera saved in the project; an unknown name is an error.
+    let proj = d.join("cams.tcraft");
+    ok(&["run", "builtin:cube", "camera.set", r#"{"yaw": 80, "distance": 9}"#, "-o", p(&proj)]);
+    ok(&["run", p(&proj), "camera.add", r#"{"name": "Side"}"#, "-o", p(&proj)]);
+    ok(&["render", p(&proj), p(&out), "--size", "48x32", "--camera", "Side", "--samples", "2", "--cpu"]);
+    assert_eq!(cli(&["render", p(&proj), p(&out), "--camera", "Nope", "--samples", "2", "--cpu"]).status.code(), Some(1));
     assert_eq!(cli(&["render", "builtin:cube", p(&out), "--samples", "0"]).status.code(), Some(1));
     assert_eq!(cli(&["render", "builtin:cube", p(&out), "--samples", "4", "--view", "2d"]).status.code(), Some(1));
     let _ = std::fs::remove_dir_all(&d);

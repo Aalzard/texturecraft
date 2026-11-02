@@ -108,7 +108,7 @@ All file names are `texturecraft-<version>-<platform>-<arch>.<ext>`, written to 
 | Web | `texturecraft-web-<version>.zip` (trunk, `wasm-release` profile; hosting notes in `packaging/web/README.md`) | `packaging/web/package.sh` |
 
 Every desktop package ships both binaries, `texturecraft` and `texturecraft-cli` (on macOS the CLI
-is its own zip next to the DMG). Release builds embed the craft-fonts CJK UI fonts
+is its own zip next to the DMG). Release builds embed the craft-fonts interface font (Inter) and CJK UI fonts
 (`CRAFT_FONTS_REF` in `release.yml`) and ship their `OFL-<family>.txt` licences with the other
 notices. The packaging
 scripts smoke-test `texturecraft-cli --version`, and the Linux job also runs the AppImage with
