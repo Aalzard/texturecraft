@@ -15,6 +15,8 @@ fn a_fill_channel_takes_an_image_from_its_source_menu() {
     let out = texturecraft_engine::execute(&mut session, "layer.add.fill", &json!({"roughness": 0.6})).unwrap();
     let layer = LayerId(out["layer"].as_u64().unwrap());
     let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1400.0)).build_eframe(|cc| TextureCraftApp::new(cc, session));
+    // The labels below are English; a first run would speak the system's language.
+    h.state_mut().ui.prefs.language = "en".into();
     h.run_steps(4);
 
     // The source menu button sits in the row of the channel's name.

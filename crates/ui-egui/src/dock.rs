@@ -849,11 +849,14 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
 fn image_menu(app: &mut TextureCraftApp, ui: &mut Ui) -> Option<String> {
     ui.label(caption(tr("Images")));
     let mut picked = None;
-    for name in app.session.doc.resources.keys() {
-        if ui.button(name.as_str()).clicked() {
-            picked = Some(name.clone());
+    // Bounded, so Import... and the items after it stay on screen with many images.
+    egui::ScrollArea::vertical().id_salt("image_menu").max_height(240.0).show(ui, |ui| {
+        for name in app.session.doc.resources.keys() {
+            if ui.button(name.as_str()).clicked() {
+                picked = Some(name.clone());
+            }
         }
-    }
+    });
     if ui.button(tr("Import...")).clicked() {
         crate::menus::invoke(app, ui.ctx(), "resource.import");
         ui.close();
