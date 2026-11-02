@@ -525,12 +525,7 @@ mod tests {
         let h = 100.0f32;
         // Large plate at z = 0
         let b = positions.len() as u32;
-        positions.extend_from_slice(&[
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(w, 0.0, 0.0),
-            Vec3::new(w, h, 0.0),
-            Vec3::new(0.0, h, 0.0),
-        ]);
+        positions.extend_from_slice(&[Vec3::new(0.0, 0.0, 0.0), Vec3::new(w, 0.0, 0.0), Vec3::new(w, h, 0.0), Vec3::new(0.0, h, 0.0)]);
         indices.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
         // 500 small triangles sitting at z = 0.5
         for i in 0..500 {
@@ -562,5 +557,43 @@ mod tests {
         // Rays hit the small triangle in front, not the plate behind
         let hit = bvh.closest(Vec3::new(20.1, 10.1, 10.0), Vec3::NEG_Z, 100.0).unwrap();
         assert!((hit.t - 9.5).abs() < 0.1, "hit t: {}", hit.t);
+    }
+
+    #[test]
+    fn clustered_coplanar_fallback_partitions_nodes() {
+        let mut positions = Vec::new();
+        let mut indices = Vec::new();
+        let w = 200.0f32;
+        let h = 100.0f32;
+        let b = positions.len() as u32;
+        positions.extend_from_slice(&[Vec3::new(0.0, 0.0, 0.0), Vec3::new(w, 0.0, 0.0), Vec3::new(w, h, 0.0), Vec3::new(0.0, h, 0.0)]);
+        indices.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
+        // 500 small coplanar triangles in the last bin so split and unsplit SAH costs match
+        for i in 0..500 {
+            let x = 190.0 + (i % 10) as f32;
+            let y = 90.0 + (i / 10) as f32 * 0.1;
+            let idx = positions.len() as u32;
+            positions.push(Vec3::new(x, y, 0.0));
+            positions.push(Vec3::new(x + 0.1, y, 0.0));
+            positions.push(Vec3::new(x, y + 0.1, 0.0));
+            indices.extend_from_slice(&[idx, idx + 1, idx + 2]);
+        }
+        let mesh = Mesh {
+            positions,
+            normals: Vec::new(),
+            uvs: Vec::new(),
+            indices,
+            tangents: Vec::new(),
+            colors: Vec::new(),
+            submeshes: Vec::new(),
+            materials: Vec::new(),
+            diagonals: Vec::new(),
+        };
+        let bvh = Bvh::new(&mesh);
+        for (_, _, _, count) in bvh.nodes() {
+            if count > 0 {
+                assert!(count <= LEAF as u32, "leaf has too many triangles: {count}");
+            }
+        }
     }
 }
