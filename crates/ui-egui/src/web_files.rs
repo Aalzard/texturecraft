@@ -53,7 +53,7 @@ pub fn poll(app: &mut TextureCraftApp) {
     for (name, bytes, pick) in picked {
         let done = match pick {
             Pick::Open => {
-                load(app, &name, &bytes);
+                load(app, &name, bytes);
                 continue;
             }
             Pick::Environment => app.session.import_resource_bytes(&name, bytes).map(|res| use_environment(app, &res)),
@@ -106,12 +106,12 @@ fn use_environment(app: &mut TextureCraftApp, name: &str) {
 }
 
 /// Import an image as a project resource, or replace the session with a `.tcraft` project or a
-/// mesh file's bytes (errors become toasts).
-pub fn load(app: &mut TextureCraftApp, name: &str, bytes: &[u8]) {
+/// mesh file's bytes, after asking to save unsaved changes (errors become toasts).
+pub fn load(app: &mut TextureCraftApp, name: &str, bytes: Vec<u8>) {
     let path = std::path::Path::new(name);
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if IMAGE_EXTS.contains(&ext.as_str()) {
-        match app.session.import_resource_bytes(name, bytes.to_vec()) {
+        match app.session.import_resource_bytes(name, bytes) {
             Ok(res) => {
                 app.ui.dock.focus(crate::docking::Panel::Assets);
                 app.toast(trf("Imported {name}", &[("name", &res)]), false);
@@ -120,8 +120,12 @@ pub fn load(app: &mut TextureCraftApp, name: &str, bytes: &[u8]) {
         }
         return;
     }
+    let bytes = std::sync::Arc::new(bytes);
+    if crate::windows::ask_to_save(app, crate::state::Unsaved::Load(name.into(), bytes.clone())) {
+        return;
+    }
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
-    let next = if ext == PROJECT_EXT { Session::from_project_bytes(bytes) } else { Session::from_mesh_bytes(name, bytes, MESH_RESOLUTION, stem) };
+    let next = if ext == PROJECT_EXT { Session::from_project_bytes(&bytes) } else { Session::from_mesh_bytes(name, &bytes, MESH_RESOLUTION, stem) };
     match next {
         Ok(next) => {
             app.session.switch_to(next);
@@ -183,13 +187,28 @@ fn zip_files(files: &[ExportedFile]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{download, export_mesh, export_textures, import_bake_mesh, import_environment, import_images, import_preset, open, save_project};
+pub use web::{
+    download, export_mesh, export_textures, import_bake_mesh, import_environment, import_images, import_preset, open, save_project, sync_unsaved, unsaved,
+};
 
 #[cfg(target_arch = "wasm32")]
 mod web {
     use super::*;
     use serde_json::Value;
     use wasm_bindgen::JsCast as _;
+
+    /// Whether the project has unsaved changes, for the page's `beforeunload` listener.
+    static UNSAVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// Refresh [`unsaved`] (once per frame).
+    pub fn sync_unsaved(app: &TextureCraftApp) {
+        UNSAVED.store(app.session.modified, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether closing or reloading the page would lose unsaved changes.
+    pub fn unsaved() -> bool {
+        UNSAVED.load(std::sync::atomic::Ordering::Relaxed)
+    }
 
     /// File › Open: the browser's file picker; the file loads on a later frame (see [`poll`]).
     pub fn open(ctx: &egui::Context) {
