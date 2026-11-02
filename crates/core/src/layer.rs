@@ -535,6 +535,21 @@ pub enum Filter {
         min: f32,
         max: f32,
     },
+    /// A ramp slid through the values: those above `position` go towards white, those below
+    /// towards black, over a width `contrast` (0..1) narrows to a hard step.
+    HistogramScan {
+        position: f32,
+        contrast: f32,
+    },
+    /// The values squeezed towards `position`: `range` 1 keeps them, 0 sets them all to it.
+    HistogramRange {
+        range: f32,
+        position: f32,
+    },
+    /// The values offset by `offset` (−1..1), wrapping around past white and black.
+    HistogramShift {
+        offset: f32,
+    },
     /// Shift each texel's lookup along a noise vector field: `intensity` in texels at 2K,
     /// `scale` noise features per UV unit.
     Warp {
@@ -742,6 +757,22 @@ impl Filter {
                 let (lo, hi) = (min.min(*max), min.max(*max));
                 per_unit(kind, v, |x| x.max(lo).min(hi))
             }
+            Filter::HistogramScan { position, contrast } => {
+                let width = (1.0 - contrast.clamp(0.0, 1.0)).max(1e-3);
+                per_unit(kind, v, |x| unit((x - position) / width + 0.5))
+            }
+            Filter::HistogramRange { range, position } => per_unit(kind, v, |x| unit(position + (x - position) * range)),
+            Filter::HistogramShift { offset } => per_unit(kind, v, |x| {
+                // Wrapped by hand: `rem_euclid` would also send white (1 + 0) to black.
+                let y = unit(x) + offset.clamp(-1.0, 1.0);
+                unit(if y > 1.0 {
+                    y - 1.0
+                } else if y < 0.0 {
+                    y + 1.0
+                } else {
+                    y
+                })
+            }),
             Filter::Grayscale => match kind {
                 ChannelKind::Color => [lum(v); 3],
                 _ => v,
@@ -793,6 +824,9 @@ impl Filter {
             Filter::GradientMap { .. } => "Gradient Map",
             Filter::Posterize { .. } => "Posterize",
             Filter::Clamp { .. } => "Clamp",
+            Filter::HistogramScan { .. } => "Histogram Scan",
+            Filter::HistogramRange { .. } => "Histogram Range",
+            Filter::HistogramShift { .. } => "Histogram Shift",
             Filter::Warp { .. } => "Warp",
             Filter::DirectionalBlur { .. } => "Blur Directional",
             Filter::SlopeBlur { .. } => "Slope Blur",
@@ -968,6 +1002,16 @@ mod tests {
         assert_eq!(Filter::GradientMap { colors: vec![] }.point(c, [0.3; 3]), None, "an empty gradient changes nothing");
         assert!(close(Filter::Posterize { levels: 2.0 }.point(c, [0.2, 0.6, 0.9]).unwrap(), [0.0, 1.0, 1.0]));
         assert!(close(Filter::Clamp { min: 0.8, max: 0.3 }.point(c, [0.1, 0.5, 0.9]).unwrap(), [0.3, 0.5, 0.8]), "swapped bounds never panic");
+        let scan = |position, contrast| Filter::HistogramScan { position, contrast }.point(c, [0.2, 0.5, 0.9]).unwrap();
+        assert!(close(scan(0.5, 0.0), [0.2, 0.5, 0.9]), "a full-width ramp at the middle keeps the values");
+        assert!(close(scan(0.4, 1.0), [0.0, 1.0, 1.0]), "full contrast is a step at the position");
+        assert!(close(scan(0.7, 0.5), [0.0, 0.1, 0.9]));
+        let range = |range, position| Filter::HistogramRange { range, position }.point(c, [0.2, 0.5, 0.9]).unwrap();
+        assert!(close(range(1.0, 0.3), [0.2, 0.5, 0.9]) && close(range(0.0, 0.3), [0.3; 3]));
+        assert!(close(range(0.5, 0.5), [0.35, 0.5, 0.7]));
+        let shift = |offset| Filter::HistogramShift { offset }.point(c, [0.0, 0.5, 1.0]).unwrap();
+        assert!(close(shift(0.0), [0.0, 0.5, 1.0]), "no offset keeps white white");
+        assert!(close(shift(0.25), [0.25, 0.75, 0.25]) && close(shift(-0.25), [0.75, 0.25, 0.75]));
         let cb = Filter::ColorBalance { shadows: [0.2, 0.0, 0.0], midtones: [0.0; 3], highlights: [0.0, 0.0, 0.2] };
         assert!(cb.point(c, [0.05; 3]).unwrap()[0] > 0.2 && cb.point(c, [0.95; 3]).unwrap()[2] > 0.99);
         assert!(close(Filter::Invert.point(ChannelKind::Signed, [0.5; 3]).unwrap(), [-0.5; 3]));

@@ -379,6 +379,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("High poly mesh suffix", "ハイポリメッシュの接尾辞"),
     ("High poly: {name}", "ハイポリ: {name}"),
     ("Highlights", "ハイライト"),
+    ("Histogram Range", "ヒストグラム範囲"),
+    ("Histogram Scan", "ヒストグラムスキャン"),
+    ("Histogram Shift", "ヒストグラムシフト"),
     ("History", "履歴"),
     (
         "Hold S: left-drag rotates, right-drag scales, middle-drag moves the stencil.",
@@ -540,6 +543,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Not exported: no source in this texture set", "エクスポートされません: このテクスチャセットにソースがありません"),
     ("Not saved: {error}", "保存されていません: {error}"),
     ("Off", "オフ"),
+    ("Offset", "オフセット"),
     ("Offset right", "右オフセット"),
     ("Offset up", "上オフセット"),
     (
@@ -625,6 +629,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Radial copies", "放射状コピー"),
     ("Radius (texels at 2K)", "半径 (2K時のテクセル)"),
     ("RENDERING", "レンダリング"),
+    ("Range", "範囲"),
     ("Rebind any menu item, tool or command", "メニュー項目、ツール、コマンドのショートカットを再割り当て"),
     ("Recent projects", "最近使ったプロジェクト"),
     (
