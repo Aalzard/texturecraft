@@ -42,7 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export textures",
             ["File"],
             None,
-            "{dir, preset?: built-in or user preset name, or a preset object {name, maps}, ts?: index|\"all\", format?: png|jpg|tga|tif|exr|..., bitDepth?, padding?: none|dilation|dilationDefault|infinite, dilation?: px, size?: px, normalFormat?: openGl|directX}",
+            "{dir, preset?: built-in or user preset name, or a preset object {name, maps}, ts?: index|\"all\", format?: png|jpg|tga|tif|exr|..., bitDepth?, padding?: none|dilation|dilationDefault|infinite, dilation?: px, size?: px, normalFormat?: openGl|directX, materialX?: bool (also write a .mtlx OpenPBR material per texture set; needs the \"OpenPBR (separate maps)\" preset)} → {files, warnings}",
             always,
             export_textures
         ),
@@ -431,10 +431,62 @@ fn export_textures(s: &mut Session, p: &Value) -> Result<Value> {
     let sets = sets_param(s, p, "file.exportTextures")?;
     std::fs::create_dir_all(&dir).map_err(|e| bad("file.exportTextures", format!("cannot create {dir}: {e}")))?;
     let files = s.export_files(&sets, &opts)?;
-    let warnings: Vec<String> = files.iter().flat_map(|f| f.warnings.iter().cloned()).collect();
-    let written = texturecraft_formats::write_files(&files, std::path::Path::new(&dir)).map_err(fe)?;
+    let mut warnings: Vec<String> = files.iter().flat_map(|f| f.warnings.iter().cloned()).collect();
+    let mut written = texturecraft_formats::write_files(&files, std::path::Path::new(&dir)).map_err(fe)?;
+    if p.get("materialX").and_then(Value::as_bool).unwrap_or(false) {
+        written.extend(write_materialx(s, &sets, &opts, std::path::Path::new(&dir), &mut warnings)?);
+    }
     s.log.push(format!("Exported {} textures to {dir}", written.len()));
     Ok(json!({ "files": written.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(), "warnings": warnings }))
+}
+
+/// One `<mesh>_<set>.mtlx` per texture set, next to the textures `opts` just wrote: the
+/// OpenPBR inputs those textures feed (see `texturecraft_formats::materialx`). UDIM sets name
+/// their files with the `<UDIM>` token. Sets with no recognised map, or whose name gives the
+/// same file name as an earlier set's, are skipped with a warning.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_materialx(s: &Session, sets: &[usize], opts: &ExportOptions, dir: &std::path::Path, warnings: &mut Vec<String>) -> Result<Vec<std::path::PathBuf>> {
+    use texturecraft_formats::materialx::{self, Texture};
+    let mesh_name = stem_of(s.doc.project.mesh.trim_start_matches("builtin:"));
+    if opts.normal_format == Some(NormalFormat::DirectX) {
+        warnings.push("MaterialX: the normalmap node reads OpenGL (+Y) normals; this export wrote DirectX normals, so flip the green channel".into());
+    }
+    let mut out = Vec::new();
+    let mut stems = std::collections::HashSet::new();
+    for &ts in sets {
+        let set = s.doc.project.texture_set(ts).map_err(|e| EngineError::Other(e.to_string()))?;
+        let mut textures: Vec<Texture> = Vec::new();
+        for f in texturecraft_formats::list_outputs(&s.doc.project, ts, &mesh_name, opts).map_err(fe)? {
+            let Some(input) = opts.preset.maps.get(f.map).and_then(|m| materialx::input_of_template(&m.file)) else { continue };
+            // The first tile stands for all of them: 1001 -> <UDIM>.
+            let file = match f.tile {
+                Some(t) => f.name.replacen(&format!(".{t}."), ".<UDIM>.", 1),
+                None => f.name.clone(),
+            };
+            // Float files hold linear values; 8/16-bit colour maps are sRGB encoded.
+            let colorspace = if f.format.is_float() { "lin_rec709" } else { "srgb_texture" };
+            if !textures.iter().any(|t| t.input == input) {
+                textures.push(Texture { input: input.to_owned(), file, colorspace });
+            }
+        }
+        if textures.is_empty() {
+            warnings.push(format!("MaterialX: texture set \"{}\" has no OpenPBR maps; use the \"OpenPBR (separate maps)\" preset", set.name));
+            continue;
+        }
+        let stem = texturecraft_formats::export::sanitize_file_stem(&format!("{mesh_name}_{}", set.name));
+        // Case-insensitive: Windows and macOS file systems are.
+        if !stems.insert(stem.to_ascii_lowercase()) {
+            warnings.push(format!(
+                "MaterialX: texture set \"{}\" exports as \"{stem}\" like an earlier set, so its .mtlx was not written; rename one of them",
+                set.name
+            ));
+            continue;
+        }
+        let path = dir.join(format!("{stem}.mtlx"));
+        texturecraft_formats::write_atomic(&path, materialx::write(&format!("{mesh_name}_{}", set.name), &textures, None).as_bytes()).map_err(fe)?;
+        out.push(path);
+    }
+    Ok(out)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
