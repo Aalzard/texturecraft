@@ -24,12 +24,13 @@ pub fn obj_bytes(mesh: &Mesh, name: &str) -> Vec<u8> {
     obj_text(mesh, name, None).into_bytes()
 }
 
-/// The mesh as OBJ with a material library: the OBJ (naming `<name>.mtl`) and the files to write
+/// The mesh as OBJ with a material library: the OBJ (naming `<stem>.mtl`, `stem` being the
+/// OBJ file's own, so exports beside each other keep their files apart) and the files to write
 /// next to it, the MTL first, then each material's maps (`textures[m]`, rendered with
 /// [`usd_export_options`], named like USD's). Roughness, metallic, normal and coat maps use the
 /// MTL PBR extension's keys.
-pub fn obj_with_mtl(mesh: &Mesh, name: &str, textures: &[Vec<ExportedFile>]) -> (Vec<u8>, NamedFiles) {
-    let stem = sanitize_file_stem(name);
+pub fn obj_with_mtl(mesh: &Mesh, name: &str, stem: &str, textures: &[Vec<ExportedFile>]) -> (Vec<u8>, NamedFiles) {
+    let stem = sanitize_file_stem(stem);
     let (maps, mut files) = usd::material_maps(mesh, &stem, textures);
     let mut mtl = format!("# {name}, exported by TextureCraft\n");
     for (material, maps) in unique_ids(&mesh.materials, token).iter().zip(&maps) {
@@ -101,7 +102,8 @@ fn obj_text(mesh: &Mesh, name: &str, mtllib: Option<&str>) -> String {
     s
 }
 
-/// `id` of each material name, made unique with `_2`, `_3`… where two would be the same.
+/// `id` of each material name, made unique with `_2`, `_3`… where two would be the same, also
+/// ignoring case (the ids name files, and file systems may ignore case).
 pub(crate) fn unique_ids(materials: &[String], id: impl Fn(&str) -> String) -> Vec<String> {
     let mut seen = BTreeSet::new();
     materials
@@ -110,7 +112,7 @@ pub(crate) fn unique_ids(materials: &[String], id: impl Fn(&str) -> String) -> V
             let base = id(m);
             let mut unique = base.clone();
             for n in 2.. {
-                if seen.insert(unique.clone()) {
+                if seen.insert(unique.to_lowercase()) {
                     break;
                 }
                 unique = format!("{base}_{n}");
@@ -378,22 +380,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn materials_whose_names_collide_stay_apart() {
+    fn materials_whose_names_collide_even_by_case_stay_apart() {
         let mut mesh = texturecraft_geom::primitives::cube(1.0);
-        mesh.materials = vec!["Mat A".into(), "Mat_A".into()];
+        mesh.materials = vec!["Mat A".into(), "mat_a".into()];
         mesh.submeshes = vec![
             SubMesh { name: "a".into(), material: 0, start: 0, count: 18 },
             SubMesh { name: "b".into(), material: 1, start: 18, count: mesh.indices.len() as u32 - 18 },
         ];
         let png = |name: &str| ExportedFile { name: name.into(), bytes: vec![1, 2, 3], width: 1, height: 1, warnings: Vec::new() };
-        let (obj, files) = obj_with_mtl(&mesh, "m", &[vec![png("BaseColor.png")], vec![png("BaseColor.png")]]);
+        let (obj, files) = obj_with_mtl(&mesh, "project", "m", &[vec![png("BaseColor.png")], vec![png("BaseColor.png")]]);
         let obj = String::from_utf8(obj).unwrap();
-        assert!(obj.contains("usemtl Mat_A\n") && obj.contains("usemtl Mat_A_2\n"));
+        assert!(obj.contains("mtllib m.mtl\n") && obj.contains("usemtl Mat_A\n") && obj.contains("usemtl mat_a_2\n"));
         let names: Vec<_> = files.iter().map(|f| f.0.as_str()).collect();
-        assert_eq!(names, ["m.mtl", "m_Mat_A_BaseColor.png", "m_Mat_A_2_BaseColor.png"]);
+        assert_eq!(names, ["m.mtl", "m_Mat_A_BaseColor.png", "m_mat_a_2_BaseColor.png"]);
         let mtl = String::from_utf8(files[0].1.clone()).unwrap();
         assert!(
-            mtl.contains("newmtl Mat_A\nKd 1 1 1\nmap_Kd m_Mat_A_BaseColor.png") && mtl.contains("newmtl Mat_A_2\nKd 1 1 1\nmap_Kd m_Mat_A_2_BaseColor.png"),
+            mtl.contains("newmtl Mat_A\nKd 1 1 1\nmap_Kd m_Mat_A_BaseColor.png") && mtl.contains("newmtl mat_a_2\nKd 1 1 1\nmap_Kd m_mat_a_2_BaseColor.png"),
             "{mtl}"
         );
     }
