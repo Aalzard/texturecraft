@@ -434,7 +434,12 @@ fn put_maps(s: &mut Session, stem: &str, maps: &[(Channel, Vec<u8>, texturecraft
     for (c, bytes, _) in maps {
         let name = unique(s, &format!("{stem}_{}_{cook}.png", c.id()));
         s.doc.resources.insert(name.clone(), Arc::new(bytes.clone()));
-        fill.sources.insert(*c, Source::image(name.clone()));
+        // A normal map the user marked DirectX stays marked through re-cooks.
+        let normal_format = match fill.sources.get(c) {
+            Some(Source::Image { normal_format, .. }) => *normal_format,
+            _ => Default::default(),
+        };
+        fill.sources.insert(*c, Source::Image { name: name.clone(), normal_format });
         names.push(name);
     }
     names

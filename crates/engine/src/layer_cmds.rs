@@ -343,6 +343,11 @@ fn fill_set(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         return Err(bad("layer.fill.set", "give `color`, `value`, `procedural`, `image`, `anchor`, `normalFormat`, `enabled` or `solo`"));
     };
+    if normal_format.is_some() && source.as_ref().is_some_and(|src| !matches!(src, Source::Image { .. })) {
+        return Err(bad("layer.fill.set", "`normalFormat` goes with `image` or alone"));
+    }
+    // A format-only edit leaves the channel on or off.
+    let touches_channel = source.is_some() || enabled.is_some();
     s.edit("Set fill", |s| {
         let f = fill_mut(s, target)?;
         // `normalFormat` alone: the convention of the channel's image.
@@ -371,7 +376,7 @@ fn fill_set(s: &mut Session, p: &Value) -> Result<Value> {
                 let l = s.doc.project.layer_mut(id)?;
                 if enabled == Some(false) {
                     l.channels.remove(&ch);
-                } else {
+                } else if touches_channel {
                     l.channels.entry(ch).or_default();
                 }
                 if solo {

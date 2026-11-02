@@ -471,6 +471,13 @@ fn directx_normal_images_flip_green() {
     fill(&mut s, json!({"image": name, "normalFormat": "openGl"})).unwrap();
     assert!((green(&mut s) - 0.8).abs() < 0.02);
     assert!(fill(&mut s, json!({"normalFormat": "sideways"})).is_err());
+    assert!(fill(&mut s, json!({"image": name, "normalFormat": 1})).is_err(), "not a string");
+    assert!(fill(&mut s, json!({"value": [0.5, 0.5, 1.0], "normalFormat": "directX"})).is_err(), "not an image");
+    // Marking an image on a channel that is off leaves it off.
+    fill(&mut s, json!({"enabled": false})).unwrap();
+    fill(&mut s, json!({"normalFormat": "directX"})).unwrap();
+    assert!(!s.doc.project.layer(layer).unwrap().channels.contains_key(&Channel::Normal));
+    fill(&mut s, json!({"enabled": true})).unwrap();
     fill(&mut s, json!({"value": [0.5, 0.5, 1.0]})).unwrap();
     assert!(fill(&mut s, json!({"normalFormat": "directX"})).is_err(), "no image on the channel");
     let old: texturecraft_engine::core::Source = serde_json::from_value(json!({"Image": {"name": "n"}})).unwrap();

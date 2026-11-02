@@ -139,11 +139,11 @@ pub(crate) fn boolp(p: &Value, key: &str) -> Option<bool> {
 
 /// The `normalFormat` param (`openGl` or `directX`), if given.
 pub(crate) fn normal_format_param(cmd: &str, p: &Value) -> Result<Option<NormalFormat>> {
-    match strp(p, "normalFormat") {
-        Some("openGl") | Some("opengl") => Ok(Some(NormalFormat::OpenGl)),
-        Some("directX") | Some("directx") => Ok(Some(NormalFormat::DirectX)),
-        Some(other) => Err(bad(cmd, format!("unknown normal format `{other}`"))),
-        None => Ok(None),
+    match p.get("normalFormat") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if matches!(s.as_str(), "openGl" | "opengl") => Ok(Some(NormalFormat::OpenGl)),
+        Some(Value::String(s)) if matches!(s.as_str(), "directX" | "directx") => Ok(Some(NormalFormat::DirectX)),
+        Some(other) => Err(bad(cmd, format!("unknown normal format {other} (openGl or directX)"))),
     }
 }
 
