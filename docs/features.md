@@ -45,7 +45,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   **mesh-map generators** (edge wear, dirt, thin areas, curvature, AO, position and direction
   gradients, all with world-space noise), filters, ID color selection and compare. Alt+click a
   mask to view it alone. Drag an effect to reorder its stack, or right-click it to duplicate it
-  (painted strokes included).
+  (painted strokes included) or copy it onto another layer or mask (Ctrl+C, Ctrl+V); with an
+  effect selected, Ctrl+D and Delete duplicate or remove it.
 - **Fill layers** take uniform values, **23 procedurals** (clouds, cells, grunge, scratches, wood
   grain, bricks, fabric weave, twill, leather grain, marble veins, Voronoi, paint chips…) or your own
   **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.

@@ -1,6 +1,10 @@
 //! Japanese UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    (
+        "\"{layer}\" has no paint yet: the filter changes what you paint on it.",
+        "「{layer}」にはまだペイントがありません：フィルターはこのレイヤーにペイントした内容を変化させます。",
+    ),
     ("0 turns autosave off. Copies go to {folder}", "0で自動保存をオフにします。コピーの保存先: {folder}"),
     ("2D view only", "2Dビューのみ"),
     ("32 bits (float)", "32ビット (浮動小数点)"),
@@ -199,6 +203,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Contrast/Luminosity", "コントラスト/輝度"),
     ("Converted maps", "変換マップ"),
     ("Copy RGB values", "RGB 値をコピー"),
+    ("Copy effect", "エフェクトをコピー"),
     ("Copy from", "コピー元"),
     ("Copy layer(s)", "レイヤーをコピー"),
     ("Copy the selected layer alone (its empty parts copy nothing)", "選択中のレイヤーのみをコピー (空の部分は何もコピーしない)"),
@@ -225,6 +230,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cube", "立方体"),
     ("Current layer", "現在のレイヤー"),
     ("Curvature", "曲率"),
+    ("Cut effect", "エフェクトを切り取り"),
     ("Cut layer(s)", "レイヤーを切り取り"),
     ("Cyan / red", "シアン / レッド"),
     ("Cylinder", "円柱"),
@@ -345,6 +351,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "テンプレートから"),
     ("From template / project", "テンプレート / プロジェクトから"),
     ("Full", "フル"),
+    ("GPU error: {error}", "GPU エラー: {error}"),
     ("Geometry mask", "ジオメトリマスク"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
@@ -543,9 +550,18 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal from height", "ハイトからノーマル"),
     ("Normal map combine", "ノーマルマップ合成"),
     ("Normal map detail", "ノーマルマップ ディテール"),
+    ("Color space", "カラースペース"),
     ("Normal map format", "ノーマルマップ形式"),
     ("Normal map inverse detail", "ノーマルマップ 逆ディテール"),
     ("Normal: painting uses the flat normal", "ノーマル: ペイントにはフラットな法線を使用"),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU メモリが不足しているため、テクスチャセット「{name}」を完全には表示できません：設定でビューポートのテクスチャ解像度を下げてください。ペイントと書き出しには影響しません。",
+    ),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU メモリが不足しているため、{count} 個のテクスチャセット（{names}）を完全には表示できません：設定でビューポートのテクスチャ解像度を下げてください。ペイントと書き出しには影響しません。",
+    ),
     ("Not exported: no source in this texture set", "エクスポートされません: このテクスチャセットにソースがありません"),
     ("Not saved: {error}", "保存されていません: {error}"),
     ("Off", "オフ"),
@@ -601,6 +617,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Particles", "パーティクル"),
     ("Passthrough", "通過"),
     ("Paste as instance", "インスタンスとして貼り付け"),
+    ("Paste effect", "エフェクトを貼り付け"),
     ("Paste layer(s)", "レイヤーを貼り付け"),
     ("Path", "パス"),
     ("Path trace on the processor instead of the graphics card (slower)", "グラフィックカードではなくプロセッサーでパストレース (低速)"),

@@ -36,7 +36,11 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn can_paste(s: &Session) -> std::result::Result<(), String> {
-    if s.clipboard.is_some() { Ok(()) } else { Err("the layer clipboard is empty".into()) }
+    match &s.clipboard {
+        Some((doc, id)) if doc.project.layers.contains_key(id) => Ok(()),
+        Some(_) => Err("the clipboard holds an effect (effect.paste)".into()),
+        None => Err("the layer clipboard is empty".into()),
+    }
 }
 
 /// Encoded "nothing painted" texel for a channel image (value 0, coverage 0).
@@ -47,7 +51,7 @@ pub(crate) fn empty_texel(c: Channel) -> Vec<u16> {
     v
 }
 
-fn fit(img: &TileImage, (w, h): (u32, u32), empty: &[u16]) -> TileImage {
+pub(crate) fn fit(img: &TileImage, (w, h): (u32, u32), empty: &[u16]) -> TileImage {
     if (img.width(), img.height()) == (w, h) { img.clone() } else { img.resampled(w, h, empty) }
 }
 

@@ -1,6 +1,7 @@
 //! Arabic UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "لا يوجد رسم على \"{layer}\" بعد: يغيّر المرشح ما ترسمه عليها."),
     ("0 turns autosave off. Copies go to {folder}", "0 يعطل الحفظ التلقائي. تُحفظ النُسخ في {folder}"),
     ("2D view only", "عرض ثنائي الأبعاد فقط"),
     ("32 bits (float)", "32 بت (فاصلة عائمة)"),
@@ -187,6 +188,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Contrast/Luminosity", "التباين / الإضاءة"),
     ("Converted maps", "الخرائط المحوّلة"),
     ("Copy RGB values", "نسخ قيم RGB"),
+    ("Copy effect", "نسخ التأثير"),
     ("Copy from", "نسخ من"),
     ("Copy layer(s)", "نسخ الطبقة (الطبقات)"),
     ("Copy the selected layer alone (its empty parts copy nothing)", "نسخ الطبقة المحددة وحدها (الأجزاء الفارغة لا تنسخ شيئاً)"),
@@ -213,6 +215,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cube", "مكعب"),
     ("Current layer", "الطبقة الحالية"),
     ("Curvature", "الانحناء"),
+    ("Cut effect", "قص التأثير"),
     ("Cut layer(s)", "قص الطبقة (الطبقات)"),
     ("Cyan / red", "سماوي / أحمر"),
     ("Cylinder", "أسطوانة"),
@@ -336,6 +339,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "من قالب"),
     ("From template / project", "من قالب / مشروع"),
     ("Full", "كامل"),
+    ("GPU error: {error}", "خطأ في GPU: {error}"),
     ("Geometry mask", "قناع هندسي"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
@@ -531,9 +535,18 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal from height", "ناظم من الارتفاع"),
     ("Normal map combine", "دمج خرائط النواظم"),
     ("Normal map detail", "تفاصيل خريطة النواظم"),
+    ("Color space", "فضاء الألوان"),
     ("Normal map format", "صيغة خريطة النواظم"),
     ("Normal map inverse detail", "عكس تفاصيل خريطة النواظم"),
     ("Normal: painting uses the flat normal", "عادي: يستخدم الرسم الناظم المسطح"),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "لا توجد ذاكرة GPU كافية لعرض مجموعة الخامات \"{name}\" كاملة: خفّض دقة الخامة لمنفذ العرض في الإعدادات. لا يتأثر الرسم والتصدير.",
+    ),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "لا توجد ذاكرة GPU كافية لعرض {count} من مجموعات الخامات كاملة ({names}): خفّض دقة الخامة لمنفذ العرض في الإعدادات. لا يتأثر الرسم والتصدير.",
+    ),
     ("Not exported: no source in this texture set", "لم يتم التصدير: لا يوجد مصدر في مجموعة الخامات هذه"),
     ("Not saved: {error}", "لم يتم الحفظ: {error}"),
     ("Off", "معطل"),
@@ -586,6 +599,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Particles", "جسيمات"),
     ("Passthrough", "تمرير مباشر (Passthrough)"),
     ("Paste as instance", "لصق كنسخة مرتبطة (Instance)"),
+    ("Paste effect", "لصق التأثير"),
     ("Paste layer(s)", "لصق الطبقة (الطبقات)"),
     ("Path", "مسار"),
     ("Path trace on the processor instead of the graphics card (slower)", "تتبع المسار على المعالج بدلاً من بطاقة الرسوميات (أبطأ)"),

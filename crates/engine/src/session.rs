@@ -333,7 +333,7 @@ pub struct Session {
     /// Viewport size (pixels) used by scripted strokes.
     pub viewport: Vec2,
     pub(crate) stroke: Option<ActiveStroke>,
-    /// Layer clipboard: a document snapshot and the copied layer.
+    /// Layer clipboard: a document snapshot and the copied layer (or effect).
     pub clipboard: Option<(Document, LayerId)>,
     /// Decoded image resources (rebuilt from `doc.resources` by `Session::sync_images`).
     pub images: texturecraft_compose::ImageStore,

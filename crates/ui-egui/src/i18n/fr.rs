@@ -1,6 +1,10 @@
 //! French UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    (
+        "\"{layer}\" has no paint yet: the filter changes what you paint on it.",
+        "\"{layer}\" n'a pas encore de peinture : le filtre modifie ce que vous y peignez.",
+    ),
     ("0 turns autosave off. Copies go to {folder}", "0 désactive la sauvegarde automatique. Les copies vont dans {folder}"),
     ("2D view only", "Vue 2D seule"),
     ("32 bits (float)", "32 bits (flottant)"),
@@ -199,6 +203,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Contrast/Luminosity", "Contraste/Luminosité"),
     ("Converted maps", "Cartes converties"),
     ("Copy RGB values", "Copier les valeurs RVB"),
+    ("Copy effect", "Copier l'effet"),
     ("Copy from", "Copier depuis"),
     ("Copy layer(s)", "Copier le(s) calque(s)"),
     ("Copy the selected layer alone (its empty parts copy nothing)", "Copier uniquement le calque sélectionné (ses parties vides ne copient rien)"),
@@ -225,6 +230,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cube", "Cube"),
     ("Current layer", "Calque actuel"),
     ("Curvature", "Courbure"),
+    ("Cut effect", "Couper l'effet"),
     ("Cut layer(s)", "Couper le(s) calque(s)"),
     ("Cyan / red", "Cyan / rouge"),
     ("Cylinder", "Cylindre"),
@@ -360,6 +366,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "Selon le modèle"),
     ("From template / project", "Selon le modèle / projet"),
     ("Full", "Pleine"),
+    ("GPU error: {error}", "Erreur GPU : {error}"),
     ("Geometry mask", "Masque de géométrie"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
@@ -564,9 +571,18 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal from height", "Normale depuis la hauteur"),
     ("Normal map combine", "Normales : combinaison"),
     ("Normal map detail", "Normales : détail"),
+    ("Color space", "Espace colorimétrique"),
     ("Normal map format", "Format de carte de normales"),
     ("Normal map inverse detail", "Normales : détail inverse"),
     ("Normal: painting uses the flat normal", "Normal : la peinture utilise la normale plate"),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "Mémoire GPU insuffisante pour afficher entièrement l'ensemble de textures \"{name}\" : réduisez la résolution des textures de l'affichage dans les Paramètres. La peinture et l'export ne sont pas affectés.",
+    ),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "Mémoire GPU insuffisante pour afficher entièrement {count} ensembles de textures ({names}) : réduisez la résolution des textures de l'affichage dans les Paramètres. La peinture et l'export ne sont pas affectés.",
+    ),
     ("Not exported: no source in this texture set", "Non exporté : aucune source dans cet ensemble de textures"),
     ("Not saved: {error}", "Non enregistré : {error}"),
     ("Off", "Désactivé"),
@@ -625,6 +641,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Particles", "Particules"),
     ("Passthrough", "Transfert"),
     ("Paste as instance", "Coller comme instance"),
+    ("Paste effect", "Coller l'effet"),
     ("Paste layer(s)", "Coller le(s) calque(s)"),
     ("Path", "Tracé"),
     ("Path trace on the processor instead of the graphics card (slower)", "Tracé de chemins sur le processeur au lieu de la carte graphique (plus lent)"),

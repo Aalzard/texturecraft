@@ -1,6 +1,7 @@
 //! Simplified Chinese UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "“{layer}”尚未绘制：滤镜会改变你在其上绘制的内容。"),
     ("0 turns autosave off. Copies go to {folder}", "设为 0 可关闭自动保存。副本保存到 {folder}"),
     ("2D view only", "仅 2D 视图"),
     ("32 bits (float)", "32 位（浮点）"),
@@ -169,6 +170,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Contrast/Luminosity", "对比度/亮度"),
     ("Converted maps", "转换贴图"),
     ("Copy RGB values", "复制 RGB 值"),
+    ("Copy effect", "复制效果"),
     ("Copy from", "复制自"),
     ("Copy layer(s)", "复制图层"),
     ("Copy the selected layer alone (its empty parts copy nothing)", "仅复制所选图层（其空白部分不复制任何内容）"),
@@ -195,6 +197,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cube", "立方体"),
     ("Current layer", "当前图层"),
     ("Curvature", "曲率"),
+    ("Cut effect", "剪切效果"),
     ("Cut layer(s)", "剪切图层"),
     ("Cyan / red", "青色 / 红色"),
     ("Cylinder", "圆柱体"),
@@ -306,6 +309,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "基于模板"),
     ("From template / project", "基于模板 / 项目"),
     ("Full", "完整"),
+    ("GPU error: {error}", "GPU 错误：{error}"),
     ("Geometry mask", "几何遮罩"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
@@ -492,9 +496,18 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal from height", "由高度生成法线"),
     ("Normal map combine", "法线贴图合并"),
     ("Normal map detail", "法线贴图细节"),
+    ("Color space", "色彩空间"),
     ("Normal map format", "法线贴图格式"),
     ("Normal map inverse detail", "法线贴图反向细节"),
     ("Normal: painting uses the flat normal", "法线：绘画使用平坦法线"),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU 内存不足，无法完整显示纹理集“{name}”：请在设置中降低视口的纹理分辨率。绘制和导出不受影响。",
+    ),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU 内存不足，无法完整显示 {count} 个纹理集（{names}）：请在设置中降低视口的纹理分辨率。绘制和导出不受影响。",
+    ),
     ("Not exported: no source in this texture set", "未导出：此纹理集中没有来源"),
     ("Not saved: {error}", "未保存：{error}"),
     ("Off", "关"),
@@ -544,6 +557,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Particles", "粒子"),
     ("Passthrough", "穿透"),
     ("Paste as instance", "粘贴为实例"),
+    ("Paste effect", "粘贴效果"),
     ("Paste layer(s)", "粘贴图层"),
     ("Path", "路径"),
     ("Path trace on the processor instead of the graphics card (slower)", "在处理器而非显卡上进行路径追踪（较慢）"),

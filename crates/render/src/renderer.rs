@@ -30,6 +30,7 @@ use texturecraft_geom::glam::{Mat4, Vec3};
 use texturecraft_geom::{Mesh, OrbitCamera};
 use texturecraft_texel::TILE;
 
+use crate::gpu_trace::{Checked, checked};
 use crate::ibl;
 use crate::subdivide::{self, Vertex};
 
@@ -327,10 +328,67 @@ struct SetGpu {
     /// Display textures hold the set at `size >> shift`: halved until they fit the device.
     shift: u32,
     /// The display textures in [`DisplayKind::ALL`] order, then the aux (mesh map) texture.
-    /// [`lazy`] kinds stay 1×1 until a tile with a non-default value arrives.
+    /// Each starts as a 1×1 neutral placeholder and gets its full size with the first tile (or
+    /// aux image) that holds something else, so a mesh with many materials costs no GPU memory
+    /// until its sets are painted.
     tex: Vec<Tex>,
     bind_group: wgpu::BindGroup,
     mips_dirty: Vec<bool>,
+    /// Textures whose full-size allocation failed (out of GPU memory): they keep their
+    /// placeholder until the set is re-created, instead of retrying on every tile.
+    failed: Vec<bool>,
+    /// Full-size textures the browser's WebGPU has not yet confirmed: tiles go into them while
+    /// the placeholder stays bound (see [`Renderer::resolve_pending`]).
+    pending: Vec<Option<PendingTex>>,
+}
+
+/// A full-size texture waiting for WebGPU's verdict on its allocation.
+struct PendingTex {
+    tex: Tex,
+    /// `None` for success, else what went wrong. (A mutex: the renderer is shared with the
+    /// paint callback, so it must be `Sync`.)
+    answer: std::sync::Mutex<std::sync::mpsc::Receiver<Option<String>>>,
+}
+
+/// Swap `tex` in for slot `slot` of `set` (bound at once; its mips are rebuilt).
+fn install(set: &mut SetGpu, slot: usize, tex: Tex, device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler) {
+    if let Some(s) = set.tex.get_mut(slot) {
+        *s = tex;
+    }
+    set.bind_group = set_bind_group(device, layout, sampler, &set.tex);
+    if let Some(d) = set.mips_dirty.get_mut(slot) {
+        *d = true;
+    }
+}
+
+/// Give slot `slot` of `set` (texture set `ts`) the full-size texture `checked` allocated:
+/// installed when wgpu accepted it, kept pending while WebGPU has not answered, or (out of GPU
+/// memory) left as the placeholder with the failure recorded. False when there is nothing to
+/// write into.
+fn grow(
+    set: &mut SetGpu,
+    ts: usize,
+    slot: usize,
+    checked: Checked<Tex>,
+    ctx: (&wgpu::Device, &wgpu::BindGroupLayout, &wgpu::Sampler),
+    failures: &mut Vec<usize>,
+) -> bool {
+    match checked {
+        Checked::Done(Ok(full)) => install(set, slot, full, ctx.0, ctx.1, ctx.2),
+        Checked::Done(Err(e)) => {
+            if let Some(f) = set.failed.get_mut(slot) {
+                *f = true;
+            }
+            memory_failed(failures, ts, &e);
+            return false;
+        }
+        Checked::Later(tex, answer) => {
+            if let Some(p) = set.pending.get_mut(slot) {
+                *p = Some(PendingTex { tex, answer: std::sync::Mutex::new(answer) });
+            }
+        }
+    }
+    true
 }
 
 /// Vertex and index buffers with their draws (first index, count, material).
@@ -477,6 +535,9 @@ pub struct Renderer {
     black: wgpu::TextureView,
     /// [`DisplayKind::default_texel`] in [`DisplayKind::ALL`] order.
     default_texels: Vec<Vec<u8>>,
+    /// Texture sets whose display textures could not be allocated (out of GPU memory) since
+    /// [`Renderer::take_memory_failures`].
+    memory_failures: Vec<usize>,
     accum_pipeline: wgpu::RenderPipeline,
     env: Tex,
     env_name: String,
@@ -530,11 +591,8 @@ pub(crate) fn display_format(k: DisplayKind) -> wgpu::TextureFormat {
     }
 }
 
-/// Textures of the optional lobe channels: most sets never use them, so they cost no memory or
-/// bandwidth (a 1×1 neutral texture) until painted.
-fn lazy(k: DisplayKind) -> bool {
-    matches!(k, DisplayKind::Lobes | DisplayKind::Sheen | DisplayKind::Extra)
-}
+/// Texel of the aux texture before a mesh map or mask is shown.
+const AUX_NEUTRAL: [u8; 4] = [128, 128, 128, 255];
 
 /// A `w × h` texture filled with `texel`.
 fn neutral_tex(device: &wgpu::Device, queue: &wgpu::Queue, (w, h): (u32, u32), format: wgpu::TextureFormat, mips: u32, texel: &[u8]) -> Tex {
@@ -555,6 +613,14 @@ fn neutral_tex(device: &wgpu::Device, queue: &wgpu::Queue, (w, h): (u32, u32), f
         y += rows;
     }
     t
+}
+
+/// Record that texture set `ts` could not get a display texture (`error` says which).
+fn memory_failed(failures: &mut Vec<usize>, ts: usize, error: &str) {
+    log::warn!("cannot allocate the display texture of {error}");
+    if !failures.contains(&ts) {
+        failures.push(ts);
+    }
 }
 
 /// Bytes per write when filling a texture with one texel.
@@ -946,6 +1012,7 @@ impl Renderer {
             shadow,
             black,
             default_texels: DisplayKind::ALL.map(DisplayKind::default_texel).to_vec(),
+            memory_failures: Vec::new(),
             env,
             env_name: String::new(),
             sh: [[0.0; 4]; 9],
@@ -1068,20 +1135,13 @@ impl Renderer {
             if self.sets.get(i).is_some_and(|s| s.size == size && s.shift == shift) {
                 continue;
             }
-            let dims = display_dims(size, shift);
-            let mut tex: Vec<Tex> = DisplayKind::ALL
-                .iter()
-                .zip(&self.default_texels)
-                .map(|(k, texel)| {
-                    let (d, mips) = if lazy(*k) { ((1, 1), 1) } else { (dims, mip_count(dims.0.max(dims.1))) };
-                    neutral_tex(device, queue, d, display_format(*k), mips, texel)
-                })
-                .collect();
-            let aux = aux_size(size);
-            tex.push(neutral_tex(device, queue, (aux, aux), wgpu::TextureFormat::Rgba8Unorm, mip_count(aux), &[128, 128, 128, 255]));
+            // Placeholders only: full-size textures come with the first non-neutral upload.
+            let mut tex: Vec<Tex> =
+                DisplayKind::ALL.iter().zip(&self.default_texels).map(|(k, texel)| neutral_tex(device, queue, (1, 1), display_format(*k), 1, texel)).collect();
+            tex.push(neutral_tex(device, queue, (1, 1), wgpu::TextureFormat::Rgba8Unorm, 1, &AUX_NEUTRAL));
             let bind_group = set_bind_group(device, &self.set_bgl, &self.sampler, &tex);
             let n = tex.len();
-            let gpu = SetGpu { size, shift, tex, bind_group, mips_dirty: vec![true; n] };
+            let gpu = SetGpu { size, shift, tex, bind_group, mips_dirty: vec![true; n], failed: vec![false; n], pending: (0..n).map(|_| None).collect() };
             if i < self.sets.len() {
                 self.sets[i] = gpu;
             } else {
@@ -1110,18 +1170,24 @@ impl Renderer {
             return;
         }
         let dims = display_dims(set.size, set.shift);
-        if t.texture.width() < dims.0 {
-            // A lazy placeholder: neutral tiles change nothing, the first real one allocates it.
-            if bytes.chunks_exact(texel.len()).all(|px| px == texel.as_slice()) {
+        let awaiting = set.pending.get(ki).is_some_and(Option::is_some);
+        if !awaiting && (t.texture.width() < dims.0 || t.texture.height() < dims.1) {
+            // A placeholder: neutral tiles change nothing, the first real one allocates it.
+            if set.failed.get(ki).copied().unwrap_or(true) || bytes.chunks_exact(texel.len()).all(|px| px == texel.as_slice()) {
                 return;
             }
-            let full = neutral_tex(device, queue, dims, display_format(kind), mip_count(dims.0.max(dims.1)), texel);
-            if let Some(slot) = set.tex.get_mut(ki) {
-                *slot = full;
+            let what = format!("texture set {} ({kind:?}, {}×{})", ts + 1, dims.0, dims.1);
+            let full = checked(device, &what, || neutral_tex(device, queue, dims, display_format(kind), mip_count(dims.0.max(dims.1)), texel));
+            if !grow(set, ts, ki, full, (device, &self.set_bgl, &self.sampler), &mut self.memory_failures) {
+                return;
             }
-            set.bind_group = set_bind_group(device, &self.set_bgl, &self.sampler, &set.tex);
         }
-        let Some(t) = set.tex.get(ki) else { return };
+        // While WebGPU has not confirmed the full-size texture, tiles go into it (its errors, if
+        // it is invalid, are dropped with these scopes) and the placeholder stays bound.
+        let pending = set.pending.get(ki).and_then(Option::as_ref).map(|p| &p.tex);
+        let Some(t) = pending.or(set.tex.get(ki)) else { return };
+        let oom = pending.is_some().then(|| device.push_error_scope(wgpu::ErrorFilter::OutOfMemory));
+        let invalid = pending.is_some().then(|| device.push_error_scope(wgpu::ErrorFilter::Validation));
         // Downscaled sets take every `step`-th texel of the tile.
         let (step, n) = (1usize << set.shift.min(6), TILE >> set.shift.min(6));
         let small: Vec<u8>;
@@ -1143,33 +1209,96 @@ impl Renderer {
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * bpt), rows_per_image: Some(n) },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
+        // Innermost scope first.
+        drop(invalid);
+        drop(oom);
         self.content_rev += 1;
         if let Some(d) = set.mips_dirty.get_mut(ki) {
             *d = true;
         }
     }
 
-    /// Upload the aux (mesh map / debug) texture of a set: RGBA8, `size × size`.
-    pub fn upload_aux(&mut self, queue: &wgpu::Queue, ts: usize, size: u32, rgba: &[u8]) {
+    /// Upload the aux (mesh map / debug) texture of a set: RGBA8, `size × size` with `size` from
+    /// [`aux_size`]. The first upload allocates it.
+    pub fn upload_aux(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, ts: usize, size: u32, rgba: &[u8]) {
         let Some(set) = self.sets.get_mut(ts) else { return };
+        let want = aux_size(set.size);
+        let ai = set.tex.len().saturating_sub(1);
         let Some(t) = set.tex.last() else { return };
-        let (w, h) = (t.texture.width(), t.texture.height());
-        if size != w || rgba.len() < (w * h * 4) as usize {
+        if size != want || rgba.len() < (size as usize) * (size as usize) * 4 {
             return;
         }
+        let awaiting = set.pending.get(ai).is_some_and(Option::is_some);
+        if !awaiting && t.texture.width() != size {
+            if set.failed.get(ai).copied().unwrap_or(true) {
+                return;
+            }
+            let what = format!("texture set {} (mesh map view, {size}×{size})", ts + 1);
+            let full = checked(device, &what, || neutral_tex(device, queue, (size, size), wgpu::TextureFormat::Rgba8Unorm, mip_count(size), &AUX_NEUTRAL));
+            if !grow(set, ts, ai, full, (device, &self.set_bgl, &self.sampler), &mut self.memory_failures) {
+                return;
+            }
+        }
+        let pending = set.pending.get(ai).and_then(Option::as_ref).map(|p| &p.tex);
+        let Some(t) = pending.or(set.tex.last()) else { return };
+        let (w, h) = (t.texture.width(), t.texture.height());
+        let oom = pending.is_some().then(|| device.push_error_scope(wgpu::ErrorFilter::OutOfMemory));
+        let invalid = pending.is_some().then(|| device.push_error_scope(wgpu::ErrorFilter::Validation));
         queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &t.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             rgba,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
+        drop(invalid);
+        drop(oom);
         self.content_rev += 1;
         if let Some(d) = set.mips_dirty.last_mut() {
             *d = true;
         }
     }
 
-    /// Size of the aux texture of a set.
+    /// Texture sets whose display textures could not be allocated since the last call (out of
+    /// GPU memory: they show neutral values where they could not be allocated).
+    pub fn take_memory_failures(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.memory_failures)
+    }
+
+    /// Whether a full-size texture still waits for WebGPU's verdict: keep drawing frames, since
+    /// [`Renderer::prepare`] installs it (or reports the failure) once the answer is in.
+    pub fn awaiting_gpu(&self) -> bool {
+        self.sets.iter().any(|s| s.pending.iter().any(Option::is_some))
+    }
+
+    /// Install the pending full-size textures WebGPU accepted; drop the ones it rejected (their
+    /// placeholder stays and the failure is reported).
+    fn resolve_pending(&mut self, device: &wgpu::Device) {
+        for (ts, set) in self.sets.iter_mut().enumerate() {
+            for slot in 0..set.pending.len() {
+                let poll = |p: &PendingTex| p.answer.lock().unwrap_or_else(std::sync::PoisonError::into_inner).try_recv();
+                let verdict = match set.pending.get(slot).and_then(Option::as_ref).map(poll) {
+                    None | Some(Err(std::sync::mpsc::TryRecvError::Empty)) => continue,
+                    Some(Ok(v)) => v,
+                    Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => Some(format!("texture set {}: the GPU never answered", ts + 1)),
+                };
+                let Some(p) = set.pending.get_mut(slot).and_then(Option::take) else { continue };
+                match verdict {
+                    None => {
+                        install(set, slot, p.tex, device, &self.set_bgl, &self.sampler);
+                        self.content_rev += 1;
+                    }
+                    Some(e) => {
+                        if let Some(f) = set.failed.get_mut(slot) {
+                            *f = true;
+                        }
+                        memory_failed(&mut self.memory_failures, ts, &e);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Size of the aux texture of a set (1 until a mesh map or mask was shown).
     pub fn aux_size(&self, ts: usize) -> Option<u32> {
         self.sets.get(ts).and_then(|s| s.tex.last()).map(|t| t.texture.width())
     }
@@ -1490,6 +1619,7 @@ impl Renderer {
     /// `shade.taa` that repeats the previous one adds a jittered sample to the average instead,
     /// and renders nothing once [`TAA_SAMPLES`] are in.
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, frame: &Frame) {
+        self.resolve_pending(device);
         self.generate_mips(device, encoder);
         let rev = self.content_rev;
         let sample = match self.views.get(&frame.view_id) {
@@ -1830,5 +1960,78 @@ impl Renderer {
     /// Forget a view's targets (e.g. a closed panel).
     pub fn drop_view(&mut self, id: u64) {
         self.views.remove(&id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::headless::Headless;
+
+    /// A headless renderer with one 256² texture set, and the base color slot's full-size
+    /// texture handed over as WebGPU would: allocated, with its verdict still to come.
+    fn awaiting() -> Option<(Headless, std::sync::mpsc::Sender<Option<String>>)> {
+        let Ok(mut h) = Headless::new() else {
+            eprintln!("skipping: no GPU adapter");
+            return None;
+        };
+        h.renderer.set_texture_sets(&h.device, &h.queue, &[((256, 256), 0)], 1);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let full = neutral_tex(&h.device, &h.queue, (256, 256), display_format(DisplayKind::BaseColor), mip_count(256), &[0, 0, 0, 255]);
+        let r = &mut h.renderer;
+        let set = r.sets.get_mut(0).unwrap();
+        assert!(grow(set, 0, 0, Checked::Later(full, rx), (&h.device, &r.set_bgl, &r.sampler), &mut r.memory_failures));
+        Some((h, tx))
+    }
+
+    fn base_width(h: &Headless) -> u32 {
+        h.renderer.display_textures()[0][0].width()
+    }
+
+    fn prepare(h: &mut Headless) {
+        let mut enc = h.device.create_command_encoder(&Default::default());
+        h.renderer.resolve_pending(&h.device);
+        h.renderer.generate_mips(&h.device, &mut enc);
+        h.queue.submit([enc.finish()]);
+    }
+
+    #[test]
+    fn a_late_texture_stays_unbound_until_accepted() {
+        let Some((mut h, tx)) = awaiting() else { return };
+        assert!(h.renderer.awaiting_gpu());
+        // Tiles go into the pending texture; the placeholder stays bound and nothing is retried.
+        h.renderer.upload_tile(&h.device, &h.queue, 0, DisplayKind::BaseColor, 0, 0, &[200, 30, 30, 255].repeat(64 * 64));
+        prepare(&mut h);
+        assert_eq!(base_width(&h), 1, "no verdict yet: the placeholder stays bound");
+        assert!(h.renderer.awaiting_gpu());
+        tx.send(None).unwrap();
+        prepare(&mut h);
+        assert_eq!(base_width(&h), 256, "accepted: installed");
+        assert!(!h.renderer.awaiting_gpu());
+        assert!(h.renderer.take_memory_failures().is_empty());
+    }
+
+    #[test]
+    fn a_late_rejection_keeps_the_placeholder_and_is_reported() {
+        let Some((mut h, tx)) = awaiting() else { return };
+        tx.send(Some("texture set 1 (BaseColor, 256×256): Out of Memory".into())).unwrap();
+        prepare(&mut h);
+        assert_eq!(base_width(&h), 1);
+        assert!(!h.renderer.awaiting_gpu());
+        assert_eq!(h.renderer.take_memory_failures(), vec![0]);
+        // The failed kind is not allocated again by later tiles.
+        h.renderer.upload_tile(&h.device, &h.queue, 0, DisplayKind::BaseColor, 1, 0, &[200, 30, 30, 255].repeat(64 * 64));
+        prepare(&mut h);
+        assert_eq!(base_width(&h), 1);
+        assert!(!h.renderer.awaiting_gpu());
+    }
+
+    #[test]
+    fn a_verdict_that_never_comes_counts_as_a_failure() {
+        let Some((mut h, tx)) = awaiting() else { return };
+        drop(tx);
+        prepare(&mut h);
+        assert_eq!(base_width(&h), 1);
+        assert_eq!(h.renderer.take_memory_failures(), vec![0]);
     }
 }

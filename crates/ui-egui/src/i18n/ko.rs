@@ -1,6 +1,10 @@
 //! Korean UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    (
+        "\"{layer}\" has no paint yet: the filter changes what you paint on it.",
+        "\"{layer}\"에 아직 페인트가 없습니다: 필터는 이 레이어에 칠하는 내용을 바꿉니다.",
+    ),
     ("0 turns autosave off. Copies go to {folder}", "0으로 설정하면 자동 저장이 꺼집니다. 사본 저장 위치: {folder}"),
     ("2D view only", "2D 뷰만"),
     ("32 bits (float)", "32비트 (float)"),
@@ -190,6 +194,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Contrast/Luminosity", "대비/광도"),
     ("Converted maps", "변환된 맵"),
     ("Copy RGB values", "RGB 값 복사"),
+    ("Copy effect", "이펙트 복사"),
     ("Copy from", "복사 원본"),
     ("Copy layer(s)", "레이어 복사"),
     ("Copy the selected layer alone (its empty parts copy nothing)", "선택한 레이어만 복사합니다 (빈 부분은 복사되지 않음)"),
@@ -216,6 +221,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cube", "큐브"),
     ("Current layer", "현재 레이어"),
     ("Curvature", "곡률"),
+    ("Cut effect", "이펙트 잘라내기"),
     ("Cut layer(s)", "레이어 잘라내기"),
     ("Cyan / red", "녹청 / 빨강"),
     ("Cylinder", "실린더"),
@@ -339,6 +345,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "템플릿 기준"),
     ("From template / project", "템플릿 / 프로젝트 기준"),
     ("Full", "전체"),
+    ("GPU error: {error}", "GPU 오류: {error}"),
     ("Geometry mask", "지오메트리 마스크"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
@@ -537,9 +544,18 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal from height", "높이에서 노멀"),
     ("Normal map combine", "노멀 맵 결합"),
     ("Normal map detail", "노멀 맵 디테일"),
+    ("Color space", "색 공간"),
     ("Normal map format", "노멀 맵 형식"),
     ("Normal map inverse detail", "노멀 맵 역 디테일"),
     ("Normal: painting uses the flat normal", "노멀: 평면 노멀로 페인팅합니다"),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU 메모리가 부족하여 텍스처 세트 \"{name}\"을(를) 모두 표시할 수 없습니다: 설정에서 뷰포트의 텍스처 해상도를 낮추세요. 페인팅과 내보내기에는 영향이 없습니다.",
+    ),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU 메모리가 부족하여 텍스처 세트 {count}개({names})를 모두 표시할 수 없습니다: 설정에서 뷰포트의 텍스처 해상도를 낮추세요. 페인팅과 내보내기에는 영향이 없습니다.",
+    ),
     ("Not exported: no source in this texture set", "내보내지 않음: 이 텍스처 세트에 소스가 없습니다"),
     ("Not saved: {error}", "저장되지 않음: {error}"),
     ("Off", "끄기"),
@@ -592,6 +608,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Particles", "파티클"),
     ("Passthrough", "통과"),
     ("Paste as instance", "인스턴스로 붙여넣기"),
+    ("Paste effect", "이펙트 붙여넣기"),
     ("Paste layer(s)", "레이어 붙여넣기"),
     ("Path", "패스"),
     ("Path trace on the processor instead of the graphics card (slower)", "그래픽 카드 대신 프로세서에서 패스 트레이싱합니다 (더 느림)"),
