@@ -73,6 +73,28 @@ fn off_by_default_and_warns_without_openpbr_maps() {
 }
 
 #[test]
+fn float_colour_maps_are_tagged_linear() {
+    let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
+    let dir = temp("exr");
+    let r = execute(&mut s, "file.exportTextures", &json!({"dir": dir.display().to_string(), "preset": OPENPBR, "format": "exr", "materialX": true})).unwrap();
+    let mtlx = files(&r).into_iter().find(|f| f.ends_with(".mtlx")).unwrap();
+    let text = std::fs::read_to_string(mtlx).unwrap();
+    assert!(text.contains("_base_color.exr\" colorspace=\"lin_rec709\"") && !text.contains("srgb_texture"), "{text}");
+}
+
+#[test]
+fn sets_with_the_same_file_name_warn_instead_of_overwriting() {
+    let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
+    assert!(s.set_count() >= 2);
+    execute(&mut s, "textureSet.rename", &json!({"ts": 0, "name": "a b"})).unwrap();
+    execute(&mut s, "textureSet.rename", &json!({"ts": 1, "name": "A_B"})).unwrap();
+    let dir = temp("clash");
+    let r = execute(&mut s, "file.exportTextures", &json!({"dir": dir.display().to_string(), "preset": OPENPBR, "ts": "all", "materialX": true})).unwrap();
+    assert_eq!(files(&r).iter().filter(|f| f.ends_with(".mtlx")).count(), s.set_count() - 1, "{r}");
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("\"A_B\"")), "{r}");
+}
+
+#[test]
 fn udim_sets_use_the_udim_token() {
     let mut s = Session::new_project("t", primitives::udim_plane(), "builtin:udim_plane", None, 128).unwrap();
     let dir = temp("udim");
