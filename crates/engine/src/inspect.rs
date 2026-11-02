@@ -26,6 +26,9 @@ fn fill_json(f: &Fill) -> Value {
     if let Projection::Decal(d) = &f.projection {
         v["decal"] = json!(d);
     }
+    if let Some(link) = &f.link {
+        v["link"] = json!(link);
+    }
     v
 }
 

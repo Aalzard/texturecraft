@@ -362,6 +362,59 @@ impl Source {
 pub struct Fill {
     pub sources: BTreeMap<Channel, Source>,
     pub projection: Projection,
+    /// Set when the sources are maps cooked from a MaterialCraft material.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<Box<MaterialLink>>,
+}
+
+/// A MaterialCraft material behind a fill (from a `.mcmat` portable material): its channel
+/// sources are image resources cooked from the graph, and changing a parameter re-cooks them
+/// through `materialcraft-cli`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MaterialLink {
+    pub name: String,
+    /// The image resource holding the material's package (`.mcraft`).
+    pub package: String,
+    /// The package's graph the maps come from.
+    pub graph: String,
+    pub params: Vec<LinkParam>,
+    #[serde(default)]
+    pub presets: Vec<LinkPreset>,
+    /// Image inputs of the graph (identifiers such as `curvature`), fed from baked mesh maps.
+    #[serde(default)]
+    pub inputs: Vec<String>,
+    /// Size the maps were cooked at (pixels across).
+    pub size: u32,
+}
+
+/// An exposed input of a linked material. Values keep MaterialCraft's typed form,
+/// `{"t": "float" | "float2" | "float3" | "float4" | "int" | "int2" | "bool" | "color" | "enum", "v": …}`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LinkParam {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub group: String,
+    pub value: serde_json::Value,
+    pub default: serde_json::Value,
+    #[serde(default)]
+    pub min: f32,
+    #[serde(default = "one")]
+    pub max: f32,
+    /// Labels of an `enum` value.
+    #[serde(default)]
+    pub options: Vec<String>,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+/// A named set of linked-material values.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LinkPreset {
+    pub name: String,
+    pub values: BTreeMap<String, serde_json::Value>,
 }
 
 impl Fill {
