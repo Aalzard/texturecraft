@@ -142,6 +142,29 @@ fn a_value_typed_in_the_number_field_applies() {
     assert_eq!(h.state().session.history_labels().len(), steps + 1);
 }
 
+/// Dragging the track while the number field has focus drops what was typed there: leaving the
+/// field afterwards does not undo the drag.
+#[test]
+fn a_track_drag_drops_text_typed_in_the_number_field() {
+    let (mut h, effect) = harness();
+    type_opacity(&mut h, &[egui::Key::End, egui::Key::Backspace], "5");
+    let t = track(&h, "Opacity");
+    h.drag_at(egui::pos2(t.right(), t.center().y));
+    h.run_steps(2);
+    h.hover_at(egui::pos2(t.left() + 20.0, t.center().y));
+    h.run_steps(2);
+    h.drop_at(egui::pos2(t.left() + 20.0, t.center().y));
+    h.run_steps(2);
+    let dragged = opacity(&h, effect);
+    assert!(dragged < 0.5, "the drag applies: {dragged}");
+    // Leave whatever has focus: a click on empty space.
+    h.drag_at(egui::pos2(5.0, 1390.0));
+    h.drop_at(egui::pos2(5.0, 1390.0));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(opacity(&h, effect), dragged, "the text typed before the drag stays dropped");
+}
+
 /// Leaving the number field without typing, or with Escape, keeps the value (not the rounded
 /// text the field shows) and makes no undo step.
 #[test]
