@@ -28,6 +28,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("textureSet.channel.add", "Add channel", [], None, "{ts?, channel}", always, |s, p| channel(s, p, true)),
         cmd!("textureSet.channel.remove", "Remove channel", [], None, "{ts?, channel}", always, |s, p| channel(s, p, false)),
         cmd!("textureSet.visible", "Toggle texture set visibility", [], None, "{ts?, visible?}", always, visible),
+        cmd!(
+            "textureSet.visibility",
+            "Show or hide texture sets",
+            [],
+            None,
+            "{mode: showAll|hideAll|invert|solo, ts?} → {visible: [bool per set]}; solo shows only `ts` (the active set), or every set again when it already was the only one",
+            always,
+            visibility
+        ),
         cmd!("textureSet.rename", "Rename texture set", [], None, "{ts?, name}", always, rename),
         cmd!("textureSet.settings", "Texture set settings", [], None, "{ts?, description?, heightStrength?, normalFormat?: openGl|directX}", always, settings),
         cmd!(
@@ -214,6 +223,25 @@ fn visible(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "visible": v }))
 }
 
+fn visibility(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "textureSet.visibility";
+    let ts = ts_param(s, p, cmd)?;
+    let mode = strp(p, "mode").filter(|m| ["showAll", "hideAll", "invert", "solo"].contains(m));
+    let mode = mode.ok_or_else(|| bad(cmd, "`mode` must be showAll, hideAll, invert or solo"))?;
+    let sets = &mut s.doc.project.texture_sets;
+    let solo = sets.iter().enumerate().all(|(i, t)| t.visible == (i == ts));
+    for (i, t) in sets.iter_mut().enumerate() {
+        t.visible = match mode {
+            "showAll" => true,
+            "hideAll" => false,
+            "invert" => !t.visible,
+            _ => solo || i == ts,
+        };
+    }
+    s.revision = s.revision.wrapping_add(1);
+    Ok(json!({ "visible": s.doc.project.texture_sets.iter().map(|t| t.visible).collect::<Vec<_>>() }))
+}
+
 fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     let ts = ts_param(s, p, "textureSet.rename")?;
     let name = strp(p, "name")
@@ -250,4 +278,23 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(Value::Null)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visibility_shows_hides_inverts_and_solos() {
+        // The material ball has two texture sets.
+        let mut s = Session::new_project("t", texturecraft_geom::primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
+        let mut run = |p: Value| crate::execute(&mut s, "textureSet.visibility", &p).map(|r| r["visible"].clone());
+        assert_eq!(run(json!({"mode": "hideAll"})).unwrap(), json!([false, false]));
+        assert_eq!(run(json!({"mode": "solo", "ts": 1})).unwrap(), json!([false, true]));
+        assert_eq!(run(json!({"mode": "solo", "ts": 1})).unwrap(), json!([true, true]), "solo again shows every set");
+        assert_eq!(run(json!({"mode": "solo", "ts": 0})).unwrap(), json!([true, false]));
+        assert_eq!(run(json!({"mode": "invert"})).unwrap(), json!([false, true]));
+        assert_eq!(run(json!({"mode": "showAll"})).unwrap(), json!([true, true]));
+        assert!(run(json!({"mode": "sideways"})).is_err() && run(json!({"mode": "solo", "ts": 9})).is_err());
+    }
 }

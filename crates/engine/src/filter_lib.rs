@@ -31,6 +31,9 @@ pub const FILTERS: &[FilterDef] = &[
     def("gradientMap", "Gradient Map", "Adjustments", true),
     def("posterize", "Posterize", "Adjustments", true),
     def("clamp", "Clamp", "Adjustments", true),
+    def("histogramScan", "Histogram Scan", "Adjustments", true),
+    def("histogramRange", "Histogram Range", "Adjustments", true),
+    def("histogramShift", "Histogram Shift", "Adjustments", true),
     def("invert", "Invert", "Adjustments", true),
     def("threshold", "Threshold", "Adjustments", true),
     def("grayscale", "Grayscale", "Adjustments", false),
@@ -96,6 +99,9 @@ pub fn build(id: &str, p: &Value) -> Result<EffectKind> {
         "gradientMap" => Filter::GradientMap { colors: vec![[0.02, 0.02, 0.04], [0.45, 0.16, 0.05], [1.0, 0.85, 0.55]] },
         "posterize" => Filter::Posterize { levels: 4.0 },
         "clamp" => Filter::Clamp { min: 0.2, max: 0.8 },
+        "histogramScan" => Filter::HistogramScan { position: 0.5, contrast: 0.5 },
+        "histogramRange" => Filter::HistogramRange { range: 0.5, position: 0.5 },
+        "histogramShift" => Filter::HistogramShift { offset: 0.25 },
         "warp" => Filter::Warp { intensity: 16.0, scale: 4.0, seed: 1 },
         "blurDirectional" => Filter::DirectionalBlur { radius: 16.0, angle: 0.0 },
         "slopeBlur" => Filter::SlopeBlur { radius: 16.0, scale: 4.0, seed: 1 },
@@ -151,6 +157,9 @@ pub fn scalar_params(f: &Filter) -> Vec<(&'static str, &'static str, f32, f32, f
         }
         Filter::Posterize { levels } => vec![("levels", "Steps", *levels, 2.0, 64.0)],
         Filter::Clamp { min, max } => vec![("min", "Minimum", *min, 0.0, 1.0), ("max", "Maximum", *max, 0.0, 1.0)],
+        Filter::HistogramScan { position, contrast } => vec![("position", "Position", *position, 0.0, 1.0), ("contrast", "Contrast", *contrast, 0.0, 1.0)],
+        Filter::HistogramRange { range, position } => vec![("range", "Range", *range, 0.0, 1.0), ("position", "Position", *position, 0.0, 1.0)],
+        Filter::HistogramShift { offset } => vec![("offset", "Offset", *offset, -1.0, 1.0)],
         Filter::Warp { intensity, scale, seed } => {
             vec![
                 ("intensity", "Intensity (texels at 2K)", *intensity, 0.0, 128.0),
@@ -250,6 +259,15 @@ pub(crate) fn apply(p: &Value, f: &mut Filter, cmd: &str) -> Result<()> {
             set(min, "min", 0.0, 1.0);
             set(max, "max", 0.0, 1.0);
         }
+        Filter::HistogramScan { position, contrast } => {
+            set(position, "position", 0.0, 1.0);
+            set(contrast, "contrast", 0.0, 1.0);
+        }
+        Filter::HistogramRange { range, position } => {
+            set(range, "range", 0.0, 1.0);
+            set(position, "position", 0.0, 1.0);
+        }
+        Filter::HistogramShift { offset } => set(offset, "offset", -1.0, 1.0),
         Filter::Warp { intensity, scale, seed: s } => {
             set(intensity, "intensity", 0.0, 256.0);
             set(scale, "scale", 0.01, 1000.0);

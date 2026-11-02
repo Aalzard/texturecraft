@@ -169,13 +169,23 @@ pub fn tile_bytes(comp: &Composite, baked: &BakedMaps, kind: DisplayKind, tx: u3
             let (n, sheen_rough) = (get(Channel::Normal), scalar8(Channel::SheenRoughness));
             for i in 0..TILE_AREA {
                 let px = &mut out[i * 4..i * 4 + 4];
-                match n {
-                    Some(t) => {
+                // The baked normal is the base the painted normal details sit on (as in export).
+                let (x, y) = (tx * TILE + (i as u32 % TILE), ty * TILE + (i as u32 / TILE));
+                let base = baked.sample(BakedMap::Normal, x, y, res);
+                match (n, base) {
+                    (Some(t), None) => {
                         for (k, d) in px.iter_mut().take(3).enumerate() {
                             *d = u8_of(t.get(i * 3 + k).copied().unwrap_or(0));
                         }
                     }
-                    None => px[..3].copy_from_slice(&[128, 128, 255]),
+                    (detail, Some(base)) => {
+                        let detail = detail.map_or([0.5, 0.5, 1.0], |t| [0, 1, 2].map(|k| t.get(i * 3 + k).map_or(0.0, |v| *v as f32 / 65535.0)));
+                        let v = texturecraft_core::blend::rnm(base, detail);
+                        for (d, v) in px.iter_mut().zip(v) {
+                            *d = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                        }
+                    }
+                    (None, None) => px[..3].copy_from_slice(&[128, 128, 255]),
                 }
                 px[3] = sheen_rough(i);
             }
@@ -229,6 +239,23 @@ mod tests {
         let h = tile_bytes(&comp, &BakedMaps::default(), DisplayKind::Height, 0, 0);
         assert_eq!(h.len(), TILE_AREA * 8);
         assert_eq!(half::f16::from_le_bytes([h[2], h[3]]).to_f32(), half::f16::from_f32(0.04).to_f32(), "default F0");
+    }
+
+    #[test]
+    fn the_baked_normal_is_the_base_of_the_shown_normal() {
+        // A baked normal tilted to +X (packed), 64² like the set.
+        let tilted = [0.8f32, 0.5, 0.9];
+        let baked = BakedMaps { resolution: 64, maps: [(BakedMap::Normal, std::sync::Arc::new(tilted.repeat(64 * 64)))].into_iter().collect() };
+        let shown = |comp: &Composite| tile_bytes(comp, &baked, DisplayKind::Normal, 0, 0)[..3].to_vec();
+        let pack = |v: [f32; 3]| v.map(|x| (x * 255.0 + 0.5) as u8).to_vec();
+        // No normal channel: the baked normal as it is.
+        assert_eq!(shown(&Composite::new(&[], 64)), pack(tilted));
+        // A flat painted normal leaves it; a painted detail is re-oriented onto it.
+        let mut comp = Composite::new(&[Channel::Normal], 64);
+        comp.channels.get_mut(&Channel::Normal).unwrap().set(0, 0, &[to_u16(0.5), to_u16(0.5), to_u16(1.0)]);
+        assert!(shown(&comp).iter().zip(pack(tilted)).all(|(a, b)| (*a as i32 - b as i32).abs() <= 1), "{:?}", shown(&comp));
+        comp.channels.get_mut(&Channel::Normal).unwrap().set(0, 0, &[to_u16(0.5), to_u16(0.8), to_u16(0.9)]);
+        assert_eq!(shown(&comp), pack(texturecraft_core::blend::rnm(tilted, [0.5, 0.8, 0.9])));
     }
 
     #[test]

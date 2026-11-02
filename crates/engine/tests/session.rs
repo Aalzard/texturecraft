@@ -166,6 +166,55 @@ fn image_resources_fill_layers_and_round_trip() {
 }
 
 #[test]
+fn brush_presets_apply_save_and_load() {
+    let mut s = session();
+    let list = execute(&mut s, "brush.preset.list", &Value::Null).unwrap();
+    assert!(list.as_array().unwrap().len() >= 12);
+    execute(&mut s, "tool.brush", &json!({"size": 30})).unwrap();
+    let b = execute(&mut s, "brush.preset.apply", &json!({"preset": "Scratches"})).unwrap();
+    assert_eq!((b["alpha"]["library"].as_str(), b["followPath"].as_bool()), (Some("scratches"), Some(true)));
+    assert!((b["size"].as_f64().unwrap() - 30.0).abs() < 1e-3, "presets keep the size");
+    assert!(execute(&mut s, "tool.stroke", &json!({"points": [[160, 200], [240, 200]]})).unwrap()["stamps"].as_u64().unwrap() > 0);
+    // Saved and loaded back onto another brush, the stroke returns and the size stays.
+    let path = std::env::temp_dir().join(format!("tc-brush-{}.tcbrush", std::process::id()));
+    let path = path.to_str().unwrap();
+    execute(&mut s, "brush.preset.save", &json!({"path": path})).unwrap();
+    execute(&mut s, "brush.preset.apply", &json!({"preset": "basic_soft"})).unwrap();
+    execute(&mut s, "tool.brush", &json!({"size": 10})).unwrap();
+    let b = execute(&mut s, "brush.preset.load", &json!({"path": path})).unwrap();
+    assert_eq!(b["alpha"]["library"], "scratches");
+    assert!((b["size"].as_f64().unwrap() - 10.0).abs() < 1e-3);
+    std::fs::write(path, b"{}").unwrap();
+    assert!(execute(&mut s, "brush.preset.load", &json!({"path": path})).is_err());
+    let _ = std::fs::remove_file(path);
+    for bad in [json!({}), json!({"preset": "nope"})] {
+        assert!(execute(&mut s, "brush.preset.apply", &bad).is_err());
+    }
+}
+
+#[test]
+fn text_becomes_a_brush_alpha_and_a_decal() {
+    let mut s = session();
+    let fonts = execute(&mut s, "text.fonts", &Value::Null).unwrap();
+    assert_eq!(fonts["builtIn"][0], "Ubuntu Light");
+    let r = execute(&mut s, "resource.text", &json!({"text": "TEXT\nCRAFT", "font": "ubuntu light", "size": 64})).unwrap();
+    let name = r["name"].as_str().unwrap().to_string();
+    assert_eq!(name, "Text_TEXT.png");
+    assert!(r["width"].as_u64().unwrap() > r["height"].as_u64().unwrap() / 2, "two short lines");
+    // White with the glyphs in alpha.
+    let img = s.images[&name].clone();
+    assert!(img.rgba.iter().any(|t| t[3] > 0.99) && img.rgba.iter().any(|t| t[3] == 0.0) && img.rgba.iter().all(|t| t[0] == 1.0));
+    // As the brush alpha it paints (keeping its proportions), and it places as a decal.
+    execute(&mut s, "tool.material", &json!({"channel": "baseColor", "color": [1.0, 0.0, 0.0]})).unwrap();
+    execute(&mut s, "tool.brush", &json!({"size": 40, "alpha": {"image": name}})).unwrap();
+    assert!(execute(&mut s, "tool.click", &json!({"x": 200, "y": 200})).is_ok());
+    assert!(execute(&mut s, "layer.add.decal", &json!({"image": name})).unwrap()["layer"].as_u64().is_some());
+    for bad in [json!({}), json!({"text": "  "}), json!({"text": "x", "font": "No Such Font"})] {
+        assert!(execute(&mut s, "resource.text", &bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn projection_tool_paints_the_stencil_colors() {
     let mut s = session();
     let mut png = Vec::new();

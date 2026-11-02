@@ -10,6 +10,7 @@
 
 pub mod auto_rebake;
 pub mod bake_cmds;
+pub mod brush_preset_cmds;
 pub mod camera_cmds;
 pub mod commands;
 pub mod decal_cmds;
@@ -36,6 +37,7 @@ pub mod session;
 pub mod set_cmds;
 pub mod smart_masks;
 pub mod template_cmds;
+pub mod text_cmds;
 pub mod tool_cmds;
 pub mod uv_tile_cmds;
 pub mod view_cmds;

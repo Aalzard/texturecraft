@@ -61,4 +61,16 @@ fn window_snapshots() {
     h.state_mut().ui.windows.export = false;
     h.state_mut().ui.windows.settings = true;
     save(&mut h, &dir, "window-settings");
+    h.state_mut().ui.windows.settings = false;
+    // A mask's levels effect over clouds: the histogram in Properties.
+    let s = &mut h.state_mut().session;
+    for (id, p) in [
+        ("layer.add.fill", serde_json::json!({"color": [0.8, 0.3, 0.1]})),
+        ("mask.add.black", serde_json::Value::Null),
+        ("effect.add.fill", serde_json::json!({"target": "mask", "procedural": "clouds"})),
+        ("effect.add.levels", serde_json::json!({"target": "mask", "inLow": 0.3, "inHigh": 0.8})),
+    ] {
+        texturecraft_engine::execute(s, id, &p).unwrap();
+    }
+    save(&mut h, &dir, "properties-levels");
 }
