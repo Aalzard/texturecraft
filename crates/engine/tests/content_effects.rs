@@ -113,6 +113,49 @@ fn painting_into_a_content_paint_effect() {
 }
 
 #[test]
+fn effects_move_within_their_stack_and_duplicate_with_their_pixels() {
+    let mut s = session();
+    let layer = id(execute(&mut s, "layer.add.fill", &json!({"roughness": 0.3})).unwrap(), "layer");
+    let paint = id(execute(&mut s, "effect.add.paint", &json!({"target": "content"})).unwrap(), "effect");
+    execute(&mut s, "tool.material", &json!({"channel": "roughness", "value": 0.9})).unwrap();
+    execute(&mut s, "tool.brush", &json!({"size": 20, "hardness": 90})).unwrap();
+    execute(&mut s, "tool.stroke", &json!({"points": [[180, 200], [220, 200]]})).unwrap();
+    let fill = id(execute(&mut s, "effect.add.fill", &json!({"target": "content", "roughness": 0.2})).unwrap(), "effect");
+    let order = |s: &Session| s.doc.project.layer(LayerId(layer)).unwrap().content_effects.iter().map(|e| e.id.0).collect::<Vec<_>>();
+    assert!(close(center(&mut s, Channel::Roughness), [0.2; 3]), "the fill covers the paint");
+    // To the bottom, the paint shows again; an index past the end means the top.
+    execute(&mut s, "effect.move", &json!({"effect": fill, "index": 0})).unwrap();
+    assert_eq!(order(&s), [fill, paint]);
+    assert!(center(&mut s, Channel::Roughness)[0] > 0.85, "{:?}", center(&mut s, Channel::Roughness));
+    execute(&mut s, "effect.move", &json!({"effect": fill, "index": 99})).unwrap();
+    assert_eq!(order(&s), [paint, fill]);
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert_eq!(order(&s), [fill, paint]);
+    assert!(execute(&mut s, "effect.move", &json!({"effect": fill})).is_err(), "index is required");
+    assert!(execute(&mut s, "effect.move", &json!({"effect": 999_999, "index": 0})).is_err());
+    // A duplicate sits just above its original with the painted pixels, and takes the selection.
+    execute(&mut s, "layer.select", &json!({"layer": layer, "target": paint})).unwrap();
+    let copy = id(execute(&mut s, "effect.duplicate", &json!({"effect": paint})).unwrap(), "effect");
+    assert_eq!(order(&s), [fill, paint, copy]);
+    assert_eq!(s.target, StackTarget::Effect(LayerId(copy)));
+    assert!(s.doc.project.effect(LayerId(copy)).unwrap().1.name.ends_with(" copy"));
+    // Undoing it leaves no missing effect selected, but the stack it was in.
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.target, StackTarget::Content);
+    execute(&mut s, "edit.redo", &Value::Null).unwrap();
+    execute(&mut s, "effect.remove", &json!({"effect": paint})).unwrap();
+    assert!(center(&mut s, Channel::Roughness)[0] > 0.85, "the copy keeps the strokes");
+    assert!(execute(&mut s, "effect.duplicate", &json!({"effect": 999_999})).is_err());
+    // Mask effects move within the mask.
+    execute(&mut s, "mask.add.black", &Value::Null).unwrap();
+    let a = id(execute(&mut s, "effect.add.fill", &json!({"target": "mask", "value": 0.3})).unwrap(), "effect");
+    let b = id(execute(&mut s, "effect.add.levels", &json!({"target": "mask"})).unwrap(), "effect");
+    execute(&mut s, "effect.move", &json!({"effect": b, "index": 0})).unwrap();
+    let mask: Vec<u64> = s.doc.project.layer(LayerId(layer)).unwrap().mask.as_ref().unwrap().effects.iter().map(|e| e.id.0).collect();
+    assert_eq!(mask, [b, a]);
+}
+
+#[test]
 fn histogram_counts_what_an_effect_reads() {
     let mut s = session();
     let hist = |s: &mut Session, p: Value| {

@@ -286,6 +286,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Ein Bild aus dem Assets-Panel hier ablegen, um es als diese Mesh-Map zu verwenden",
     ),
     ("Dry streaks", "Trockene Schlieren"),
+    ("Duplicate effect", "Effekt duplizieren"),
     ("Duplicate layer(s)", "Ebene(n) duplizieren"),
     ("Duplicate the selected template", "Ausgewählte Vorlage duplizieren"),
     ("Edge Detect", "Kantenerkennung"),

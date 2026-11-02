@@ -286,6 +286,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Drop an image from the Assets panel here to use it as this mesh map", "Rilascia qui un'immagine dal pannello Risorse per usarla come questa mappa mesh"),
     ("Dry streaks", "Striature secche"),
+    ("Duplicate effect", "Duplica effetto"),
     ("Duplicate layer(s)", "Duplica livello/i"),
     ("Duplicate the selected template", "Duplica il modello selezionato"),
     ("Edge Detect", "Rilevamento bordi"),

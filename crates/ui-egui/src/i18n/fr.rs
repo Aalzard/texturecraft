@@ -286,6 +286,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Déposez ici une image du panneau Ressources pour l'utiliser comme cette carte de maillage",
     ),
     ("Dry streaks", "Traînées sèches"),
+    ("Duplicate effect", "Dupliquer l'effet"),
     ("Duplicate layer(s)", "Dupliquer le(s) calque(s)"),
     ("Duplicate the selected template", "Dupliquer le modèle sélectionné"),
     ("Edge Detect", "Détection des contours"),
