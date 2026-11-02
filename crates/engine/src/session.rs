@@ -604,6 +604,10 @@ impl Session {
     pub fn redo_label(&self) -> Option<&str> {
         self.redo.last().map(|(l, _)| l.as_str())
     }
+    /// The undone steps, the next one to redo first.
+    pub fn redo_labels(&self) -> Vec<String> {
+        self.redo.iter().rev().map(|(l, _)| l.clone()).collect()
+    }
     pub fn history_labels(&self) -> Vec<String> {
         self.undo.iter().map(|(l, _)| l.clone()).collect()
     }
@@ -632,6 +636,14 @@ impl Session {
         self.modified = true;
         self.revision = self.revision.wrapping_add(1);
         self.invalidate_changed(other);
+        // An undone add or duplicate takes the selected effect away: select the stack it was in.
+        if let StackTarget::Effect(e) = self.target
+            && self.doc.project.effect(e).is_none()
+        {
+            let p = &other.project;
+            let content = p.effect(e).and_then(|(owner, _)| p.layers.get(&owner)).is_some_and(|l| l.content_effects.iter().any(|x| x.id == e));
+            self.target = if content { StackTarget::Content } else { StackTarget::Mask };
+        }
     }
 
     // -----------------------------------------------------------------------------------------

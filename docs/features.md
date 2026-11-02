@@ -7,6 +7,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Brushes** with size, flow, stroke opacity, spacing, hardness, angle and follow path; size,
   angle, flow and position jitter; tangent or camera alignment, angle fade, backface culling, lazy
   mouse, X/Y/Z mirror and radial symmetry (copies paint the far side too) and pen pressure.
+  Ctrl+drag in a view sets them on the fly: right-drag the size and hardness, left-drag the flow
+  and angle.
   **67 procedural brush alphas** in their own shelf tab, or any imported image as the alpha.
   **18 brush presets** (basic, wear and grunge, details) in the shelf's Brushes tab set the
   stroke and keep the size; save your own brushes there too.
@@ -42,7 +44,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Masks** with a white or black background and a stack of effects: painted strokes, fills,
   **mesh-map generators** (edge wear, dirt, thin areas, curvature, AO, position and direction
   gradients, all with world-space noise), filters, ID color selection and compare. Alt+click a
-  mask to view it alone.
+  mask to view it alone. Drag an effect to reorder its stack, or right-click it to duplicate it
+  (painted strokes included).
 - **Fill layers** take uniform values, **23 procedurals** (clouds, cells, grunge, scratches, wood
   grain, bricks, fabric weave, twill, leather grain, marble veins, Voronoi, paint chips…) or your own
   **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.
@@ -79,7 +82,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Bake mesh maps** on the GPU (ray traced, about 12× the CPU path) or on every CPU core: ambient
   occlusion, curvature, thickness, world-space normal, position, ID, bent normals, opacity, color
   and direction maps, and normal and height maps from high-poly meshes, with a cage, ray distances
-  and matching by mesh name.
+  and matching by mesh name. Or **use your own images** as mesh maps (baked in another app, or
+  edited): drop one from the Assets panel on a slot of the Texture Set Settings, or pick it from
+  the slot's menu.
 - **Export presets** for glTF PBR Metal Roughness, Unreal Engine (packed), Unity HDRP (mask map),
   Unity Standard, Blender (Principled BSDF), Godot 4 (ORM), OpenPBR (with the coat, fuzz,
   anisotropy, transmission and subsurface maps), separate maps, mesh maps and document channels, in
@@ -118,6 +123,7 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - A **start window** at launch: a new project, a project file, a recent project or the sample
   (Settings › Interface › Start window).
 - A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.
+- A **History** panel: click any step to go back to it, or forward again to an undone one.
 - **10 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese,
   Korean and Arabic, switchable live.
 - **In the browser:** the same app compiled to WebAssembly, on WebGPU or WebGL2, with touch

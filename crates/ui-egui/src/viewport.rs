@@ -199,14 +199,16 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     app.session.viewport = Vec2::new(size.x.max(16.0), size.y.max(16.0));
     let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
     let local = |p: egui::Pos2| Vec2::new(p.x - rect.left(), p.y - rect.top());
-    let navigating = alt || ui.input(|i| i.pointer.middle_down() || i.pointer.secondary_down());
+    let adjusting = brush_drag(app, ui, &resp);
+    let navigating = !adjusting && (alt || ui.input(|i| i.pointer.middle_down() || i.pointer.secondary_down()));
 
     // Navigation (S + drag manipulates the projection stencil instead, below).
     let delta = ui.input(|i| i.pointer.delta());
     let s_held = ui.input(|i| i.key_down(egui::Key::S)) && !ui.ctx().egui_wants_keyboard_input();
     let stencil_drag = s_held && app.session.tool.stencil.is_some();
-    if stencil_drag {
-        // The stencil moves, turns and scales instead of the camera (handled below).
+    if stencil_drag || adjusting {
+        // The stencil moves, turns and scales instead of the camera (handled below), or the
+        // brush changes.
     } else if resp.dragged_by(PointerButton::Middle) {
         app.session.camera.pan(delta.x / size.y, delta.y / size.y);
     } else if alt && resp.dragged_by(PointerButton::Primary) {
@@ -302,8 +304,15 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     // The selected decal's frame and handles: drag to move, scale or turn it.
     let decal_drag = !alt && !s_held && !v_held && !focus_pick && placing.is_none() && touch.is_none() && decal_input(app, ui, &resp, rect);
     // Painting.
-    let painting =
-        app.ui.mode == crate::state::Mode::Painting && !alt && !s_held && !v_held && !focus_pick && placing.is_none() && touch.is_none() && !decal_drag;
+    let painting = app.ui.mode == crate::state::Mode::Painting
+        && !alt
+        && !adjusting
+        && !s_held
+        && !v_held
+        && !focus_pick
+        && placing.is_none()
+        && touch.is_none()
+        && !decal_drag;
     let path_tool = app.session.tool.tool == Tool::Path;
     let vp = app.session.viewport;
     let show = |app: &TextureCraftApp, p: Vec3| project(app, rect, p);
@@ -368,8 +377,9 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     if app.ui.mode == crate::state::Mode::Painting
         && !navigating
         && resp.hovered()
-        && matches!(app.session.tool.tool, Tool::Paint | Tool::Eraser | Tool::Projection | Tool::Smudge | Tool::Clone | Tool::Path)
-        && let Some(hp) = resp.hover_pos()
+        && brush_tool(app.session.tool.tool)
+        // While a Ctrl+drag changes the brush, its cursor stays where the drag began.
+        && let Some(hp) = if adjusting { ui.input(|i| i.pointer.press_origin()) } else { resp.hover_pos() }
         && let Some(hit) = app.session.pick(local(hp), app.session.viewport)
     {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
@@ -392,6 +402,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     }
     stencil_overlay(app, ui, rect);
     decal_overlay(app, ui, rect);
+    brush_readout(app, ui, &resp, adjusting);
     if app.session.quick_mask.editing {
         ui.painter_at(rect).text(
             rect.left_top() + vec2(12.0, 40.0),
@@ -754,6 +765,62 @@ fn clone_marker(app: &TextureCraftApp, ui: &Ui, rect: Rect, pos: Vec3) {
     }
 }
 
+/// Tools that paint with the brush (and show its cursor).
+fn brush_tool(t: Tool) -> bool {
+    matches!(t, Tool::Paint | Tool::Eraser | Tool::Projection | Tool::Smudge | Tool::Clone | Tool::Path)
+}
+
+/// Ctrl (Cmd on macOS) + drag in a view changes the brush instead of painting or navigating: a
+/// right drag its size (left/right) and hardness (up/down), a left drag its flow and angle. True
+/// while Ctrl is held with a brush tool and no stroke is under way.
+fn brush_drag(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response) -> bool {
+    let held =
+        app.ui.mode == crate::state::Mode::Painting && brush_tool(app.session.tool.tool) && !app.session.stroke_active() && ui.input(|i| i.modifiers.command);
+    if held && let Some(right) = brush_drag_button(resp) {
+        adjust_brush(&mut app.session.tool.brush, right, ui.input(|i| i.pointer.delta()));
+    }
+    held
+}
+
+/// The button of a drag on `resp`: Some(true) right, Some(false) left.
+fn brush_drag_button(resp: &egui::Response) -> Option<bool> {
+    let right = resp.dragged_by(PointerButton::Secondary);
+    (right || resp.dragged_by(PointerButton::Primary)).then_some(right)
+}
+
+/// While a Ctrl+drag changes the brush, its values beside where the drag began (drawn over the
+/// view; the tool bar and Properties show them too).
+fn brush_readout(app: &TextureCraftApp, ui: &Ui, resp: &egui::Response, adjusting: bool) {
+    let Some(right) = brush_drag_button(resp).filter(|_| adjusting) else { return };
+    let Some(at) = ui.input(|i| i.pointer.press_origin()) else { return };
+    // The pointer would cover the values; the brush cursor stays where the drag began.
+    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+    let b = &app.session.tool.brush;
+    let text = if right {
+        format!("{} {:.1}   {} {:.0}", tr("Size"), b.size / 0.25 * 100.0, tr("Hardness"), b.hardness * 100.0)
+    } else {
+        format!("{} {:.0}   {} {:.0}°", tr("Flow"), b.flow * 100.0, tr("Angle"), b.angle)
+    };
+    let tk = Tokens::get(ui.ctx());
+    let p = ui.painter_at(resp.rect);
+    let g = p.layout_no_wrap(text, egui::FontId::proportional(12.0), tk.text_strong);
+    let r = Rect::from_min_size(at + vec2(18.0, -30.0), g.size()).expand2(vec2(6.0, 3.0));
+    p.rect_filled(r, 3.0, tk.panel);
+    p.galley(r.min + vec2(6.0, 3.0), g, tk.text_strong);
+}
+
+/// Brush change for a Ctrl+drag by `d` points: `right` sets the size (x) and hardness (y), else
+/// the flow (x) and angle (y); dragging up raises hardness and angle.
+fn adjust_brush(b: &mut texturecraft_engine::paint::BrushSettings, right: bool, d: egui::Vec2) {
+    if right {
+        b.size = (b.size * (1.0 + d.x * 0.005)).clamp(0.0005, 0.25);
+        b.hardness = (b.hardness - d.y * 0.005).clamp(0.0, 0.999);
+    } else {
+        b.flow = (b.flow + d.x * 0.005).clamp(0.0, 1.0);
+        b.angle = (b.angle - d.y * 0.5 + 180.0).rem_euclid(360.0) - 180.0;
+    }
+}
+
 fn brush_cursor(app: &TextureCraftApp, ui: &Ui, rect: Rect, pos: Vec3, nrm: Vec3) {
     let (lo, hi) = app.session.mesh.bounds();
     let r = app.session.tool.brush.size * (hi - lo).length();
@@ -791,6 +858,7 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     let resp = ui.interact(rect, ui.scope_id().with("view2d"), Sense::click_and_drag());
     let size = rect.size();
     let alt = ui.input(|i| i.modifiers.alt);
+    let adjusting = brush_drag(app, ui, &resp);
     let delta = ui.input(|i| i.pointer.delta());
     if resp.dragged_by(PointerButton::Middle) || (alt && resp.dragged_by(PointerButton::Primary)) {
         app.ui.uv_pan[0] += delta.x / size.x * 2.0;
@@ -836,7 +904,7 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         let uv = to_uv(p);
         app.run("tool.cloneSource", json!({"uv": [uv.x, uv.y]}));
     }
-    let painting = app.ui.mode == crate::state::Mode::Painting && !alt && !v_held;
+    let painting = app.ui.mode == crate::state::Mode::Painting && !alt && !adjusting && !v_held;
     if painting && path_tool {
         path_input(app, ui, &resp, true, |_, p| Some(to_uv(p).extend(0.0)), show);
     } else if painting {
@@ -898,6 +966,7 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     if app.ui.mode == crate::state::Mode::Painting && path_tool {
         path_overlay(app, ui, rect, &resp, true, show);
     }
+    brush_readout(app, ui, &resp, adjusting);
     view_header(app, ui, rect, "v2d");
     axis_gizmo(ui, rect, app, true);
     let name = app.session.doc.project.texture_sets.get(ts).map(|t| t.name.clone()).unwrap_or_default();
