@@ -241,7 +241,7 @@ impl<'a> Ctx<'a> {
             None => {
                 // Skew correction turns the averaged direction towards the base normal.
                 let up = match &self.skew {
-                    Some(k) => k.correct(self.low.mesh, s.tri, s.pos, s.uv, n, s.nrm, s.geo_nrm),
+                    Some(k) => k.correct(self.low.mesh, s, n),
                     None => n,
                 };
                 (s.pos + up * self.frontal, -up, self.frontal)

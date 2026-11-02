@@ -654,18 +654,27 @@ fn skew_paint(s: &mut Session, p: &Value) -> Result<Value> {
     if !(16..=4096).contains(&size) {
         return Err(bad(cmd, "`size` is 16 to 4096"));
     }
-    let mut map = match s.bake_meshes.skew.as_deref() {
-        // A constant map has no resolution to paint at: widen it, keeping its value everywhere.
-        Some(k) if k.values.len() > 1 => k.clone(),
-        Some(k) => k.resized(size as u32, size as u32).map_err(|e| bad(cmd, e.to_string()))?,
-        None => SkewMap::constant(0.0).resized(size as u32, size as u32).map_err(|e| bad(cmd, e.to_string()))?,
-    };
     let (value, radius) = (f32p(p, "value").unwrap_or(1.0), f32p(p, "radius").unwrap_or(0.03));
     if !(radius.is_finite() && radius > 0.0 && radius <= 1.0) {
         return Err(bad(cmd, "`radius` is above 0 and at most 1 (uv units)"));
     }
-    map.paint(&points, radius, value, f32p(p, "hardness").unwrap_or(0.5), f32p(p, "strength").unwrap_or(1.0)).map_err(|e| bad(cmd, e.to_string()))?;
-    s.bake_meshes.skew = Some(Arc::new(map));
+    let (hardness, strength) = (f32p(p, "hardness").unwrap_or(0.5), f32p(p, "strength").unwrap_or(1.0));
+    let stroke = |m: &mut SkewMap| m.paint(&points, radius, value, hardness, strength).map_err(|e| bad(cmd, e.to_string()));
+    match s.bake_meshes.skew.as_mut() {
+        // In place: the map is copied only while a running bake still holds it, and `paint`
+        // refuses a stroke before it changes a texel.
+        Some(k) if k.values.len() > 1 => stroke(Arc::make_mut(k))?,
+        // A constant map has no resolution to paint at: widen it, keeping its value everywhere.
+        k => {
+            let mut map = match k {
+                Some(k) => k.resized(size as u32, size as u32),
+                None => SkewMap::constant(0.0).resized(size as u32, size as u32),
+            }
+            .map_err(|e| bad(cmd, e.to_string()))?;
+            stroke(&mut map)?;
+            s.bake_meshes.skew = Some(Arc::new(map));
+        }
+    }
     s.bake_meshes.skew_rev += 1;
     s.modified = true;
     Ok(meshes_json(s))

@@ -46,6 +46,7 @@ pub const CATALOG: &[Item] = &[
     sep("File"),
     it("File", "Import resources...", "resource.import", None),
     it("File", "Import MaterialX material...", "file.importMaterialX", None),
+    it("File", "Import material...", "material.load", None),
     it("File", "Export Textures...", "ui.export", Some("Ctrl+Shift+E")),
     it("File", "Export Mesh...", "file.exportMesh", None),
     sep("File"),
@@ -317,6 +318,7 @@ pub fn shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context) {
         if i.consume_key(Modifiers::NONE, Key::Escape) {
             app.session.cancel_stroke();
             app.session.tool.path.points.clear();
+            app.session.tool.path.editing = None;
         }
     });
     for id in fire {

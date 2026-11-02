@@ -201,6 +201,21 @@ fn effects_copy_and_paste_between_layers_and_stacks() {
 }
 
 #[test]
+fn pasting_an_effect_into_another_texture_set_keeps_the_active_target() {
+    let mut s = texturecraft_engine::sample_session(256, 64).unwrap();
+    execute(&mut s, "layer.add.fill", &Value::Null).unwrap();
+    execute(&mut s, "effect.add.filter", &json!({"target": "content", "filter": "invert"})).unwrap();
+    execute(&mut s, "effect.copy", &Value::Null).unwrap();
+    execute(&mut s, "textureSet.select", &json!({"ts": 1})).unwrap();
+    let other = id(execute(&mut s, "layer.add.fill", &Value::Null).unwrap(), "layer");
+    execute(&mut s, "textureSet.select", &json!({"ts": 0})).unwrap();
+    let before = s.target;
+    let pasted = id(execute(&mut s, "effect.paste", &json!({"layer": other})).unwrap(), "effect");
+    assert_eq!(s.target, before, "the active set's selection keeps its target");
+    assert_eq!(s.doc.project.effect(LayerId(pasted)).map(|(owner, _)| owner), Some(LayerId(other)));
+}
+
+#[test]
 fn histogram_counts_what_an_effect_reads() {
     let mut s = session();
     let hist = |s: &mut Session, p: Value| {

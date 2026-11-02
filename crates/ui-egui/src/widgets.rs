@@ -166,15 +166,18 @@ pub fn primary_button<'a>(ui: &Ui, text: &str) -> egui::Button<'a> {
 
 /// A labelled dropdown on one row: the label, then the box filling the rest of the row, so a
 /// narrow panel shortens the box (its text truncated) instead of pushing the row past its edge.
-pub fn combo(ui: &mut Ui, label: &str, selected: impl Into<egui::WidgetText>, menu: impl FnOnce(&mut Ui)) {
+/// Returns the box's response (for a tooltip).
+pub fn combo(ui: &mut Ui, label: &str, selected: impl Into<egui::WidgetText>, menu: impl FnOnce(&mut Ui)) -> Response {
     ui.horizontal(|ui| {
         ui.label(label);
         egui::ComboBox::from_id_salt(label)
             .width(ui.available_width().max(60.0))
             .wrap_mode(egui::TextWrapMode::Truncate)
             .selected_text(selected)
-            .show_ui(ui, menu);
-    });
+            .show_ui(ui, menu)
+            .response
+    })
+    .inner
 }
 
 /// A collapsible section header with a chevron ("> Size").

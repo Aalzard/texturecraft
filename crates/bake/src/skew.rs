@@ -10,8 +10,8 @@
 
 use std::collections::HashMap;
 
-use texturecraft_geom::Mesh;
 use texturecraft_geom::glam::{Vec2, Vec3};
+use texturecraft_geom::{Mesh, Surface};
 
 use crate::{BakeError, MAX_TEXELS};
 
@@ -184,30 +184,28 @@ impl<'a> Prepared<'a> {
         Ok(Prepared { map, hard, diag })
     }
 
-    /// The ray direction `up` (unit, away from the surface) turned towards the base normal: `nrm`
-    /// is the interpolated vertex normal, `geo` the flat one, `uv` the atlas position of the
-    /// sample at `pos` on triangle `tri`.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn correct(&self, mesh: &Mesh, tri: u32, pos: Vec3, uv: Vec2, up: Vec3, nrm: Vec3, geo: Vec3) -> Vec3 {
-        let amount = self.map.at(uv);
+    /// The ray direction `up` (unit, away from the surface) at the low-poly sample `s` turned
+    /// towards its base normal: the interpolated vertex normal, or the flat one per triangle.
+    pub(crate) fn correct(&self, mesh: &Mesh, s: &Surface, up: Vec3) -> Vec3 {
+        let amount = self.map.at(s.uv);
         if amount <= 0.0 {
             return up;
         }
-        let protect = match (self.hard.get(tri as usize), mesh.tri(tri as usize)) {
+        let protect = match (self.hard.get(s.tri as usize), mesh.tri(s.tri as usize)) {
             (Some(edges), Some(c)) => {
                 let near = (0..3)
                     .filter(|&k| edges[k])
                     .filter_map(|k| {
                         let a = mesh.positions.get(*c.get(k)?)?;
                         let b = mesh.positions.get(*c.get((k + 1) % 3)?)?;
-                        Some(segment_distance(pos, *a, *b))
+                        Some(segment_distance(s.pos, *a, *b))
                     })
                     .fold(f32::INFINITY, f32::min);
                 (near / (self.map.edge_distance * self.diag).max(1e-9)).clamp(0.0, 1.0).powf(self.map.edge_contrast)
             }
             _ => 1.0,
         };
-        let base = if self.map.per_triangle { geo } else { nrm };
+        let base = if self.map.per_triangle { s.geo_nrm } else { s.nrm };
         let t = amount * protect;
         (up * (1.0 - t) + base * t).try_normalize().unwrap_or(up)
     }
@@ -295,7 +293,10 @@ mod tests {
         let mesh = fold();
         let up = Vec3::new(0.6, 0.8, 0.0);
         let base = Vec3::Y;
-        let go = |map: &SkewMap, pos: Vec3| Prepared::new(map, &mesh, 1.0).unwrap().correct(&mesh, 0, pos, Vec2::splat(0.5), up, base, base);
+        let go = |map: &SkewMap, pos: Vec3| {
+            let s = Surface { pos, nrm: base, geo_nrm: base, tangent: Default::default(), uv: Vec2::splat(0.5), tri: 0 };
+            Prepared::new(map, &mesh, 1.0).unwrap().correct(&mesh, &s, up)
+        };
         assert!((go(&SkewMap::constant(0.0), Vec3::ZERO) - up).length() < 1e-6, "black leaves the ray alone");
         assert!((go(&SkewMap::constant(1.0), Vec3::ZERO) - base).length() < 1e-6, "white turns it onto the base normal");
         let half = go(&SkewMap::constant(0.5), Vec3::ZERO);
