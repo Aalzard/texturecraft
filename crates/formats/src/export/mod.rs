@@ -41,7 +41,7 @@ pub const FILE_TOKENS: [(&str, &str); 6] = [
     ("$textureSet", "Texture set name"),
     ("$project", "Project name"),
     ("$channel", "Channel or map id"),
-    ("$colorSpace", "sRGB or linear"),
+    ("$colorSpace", "Colour maps: sRGB, linear, ACEScg or ACES2065-1; data maps: linear"),
     ("$udim", "UV tile number (1001 for sets without UV tiles)"),
 ];
 
@@ -736,15 +736,18 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
             let space = opts.space_for(p.format);
             let rgb = lay.len() >= 3 && lay.iter().take(3).map(|(d, _)| *d).eq([Dest::R, Dest::G, Dest::B]);
             let mut data = data;
-            if is_color(map) && rgb && (space != ColorSpace::Srgb || p.format.is_float()) && space != ColorSpace::LinearRec709 {
+            let mut warnings = p.warnings;
+            let convert = is_color(map) && (space != ColorSpace::Srgb || p.format.is_float()) && space != ColorSpace::LinearRec709;
+            if convert && rgb {
                 data.par_chunks_mut(n).for_each(|px| {
                     if let [r, g, b, ..] = px {
                         [*r, *g, *b] = space.from_linear_rec709([*r, *g, *b]);
                     }
                 });
+            } else if convert {
+                warnings.push(format!("\"{}\" packs colour into one channel (L), so it is written in linear Rec.709, not {}", p.name, space.name()));
             }
             let srgb: Vec<bool> = lay.iter().map(|(d, _)| *d != Dest::A && is_color(map) && !p.format.is_float() && space == ColorSpace::Srgb).collect();
-            let mut warnings = p.warnings;
             let bytes = encode(p.format, p.bit_depth, size, n, &data, &srgb, &mut warnings)?;
             Ok(ExportedFile { name: p.name, bytes, width: size.0, height: size.1, warnings })
         })

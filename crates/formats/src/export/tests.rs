@@ -588,3 +588,12 @@ fn colour_space_names_the_files_and_warns_when_integer_files_clamp() {
     assert_eq!(names, list_outputs(&fx.project, 0, "sphere", &opts).unwrap().into_iter().map(|p| p.name).collect::<Vec<_>>());
     assert!(names[0].ends_with("_ACES2065-1.png"), "{names:?}");
 }
+
+#[test]
+fn colour_packed_into_one_channel_warns_instead_of_converting_silently() {
+    let fx = Fx::new(&default_channels());
+    let preset = ExportPreset { name: "l".into(), maps: vec![gray_map("$textureSet_red", SourceRef::Channel { channel: Channel::BaseColor, component: 0 })] };
+    let opts = |space| ExportOptions { color_space: space, format_override: Some(FileFormat::Exr), ..ExportOptions::new(preset.clone()) };
+    assert!(fx.render(&opts(Some(ColorSpace::AcesCg)))[0].warnings.iter().any(|w| w.contains("ACEScg")));
+    assert!(fx.render(&opts(None))[0].warnings.is_empty(), "linear Rec.709 needs no conversion");
+}

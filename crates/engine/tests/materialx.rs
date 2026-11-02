@@ -83,6 +83,25 @@ fn float_colour_maps_are_tagged_linear() {
 }
 
 #[test]
+fn colour_maps_are_tagged_with_the_export_colour_space() {
+    let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
+    for (space, tag, warns) in [("ACEScg", "acescg", false), ("ACES2065-1", "lin_ap0_scene", true), ("sRGB", "srgb_texture", false)] {
+        let dir = temp(tag);
+        let r = execute(
+            &mut s,
+            "file.exportTextures",
+            &json!({"dir": dir.display().to_string(), "preset": OPENPBR, "format": "exr", "colorSpace": space, "materialX": true}),
+        )
+        .unwrap();
+        let mtlx = files(&r).into_iter().find(|f| f.ends_with(".mtlx")).unwrap();
+        let text = std::fs::read_to_string(mtlx).unwrap();
+        assert!(text.contains(&format!("_base_color.exr\" colorspace=\"{tag}\"")), "{space}: {text}");
+        let warned = r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("ACES2065-1"));
+        assert_eq!(warned, warns, "{space}: {r}");
+    }
+}
+
+#[test]
 fn sets_with_the_same_file_name_warn_instead_of_overwriting() {
     let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
     assert!(s.set_count() >= 2);

@@ -457,6 +457,9 @@ fn write_materialx(s: &Session, sets: &[usize], opts: &ExportOptions, dir: &std:
     if opts.normal_format == Some(NormalFormat::DirectX) {
         warnings.push("MaterialX: the normalmap node reads OpenGL (+Y) normals; this export wrote DirectX normals, so flip the green channel".into());
     }
+    if opts.color_space == Some(texturecraft_texel::ColorSpace::Aces2065) {
+        warnings.push("MaterialX: version 1.39 has no ACES2065-1 colour space; the colour maps are tagged lin_ap0_scene, its name in later versions, which older readers may not know".into());
+    }
     let mut out = Vec::new();
     let mut stems = std::collections::HashSet::new();
     for &ts in sets {
@@ -469,8 +472,7 @@ fn write_materialx(s: &Session, sets: &[usize], opts: &ExportOptions, dir: &std:
                 Some(t) => f.name.replacen(&format!(".{t}."), ".<UDIM>.", 1),
                 None => f.name.clone(),
             };
-            // Float files hold linear values; 8/16-bit colour maps are sRGB encoded.
-            let colorspace = if f.format.is_float() { "lin_rec709" } else { "srgb_texture" };
+            let colorspace = materialx::colorspace_name(opts.space_for(f.format));
             if !textures.iter().any(|t| t.input == input) {
                 textures.push(Texture { input: input.to_owned(), file, colorspace });
             }
