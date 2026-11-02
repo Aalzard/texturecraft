@@ -954,4 +954,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Unsaved changes", "저장되지 않은 변경 사항"),
     ("Don't save", "저장 안 함"),
     ("Save the changes to {name} before closing?", "닫기 전에 {name}의 변경 사항을 저장할까요?"),
+    ("Save the changes to {name} first?", "먼저 {name}의 변경 사항을 저장할까요?"),
 ];

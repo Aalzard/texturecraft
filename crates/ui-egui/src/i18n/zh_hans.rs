@@ -900,4 +900,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Unsaved changes", "未保存的更改"),
     ("Don't save", "不保存"),
     ("Save the changes to {name} before closing?", "关闭前是否保存对 {name} 的更改？"),
+    ("Save the changes to {name} first?", "是否先保存对 {name} 的更改？"),
 ];
