@@ -463,26 +463,38 @@ impl Session {
             let view_proj = self.camera.view_proj(viewport.x.max(1.0) / viewport.y.max(1.0));
             let inv = view_proj.inverse();
             let (cull, mesh, bvh) = (self.tool.brush.backface_culling, &self.mesh, &self.bvh);
+            // Symmetry copies: a texel is painted when its mirror image (or radial copy) lies under
+            // the lasso on the surface the camera sees.
+            let (lo, hi) = mesh.bounds();
+            let center = (lo + hi) * 0.5;
+            let inverses: Vec<_> = self.tool.brush.sanitized().symmetry.transforms().iter().map(|m| m.inverse()).collect();
             fill_coverage(&mut canvas, &gbuf, |i, _| {
                 let Some(s) = gbuf.surface(mesh, i) else { return 0.0 };
-                let c = view_proj * s.pos.extend(1.0);
-                if c.w <= 1e-6 {
-                    return 0.0;
+                let mut best = 0.0f32;
+                for m in &inverses {
+                    let (pos, nrm) = (center + *m * (s.pos - center), *m * s.nrm);
+                    let c = view_proj * pos.extend(1.0);
+                    if c.w <= 1e-6 {
+                        continue;
+                    }
+                    let ndc = Vec2::new(c.x, c.y) / c.w;
+                    let a = lasso.coverage(to_pixels(ndc, viewport));
+                    if a <= best {
+                        continue;
+                    }
+                    // Exact visibility (a depth buffer flickers on grazing surfaces): nothing between
+                    // the near plane and the texel.
+                    let o = inv * ndc.extend(0.0).extend(1.0);
+                    let origin = o.truncate() / o.w;
+                    let to = pos - origin;
+                    let d = to.length();
+                    let dir = to / d.max(1e-9);
+                    let hidden = (cull && nrm.dot(dir) >= 0.0) || bvh.closest(origin, dir, d * 0.999).is_some();
+                    if !hidden {
+                        best = a;
+                    }
                 }
-                let ndc = Vec2::new(c.x, c.y) / c.w;
-                let a = lasso.coverage(to_pixels(ndc, viewport));
-                if a <= 0.0 {
-                    return 0.0;
-                }
-                // Exact visibility (a depth buffer flickers on grazing surfaces): nothing between
-                // the near plane and the texel.
-                let o = inv * ndc.extend(0.0).extend(1.0);
-                let origin = o.truncate() / o.w;
-                let to = s.pos - origin;
-                let d = to.length();
-                let dir = to / d.max(1e-9);
-                let hidden = (cull && s.nrm.dot(dir) >= 0.0) || bvh.closest(origin, dir, d * 0.999).is_some();
-                if hidden { 0.0 } else { a }
+                best
             });
         }
         let tiles = canvas.dirty.len();

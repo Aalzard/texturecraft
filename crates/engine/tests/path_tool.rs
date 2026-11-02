@@ -88,6 +88,17 @@ fn closed_filled_path_fills_the_inside_only() {
     assert!(execute(&mut s, "tool.path", &json!({"uvPoints": [[0.1, 0.1], [0.2, 0.2]], "closed": true, "fill": true, "commit": true})).is_err());
 }
 
+#[test]
+fn closed_filled_path_is_symmetrized() {
+    let mut s = session(primitives::sphere(1.0, 48, 24));
+    execute(&mut s, "tool.brush", &json!({"symmetryX": true})).unwrap();
+    let square = json!([[230, 160], [270, 160], [270, 240], [230, 240]]);
+    execute(&mut s, "tool.path", &json!({"points": square, "closed": true, "fill": true, "commit": true})).unwrap();
+    assert!(red_at(&s, 250.0, 200.0), "the drawn side");
+    assert!(red_at(&s, 150.0, 200.0), "the mirrored side");
+    assert!(!red_at(&s, 200.0, 200.0), "between the two");
+}
+
 /// A 2×2 wall facing the camera (+Z): v grows downward (world −Y).
 fn wall() -> Mesh {
     let mut m = primitives::plane(2.0, 8);

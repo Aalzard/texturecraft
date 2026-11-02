@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use texturecraft_compose::ImageRes;
+use texturecraft_geom::glam::{Mat3, Vec3};
 use texturecraft_texel::noise;
 
 use crate::alphas::AlphaImage;
@@ -156,6 +157,28 @@ impl Default for Symmetry {
 impl Symmetry {
     pub fn any(&self) -> bool {
         self.x || self.y || self.z || self.radial > 1
+    }
+
+    /// Linear maps (through the mesh center) taking a point to each of its symmetry copies,
+    /// the identity first. Mirrors come first, then radial rotations of the point and its mirrors.
+    pub fn transforms(&self) -> Vec<Mat3> {
+        let mut out = vec![Mat3::IDENTITY];
+        for mask in 1u8..8 {
+            let (mx, my, mz) = (mask & 1 != 0, mask & 2 != 0, mask & 4 != 0);
+            if (mx && !self.x) || (my && !self.y) || (mz && !self.z) {
+                continue;
+            }
+            out.push(Mat3::from_diagonal(Vec3::new(if mx { -1.0 } else { 1.0 }, if my { -1.0 } else { 1.0 }, if mz { -1.0 } else { 1.0 })));
+        }
+        if self.radial > 1 {
+            let axis = [Vec3::X, Vec3::Y, Vec3::Z].get(self.axis as usize).copied().unwrap_or(Vec3::Y);
+            let base = out.clone();
+            for k in 1..self.radial {
+                let r = Mat3::from_axis_angle(axis, f32::from(k) * std::f32::consts::TAU / f32::from(self.radial));
+                out.extend(base.iter().map(|m| r * *m));
+            }
+        }
+        out
     }
 }
 
