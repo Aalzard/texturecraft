@@ -350,6 +350,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "Selon le modèle"),
     ("From template / project", "Selon le modèle / projet"),
     ("Full", "Pleine"),
+    ("GPU error: {error}", "Erreur GPU : {error}"),
     ("Geometry mask", "Masque de géométrie"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
@@ -554,6 +555,14 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal map format", "Format de carte de normales"),
     ("Normal map inverse detail", "Normales : détail inverse"),
     ("Normal: painting uses the flat normal", "Normal : la peinture utilise la normale plate"),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "Mémoire GPU insuffisante pour afficher entièrement l'ensemble de textures \"{name}\" : réduisez la résolution des textures de l'affichage dans les Paramètres. La peinture et l'export ne sont pas affectés.",
+    ),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "Mémoire GPU insuffisante pour afficher entièrement {count} ensembles de textures ({names}) : réduisez la résolution des textures de l'affichage dans les Paramètres. La peinture et l'export ne sont pas affectés.",
+    ),
     ("Not exported: no source in this texture set", "Non exporté : aucune source dans cet ensemble de textures"),
     ("Not saved: {error}", "Non enregistré : {error}"),
     ("Off", "Désactivé"),
@@ -993,13 +1002,4 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Style", "Style"),
     ("Use as brush alpha", "Utiliser comme alpha du pinceau"),
     ("Place as decal", "Placer en décalque"),
-    (
-        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
-        "Mémoire GPU insuffisante pour afficher entièrement l'ensemble de textures \"{name}\" : réduisez la résolution des textures de l'affichage dans les Paramètres. La peinture et l'export ne sont pas affectés.",
-    ),
-    ("GPU error: {error}", "Erreur GPU : {error}"),
-    (
-        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
-        "Mémoire GPU insuffisante pour afficher entièrement {count} ensembles de textures ({names}) : réduisez la résolution des textures de l'affichage dans les Paramètres. La peinture et l'export ne sont pas affectés.",
-    ),
 ];
