@@ -281,16 +281,27 @@ pub(crate) fn shader(app: &mut TextureCraftApp, ui: &mut Ui) {
 /// The History panel body (a dock tab).
 pub(crate) fn history(app: &mut TextureCraftApp, ui: &mut Ui) {
     let tk = Tokens::get(ui.ctx());
-    let labels = app.session.history_labels();
+    let (done, undone) = (app.session.history_labels(), app.session.redo_labels());
+    // A click on a step goes back (or forward) to it: steps to undo, or to redo when negative.
+    let mut jump = 0i64;
     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-        ui.label(RichText::new(tr("Project opened")).color(tk.text_dim));
-        for l in &labels {
-            ui.label(l);
-        }
-        if let Some(r) = app.session.redo_label() {
-            ui.label(RichText::new(trf("{action} (undone)", &[("action", &r)])).color(tk.text_dim));
+        let n = done.len() as i64;
+        let rows = std::iter::once(RichText::new(tr("Project opened")).color(tk.text_dim))
+            .chain(done.iter().map(RichText::new))
+            .chain(undone.iter().map(|l| RichText::new(trf("{action} (undone)", &[("action", l)])).color(tk.text_dim)));
+        for (i, text) in rows.enumerate() {
+            // Row i is the state after i steps.
+            let steps = n - i as i64;
+            if ui.selectable_label(steps == 0, text).on_hover_text(tr("Return to this step")).clicked() {
+                jump = steps;
+            }
         }
     });
+    if jump > 0 {
+        app.run("edit.undo", json!({ "steps": jump }));
+    } else if jump < 0 {
+        app.run("edit.redo", json!({ "steps": -jump }));
+    }
     ui.horizontal(|ui| {
         if ui.add_enabled(app.session.can_undo(), egui::Button::new(format!("{} {}", ic::ARROW_COUNTER_CLOCKWISE, tr("Undo")))).clicked() {
             app.run("edit.undo", json!({}));

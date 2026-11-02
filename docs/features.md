@@ -123,6 +123,7 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - A **start window** at launch: a new project, a project file, a recent project or the sample
   (Settings › Interface › Start window).
 - A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.
+- A **History** panel: click any step to go back to it, or forward again to an undone one.
 - **10 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese,
   Korean and Arabic, switchable live.
 - **In the browser:** the same app compiled to WebAssembly, on WebGPU or WebGL2, with touch

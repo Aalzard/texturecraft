@@ -671,6 +671,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "크기 조정 중"),
     ("Restore every default shortcut", "모든 기본 단축키를 복원합니다"),
     ("Return to painting mode", "페인팅 모드로 돌아가기"),
+    ("Return to this step", "이 단계로 돌아가기"),
     ("Right-click a layer > Create smart material", "레이어 마우스 오른쪽 클릭 > 스마트 머티리얼 만들기"),
     ("Rotation", "회전"),
     ("Rotation (degrees)", "회전 (도)"),

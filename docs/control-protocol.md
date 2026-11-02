@@ -18,6 +18,9 @@ effect's input), so an agent can pick its input range from the data. `effect.mov
 index}` reorders an effect within its stack (0 = bottom) and `effect.duplicate {effect}` copies
 one just above itself.
 
+`edit.undo {steps?}` and `edit.redo {steps?}` go back or forward several steps at once (as far
+as the history reaches); `edit.history` lists the steps done and the undone ones, next first.
+
 ## Control channel (desktop app)
 
 ```sh
