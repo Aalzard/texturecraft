@@ -1,6 +1,7 @@
 //! Brazilian Portuguese UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "\"{layer}\" ainda não tem pintura: o filtro altera o que você pintar nela."),
     ("0 turns autosave off. Copies go to {folder}", "0 desativa o salvamento automático. As cópias vão para {folder}"),
     ("2D view only", "Apenas vista 2D"),
     ("32 bits (float)", "32 bits (float)"),
@@ -975,5 +976,4 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Style", "Estilo"),
     ("Use as brush alpha", "Usar como alpha do pincel"),
     ("Place as decal", "Colocar como decalque"),
-    ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "\"{layer}\" ainda não tem pintura: o filtro altera o que você pintar nela."),
 ];

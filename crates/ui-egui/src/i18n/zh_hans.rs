@@ -1,6 +1,7 @@
 //! Simplified Chinese UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "“{layer}”尚未绘制：滤镜会改变你在其上绘制的内容。"),
     ("0 turns autosave off. Copies go to {folder}", "设为 0 可关闭自动保存。副本保存到 {folder}"),
     ("2D view only", "仅 2D 视图"),
     ("32 bits (float)", "32 位（浮点）"),
@@ -891,5 +892,4 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Style", "样式"),
     ("Use as brush alpha", "用作笔刷 Alpha"),
     ("Place as decal", "作为贴花放置"),
-    ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "“{layer}”尚未绘制：滤镜会改变你在其上绘制的内容。"),
 ];

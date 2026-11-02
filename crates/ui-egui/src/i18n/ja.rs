@@ -1,6 +1,10 @@
 //! Japanese UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    (
+        "\"{layer}\" has no paint yet: the filter changes what you paint on it.",
+        "「{layer}」にはまだペイントがありません：フィルターはこのレイヤーにペイントした内容を変化させます。",
+    ),
     ("0 turns autosave off. Copies go to {folder}", "0で自動保存をオフにします。コピーの保存先: {folder}"),
     ("2D view only", "2Dビューのみ"),
     ("32 bits (float)", "32ビット (浮動小数点)"),
@@ -960,8 +964,4 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Style", "スタイル"),
     ("Use as brush alpha", "ブラシのアルファとして使用"),
     ("Place as decal", "デカールとして配置"),
-    (
-        "\"{layer}\" has no paint yet: the filter changes what you paint on it.",
-        "「{layer}」にはまだペイントがありません：フィルターはこのレイヤーにペイントした内容を変化させます。",
-    ),
 ];
