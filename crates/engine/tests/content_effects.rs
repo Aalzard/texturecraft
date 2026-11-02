@@ -1,7 +1,7 @@
 //! Content effects, HSL and anchor points through engine commands.
 
 use serde_json::{Value, json};
-use texturecraft_engine::core::{Channel, LayerId};
+use texturecraft_engine::core::{Channel, EffectKind, LayerId};
 use texturecraft_engine::geom::primitives;
 use texturecraft_engine::{Session, StackTarget, execute};
 
@@ -153,6 +153,51 @@ fn effects_move_within_their_stack_and_duplicate_with_their_pixels() {
     execute(&mut s, "effect.move", &json!({"effect": b, "index": 0})).unwrap();
     let mask: Vec<u64> = s.doc.project.layer(LayerId(layer)).unwrap().mask.as_ref().unwrap().effects.iter().map(|e| e.id.0).collect();
     assert_eq!(mask, [b, a]);
+}
+
+#[test]
+fn effects_copy_and_paste_between_layers_and_stacks() {
+    let mut s = session();
+    let low = id(execute(&mut s, "layer.add.fill", &json!({"roughness": 0.3})).unwrap(), "layer");
+    let paint = id(execute(&mut s, "effect.add.paint", &json!({"target": "content"})).unwrap(), "effect");
+    execute(&mut s, "tool.material", &json!({"channel": "roughness", "value": 0.9})).unwrap();
+    execute(&mut s, "tool.brush", &json!({"size": 20, "hardness": 90})).unwrap();
+    execute(&mut s, "tool.stroke", &json!({"points": [[180, 200], [220, 200]]})).unwrap();
+    assert_eq!(execute(&mut s, "effect.copy", &Value::Null).unwrap(), json!({"copied": paint}), "the selected effect");
+    assert!(execute(&mut s, "layer.paste", &Value::Null).is_err(), "the clipboard holds an effect, not a layer");
+    // Onto the content of a fill above that covers the first: its strokes come along.
+    let high = id(execute(&mut s, "layer.add.fill", &json!({"roughness": 0.3})).unwrap(), "layer");
+    let pasted = id(execute(&mut s, "effect.paste", &Value::Null).unwrap(), "effect");
+    assert_eq!(s.target, StackTarget::Effect(LayerId(pasted)));
+    assert!(s.doc.pixels.layer(LayerId(pasted), Channel::Roughness).is_some());
+    execute(&mut s, "effect.remove", &json!({"effect": paint})).unwrap();
+    assert!(center(&mut s, Channel::Roughness)[0] > 0.85, "{:?}", center(&mut s, Channel::Roughness));
+    // Above the selected effect.
+    let inv = id(execute(&mut s, "effect.add.filter", &json!({"target": "content", "filter": "invert"})).unwrap(), "effect");
+    execute(&mut s, "effect.copy", &json!({"effect": inv})).unwrap();
+    execute(&mut s, "layer.select", &json!({"layer": high, "target": pasted})).unwrap();
+    let again = id(execute(&mut s, "effect.paste", &Value::Null).unwrap(), "effect");
+    let order: Vec<u64> = s.doc.project.layer(LayerId(high)).unwrap().content_effects.iter().map(|e| e.id.0).collect();
+    assert_eq!(order, [pasted, again, inv]);
+    // A generator goes on a mask (made for it) even with the content selected; asking for the
+    // content is an error. Cut removes the original.
+    execute(&mut s, "layer.select", &json!({"layer": high})).unwrap();
+    let generator = id(execute(&mut s, "effect.add.generator", &Value::Null).unwrap(), "effect");
+    execute(&mut s, "effect.cut", &json!({"effect": generator})).unwrap();
+    assert!(s.doc.project.effect(LayerId(generator)).is_none());
+    execute(&mut s, "layer.select", &json!({"layer": low})).unwrap();
+    assert!(execute(&mut s, "effect.paste", &json!({"target": "content"})).is_err());
+    execute(&mut s, "effect.paste", &Value::Null).unwrap();
+    let mask = &s.doc.project.layer(LayerId(low)).unwrap().mask;
+    assert!(mask.as_ref().is_some_and(|m| m.effects.iter().any(|e| matches!(e.kind, EffectKind::Generator(_)))));
+    // A fill reading an anchor point needs one below its new layer.
+    execute(&mut s, "layer.select", &json!({"layer": low})).unwrap();
+    let anchor = id(execute(&mut s, "effect.add.anchor", &Value::Null).unwrap(), "effect");
+    execute(&mut s, "layer.select", &json!({"layer": high})).unwrap();
+    let reader = id(execute(&mut s, "effect.add.fill", &json!({"target": "mask", "anchor": anchor})).unwrap(), "effect");
+    execute(&mut s, "effect.copy", &json!({"effect": reader})).unwrap();
+    execute(&mut s, "layer.select", &json!({"layer": low})).unwrap();
+    assert!(execute(&mut s, "effect.paste", &Value::Null).is_err(), "the anchor is on the layer itself");
 }
 
 #[test]

@@ -13,6 +13,7 @@ pub mod brush_preset_cmds;
 pub mod camera_cmds;
 pub mod commands;
 pub mod decal_cmds;
+pub mod effect_clipboard;
 pub mod file_cmds;
 pub mod filter_lib;
 pub mod inspect;
