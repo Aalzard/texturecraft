@@ -209,14 +209,87 @@ pub fn color_swatch(ui: &mut Ui, id: &str, linear: &mut [f32; 3], width: f32) ->
     // Open state lives in memory (`toggle_id` above); `from_response` alone shows it always.
     egui::Popup::from_response(&resp).id(popup).open_memory(None).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         // Wider than the R, G, B row at any value, so the popup keeps one size and place.
-        ui.spacing_mut().slider_width = 275.0;
-        if egui::color_picker::color_picker_color32(ui, &mut c, egui::color_picker::Alpha::Opaque) {
+        if color_picker(ui, popup.with("picker"), &mut c, 275.0) {
             let lin = [c.r(), c.g(), c.b()].map(|v| texturecraft_engine::texel::srgb_to_linear(v as f32 / 255.0));
             *linear = lin;
             changed = true;
         }
     });
     changed
+}
+
+/// A color picker `width` wide: R, G, B (sRGB 0–255) with a copy button, a saturation/value
+/// square and a hue strip. Returns true when the color changed.
+fn color_picker(ui: &mut Ui, id: egui::Id, c: &mut Color32, width: f32) -> bool {
+    use egui::ecolor::{hsv_from_rgb, rgb_from_hsv};
+    let tk = Tokens::get(ui.ctx());
+    let mut srgb = [c.r(), c.g(), c.b()];
+    let hsv_of = |srgb: [u8; 3]| hsv_from_rgb(srgb.map(|v| v as f32 / 255.0));
+    // Remembered with the color it was for, so hue and saturation survive black, white and grays.
+    let (mut h, mut s, mut v) = ui.data(|d| d.get_temp::<(Color32, (f32, f32, f32))>(id)).filter(|(k, _)| k == c).map_or_else(|| hsv_of(srgb), |(_, hsv)| hsv);
+    let mut typed = false;
+    let mut dragged = false;
+    ui.horizontal(|ui| {
+        for (x, prefix) in srgb.iter_mut().zip(["R ", "G ", "B "]) {
+            typed |= ui.add(egui::DragValue::new(x).speed(0.5).prefix(prefix)).changed();
+        }
+        if icon_button(ui, egui_phosphor::regular::COPY, crate::i18n::tr("Copy RGB values"), false, 20.0).clicked() {
+            ui.copy_text(format!("{}, {}, {}", srgb[0], srgb[1], srgb[2]));
+        }
+    });
+    if typed {
+        (h, s, v) = hsv_of(srgb);
+    }
+    let border = Stroke::new(1.0, tk.field_border);
+    // Saturation across, value up.
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, width), Sense::click_and_drag());
+    if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.clicked()) {
+        (s, v) = (((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0), 1.0 - ((p.y - rect.top()) / rect.height()).clamp(0.0, 1.0));
+        dragged = true;
+    }
+    gradient(ui.painter(), rect, |x, y| rgb_from_hsv((h, x, 1.0 - y)));
+    ui.painter().rect_stroke(rect, 0.0, border, egui::StrokeKind::Inside);
+    let at = rect.lerp_inside(vec2(s, 1.0 - v));
+    ui.painter().circle_stroke(at, 5.0, Stroke::new(2.0, Color32::WHITE));
+    ui.painter().circle_stroke(at, 6.5, Stroke::new(1.0, Color32::BLACK));
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 16.0), Sense::click_and_drag());
+    if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.clicked()) {
+        h = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+        dragged = true;
+    }
+    gradient(ui.painter(), rect, |x, _| rgb_from_hsv((x, 1.0, 1.0)));
+    ui.painter().rect_stroke(rect, 0.0, border, egui::StrokeKind::Inside);
+    let x = rect.left() + rect.width() * h;
+    ui.painter().rect_stroke(egui::Rect::from_x_y_ranges(x - 2.0..=x + 2.0, rect.y_range()), 1.0, Stroke::new(1.5, Color32::WHITE), egui::StrokeKind::Middle);
+    if dragged {
+        srgb = rgb_from_hsv((h, s, v)).map(|x| (x * 255.0 + 0.5) as u8);
+    }
+    let next = Color32::from_rgb(srgb[0], srgb[1], srgb[2]);
+    ui.data_mut(|d| d.insert_temp(id, (next, (h, s, v))));
+    let changed = next != *c;
+    *c = next;
+    changed
+}
+
+/// Fill `rect` with `rgb(x, y)` (sRGB 0..1 over 0..1 across and down), as a shaded mesh.
+fn gradient(painter: &egui::Painter, rect: egui::Rect, rgb: impl Fn(f32, f32) -> [f32; 3]) {
+    const N: u32 = 24;
+    let mut mesh = egui::Mesh::default();
+    for j in 0..=N {
+        for i in 0..=N {
+            let (x, y) = (i as f32 / N as f32, j as f32 / N as f32);
+            let [r, g, b] = rgb(x, y).map(|c| (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            mesh.colored_vertex(rect.lerp_inside(vec2(x, y)), Color32::from_rgb(r, g, b));
+        }
+    }
+    for j in 0..N {
+        for i in 0..N {
+            let k = j * (N + 1) + i;
+            mesh.add_triangle(k, k + 1, k + N + 1);
+            mesh.add_triangle(k + 1, k + N + 2, k + N + 1);
+        }
+    }
+    painter.add(mesh);
 }
 
 /// Panel title row with optional trailing content.
