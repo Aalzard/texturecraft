@@ -249,6 +249,11 @@ impl TextureCraftApp {
     /// Auto-rebake: when the chosen map's bake inputs changed, bake it again in the background
     /// (one set after another, only that map), unless a bake or a stroke is running.
     fn drive_auto_rebake(&mut self) {
+        // The web build runs a bake on the page's own thread, which would freeze the browser: there
+        // Auto-rebake is left to the manual command (`bake.autoRebake.run`).
+        if cfg!(target_arch = "wasm32") {
+            return;
+        }
         if self.bake.is_some() || self.session.stroke_active() || self.session.auto_rebake.map.is_none() {
             return;
         }

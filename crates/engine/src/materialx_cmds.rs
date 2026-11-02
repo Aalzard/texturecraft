@@ -133,7 +133,12 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         if !full.starts_with(&dir) {
             return Err(outside.into());
         }
-        let len = std::fs::metadata(&full).map_err(|e| e.to_string())?.len();
+        let meta = std::fs::metadata(&full).map_err(|e| e.to_string())?;
+        // A pipe or device in the folder would block the read (a pipe reports no length).
+        if !meta.is_file() {
+            return Err("it is not a regular file".into());
+        }
+        let len = meta.len();
         if len > crate::resource_cmds::MAX_BYTES as u64 {
             return Err(format!("the file is over {} MB", crate::resource_cmds::MAX_BYTES >> 20));
         }

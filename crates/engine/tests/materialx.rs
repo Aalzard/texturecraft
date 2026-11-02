@@ -125,3 +125,34 @@ fn udim_sets_use_the_udim_token() {
     assert!(!text.contains(".1001.") && !text.contains(".1002."), "{text}");
     assert!(all.iter().any(|f| f.ends_with(".1001.png")) && all.iter().any(|f| f.ends_with(".1002.png")));
 }
+
+#[test]
+fn the_udim_placeholder_replaces_the_tile_number_not_a_look_alike_in_the_name() {
+    let mut s = Session::new_project("t", primitives::udim_plane(), "builtin:udim_plane", None, 128).unwrap();
+    execute(&mut s, "textureSet.rename", &json!({"ts": 0, "name": "cloth.1001.body"})).unwrap();
+    let dir = temp("lookalike");
+    let r = export(&mut s, &dir, OPENPBR, true);
+    let all = files(&r);
+    let mtlx = all.iter().find(|f| f.ends_with(".mtlx")).unwrap_or_else(|| panic!("no .mtlx in {all:?}"));
+    let text = std::fs::read_to_string(mtlx).unwrap();
+    assert!(text.contains("cloth.1001.body"), "the set's own name stays as it is: {text}");
+    assert!(text.contains("&lt;UDIM&gt;"), "{text}");
+    // Every texture the document names exists for the first tile.
+    for part in text.split("name=\"file\" type=\"filename\" value=\"").skip(1) {
+        let file = part.split('"').next().unwrap().replace("&lt;UDIM&gt;", "1001");
+        assert!(dir.join(&file).is_file(), "{file} is not in {all:?}");
+    }
+}
+
+#[test]
+fn the_directx_warning_comes_once_and_only_with_a_normal_map() {
+    let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
+    let dir = temp("dx");
+    let r = execute(&mut s, "file.exportTextures", &json!({"dir": dir.display().to_string(), "preset": OPENPBR, "materialX": true, "normalFormat": "directX"}))
+        .unwrap();
+    let warnings: Vec<&str> = r["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap()).filter(|w| w.contains("DirectX")).collect();
+    assert_eq!(warnings.len(), 1, "{r}");
+    let dir = temp("gl");
+    let r = export(&mut s, &dir, OPENPBR, true);
+    assert!(!r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("DirectX")), "{r}");
+}
