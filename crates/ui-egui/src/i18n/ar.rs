@@ -101,6 +101,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Assets", "الأصول"),
     ("Automatic (from the mesh UVs)", "تلقائي (من إحداثيات UV للمجسم)"),
     ("Autosave every", "حفظ تلقائي كل"),
+    (
+        "Autosaves, smart materials, presets, templates and UI layouts go to the data folder. A new folder applies on restart; files already saved stay where they are.",
+        "تُحفظ النسخ التلقائية والمواد الذكية والإعدادات المسبقة والقوالب وتخطيطات الواجهة في مجلد البيانات. يُطبَّق المجلد الجديد عند إعادة التشغيل، وتبقى الملفات المحفوظة في مكانها.",
+    ),
     ("Average normals", "توسيط النواظم"),
     ("Back to painting", "العودة إلى الرسم"),
     ("Backface culling", "استبعاد الوجوه الخلفية"),
@@ -222,6 +226,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cylindrical projection", "إسقاط أسطواني"),
     ("Dark to light: the content's luminance picks a color along these stops.", "من الداكن إلى الفاتح: تحدد إضاءة المحتوى لوناً على طول نقاط التوقف هذه."),
     ("Darken (Min)", "تغميق (الحد الأدنى)"),
+    ("Data folder", "مجلد البيانات"),
     ("Decal", "ملصق"),
     ("Decal projection", "إسقاط الملصق"),
     ("Default", "افتراضي"),
