@@ -228,6 +228,8 @@ pub enum ProceduralKind {
     Tiles,
     /// Plain fabric weave.
     Weave,
+    /// 2/2 twill: diagonal ribs, the warp brighter than the weft (denim, carbon fiber).
+    Twill,
     /// Leather grain: pebbled cells with creases.
     Leather,
     /// Hammered metal dimples.
@@ -249,7 +251,7 @@ pub enum ProceduralKind {
 }
 
 impl ProceduralKind {
-    pub const ALL: [ProceduralKind; 22] = [
+    pub const ALL: [ProceduralKind; 23] = [
         ProceduralKind::Clouds,
         ProceduralKind::Perlin,
         ProceduralKind::Noise,
@@ -263,6 +265,7 @@ impl ProceduralKind {
         ProceduralKind::Bricks,
         ProceduralKind::Tiles,
         ProceduralKind::Weave,
+        ProceduralKind::Twill,
         ProceduralKind::Leather,
         ProceduralKind::Hammered,
         ProceduralKind::Brushed,
@@ -288,6 +291,7 @@ impl ProceduralKind {
             ProceduralKind::Bricks => "Bricks",
             ProceduralKind::Tiles => "Tiles",
             ProceduralKind::Weave => "Fabric weave",
+            ProceduralKind::Twill => "Twill weave",
             ProceduralKind::Leather => "Leather grain",
             ProceduralKind::Hammered => "Hammered",
             ProceduralKind::Brushed => "Brushed lines",

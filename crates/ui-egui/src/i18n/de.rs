@@ -1002,4 +1002,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Unsaved changes", "Ungespeicherte Änderungen"),
     ("Don't save", "Nicht speichern"),
     ("Save the changes to {name} before closing?", "Änderungen an {name} vor dem Schließen speichern?"),
+    ("Twill weave", "Köperbindung"),
 ];
