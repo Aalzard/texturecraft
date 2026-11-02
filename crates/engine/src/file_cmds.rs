@@ -271,11 +271,16 @@ pub fn export_options(s: &Session, p: &Value, cmd: &str) -> Result<ExportOptions
         Some(other) => return Err(bad(cmd, format!("unknown normal format `{other}`"))),
         None => None,
     };
-    if let Some(name) = strp(p, "colorSpace") {
-        o.color_space = Some(
-            texturecraft_texel::ColorSpace::from_name(name)
-                .ok_or_else(|| bad(cmd, format!("unknown colorSpace `{name}` (sRGB, Linear Rec.709, ACEScg or ACES2065-1)")))?,
-        );
+    match p.get("colorSpace") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(name)) => {
+            o.color_space = Some(
+                texturecraft_texel::ColorSpace::from_name(name)
+                    .ok_or_else(|| bad(cmd, format!("unknown colorSpace `{name}` (sRGB, Linear Rec.709, ACEScg or ACES2065-1)")))?,
+            );
+        }
+        // A value of the wrong type is an error, not the format's default space.
+        Some(other) => return Err(bad(cmd, format!("`colorSpace` is a name (sRGB, Linear Rec.709, ACEScg or ACES2065-1), not {other}"))),
     }
     Ok(o)
 }
@@ -456,29 +461,25 @@ fn export_textures(s: &mut Session, p: &Value) -> Result<Value> {
 fn write_materialx(s: &Session, sets: &[usize], opts: &ExportOptions, dir: &std::path::Path, warnings: &mut Vec<String>) -> Result<Vec<std::path::PathBuf>> {
     use texturecraft_formats::materialx::{self, Texture};
     let mesh_name = stem_of(s.doc.project.mesh.trim_start_matches("builtin:"));
-    if opts.normal_format == Some(NormalFormat::DirectX) {
-        warnings.push("MaterialX: the normalmap node reads OpenGL (+Y) normals; this export wrote DirectX normals, so flip the green channel".into());
-    }
     if opts.color_space == Some(texturecraft_texel::ColorSpace::Aces2065) {
         warnings.push("MaterialX: version 1.39 has no ACES2065-1 colour space; the colour maps are tagged lin_ap0_scene, its name in later versions, which older readers may not know".into());
     }
     let mut out = Vec::new();
     let mut stems = std::collections::HashSet::new();
+    let mut normal_map_written = false;
     for &ts in sets {
         let set = s.doc.project.texture_set(ts).map_err(|e| EngineError::Other(e.to_string()))?;
         let mut textures: Vec<Texture> = Vec::new();
         for f in texturecraft_formats::list_outputs(&s.doc.project, ts, &mesh_name, opts).map_err(fe)? {
             let Some(input) = opts.preset.maps.get(f.map).and_then(|m| materialx::input_of_template(&m.file)) else { continue };
-            // The first tile stands for all of them: 1001 -> <UDIM>.
-            let file = match f.tile {
-                Some(t) => f.name.replacen(&format!(".{t}."), ".<UDIM>.", 1),
-                None => f.name.clone(),
-            };
+            // The first tile stands for all of them: its number is written as <UDIM>.
+            let file = f.udim_name.clone().unwrap_or_else(|| f.name.clone());
             let colorspace = materialx::colorspace_name(opts.space_for(f.format));
             if !textures.iter().any(|t| t.input == input) {
                 textures.push(Texture { input: input.to_owned(), file, colorspace });
             }
         }
+        normal_map_written |= textures.iter().any(|t| t.input == "geometry_normal");
         if textures.is_empty() {
             warnings.push(format!("MaterialX: texture set \"{}\" has no OpenPBR maps; use the \"OpenPBR (separate maps)\" preset", set.name));
             continue;
@@ -495,6 +496,10 @@ fn write_materialx(s: &Session, sets: &[usize], opts: &ExportOptions, dir: &std:
         let path = dir.join(format!("{stem}.mtlx"));
         texturecraft_formats::write_atomic(&path, materialx::write(&format!("{mesh_name}_{}", set.name), &textures, None).as_bytes()).map_err(fe)?;
         out.push(path);
+    }
+    // The normalmap node only exists in a material that has a normal map.
+    if normal_map_written && opts.normal_format == Some(NormalFormat::DirectX) {
+        warnings.push("MaterialX: the normalmap node reads OpenGL (+Y) normals; this export wrote DirectX normals, so flip the green channel".into());
     }
     Ok(out)
 }

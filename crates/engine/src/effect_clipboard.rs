@@ -27,7 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// The copied effect, if the clipboard holds one.
-fn clipboard_effect(s: &Session) -> Option<LayerId> {
+pub fn clipboard_effect(s: &Session) -> Option<LayerId> {
     s.clipboard.as_ref().and_then(|(doc, id)| doc.project.effect(*id).map(|_| *id))
 }
 
@@ -114,10 +114,13 @@ fn paste(s: &mut Session, p: &Value) -> Result<Value> {
                 s.doc.pixels.layers.insert((new, c), fit(img, size, &empty_texel(c)));
             }
         }
+        // The target belongs to the active set's selection: a paste into another set leaves it.
         if let Some((lts, _, _)) = s.doc.project.locate(layer) {
             s.selected.insert(lts, layer);
+            if lts == s.ts() {
+                s.target = StackTarget::Effect(new);
+            }
         }
-        s.target = StackTarget::Effect(new);
         Ok(new)
     })?;
     Ok(json!({ "effect": new.0 }))

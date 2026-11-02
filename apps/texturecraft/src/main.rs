@@ -170,9 +170,12 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // Errors before the window opens speak the system's language; the app then applies the saved one.
+    texturecraft_ui_egui::i18n::set_language(texturecraft_ui_egui::i18n::os_language());
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        eprintln!("texturecraft: internal error: {info}");
+        // A message box needs the main thread on macOS; other threads' panics are only logged.
+        fatal(&format!("internal error: {info}"), std::thread::current().name() == Some("main"));
         prev(info);
     }));
     let session = initial_session(&args);
@@ -188,7 +191,7 @@ fn main() {
     let viewport = title_bar.viewport(viewport);
     let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, persistence_path, ..Default::default() };
     if let Err(e) = gpu::configure(&mut options, args.gpu, args.power_pref) {
-        eprintln!("texturecraft: {e}");
+        fatal(&e.to_string(), true);
         std::process::exit(2);
     }
     let control = args.control;
@@ -218,8 +221,38 @@ fn main() {
         }),
     );
     if let Err(e) = r {
-        eprintln!("texturecraft: {e}");
+        fatal(&e.to_string(), true);
         std::process::exit(1);
+    }
+}
+
+/// The file startup errors and crashes are appended to, beside the saved settings.
+fn error_log() -> Option<std::path::PathBuf> {
+    eframe::storage_dir(APP_NAME).map(|d| d.join("errors.log"))
+}
+
+/// Append a line with the time (Unix seconds) and the app version; true when it was written.
+fn append_line(file: &std::path::Path, msg: &str) -> bool {
+    use std::io::Write as _;
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let open = || std::fs::OpenOptions::new().create(true).append(true).open(file);
+    file.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok()) && open().and_then(|mut f| writeln!(f, "[{secs}] {}: {msg}", version())).is_ok()
+}
+
+/// An error that ends the app: printed, logged, and (with `dialog`) shown in a message box, since
+/// a Windows release build has no console and would otherwise close without a word.
+fn fatal(msg: &str, dialog: bool) {
+    eprintln!("texturecraft: {msg}");
+    let log = error_log().filter(|f| append_line(f, msg));
+    if dialog {
+        use texturecraft_ui_egui::i18n::{tr, trf};
+        let saved = log.map(|f| format!("\n\n{}", trf("Details saved to {file}", &[("file", &f.display())]))).unwrap_or_default();
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title(APP_NAME)
+            .set_description(format!("{}\n\n{msg}{saved}", tr("TextureCraft had to close:")))
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
     }
 }
 
@@ -246,6 +279,20 @@ mod tests {
         assert!(parse_args_from(["--gpu".to_string()]).is_err());
         assert!(parse_args_from(["--power-pref".to_string()]).is_err());
         assert!(parse_args_from(["--power-pref".to_string(), "unrecognized".to_string()]).is_err());
+    }
+
+    #[test]
+    fn errors_are_appended_to_the_log_in_a_new_folder() {
+        let dir = std::env::temp_dir().join(format!("texturecraft-errlog-test-{}", std::process::id()));
+        let file = dir.join("nested").join("errors.log");
+        assert!(append_line(&file, "first"));
+        assert!(append_line(&file, "second"));
+        let text = std::fs::read_to_string(&file).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].ends_with(&format!("{}: first", version())) && lines[1].ends_with(": second"), "{text}");
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!append_line(std::path::Path::new(""), "no folder"), "a path without a folder is refused");
     }
 
     #[test]

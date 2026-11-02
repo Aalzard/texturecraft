@@ -54,4 +54,9 @@ fn the_plan_reports_the_space_and_clamping_and_bad_names_are_errors() {
     for bad in ["Display P3", "", "Rec.2020"] {
         assert!(execute(&mut s, "export.plan", &json!({ "preset": "glTF PBR Metal Roughness", "colorSpace": bad })).is_err(), "{bad:?}");
     }
+    // A value that isn't a name is an error too, not the format's default space; null means none.
+    for bad in [json!(["ACEScg"]), json!(3), json!({ "name": "ACEScg" }), json!(true)] {
+        assert!(execute(&mut s, "export.plan", &json!({ "preset": "glTF PBR Metal Roughness", "colorSpace": bad })).is_err(), "{bad}");
+    }
+    assert!(execute(&mut s, "export.plan", &json!({ "preset": "glTF PBR Metal Roughness", "colorSpace": null })).is_ok());
 }

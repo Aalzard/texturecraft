@@ -115,6 +115,9 @@ pub struct Prefs {
     pub system_title_bar: bool,
     /// Show the start window at launch.
     pub start_window: bool,
+    /// Where autosaves, smart materials, presets, templates and layouts go (desktop; read at
+    /// startup). Empty or relative: `Documents/TextureCraft`.
+    pub data_folder: String,
 }
 
 impl Default for Prefs {
@@ -128,6 +131,7 @@ impl Default for Prefs {
             accent: crate::theme::Accent::default(),
             system_title_bar: false,
             start_window: true,
+            data_folder: String::new(),
         }
     }
 }
@@ -354,6 +358,16 @@ mod tests {
         assert_eq!(ui.recent, vec!["a.tcraft".to_string()]);
         assert_eq!(ui.export.preset, "Mine");
         assert_eq!(ui.keymap.get("file.save").map(String::as_str), Some("F5"));
+    }
+
+    #[test]
+    fn the_data_folder_is_an_absolute_choice_or_documents_texturecraft() {
+        let default = crate::data_folder("");
+        assert!(default.ends_with(std::path::Path::new("Documents").join("TextureCraft")));
+        assert_eq!(crate::data_folder("relative/dir"), default, "a relative path is not a choice");
+        let chosen = std::env::temp_dir().join("tc-data");
+        assert_eq!(crate::data_folder(&format!(" {} ", chosen.display())), chosen);
+        assert_eq!(Prefs::default().data_folder, "", "the default is no choice");
     }
 
     #[test]

@@ -57,6 +57,14 @@ impl Session {
                     let content = self.doc.project.layer(owner)?.content_effects.iter().any(|x| x.id == e);
                     Ok(if content { PaintTarget::Layer(e) } else { PaintTarget::Mask(e) })
                 }
+                // Path sublayers are painted only from their stored paths.
+                Some((owner, eff)) if matches!(eff.kind, EffectKind::Path(_)) && self.painting_paths => {
+                    let content = self.doc.project.layer(owner)?.content_effects.iter().any(|x| x.id == e);
+                    Ok(if content { PaintTarget::Layer(e) } else { PaintTarget::Mask(e) })
+                }
+                Some((_, eff)) if matches!(eff.kind, EffectKind::Path(_)) => {
+                    Err(EngineError::Other("a path sublayer holds paths only: edit them with the Path tool, or paint on a paint sublayer".into()))
+                }
                 // A filter (or another effect) is selected, e.g. just added from the shelf: paint
                 // what lies beneath it, so the new paint goes through it.
                 Some((owner, _)) => self.paint_target_below(owner, e),
