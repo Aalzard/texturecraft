@@ -601,6 +601,10 @@ impl Session {
     pub fn redo_label(&self) -> Option<&str> {
         self.redo.last().map(|(l, _)| l.as_str())
     }
+    /// The undone steps, the next one to redo first.
+    pub fn redo_labels(&self) -> Vec<String> {
+        self.redo.iter().rev().map(|(l, _)| l.clone()).collect()
+    }
     pub fn history_labels(&self) -> Vec<String> {
         self.undo.iter().map(|(l, _)| l.clone()).collect()
     }

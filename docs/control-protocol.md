@@ -16,6 +16,9 @@ painted tile count, so an agent can verify its work without a screenshot.
 `effect.histogram {effect, channel?, bins?}` counts the values an effect reads (a levels
 effect's input), so an agent can pick its input range from the data.
 
+`edit.undo {steps?}` and `edit.redo {steps?}` go back or forward several steps at once (as far
+as the history reaches); `edit.history` lists the steps done and the undone ones, next first.
+
 ## Control channel (desktop app)
 
 ```sh

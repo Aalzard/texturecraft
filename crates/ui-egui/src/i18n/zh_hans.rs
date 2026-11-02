@@ -615,6 +615,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "正在调整大小"),
     ("Restore every default shortcut", "恢复所有默认快捷键"),
     ("Return to painting mode", "返回绘画模式"),
+    ("Return to this step", "返回到此步骤"),
     ("Right-click a layer > Create smart material", "右键单击图层 > 创建智能材质"),
     ("Rotation", "旋转"),
     ("Rotation (degrees)", "旋转（度）"),

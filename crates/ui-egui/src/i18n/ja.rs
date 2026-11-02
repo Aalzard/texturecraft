@@ -675,6 +675,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "サイズ変更中"),
     ("Restore every default shortcut", "すべてのショートカットをデフォルトに戻す"),
     ("Return to painting mode", "ペイントモードに戻る"),
+    ("Return to this step", "このステップに戻る"),
     ("Right-click a layer > Create smart material", "レイヤーを右クリック > スマートマテリアルを作成"),
     ("Rotation", "回転"),
     ("Rotation (degrees)", "回転 (度)"),

@@ -687,6 +687,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "Redimensionando"),
     ("Restore every default shortcut", "Restaurar todos los atajos predeterminados"),
     ("Return to painting mode", "Volver al modo de pintura"),
+    ("Return to this step", "Volver a este paso"),
     ("Right-click a layer > Create smart material", "Clic derecho en una capa > Crear material inteligente"),
     ("Rotation", "Rotación"),
     ("Rotation (degrees)", "Rotación (grados)"),
