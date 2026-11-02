@@ -157,6 +157,12 @@ impl TextureCraftApp {
         export_templates::load_library(&mut app, cc.storage);
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // The first window of the process fixes it; a new folder applies on restart.
+            let _ = DATA_FOLDER.set(data_folder(&app.ui.prefs.data_folder));
+            // An export folder still at the default follows the data folder.
+            if app.ui.export.dir == data_folder("").join("export").display().to_string() {
+                app.ui.export.dir = user_dir("export").display().to_string();
+            }
             let skipped = app.session.load_templates(user_dir("templates"));
             app.session.log.extend(skipped.into_iter().map(|w| format!("Project template skipped: {w}")));
         }
@@ -452,11 +458,26 @@ impl eframe::App for TextureCraftApp {
     }
 }
 
-/// `Documents/TextureCraft/<sub>` in the user's home folder.
+/// The data folder chosen in Settings, fixed at startup (unset: the default).
+#[cfg(not(target_arch = "wasm32"))]
+static DATA_FOLDER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// The data folder for a `Prefs::data_folder` value: that path when it is absolute, otherwise
+/// `Documents/TextureCraft` in the user's home folder.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn data_folder(pref: &str) -> std::path::PathBuf {
+    let chosen = std::path::Path::new(pref.trim());
+    if chosen.is_absolute() {
+        return chosen.to_path_buf();
+    }
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_else(|_| ".".into());
+    std::path::Path::new(&home).join("Documents").join("TextureCraft")
+}
+
+/// `<sub>` in the data folder in use (Settings › Folders › Data folder).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn user_dir(sub: &str) -> std::path::PathBuf {
-    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_else(|_| ".".into());
-    std::path::Path::new(&home).join("Documents").join("TextureCraft").join(sub)
+    DATA_FOLDER.get().cloned().unwrap_or_else(|| data_folder("")).join(sub)
 }
 
 /// Folder holding the user's smart materials.
