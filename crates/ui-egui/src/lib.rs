@@ -483,6 +483,11 @@ fn toasts(app: &mut TextureCraftApp, ctx: &egui::Context) {
     }
     let tk = theme::Tokens::get(ctx);
     let mut dismissed = None;
+    // Toasts fit the window: at most 360 points wide and, for their text, a part of its height
+    // (longer text scrolls), so a sticky toast's dismiss button always stays on screen.
+    let screen = ctx.content_rect().size();
+    let max_width = (screen.x - 52.0).clamp(120.0, 360.0);
+    let max_text_height = (screen.y * 0.35).clamp(48.0, 220.0);
     egui::Area::new(egui::Id::unique("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -36.0)).show(ctx, |ui| {
         for (i, t) in app.toasts.iter().enumerate() {
             egui::Frame::NONE
@@ -492,10 +497,18 @@ fn toasts(app: &mut TextureCraftApp, ctx: &egui::Context) {
                 .shadow(ui.visuals().popup_shadow)
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
-                    ui.set_max_width(360.0);
+                    ui.set_max_width(max_width);
+                    let sticky = t.until.is_infinite();
                     ui.horizontal_top(|ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(&t.text).color(tk.text_strong)).wrap());
-                        if t.until.is_infinite() && widgets::icon_button(ui, egui_phosphor::regular::X, i18n::tr("Dismiss"), false, 18.0).clicked() {
+                        // The text wraps in the width the dismiss button leaves.
+                        let width = if sticky { max_width - 28.0 } else { max_width };
+                        ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                            egui::ScrollArea::vertical().id_salt(("toast", i)).max_height(max_text_height).show(ui, |ui| {
+                                ui.set_max_width(width);
+                                ui.add(egui::Label::new(egui::RichText::new(&t.text).color(tk.text_strong)).wrap());
+                            });
+                        });
+                        if sticky && widgets::icon_button(ui, egui_phosphor::regular::X, i18n::tr("Dismiss"), false, 18.0).clicked() {
                             dismissed = Some(i);
                         }
                     });

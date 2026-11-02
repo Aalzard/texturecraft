@@ -118,7 +118,11 @@ fn gpu_report_toasts(app: &mut TextureCraftApp, reports: crate::gpu::GpuReports)
                 &[("name", one)],
             ),
             many => {
-                let mut list = many.iter().take(MAX_NAMED_SETS).map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(", ");
+                let short = |n: &String| match n.char_indices().nth(MAX_NAME_CHARS) {
+                    Some((cut, _)) => format!("\"{}...\"", &n[..cut]),
+                    None => format!("\"{n}\""),
+                };
+                let mut list = many.iter().take(MAX_NAMED_SETS).map(short).collect::<Vec<_>>().join(", ");
                 if many.len() > MAX_NAMED_SETS {
                     list.push_str(", ...");
                 }
@@ -141,6 +145,8 @@ fn gpu_report_toasts(app: &mut TextureCraftApp, reports: crate::gpu::GpuReports)
 
 /// Texture sets a GPU memory notice names before "...".
 const MAX_NAMED_SETS: usize = 5;
+/// Characters of a set name in that notice (long names are cut, with "...").
+const MAX_NAME_CHARS: usize = 32;
 
 /// This frame's scene sync (compositing and GPU uploads), run by the first view drawn, after
 /// that view handled its input: a stroke shows in the frame it is painted, not the next.
