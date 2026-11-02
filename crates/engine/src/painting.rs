@@ -57,7 +57,10 @@ impl Session {
                     let content = self.doc.project.layer(owner)?.content_effects.iter().any(|x| x.id == e);
                     Ok(if content { PaintTarget::Layer(e) } else { PaintTarget::Mask(e) })
                 }
-                _ => Err(EngineError::Other("the selected effect is not a paint effect".into())),
+                // A filter (or another effect) is selected, e.g. just added from the shelf: paint
+                // what lies beneath it, so the new paint goes through it.
+                Some((owner, _)) => self.paint_target_below(owner, e),
+                None => Err(EngineError::Other("the selected effect is not a paint effect".into())),
             },
             StackTarget::Mask => {
                 let eid = self.doc.project.alloc_id();
@@ -70,6 +73,36 @@ impl Session {
                 Ok(PaintTarget::Mask(eid))
             }
         }
+    }
+
+    /// What a stroke paints while non-paint effect `effect` of layer `owner` is selected: the
+    /// nearest paint effect below it in the same stack, else the paint layer's own pixels (for
+    /// content) or a new paint effect inserted just below it (for a mask).
+    fn paint_target_below(&mut self, owner: LayerId, effect: LayerId) -> Result<PaintTarget> {
+        let eid = self.doc.project.alloc_id();
+        let layer = self.doc.project.layer_mut(owner)?;
+        let below = |effects: &[Effect], at: usize| effects.get(..at).and_then(|b| b.iter().rev().find(|x| matches!(x.kind, EffectKind::Paint))).map(|x| x.id);
+        if let Some(at) = layer.content_effects.iter().position(|x| x.id == effect) {
+            if let Some(id) = below(&layer.content_effects, at) {
+                return Ok(PaintTarget::Layer(id));
+            }
+            return if matches!(layer.kind, LayerKind::Paint) {
+                Ok(PaintTarget::Layer(owner))
+            } else {
+                Err(EngineError::Other(format!(
+                    "\"{}\" is a {} layer: paint on a paint layer or on its mask (a filter changes what lies below it)",
+                    layer.name,
+                    layer.kind.name()
+                )))
+            };
+        }
+        let mask = layer.mask.as_mut().ok_or_else(|| EngineError::Other("the selected effect is not a paint effect".into()))?;
+        let at = mask.effects.iter().position(|x| x.id == effect).ok_or_else(|| EngineError::Other("the selected effect is not a paint effect".into()))?;
+        if let Some(id) = below(&mask.effects, at) {
+            return Ok(PaintTarget::Mask(id));
+        }
+        mask.effects.insert(at, Effect::new(eid, EffectKind::Paint));
+        Ok(PaintTarget::Mask(eid))
     }
 
     fn stroke_values(&self, target: PaintTarget) -> BTreeMap<Channel, [f32; 3]> {
@@ -483,13 +516,18 @@ impl Session {
             FillMode::Triangle => [tri].into_iter().collect(),
             FillMode::Mesh => m.triangles_of(material).map(|t| t as u32).collect(),
             FillMode::UvIsland => {
-                // Triangles sharing vertex indices form a UV island (seams split vertices).
-                let mut by_vertex: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
+                // Triangles sharing an edge in UV space form a UV island: imported meshes often
+                // split vertices along hard edges (or per face) where the UVs run on, so shared
+                // vertex indices alone break an island into its polygons.
+                let corner = |i: usize| m.uvs.get(i).map(|uv| [(uv.x * 1e5).round() as i64, (uv.y * 1e5).round() as i64]);
+                let edges = |t: usize| match m.tri(t).map(|v| v.map(corner)) {
+                    Some([Some(a), Some(b), Some(c)]) => [(a, b), (b, c), (c, a)].map(|(p, q)| (p.min(q), p.max(q))).to_vec(),
+                    _ => Vec::new(),
+                };
+                let mut by_edge: BTreeMap<_, Vec<u32>> = BTreeMap::new();
                 for t in m.triangles_of(material) {
-                    if let Some(v) = m.tri(t) {
-                        for i in v {
-                            by_vertex.entry(i).or_default().push(t as u32);
-                        }
+                    for e in edges(t) {
+                        by_edge.entry(e).or_default().push(t as u32);
                     }
                 }
                 let mut seen = BTreeSet::new();
@@ -498,12 +536,10 @@ impl Session {
                     if !seen.insert(t) {
                         continue;
                     }
-                    if let Some(v) = m.tri(t as usize) {
-                        for i in v {
-                            for n in by_vertex.get(&i).map(Vec::as_slice).unwrap_or(&[]) {
-                                if !seen.contains(n) {
-                                    stack.push(*n);
-                                }
+                    for e in edges(t as usize) {
+                        for n in by_edge.get(&e).map(Vec::as_slice).unwrap_or(&[]) {
+                            if !seen.contains(n) {
+                                stack.push(*n);
                             }
                         }
                     }
@@ -572,4 +608,35 @@ fn with_commit_source<R>(
     let per_texel: Option<texturecraft_paint::TexelFn> = if st.stencil.is_some() { Some(&stencil_fn) } else { None };
     let carried = st.canvas.pickup.as_ref().map(|p| &p.values);
     f(CommitSource { alpha: &st.canvas.alpha, tiles, opacity: st.stroke.settings.opacity, erase: st.erase, per_texel, carried })
+}
+
+#[cfg(test)]
+mod tests {
+    use texturecraft_geom::glam::{Vec2, Vec3};
+    use texturecraft_geom::mesh::Mesh;
+    use texturecraft_geom::primitives;
+
+    use crate::session::{FillMode, Session};
+
+    #[test]
+    fn uv_island_fill_follows_uvs_across_split_vertices() {
+        // Two copies of a plane, each triangle with its own three vertices (as hard edges or
+        // per-face imports leave a mesh), the second copy apart in UV space.
+        let plane = primitives::plane(2.0, 4);
+        let (mut positions, mut uvs) = (Vec::<Vec3>::new(), Vec::<Vec2>::new());
+        for shift in [0.0, 0.5] {
+            for i in plane.indices.iter().map(|i| *i as usize) {
+                positions.push(plane.positions[i] + Vec3::Y * shift);
+                uvs.push(plane.uvs[i] * 0.5 + shift);
+            }
+        }
+        let indices = (0..positions.len() as u32).collect();
+        let mesh = Mesh::from_parts(positions, None, uvs, indices, "m").unwrap();
+        let n = plane.triangle_count();
+        assert_eq!(mesh.vertex_count(), 6 * n, "no vertex is shared");
+        let mut s = Session::new_project("t", mesh, "test", None, 128).unwrap();
+        s.tool.fill_mode = FillMode::UvIsland;
+        assert_eq!(s.fill_set(0, 0).len(), n, "the whole first island");
+        assert_eq!(s.fill_set(n as u32, 0).len(), n, "only the second island");
+    }
 }

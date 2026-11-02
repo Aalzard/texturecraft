@@ -5,7 +5,7 @@ use egui::{Color32, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use egui_phosphor::regular as ic;
 use serde_json::{Value, json};
 use texturecraft_engine::core::{
-    BakedMap, BlendMode, Channel, Decal, EffectKind, Fill, Filter, GeneratorKind, Layer, LayerId, LayerKind, ProceduralKind, Source,
+    BakedMap, BlendMode, Channel, Decal, Effect, EffectKind, Fill, Filter, GeneratorKind, Layer, LayerId, LayerKind, ProceduralKind, Source,
 };
 use texturecraft_engine::filter_lib::{FILTERS, scalar_params};
 use texturecraft_engine::paint::{BrushAlpha, alphas};
@@ -16,7 +16,7 @@ use crate::i18n::{n_, tr, trf};
 use crate::shelf::{Asset, ShelfDrag};
 use crate::state::PropsTab;
 use crate::theme::{Tokens, caption};
-use crate::widgets::{chip, color_swatch, combo, dnd_release, elided, icon_button, section, slider, slider_edit};
+use crate::widgets::{chip, color_swatch, combo, dnd_release, elided, histogram, icon_button, section, slider, slider_edit};
 
 const TAG_COLORS: [Color32; 8] = [
     Color32::from_rgb(0xc0, 0x40, 0x40),
@@ -255,11 +255,11 @@ fn layer_tree(app: &mut TextureCraftApp, ui: &mut Ui, id: LayerId, depth: usize)
     let Some(layer) = app.session.doc.project.layers.get(&id).cloned() else { return };
     layer_row(app, ui, &layer, depth);
     for e in layer.content_effects.iter().rev() {
-        effect_row(app, ui, &layer, e.id, &e.name, e.visible, depth + 1, ic::SPHERE);
+        effect_row(app, ui, &layer, &layer.content_effects, e, depth + 1, ic::SPHERE);
     }
     if let Some(m) = &layer.mask {
         for e in m.effects.iter().rev() {
-            effect_row(app, ui, &layer, e.id, &e.name, e.visible, depth + 1, ic::MAGIC_WAND);
+            effect_row(app, ui, &layer, &m.effects, e, depth + 1, ic::MAGIC_WAND);
         }
     }
     if let LayerKind::Group { children, collapsed } = &layer.kind
@@ -522,12 +522,16 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     resp.context_menu(|ui| layer_context_menu(app, ui, layer));
 }
 
-/// One effect of a layer's content (`glyph` sphere) or mask (`glyph` wand) stack.
-#[allow(clippy::too_many_arguments)]
-fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid: LayerId, name: &str, visible: bool, depth: usize, glyph: &str) {
+/// The drag-and-drop payload of an effect row (the effect id).
+struct EffectDrag(u64);
+
+/// Effect `e` of `stack`, a layer's content (`glyph` sphere) or mask (`glyph` wand) effects.
+fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, stack: &[Effect], e: &Effect, depth: usize, glyph: &str) {
     let tk = Tokens::get(ui.ctx());
+    let (eid, visible) = (e.id, e.visible);
     let selected = app.session.selected_layer() == Some(layer.id) && app.session.target == StackTarget::Effect(eid);
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::ListItem, true, selected, &e.name));
     let p = ui.painter().clone();
     p.rect_filled(
         rect.shrink2(vec2(0.0, 1.0)),
@@ -548,16 +552,55 @@ fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid: LayerI
     let er = ui.interact(eye, ui.scope_id().with(("eff_eye", eid.0)), Sense::click()).on_hover_text(tr("Enable or disable the effect"));
     p.text(eye.center(), egui::Align2::CENTER_CENTER, if visible { ic::EYE } else { ic::EYE_SLASH }, egui::FontId::proportional(12.0), tk.text_dim);
     p.text(pos2(x0 + 22.0, rect.center().y), egui::Align2::LEFT_CENTER, glyph, egui::FontId::proportional(11.0), tk.text_dim);
-    p.text(pos2(x0 + 38.0, rect.center().y), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(11.5), tk.text);
+    p.text(pos2(x0 + 38.0, rect.center().y), egui::Align2::LEFT_CENTER, &e.name, egui::FontId::proportional(11.5), tk.text);
     if er.clicked() {
         app.run("effect.set", json!({"effect": eid.0, "visible": !visible}));
     } else if resp.clicked() {
         app.run("layer.select", json!({"layer": layer.id.0, "target": eid.0}));
     }
+    // Drag to reorder within the stack: a drop lands above this row, or below it from its lower half.
+    if resp.drag_started() {
+        resp.dnd_set_drag_payload(EffectDrag(eid.0));
+    }
+    let pos = |id: u64| stack.iter().position(|x| x.id.0 == id);
+    let below = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| p.y > rect.center().y);
+    if resp.dnd_hover_payload::<EffectDrag>().is_some_and(|src| src.0 != eid.0 && pos(src.0).is_some()) {
+        let y = if below { rect.bottom() } else { rect.top() };
+        p.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(2.0, tk.accent));
+    }
+    if let Some(src) = dnd_release::<EffectDrag>(&resp)
+        && let (Some(from), Some(to)) = (pos(src.0), pos(eid.0))
+        && from != to
+    {
+        // Rows list the stack top first, so above this row is the next index up.
+        let index = match (from < to, below) {
+            (true, false) | (false, true) => to,
+            (true, true) => to - 1,
+            (false, false) => to + 1,
+        };
+        app.run("effect.move", json!({"effect": src.0, "index": index}));
+    }
     resp.context_menu(|ui| {
-        if ui.button(tr("Remove effect")).clicked() {
-            app.run("effect.remove", json!({"effect": eid.0}));
-            ui.close();
+        let keymap = app.ui.keymap.clone();
+        let paste = crate::menus::enabled(app, "effect.paste");
+        // The clipboard items show the layer clipboard's shortcuts, which act on a selected effect.
+        for (label, id, keys, enabled) in [
+            (tr("Copy effect"), "effect.copy", Some("layer.copy"), true),
+            (tr("Cut effect"), "effect.cut", Some("layer.cut"), true),
+            (tr("Paste effect"), "effect.paste", Some("layer.paste"), paste),
+            (tr("Duplicate effect"), "effect.duplicate", None, true),
+            (tr("Remove effect"), "effect.remove", None, true),
+        ] {
+            let mut b = egui::Button::new(label);
+            if let Some(sc) = keys.and_then(|k| crate::keymap::shortcut_of(&keymap, k)) {
+                b = b.shortcut_text(sc);
+            }
+            if ui.add_enabled(enabled, b).clicked() {
+                // Selected first: a paste lands above it, a duplicate takes the selection.
+                app.run("layer.select", json!({"layer": layer.id.0, "target": eid.0}));
+                app.run(id, json!({"effect": eid.0}));
+                ui.close();
+            }
         }
     });
 }
@@ -650,7 +693,9 @@ fn layer_context_menu(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
     ui.separator();
     run(app, ui, tr("Cut layer(s)"), "layer.cut", json!({"layer": lid}), true);
     run(app, ui, tr("Copy layer(s)"), "layer.copy", json!({"layer": lid}), true);
-    run(app, ui, tr("Paste layer(s)"), "layer.paste", json!({}), app.session.clipboard.is_some());
+    let (paste_layer, paste_effect) = (crate::menus::enabled(app, "layer.paste"), crate::menus::enabled(app, "effect.paste"));
+    run(app, ui, tr("Paste layer(s)"), "layer.paste", json!({}), paste_layer);
+    run(app, ui, tr("Paste effect"), "effect.paste", json!({}), paste_effect);
     let paste_instance = crate::menus::enabled(app, "layer.pasteInstance");
     run(app, ui, tr("Paste as instance"), "layer.pasteInstance", json!({}), paste_instance);
     run(app, ui, tr("Duplicate layer(s)"), "layer.duplicate", json!({"layer": lid}), true);
@@ -762,10 +807,10 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
                 }
             });
         });
-        let baked = app.session.doc.baked.get(&ts);
+        let images: Vec<String> = app.session.doc.resources.keys().cloned().collect();
         for m in BakedMap::ALL {
-            let present = baked.is_some_and(|b| b.maps.contains_key(&m));
-            ui.horizontal(|ui| {
+            let present = app.session.doc.baked.get(&ts).is_some_and(|b| b.maps.contains_key(&m));
+            let row = ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
                 ui.painter().rect_filled(r, 2.0, if present { mesh_map_color(m) } else { tk.button });
                 ui.vertical(|ui| {
@@ -776,7 +821,36 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
                             .color(tk.text_dim),
                     );
                 });
+                // An image resource instead of a bake, or no map.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.menu_button(RichText::new(ic::DOTS_THREE).size(13.0), |ui| {
+                        ui.label(caption(tr("Images")));
+                        for name in &images {
+                            if ui.button(name).clicked() {
+                                app.run("textureSet.meshMap.set", json!({"ts": ts, "map": m.id(), "image": name}));
+                                ui.close();
+                            }
+                        }
+                        if ui.button(tr("Import...")).clicked() {
+                            crate::menus::invoke(app, ui.ctx(), "resource.import");
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.add_enabled(present, egui::Button::new(tr("Clear"))).clicked() {
+                            app.run("textureSet.meshMap.clear", json!({"ts": ts, "map": m.id()}));
+                            ui.close();
+                        }
+                    });
+                });
             });
+            // A shelf image dropped on the row becomes this mesh map.
+            let resp = row.response.interact(Sense::hover()).on_hover_text(tr("Drop an image from the Assets panel here to use it as this mesh map"));
+            if resp.dnd_hover_payload::<ShelfDrag>().is_some_and(|d| matches!(d.asset, Asset::Texture(_))) {
+                ui.painter().rect_stroke(resp.rect.shrink(1.0), 3.0, Stroke::new(2.0, tk.accent), egui::StrokeKind::Inside);
+            }
+            if let Some(Asset::Texture(name)) = dnd_release::<ShelfDrag>(&resp).map(|d| d.asset.clone()) {
+                app.run("textureSet.meshMap.set", json!({"ts": ts, "map": m.id(), "image": name}));
+            }
         }
     });
 }
@@ -1027,6 +1101,8 @@ fn path_section(app: &mut TextureCraftApp, ui: &mut Ui) {
 fn brush_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     let b = &mut app.session.tool.brush;
     ui.label(caption(tr("Brush")));
+    let hint = tr("Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.");
+    ui.label(RichText::new(hint).size(10.5).color(Tokens::get(ui.ctx()).text_dim));
     section(ui, "sec_size", tr("Size"), true, |ui| {
         let mut size = b.size / 0.25 * 100.0;
         if slider(ui, tr("Size"), &mut size, 0.05..=100.0, 1).changed() {
@@ -1582,6 +1658,7 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
         }
         EffectKind::Levels(l) => {
             ui.label(caption(tr("Levels")));
+            levels_histogram(app, ui, layer, eid, (l.in_low, l.in_high));
             let mut v = [l.in_low, l.in_high, l.gamma, l.out_low, l.out_high];
             let labels = [tr("Input low"), tr("Input high"), tr("Gamma"), tr("Output low"), tr("Output high")];
             let mut done = false;
@@ -1661,6 +1738,38 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
         other => {
             ui.label(RichText::new(tr(other.name())).color(tk.text_dim));
         }
+    }
+}
+
+/// The histogram of what levels effect `eid` of `layer` remaps (its mask, or a content channel
+/// picked here), with the input range marked. Recomputed after a document change once no
+/// pointer button is held, so dragging a slider keeps the last one.
+fn levels_histogram(app: &TextureCraftApp, ui: &mut Ui, layer: &Layer, eid: LayerId, range: (f32, f32)) {
+    let mut channel = layer.channels.keys().next().copied().unwrap_or(Channel::BaseColor);
+    if layer.content_effects.iter().any(|e| e.id == eid) {
+        let pick = egui::Id::unique(("levels_channel", eid.0));
+        let chans: Vec<Channel> = layer.channels.keys().copied().filter(|c| c.kind() != texturecraft_engine::core::ChannelKind::NormalMap).collect();
+        channel = ui.data(|d| d.get_temp(pick)).filter(|c| chans.contains(c)).or(chans.first().copied()).unwrap_or(channel);
+        combo(ui, tr("Channel"), tr(channel.label()), |ui| {
+            for c in chans {
+                if ui.selectable_label(c == channel, tr(c.label())).clicked() {
+                    ui.data_mut(|d| d.insert_temp(pick, c));
+                }
+            }
+        });
+    }
+    let key = egui::Id::unique(("levels_histogram", eid.0, channel));
+    let rev = app.session.revision;
+    let counts = match ui.data(|d| d.get_temp::<(u64, std::sync::Arc<Vec<u32>>)>(key)) {
+        Some((r, h)) if r == rev || ui.input(|i| i.pointer.any_down()) => Some(h),
+        _ => app.session.effect_histogram(eid, channel, 64).map(|h| {
+            let h = std::sync::Arc::new(h);
+            ui.data_mut(|d| d.insert_temp(key, (rev, h.clone())));
+            h
+        }),
+    };
+    if let Some(counts) = counts {
+        histogram(ui, &counts, range);
     }
 }
 

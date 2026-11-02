@@ -320,6 +320,8 @@ pub struct Session {
     pub mesh_source: Option<(String, Vec<u8>)>,
     /// High-definition meshes and cage for baking (saved inside the project).
     pub bake_meshes: crate::BakeMeshes,
+    /// The map that bakes itself again when its inputs change (not saved).
+    pub auto_rebake: crate::auto_rebake::AutoRebake,
     pub caches: Vec<SetCache>,
     pub(crate) undo: Vec<(String, Document)>,
     pub(crate) redo: Vec<(String, Document)>,
@@ -333,7 +335,7 @@ pub struct Session {
     /// Viewport size (pixels) used by scripted strokes.
     pub viewport: Vec2,
     pub(crate) stroke: Option<ActiveStroke>,
-    /// Layer clipboard: a document snapshot and the copied layer.
+    /// Layer clipboard: a document snapshot and the copied layer (or effect).
     pub clipboard: Option<(Document, LayerId)>,
     /// Decoded image resources (rebuilt from `doc.resources` by `Session::sync_images`).
     pub images: texturecraft_compose::ImageStore,
@@ -375,6 +377,7 @@ impl Session {
             bvh: Arc::new(bvh),
             mesh_source,
             bake_meshes: Default::default(),
+            auto_rebake: Default::default(),
             caches,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -601,6 +604,10 @@ impl Session {
     pub fn redo_label(&self) -> Option<&str> {
         self.redo.last().map(|(l, _)| l.as_str())
     }
+    /// The undone steps, the next one to redo first.
+    pub fn redo_labels(&self) -> Vec<String> {
+        self.redo.iter().rev().map(|(l, _)| l.clone()).collect()
+    }
     pub fn history_labels(&self) -> Vec<String> {
         self.undo.iter().map(|(l, _)| l.clone()).collect()
     }
@@ -629,6 +636,14 @@ impl Session {
         self.modified = true;
         self.revision = self.revision.wrapping_add(1);
         self.invalidate_changed(other);
+        // An undone add or duplicate takes the selected effect away: select the stack it was in.
+        if let StackTarget::Effect(e) = self.target
+            && self.doc.project.effect(e).is_none()
+        {
+            let p = &other.project;
+            let content = p.effect(e).and_then(|(owner, _)| p.layers.get(&owner)).is_some_and(|l| l.content_effects.iter().any(|x| x.id == e));
+            self.target = if content { StackTarget::Content } else { StackTarget::Mask };
+        }
     }
 
     // -----------------------------------------------------------------------------------------
@@ -773,12 +788,12 @@ impl Session {
         self.caches.get_mut(ts).map(|c| std::mem::take(&mut c.upload).into_iter().collect()).unwrap_or_default()
     }
 
-    /// Grayscale RGBA8 of layer `id`'s mask at `size²` for the mask view (None without a mask).
-    pub fn mask_view_rgba(&self, id: LayerId, size: u32) -> Option<Vec<u8>> {
-        let (ts, _, _) = self.doc.project.locate(id)?;
+    /// `f` on the compositor inputs of texture set `ts` (without a live stroke; None for a set
+    /// not ready).
+    pub(crate) fn with_inputs<R>(&self, ts: usize, f: impl FnOnce(&texturecraft_compose::Inputs) -> Option<R>) -> Option<R> {
         let cache = self.caches.get(ts)?;
         let empty = BakedMaps::default();
-        let inputs = texturecraft_compose::Inputs {
+        f(&texturecraft_compose::Inputs {
             project: &self.doc.project,
             ts,
             mesh: &self.mesh,
@@ -788,9 +803,22 @@ impl Session {
             preview: None,
             images: &self.images,
             bounds: self.mesh.bounds(),
-        };
-        let gray = texturecraft_compose::mask_image(&inputs, id, size)?;
+        })
+    }
+
+    /// Grayscale RGBA8 of layer `id`'s mask at `size²` for the mask view (None without a mask).
+    pub fn mask_view_rgba(&self, id: LayerId, size: u32) -> Option<Vec<u8>> {
+        let (ts, _, _) = self.doc.project.locate(id)?;
+        let gray = self.with_inputs(ts, |inp| texturecraft_compose::mask_image(inp, id, size))?;
         Some(gray.iter().flat_map(|g| [*g, *g, *g, 255]).collect())
+    }
+
+    /// Histogram (`bins` buckets over 0..1) of the values entering effect `effect`: its layer's
+    /// mask, or for a content effect the layer's `channel` (None for an unknown effect).
+    pub fn effect_histogram(&self, effect: LayerId, channel: Channel, bins: usize) -> Option<Vec<u32>> {
+        let (owner, _) = self.doc.project.effect(effect)?;
+        let (ts, _, _) = self.doc.project.locate(owner)?;
+        self.with_inputs(ts, |inp| texturecraft_compose::effect_histogram(inp, effect, channel, bins))
     }
 
     pub fn baked(&self, ts: usize) -> Option<&BakedMaps> {

@@ -16,7 +16,7 @@ use texturecraft_engine::smart_masks::SMART_MASKS;
 use texturecraft_render::ibl::ENVIRONMENTS;
 
 use crate::TextureCraftApp;
-use crate::i18n::tr;
+use crate::i18n::{tr, trf};
 use crate::theme::Tokens;
 use crate::widgets::{dnd_release, icon_button};
 
@@ -78,12 +78,36 @@ pub fn apply(app: &mut TextureCraftApp, asset: &Asset) {
     let (cmd, params) = match asset {
         Asset::Material(id) => ("material.apply", json!({"material": id})),
         Asset::SmartMask(id) => ("mask.smart.apply", json!({"name": id})),
-        Asset::Filter(id) => ("effect.add.filter", json!({"filter": id, "target": if crate::dock::targets_content(app) { "content" } else { "mask" }})),
+        Asset::Filter(id) => {
+            let content = crate::dock::targets_content(app);
+            if app.run("effect.add.filter", json!({"filter": id, "target": if content { "content" } else { "mask" }})).is_some()
+                && content
+                && let Some(name) = unpainted_paint_layer(app)
+            {
+                // Otherwise the filter seems to do nothing: it has nothing to change yet.
+                app.toast(trf("\"{layer}\" has no paint yet: the filter changes what you paint on it.", &[("layer", &name)]), false);
+            }
+            return;
+        }
         Asset::Alpha(id) => ("tool.brush", json!({"alpha": {"library": id}})),
         Asset::Library(path) => ("material.load", json!({"path": path})),
         Asset::Texture(name) => ("layer.add.image", json!({"name": name})),
     };
     app.run(cmd, params);
+}
+
+/// The selected layer's name when it is a paint layer with nothing painted (in itself or in its
+/// content paint effects).
+fn unpainted_paint_layer(app: &TextureCraftApp) -> Option<String> {
+    use texturecraft_engine::core::{EffectKind, LayerKind};
+    let s = &app.session;
+    let layer = s.selected_layer().and_then(|id| s.doc.project.content_layer(id))?;
+    if !matches!(layer.kind, LayerKind::Paint) {
+        return None;
+    }
+    let ids: Vec<_> = std::iter::once(layer.id).chain(layer.content_effects.iter().filter(|e| matches!(e.kind, EffectKind::Paint)).map(|e| e.id)).collect();
+    let painted = s.doc.pixels.layers.iter().any(|((id, _), img)| ids.contains(id) && img.allocated_count() > 0);
+    (!painted).then(|| layer.name.clone())
 }
 
 /// What a view accepts from the shelf.

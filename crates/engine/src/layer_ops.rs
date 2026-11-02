@@ -36,7 +36,11 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn can_paste(s: &Session) -> std::result::Result<(), String> {
-    if s.clipboard.is_some() { Ok(()) } else { Err("the layer clipboard is empty".into()) }
+    match &s.clipboard {
+        Some((doc, id)) if doc.project.layers.contains_key(id) => Ok(()),
+        Some(_) => Err("the clipboard holds an effect (effect.paste)".into()),
+        None => Err("the layer clipboard is empty".into()),
+    }
 }
 
 /// Encoded "nothing painted" texel for a channel image (value 0, coverage 0).
@@ -47,7 +51,7 @@ pub(crate) fn empty_texel(c: Channel) -> Vec<u16> {
     v
 }
 
-fn fit(img: &TileImage, (w, h): (u32, u32), empty: &[u16]) -> TileImage {
+pub(crate) fn fit(img: &TileImage, (w, h): (u32, u32), empty: &[u16]) -> TileImage {
     if (img.width(), img.height()) == (w, h) { img.clone() } else { img.resampled(w, h, empty) }
 }
 
@@ -194,21 +198,8 @@ impl Session {
     /// Layer `id` of texture set `ts` alone (content times mask) as premultiplied tiles per
     /// channel over the set's covered tiles. None for folders or a set not ready.
     pub(crate) fn flatten(&self, ts: usize, id: LayerId) -> Option<Vec<texturecraft_compose::eval::FlatTile>> {
-        let cache = self.caches.get(ts)?;
-        let tiles: Vec<(u32, u32)> = cache.covered_tiles.iter().copied().collect();
-        let empty = Default::default();
-        let inputs = texturecraft_compose::Inputs {
-            project: &self.doc.project,
-            ts,
-            mesh: &self.mesh,
-            gbuf: &cache.gbuf,
-            pixels: &self.doc.pixels,
-            baked: self.doc.baked.get(&ts).unwrap_or(&empty),
-            preview: None,
-            images: &self.images,
-            bounds: self.mesh.bounds(),
-        };
-        texturecraft_compose::flatten_layer(&inputs, id, &tiles)
+        let tiles: Vec<(u32, u32)> = self.caches.get(ts)?.covered_tiles.iter().copied().collect();
+        self.with_inputs(ts, |inp| texturecraft_compose::flatten_layer(inp, id, &tiles))
     }
 }
 

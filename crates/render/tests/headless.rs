@@ -734,3 +734,47 @@ fn refraction_shows_the_scene_behind_transmissive_surfaces() {
     let frosted = render(&mut h, &refr, "refr_frosted_checker");
     assert!(detail(&frosted, &ball) < detail(&clear, &ball), "frosted glass blurs the scene behind");
 }
+
+/// Kinds in [`DisplayKind::ALL`] order with each set's display texture widths, then the aux width.
+fn widths(h: &Headless) -> Vec<Vec<u32>> {
+    h.renderer.display_textures().iter().map(|s| s.iter().map(|t| t.width()).collect()).collect()
+}
+
+#[test]
+fn texture_sets_take_no_gpu_memory_until_painted() {
+    // A mesh with many materials (one texture set each) must not reserve full-size textures
+    // for every set up front: that ran a 4 GB GPU out of memory, and wgpu's handler aborted.
+    let Some((mut h, _)) = setup() else { return };
+    let sets: Vec<((u32, u32), usize)> = (0..40).map(|m| ((2048, 2048), m)).collect();
+    h.renderer.set_texture_sets(&h.device, &h.queue, &sets, 40);
+    assert!(widths(&h).iter().flatten().all(|w| *w == 1), "every display texture starts as a 1×1 placeholder");
+    assert!((0..40).all(|ts| h.renderer.aux_size(ts) == Some(1)), "so does every aux texture");
+    // A neutral tile changes nothing; the first painted one allocates that kind alone.
+    let kind = DisplayKind::BaseColor;
+    let neutral = kind.default_texel().repeat(64 * 64);
+    h.renderer.upload_tile(&h.device, &h.queue, 3, kind, 0, 0, &neutral);
+    assert_eq!(widths(&h)[3][0], 1);
+    h.renderer.upload_tile(&h.device, &h.queue, 3, kind, 0, 0, &[200, 30, 30, 255].repeat(64 * 64));
+    let w = widths(&h);
+    assert_eq!(w[3][0], 2048, "the painted kind is full size");
+    assert!(w[3][1..].iter().all(|w| *w == 1) && w[2].iter().all(|w| *w == 1), "nothing else was allocated");
+    // The aux texture is allocated by its first upload, at the set's aux size only.
+    h.renderer.upload_aux(&h.device, &h.queue, 3, 512, &[0; 512 * 512 * 4]);
+    assert_eq!(h.renderer.aux_size(3), Some(1), "a wrong aux size is ignored");
+    h.renderer.upload_aux(&h.device, &h.queue, 3, 2048, &[90; 2048 * 2048 * 4]);
+    assert_eq!(h.renderer.aux_size(3), Some(2048));
+    assert!(h.renderer.take_memory_failures().is_empty());
+}
+
+#[test]
+fn painted_placeholders_render_like_full_textures() {
+    // A set painted in one kind renders that paint whether the other kinds are placeholders.
+    let Some((mut h, frame)) = setup() else { return };
+    let before = render(&mut h, &frame, "placeholders");
+    fill(&mut h, &[0, 1], DisplayKind::BaseColor, &[220, 40, 40, 255]);
+    let red = render(&mut h, &frame, "painted_base_color");
+    let (w, hgt) = (frame.size[0], frame.size[1]);
+    let [r0, g0, _] = before.at(w / 2, hgt / 2);
+    let [r1, g1, _] = red.at(w / 2, hgt / 2);
+    assert!(r1 > r0 && g1 < g0, "the painted base color shows: {:?} → {:?}", before.at(w / 2, hgt / 2), red.at(w / 2, hgt / 2));
+}

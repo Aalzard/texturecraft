@@ -143,7 +143,7 @@ fn per_map_ray_settings_round_trip() {
     let b = s.doc.project.texture_sets[0].bake.clone();
     assert_eq!(b.ao, RaySettings { rays: 48, max_distance: 0.5, spread: 90.0, distribution: RayDistribution::Uniform });
     assert!(b.ao_ignore_backface && b.ao_self_occlusion == SelfOcclusion::SameMeshName);
-    assert_eq!((b.thickness.rays, b.thickness.spread, b.thickness.max_distance), (12, 45.0, 0.25));
+    assert_eq!((b.thickness.rays, b.thickness.spread, b.thickness.max_distance), (12, 45.0, 0.1));
     assert_eq!((b.bent_normal.rays, b.bent_normal.max_distance, b.bent_normal.spread), (6, 0.1, 180.0));
     assert_eq!((b.curvature_radius, b.position_mode, b.direction_mode), (3, PositionMode::BoundingSphere, DirectionMode::Positive));
     assert_eq!(r[0]["settings"]["ao"]["selfOcclusion"], "sameMeshName");
@@ -356,7 +356,8 @@ fn skew_correction_turns_the_transfer_rays_onto_the_base_normal() {
     assert!((centre_height(&mut s) - flat).abs() < 1e-3, "skew-corrected: {} vs upright {flat}", centre_height(&mut s));
 
     // A greyscale image over the atlas: white everywhere is the same as value 1.
-    let dir = std::path::PathBuf::from(temp_file("skew.txt", "")).parent().unwrap().to_path_buf();
+    let dir = std::env::temp_dir().join(format!("texturecraft-skew-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
     let png = dir.join("skew.png");
     image::GrayImage::from_pixel(4, 4, image::Luma([255])).save(&png).unwrap();
     execute(&mut s, "bake.skew.set", &json!({ "path": png.display().to_string(), "base": "triangle" })).unwrap();

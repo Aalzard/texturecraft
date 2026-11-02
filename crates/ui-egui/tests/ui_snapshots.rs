@@ -61,4 +61,33 @@ fn window_snapshots() {
     h.state_mut().ui.windows.export = false;
     h.state_mut().ui.windows.settings = true;
     save(&mut h, &dir, "window-settings");
+    h.state_mut().ui.windows.settings = false;
+    // The mesh map slots, each with its menu of images (a tall window shows them all).
+    h.state_mut().ui.dock.focus(Panel::TextureSetSettings);
+    h.set_size(egui::vec2(1600.0, 1800.0));
+    save(&mut h, &dir, "panel-texture-set-settings");
+    h.set_size(egui::vec2(1600.0, 960.0));
+    // A mask's levels effect over clouds: the histogram in Properties.
+    let s = &mut h.state_mut().session;
+    for (id, p) in [
+        ("layer.add.fill", serde_json::json!({"color": [0.8, 0.3, 0.1]})),
+        ("mask.add.black", serde_json::Value::Null),
+        ("effect.add.fill", serde_json::json!({"target": "mask", "procedural": "clouds"})),
+        ("effect.add.levels", serde_json::json!({"target": "mask", "inLow": 0.3, "inHigh": 0.8})),
+    ] {
+        texturecraft_engine::execute(s, id, &p).unwrap();
+    }
+    save(&mut h, &dir, "properties-levels");
+    // Ctrl+right drag in the 3D view: the brush cursor where it began and the readout.
+    let c = h.state().viewport_rect.center();
+    let (m, button) = (egui::Modifiers::COMMAND, egui::PointerButton::Secondary);
+    h.event(egui::Event::ModifiersChanged(m));
+    h.event(egui::Event::PointerButton { pos: c, button, pressed: true, modifiers: m });
+    for k in 1..=4 {
+        h.hover_at(c + egui::vec2(15.0 * k as f32, -8.0 * k as f32));
+        h.run_steps(1);
+    }
+    save(&mut h, &dir, "brush-ctrl-drag");
+    h.event(egui::Event::PointerButton { pos: c, button, pressed: false, modifiers: m });
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
 }

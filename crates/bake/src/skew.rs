@@ -18,6 +18,10 @@ use crate::{BakeError, MAX_TEXELS};
 /// Most dabs one [`SkewMap::paint`] call places.
 pub const MAX_DABS: usize = 200_000;
 
+/// Most texels one [`SkewMap::paint`] call may visit, summed over its dabs (about 70 ms of work):
+/// a big brush on a big map costs per dab what a whole-map pass costs, so dabs alone don't bound it.
+pub const MAX_PAINT_TEXELS: u64 = 1 << 26;
+
 /// Edges steeper than this cosine between two faces count as hard (about 30 degrees).
 const HARD_EDGE_COS: f32 = 0.866;
 
@@ -101,12 +105,29 @@ impl SkewMap {
             }
         }
         let (w, h) = (self.width as usize, self.height as usize);
-        for c in dabs {
-            // The texel box of the dab, row 0 at the top (v = 1).
+        // The texel box of a dab, row 0 at the top (v = 1).
+        let span = |c: Vec2| {
             let x0 = (((c.x - radius) * w as f32).floor().max(0.0)) as usize;
             let x1 = (((c.x + radius) * w as f32).ceil().min(w as f32)).max(0.0) as usize;
             let y0 = ((((1.0 - c.y) - radius) * h as f32).floor().max(0.0)) as usize;
             let y1 = ((((1.0 - c.y) + radius) * h as f32).ceil().min(h as f32)).max(0.0) as usize;
+            (x0, x1, y0, y1)
+        };
+        // Refuse a stroke that would take too long before the first texel changes.
+        let work: u64 = dabs
+            .iter()
+            .map(|c| {
+                let (x0, x1, y0, y1) = span(*c);
+                x1.saturating_sub(x0) as u64 * y1.saturating_sub(y0) as u64
+            })
+            .fold(0, u64::saturating_add);
+        if work > MAX_PAINT_TEXELS {
+            return Err(BakeError::Invalid(format!(
+                "this stroke would visit {work} texels (limit {MAX_PAINT_TEXELS}); use a smaller radius, a smaller map or a shorter stroke"
+            )));
+        }
+        for c in dabs {
+            let (x0, x1, y0, y1) = span(c);
             for y in y0..y1 {
                 let dv = (1.0 - (y as f32 + 0.5) / h as f32) - c.y;
                 for x in x0..x1 {
@@ -166,6 +187,7 @@ impl<'a> Prepared<'a> {
     /// The ray direction `up` (unit, away from the surface) turned towards the base normal: `nrm`
     /// is the interpolated vertex normal, `geo` the flat one, `uv` the atlas position of the
     /// sample at `pos` on triangle `tri`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn correct(&self, mesh: &Mesh, tri: u32, pos: Vec3, uv: Vec2, up: Vec3, nrm: Vec3, geo: Vec3) -> Vec3 {
         let amount = self.map.at(uv);
         if amount <= 0.0 {
@@ -326,6 +348,12 @@ mod tests {
         assert_eq!(map, before);
         assert!(map.paint(&[Vec2::ZERO, Vec2::new(1e6, 1e6)], 1e-4, 1.0, 0.5, 1.0).is_err());
         assert_eq!(map, before);
+        // A big brush over a big map is refused up front, whatever the dab count: one dab here covers 16.7 M texels.
+        let mut big = SkewMap::constant(0.0).resized(4096, 4096).unwrap();
+        let untouched = big.clone();
+        assert!(big.paint(&[Vec2::splat(0.5); 8], 1.0, 1.0, 0.5, 1.0).is_err());
+        assert_eq!(big, untouched, "nothing was painted before the refusal");
+        assert!(big.paint(&[Vec2::splat(0.5)], 1.0, 1.0, 0.5, 1.0).is_ok(), "one such dab is within the budget");
         assert!(SkewMap::constant(0.0).resized(0, 4).is_err() && SkewMap::constant(0.0).resized(100_000, 100_000).is_err());
     }
 }
