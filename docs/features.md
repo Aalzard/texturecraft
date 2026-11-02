@@ -42,7 +42,7 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   **mesh-map generators** (edge wear, dirt, thin areas, curvature, AO, position and direction
   gradients, all with world-space noise), filters, ID color selection and compare. Alt+click a
   mask to view it alone.
-- **Fill layers** take uniform values, **22 procedurals** (clouds, cells, grunge, scratches, wood
+- **Fill layers** take uniform values, **23 procedurals** (clouds, cells, grunge, scratches, wood
   grain, bricks, fabric weave, twill, leather grain, marble veins, Voronoi, paint chips…) or your own
   **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.
   Alt+click a material channel (of a fill or the brush) to keep that channel alone.
