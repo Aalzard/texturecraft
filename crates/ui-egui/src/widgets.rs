@@ -36,18 +36,36 @@ fn slider_inner(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::Rang
     ui.horizontal(|ui| {
         ui.label(RichText::new(label).color(tk.text));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let mut text = format!("{:.*}", decimals, value);
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(44.0).align(egui::Align2::RIGHT_CENTER).frame(egui::Frame::NONE));
-            if r.lost_focus()
-                && let Ok(v) = text.trim().parse::<f32>()
-                && v.is_finite()
-            {
-                *value = v.clamp(lo, hi);
-                edit = Some(false);
+            let id = ui.next_auto_id();
+            let shown = format!("{:.*}", decimals, value);
+            // What is typed lives here while the field has focus (`value` is re-read every frame).
+            let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| shown.clone());
+            let r = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(44.0).align(egui::Align2::RIGHT_CENTER).frame(egui::Frame::NONE));
+            if r.has_focus() {
+                ui.data_mut(|d| d.insert_temp(id, text.clone()));
+            } else {
+                ui.data_mut(|d| d.remove_temp::<String>(id));
+                // Escape unfocuses the field before the app's shortcuts may consume the key, so
+                // look at the raw input.
+                let escape = ui.input(|i| i.raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. })));
+                // Leaving the field unchanged (or with Escape) keeps the value as it is.
+                if r.lost_focus()
+                    && !escape
+                    && text != shown
+                    && let Ok(v) = text.trim().parse::<f32>()
+                    && v.is_finite()
+                {
+                    *value = v.clamp(lo, hi);
+                    edit = Some(false);
+                }
             }
         });
     });
     let (rect, mut resp) = ui.allocate_exact_size(vec2(w, 14.0), Sense::click_and_drag());
+    if edit.is_some() {
+        // A typed value is a change for `slider`'s callers too.
+        resp.mark_changed();
+    }
     if (resp.dragged() || resp.clicked())
         && let Some(p) = resp.interact_pointer_pos()
     {
