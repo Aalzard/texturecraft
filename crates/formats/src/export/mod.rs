@@ -535,8 +535,9 @@ pub fn list_outputs(project: &Project, ts: usize, mesh_name: &str, opts: &Export
                 warnings.push(format!("\"{stem}.{ext}\" is produced by more than one map; this one was renamed to \"{name}\""));
             }
             used.insert(name.to_ascii_lowercase());
-            // A tile number cut off by the length limit leaves no placeholder: then there is none.
-            let udim_name = token_stem.filter(|t| t.contains("UDIMTOKEN")).map(|t| {
+            // Only when putting the tile number back gives this file's name: the length limit cuts the
+            // longer placeholder elsewhere (or off), and a name may hold the placeholder text itself.
+            let udim_name = token_stem.filter(|t| tile.is_some_and(|n| t.contains("UDIMTOKEN") && t.replace("UDIMTOKEN", &n.to_string()) == stem)).map(|t| {
                 let renamed = if k > 2 { format!("_{}", k - 1) } else { String::new() };
                 format!("{t}{renamed}.{ext}").replace("UDIMTOKEN", "<UDIM>")
             });

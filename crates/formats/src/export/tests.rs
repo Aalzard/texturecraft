@@ -484,6 +484,24 @@ fn uv_tiles_export_one_file_per_tile_without_padding_across() {
 }
 
 #[test]
+fn the_udim_name_is_the_file_name_with_its_tile_number_as_placeholder() {
+    let mut project = Project::new("p", "builtin:udim_plane");
+    let mut ts = TextureSet::new("Body", 0, RES);
+    ts.uv_tiles = vec![1001, 1002];
+    ts.channels = vec![(Channel::BaseColor, ChannelFormat::default_for(Channel::BaseColor))];
+    project.texture_sets.push(ts);
+    let udim_names = |file: String| {
+        let channels = vec![(Dest::R, SourceRef::Channel { channel: Channel::BaseColor, component: 0 })];
+        let preset = ExportPreset { name: "t".into(), maps: vec![MapSpec { file, format: FileFormat::Png, bit_depth: 8, channels }] };
+        list_outputs(&project, 0, "m", &ExportOptions::new(preset)).unwrap().into_iter().map(|f| f.udim_name).collect::<Vec<_>>()
+    };
+    let placeholder = Some("Body_<UDIM>.png".to_string());
+    assert_eq!(udim_names("$textureSet_$udim".into()), [placeholder.clone(), placeholder]);
+    // The length limit cuts the longer placeholder where it doesn't cut the tile number: none then.
+    assert_eq!(udim_names(format!("{}_$udim_$textureSet", "a".repeat(MAX_STEM - 10))), [None, None]);
+}
+
+#[test]
 fn lobe_channels_export_as_document_maps_and_gltf_extension_maps() {
     let mut channels = default_channels();
     channels.extend(Channel::LOBES);
