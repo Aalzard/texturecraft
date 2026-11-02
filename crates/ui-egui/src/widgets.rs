@@ -14,11 +14,23 @@ pub fn dnd_release<T: std::any::Any + Send + Sync>(resp: &Response) -> Option<st
 }
 
 /// A labelled slider in two rows: "Label ........ value" over a slim track with a round knob.
-/// Returns the response of the track (`.changed()` when dragged, `.drag_stopped()` at the end).
+/// Returns the response of the track (`.changed()` while dragged); for a value that is applied
+/// once the edit is done, use [`slider_edit`].
 pub fn slider(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) -> Response {
+    slider_inner(ui, label, value, range, decimals).0
+}
+
+/// [`slider`] for a value re-read from the document every frame: true on the frame an edit is
+/// done (a drag released, a click on the track, a typed value), with `value` holding the result.
+pub fn slider_edit(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) -> bool {
+    slider_inner(ui, label, value, range, decimals).1
+}
+
+fn slider_inner(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) -> (Response, bool) {
     let tk = Tokens::get(ui.ctx());
     let (lo, hi) = (*range.start(), *range.end());
     let w = ui.available_width();
+    let mut done = false;
     ui.horizontal(|ui| {
         ui.label(RichText::new(label).color(tk.text));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -29,6 +41,7 @@ pub fn slider(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeI
                 && v.is_finite()
             {
                 *value = v.clamp(lo, hi);
+                done = true;
             }
         });
     });
@@ -38,14 +51,22 @@ pub fn slider(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeI
     {
         let t = ((p.x - rect.left() - 5.0) / (rect.width() - 10.0).max(1.0)).clamp(0.0, 1.0);
         let v = lo + (hi - lo) * t;
+        // Remembered for the release frame, where the pointer no longer drags.
+        ui.data_mut(|d| d.insert_temp(resp.id, v));
         if (v - *value).abs() > f32::EPSILON {
             *value = v;
             resp.mark_changed();
         }
     }
+    if resp.drag_stopped() || resp.clicked() {
+        if let Some(v) = ui.data_mut(|d| d.remove_temp::<f32>(resp.id)) {
+            *value = v;
+        }
+        done = true;
+    }
     let t = if hi > lo { ((*value - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 };
     track(ui, &resp, rect.left() + 5.0..=rect.right() - 5.0, rect.center().y, t, 2.0, 4.5);
-    resp
+    (resp, done)
 }
 
 /// A small inline slider for the top tool bar: "Label value" above a short track.
@@ -187,6 +208,8 @@ pub fn color_swatch(ui: &mut Ui, id: &str, linear: &mut [f32; 3], width: f32) ->
     let mut changed = false;
     // Open state lives in memory (`toggle_id` above); `from_response` alone shows it always.
     egui::Popup::from_response(&resp).id(popup).open_memory(None).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        // Wider than the R, G, B row at any value, so the popup keeps one size and place.
+        ui.spacing_mut().slider_width = 275.0;
         if egui::color_picker::color_picker_color32(ui, &mut c, egui::color_picker::Alpha::Opaque) {
             let lin = [c.r(), c.g(), c.b()].map(|v| texturecraft_engine::texel::srgb_to_linear(v as f32 / 255.0));
             *linear = lin;

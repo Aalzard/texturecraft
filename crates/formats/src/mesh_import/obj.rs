@@ -27,7 +27,8 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
     }
     let library: String = names.iter().map(|n| format!("newmtl {n}\n")).collect();
     let source = format!("mtllib texturecraft-usemtl.mtl\n{text}");
-    let opts = tobj::LoadOptions { single_index: true, triangulate: true, ignore_points: true, ignore_lines: true };
+    // Polygons stay whole so the wireframe can show them; `RawMesh::polygon` triangulates.
+    let opts = tobj::LoadOptions { single_index: true, triangulate: false, ignore_points: true, ignore_lines: true };
     let (models, materials) =
         tobj::load_obj_buf(&mut source.as_bytes(), &opts, |_| tobj::load_mtl_buf(&mut library.as_bytes())).map_err(|e| malformed(KIND, e))?;
     let materials = materials.unwrap_or_default();
@@ -39,7 +40,9 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
         let m = &model.mesh;
         let n = m.positions.len() / 3;
         check_vertices(raw.positions.len().saturating_add(n))?;
-        check_triangles(raw.triangle_count(), m.indices.len() / 3)?;
+        // Corners per face; without arities every face is a triangle.
+        let arities: Vec<usize> = if m.face_arities.is_empty() { vec![3; m.indices.len() / 3] } else { m.face_arities.iter().map(|a| *a as usize).collect() };
+        check_triangles(raw.triangle_count(), arities.iter().map(|a| a.saturating_sub(2)).sum())?;
         let base = raw.positions.len() as u32;
         raw.positions.extend(m.positions.chunks_exact(3).map(|p| Vec3::new(p[0], p[1], p[2])));
         if m.normals.len() == n * 3 {
@@ -67,12 +70,18 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
             Some(id) => materials.get(id).map(|mat| mat.name.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| format!("Material_{id}")),
             None => "Default".to_string(),
         };
-        let group = raw.group(&name, &model.name);
-        for &i in m.indices.get(..m.indices.len() / 3 * 3).unwrap_or_default() {
-            if i as usize >= n {
-                return Err(malformed(KIND, format!("face index {i} out of range")));
+        if let Some(i) = m.indices.iter().find(|i| **i as usize >= n) {
+            return Err(malformed(KIND, format!("face index {i} out of range")));
+        }
+        let (mut rest, mut corners) = (m.indices.as_slice(), Vec::new());
+        for arity in arities {
+            let Some((face, tail)) = rest.split_at_checked(arity) else { break };
+            rest = tail;
+            corners.clear();
+            corners.extend(face.iter().map(|i| base + i));
+            if arity >= 3 {
+                raw.polygon(&name, &model.name, &corners);
             }
-            group.push(base + i);
         }
     }
     if partial_uvs && models.iter().any(|m| !m.mesh.texcoords.is_empty()) {

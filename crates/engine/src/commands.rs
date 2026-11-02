@@ -57,6 +57,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(crate::instance_cmds::specs());
         v.extend(crate::mask_cmds::specs());
         v.extend(crate::tool_cmds::specs());
+        v.extend(crate::brush_preset_cmds::specs());
         v.extend(crate::path_tool::specs());
         v.extend(crate::view_cmds::specs());
         v.extend(crate::camera_cmds::specs());
@@ -73,6 +74,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(crate::smart_masks::specs());
         v.extend(crate::filter_lib::specs());
         v.extend(crate::decal_cmds::specs());
+        v.extend(crate::text_cmds::specs());
         v
     })
 }

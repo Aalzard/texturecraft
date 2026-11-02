@@ -228,8 +228,8 @@ fn read_usdz(bytes: &[u8]) -> Result<(Layer, Package<'_>)> {
     if zip.len() > MAX_ZIP_ENTRIES {
         return Err(FormatError::TooLarge(format!("the usdz package has more than {MAX_ZIP_ENTRIES} entries")));
     }
-    let name = zip.file_names().filter(|n| matches!(super::extension(n).as_str(), "usda" | "usdc" | "usd")).min_by_key(|n| zip.index_for_name(n));
-    let name = name.ok_or_else(|| malformed(KIND, "the usdz package contains no USD layer"))?.to_string();
+    let name = zip.file_names().flatten().filter(|n| matches!(super::extension(n).as_str(), "usda" | "usdc" | "usd")).min_by_key(|n| zip.index_for_name(n));
+    let name = name.ok_or_else(|| malformed(KIND, "the usdz package contains no USD layer"))?.into_owned();
     let dir = name.rsplit_once('/').map_or("", |(d, _)| d).to_string();
     let mut package = Package { zip, dir };
     let data = package.read(&name, MAX_MESH_FILE_BYTES).ok_or_else(|| FormatError::TooLarge("the usdz layer is unreadable or larger than 2 GiB".into()))?;
