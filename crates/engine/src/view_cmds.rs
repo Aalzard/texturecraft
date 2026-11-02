@@ -1,10 +1,11 @@
 //! Edit, viewport and display commands.
 
 use serde_json::{Value, json};
+use texturecraft_core::project::ENVIRONMENTS;
 use texturecraft_core::{BakedMap, Channel, ToneMapping};
 use texturecraft_geom::glam::Vec3;
 
-use crate::commands::{CommandSpec, always, bad, boolp, can_redo, can_undo, color_param, f32p, strp};
+use crate::commands::{CommandSpec, always, bad, boolp, can_redo, can_undo, color_param, f32p, strp, u64p};
 use crate::session::ViewMode;
 use crate::{Result, Session, cmd};
 
@@ -34,12 +35,49 @@ pub fn specs() -> Vec<CommandSpec> {
 
 pub(crate) fn edit_specs() -> Vec<CommandSpec> {
     vec![
-        cmd!("edit.undo", "Undo", ["Edit"], Some("Ctrl+Z"), "{}", can_undo, |s, _| Ok(json!({ "undone": s.undo()? }))),
-        cmd!("edit.redo", "Redo", ["Edit"], Some("Ctrl+Y"), "{}", can_redo, |s, _| Ok(json!({ "redone": s.redo()? }))),
-        cmd!("edit.history", "History", [], None, "{}", always, |s, _| Ok(
-            json!({ "undo": s.history_labels(), "redo": s.redo.iter().rev().map(|(l, _)| l.clone()).collect::<Vec<_>>() })
+        cmd!(
+            "edit.undo",
+            "Undo",
+            ["Edit"],
+            Some("Ctrl+Z"),
+            "{steps?: 1 (as many as there are)} → {undone: the last step undone, steps}",
+            can_undo,
+            |s, p| {
+                let (last, n) = repeat(s, p, Session::undo)?;
+                Ok(json!({ "undone": last, "steps": n }))
+            }
+        ),
+        cmd!(
+            "edit.redo",
+            "Redo",
+            ["Edit"],
+            Some("Ctrl+Y"),
+            "{steps?: 1 (as many as there are)} → {redone: the last step redone, steps}",
+            can_redo,
+            |s, p| {
+                let (last, n) = repeat(s, p, Session::redo)?;
+                Ok(json!({ "redone": last, "steps": n }))
+            }
+        ),
+        cmd!("edit.history", "History", [], None, "{} → {undo: steps, oldest first, redo: undone steps, next first}", always, |s, _| Ok(
+            json!({ "undo": s.history_labels(), "redo": s.redo_labels() })
         )),
     ]
+}
+
+/// Run `step` (undo or redo) `steps` times (default 1) or until the history runs out: the last
+/// step's label and how many ran (the History panel jumps to a step this way).
+fn repeat(s: &mut Session, p: &Value, step: fn(&mut Session) -> Result<String>) -> Result<(String, u64)> {
+    let steps = u64p(p, "steps").unwrap_or(1).max(1);
+    let mut last = step(s)?;
+    let mut n = 1;
+    while n < steps
+        && let Ok(l) = step(s)
+    {
+        last = l;
+        n += 1;
+    }
+    Ok((last, n))
 }
 
 fn frame(s: &mut Session, _: &Value) -> Result<Value> {
@@ -164,6 +202,9 @@ fn display(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(bad("display.set", format!("no image resource `{name}` (import it with resource.import)")));
     }
+    if let Some(e) = env.as_deref().filter(|e| !e.starts_with(texturecraft_core::project::ENV_RESOURCE_PREFIX) && !ENVIRONMENTS.contains(e)) {
+        return Err(bad("display.set", format!("unknown environment `{e}`: one of {}, or resource:<image>", ENVIRONMENTS.join(", "))));
+    }
     let d = &mut s.doc.project.display;
     if let Some(e) = env {
         d.environment = e;
@@ -234,6 +275,10 @@ mod tests {
     fn hdr_resources_become_the_environment() {
         let mut s = Session::new_project("t", texturecraft_geom::primitives::sphere(1.0, 16, 8), "builtin:sphere", None, 128).unwrap();
         assert!(execute(&mut s, "display.set", &json!({"environment": "resource:sky.hdr"})).is_err(), "unknown resources are rejected");
+        let e = execute(&mut s, "display.set", &json!({"environment": "nonexistent"})).unwrap_err().to_string();
+        assert!(e.contains("Studio Soft"), "unknown environments are rejected with the valid names: {e}");
+        assert_eq!(s.doc.project.display.environment, "Studio Soft");
+        execute(&mut s, "display.set", &json!({"environment": "Night"})).unwrap();
         let img = image::Rgb32FImage::from_fn(64, 32, |_, y| image::Rgb([if y < 8 { 40.0 } else { 0.5 }; 3]));
         let mut hdr = Vec::new();
         image::DynamicImage::ImageRgb32F(img).write_to(&mut std::io::Cursor::new(&mut hdr), image::ImageFormat::Hdr).unwrap();

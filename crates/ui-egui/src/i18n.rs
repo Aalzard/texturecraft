@@ -184,6 +184,7 @@ mod tests {
             "Anchor point",
             "Layer mask",
             texturecraft_engine::camera_cmds::DEFAULT_CAMERA,
+            crate::dock::SOLO_HINT,
         ]);
         k.retain(|s| !s.is_empty() && !UNTRANSLATED.contains(s));
         k

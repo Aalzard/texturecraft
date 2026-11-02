@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod control_server;
+mod gpu;
 mod window_frame;
 
 use texturecraft_engine::Session;
@@ -32,11 +33,17 @@ struct Args {
     file: Option<String>,
     control: Option<u16>,
     empty: bool,
+    gpu: Option<String>,
+    power_pref: Option<eframe::wgpu::PowerPreference>,
 }
 
 fn parse_args() -> Result<Option<Args>, String> {
-    let mut args = Args { file: None, control: None, empty: false };
-    let mut it = std::env::args().skip(1);
+    parse_args_from(std::env::args().skip(1))
+}
+
+fn parse_args_from<I: IntoIterator<Item = String>>(it: I) -> Result<Option<Args>, String> {
+    let mut args = Args { file: None, control: None, empty: false, gpu: None, power_pref: None };
+    let mut it = it.into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--version" | "-V" => {
@@ -44,12 +51,23 @@ fn parse_args() -> Result<Option<Args>, String> {
                 return Ok(None);
             }
             "--help" | "-h" => {
-                println!("{}\n\nUsage: texturecraft [project.tcraft | mesh file] [--control <port>] [--empty]", version());
+                println!(
+                    "{}\n\nUsage: texturecraft [project.tcraft | mesh file] [--control <port>] [--gpu <name>] [--power-pref <high|low|none>] [--empty]",
+                    version()
+                );
                 return Ok(None);
             }
             "--control" => {
                 let p = it.next().ok_or("--control needs a port")?;
                 args.control = Some(p.parse().map_err(|_| format!("invalid port `{p}`"))?);
+            }
+            "--gpu" => {
+                let g = it.next().ok_or("--gpu needs a GPU name or pattern")?;
+                args.gpu = Some(g);
+            }
+            "--power-pref" => {
+                let p = it.next().ok_or("--power-pref needs high, low, or none")?;
+                args.power_pref = Some(gpu::parse_power_preference(&p)?);
             }
             "--empty" => args.empty = true,
             f if !f.starts_with('-') => args.file = Some(f.to_string()),
@@ -168,8 +186,14 @@ fn main() {
         viewport = viewport.with_icon(i);
     }
     let viewport = title_bar.viewport(viewport);
-    let options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, persistence_path, ..Default::default() };
+    let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, persistence_path, ..Default::default() };
+    if let Err(e) = gpu::configure(&mut options, args.gpu, args.power_pref) {
+        eprintln!("texturecraft: {e}");
+        std::process::exit(2);
+    }
     let control = args.control;
+    // The start window offers new, open and recent projects, unless a file was given or a script drives the app.
+    let start = args.file.is_none() && control.is_none();
     let r = eframe::run_native(
         APP_NAME,
         options,
@@ -181,6 +205,7 @@ fn main() {
             let window_frame = window_frame::service(cc, matches!(title_bar, TitleBar::App(_)));
             let mut app = TextureCraftApp::new(cc, session);
             app.title_bar = title_bar;
+            app.ui.windows.start = start && app.ui.prefs.start_window;
             if let Some(port) = control {
                 app.control = Some(control_server::start(port, cc.egui_ctx.clone()));
             }
@@ -201,6 +226,27 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_gpu_and_power_preference_args() {
+        let args = parse_args_from(["--gpu".to_string(), "nvidia".to_string()]).unwrap().unwrap();
+        assert_eq!(args.gpu.as_deref(), Some("nvidia"));
+        assert_eq!(args.power_pref, None);
+
+        let args = parse_args_from(["--power-pref".to_string(), "high".to_string()]).unwrap().unwrap();
+        assert_eq!(args.power_pref, Some(eframe::wgpu::PowerPreference::HighPerformance));
+
+        let args = parse_args_from(["--power-pref".to_string(), "low".to_string(), "--gpu".to_string(), "3080".to_string()]).unwrap().unwrap();
+        assert_eq!(args.power_pref, Some(eframe::wgpu::PowerPreference::LowPower));
+        assert_eq!(args.gpu.as_deref(), Some("3080"));
+    }
+
+    #[test]
+    fn rejects_missing_or_invalid_gpu_args() {
+        assert!(parse_args_from(["--gpu".to_string()]).is_err());
+        assert!(parse_args_from(["--power-pref".to_string()]).is_err());
+        assert!(parse_args_from(["--power-pref".to_string(), "unrecognized".to_string()]).is_err());
+    }
 
     #[test]
     fn the_system_title_bar_setting_is_read_from_eframes_settings_file() {

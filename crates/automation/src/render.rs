@@ -77,7 +77,7 @@ impl Gpu {
                 _ => None,
             };
             if let Some(rgba) = aux {
-                h.renderer.upload_aux(&h.queue, ts, res, &rgba);
+                h.renderer.upload_aux(&h.device, &h.queue, ts, res, &rgba);
             }
         }
     }

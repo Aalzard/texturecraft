@@ -69,6 +69,7 @@ fn instance(s: &mut Session, p: &Value) -> Result<Value> {
 fn can_paste_instance(s: &Session) -> std::result::Result<(), String> {
     match &s.clipboard {
         Some((_, id)) if s.doc.project.locate(*id).is_some() => Ok(()),
+        Some((doc, id)) if doc.project.effect(*id).is_some() => Err("the clipboard holds an effect (effect.paste)".into()),
         Some(_) => Err("the copied layer is no longer in the project (paste it instead)".into()),
         None => Err("the layer clipboard is empty".into()),
     }

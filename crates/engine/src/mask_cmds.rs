@@ -3,10 +3,10 @@
 use serde_json::{Value, json};
 use texturecraft_core::{
     BlendMode, Channel, CompareOp, Effect, EffectKind, Filter, Generator, GeneratorKind, LayerId, Levels, Mask, MaskBackground, Procedural, ProceduralKind,
-    Source,
+    Project, Source,
 };
 
-use crate::commands::{CommandSpec, bad, blend_param, boolp, channel_param, color_param, f32p, has_layer, layer_param, strp, u64p};
+use crate::commands::{CommandSpec, always, bad, blend_param, boolp, channel_param, color_param, f32p, has_layer, layer_param, strp, u64p};
 use crate::layer_cmds::projection_from;
 use crate::session::StackTarget;
 use crate::{EngineError, Result, Session, cmd};
@@ -67,7 +67,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add filter",
             ["Layers", "Effects"],
             None,
-            "{layer?, target?: mask|content, name?, filter?: id from filter.list (invert, threshold, blur, sharpen, hsl, levels, contrastLuminosity, colorBalance, gradientMap, posterize, clamp, warp, blurDirectional, slopeBlur, matFinishGrind|Raw|Sanded|Hammered), level?, radius?, amount?, hue?: turns -1..1, saturation?, lightness?, contrast?, luminosity?, shadows?|midtones?|highlights?: [r,g,b] -1..1, colors?: [[r,g,b]|\"#rrggbb\", ...], levels?, min?, max?, intensity?, scale?, seed?, angle?} — material finishes go on the content",
+            "{layer?, target?: mask|content, name?, filter?: id from filter.list (invert, threshold, blur, sharpen, hsl, levels, contrastLuminosity, colorBalance, gradientMap, posterize, clamp, histogramScan|Range|Shift, warp, blurDirectional, slopeBlur, matFinishGrind|Raw|Sanded|Hammered), level?, radius?, amount?, hue?: turns -1..1, saturation?, lightness?, contrast?, luminosity?, shadows?|midtones?|highlights?: [r,g,b] -1..1, colors?: [[r,g,b]|\"#rrggbb\", ...], levels?, min?, max?, position?, range?, offset?, intensity?, scale?, seed?, angle?} — material finishes go on the content",
             has_layer,
             add_filter
         ),
@@ -98,7 +98,26 @@ pub fn specs() -> Vec<CommandSpec> {
             has_layer,
             set
         ),
-        cmd!("effect.remove", "Remove effect", [], None, "{effect}", has_layer, remove_effect),
+        cmd!("effect.remove", "Remove effect", [], None, "{effect?: the selected effect}", has_layer, remove_effect),
+        cmd!(
+            "effect.duplicate",
+            "Duplicate effect",
+            [],
+            None,
+            "{effect?: the selected effect} → {effect} (the copy, just above it, pixels included)",
+            has_layer,
+            duplicate_effect
+        ),
+        cmd!("effect.move", "Move effect", [], None, "{effect, index: position in its stack, 0 = bottom (applied first)}", has_layer, move_effect),
+        cmd!(
+            "effect.histogram",
+            "Effect input histogram",
+            [],
+            None,
+            "{effect, channel?: for content effects (default: the layer's first channel), bins?: 2..256 (64)} → {target: mask|content, channel?, bins: [count per bucket over 0..1]}",
+            always,
+            histogram
+        ),
     ]
 }
 
@@ -200,7 +219,7 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Whether `effect.add.*` targets the layer content (`target: "content"`) or its mask (the
 /// default).
-fn content_target(p: &Value, cmd: &str) -> Result<bool> {
+pub(crate) fn content_target(p: &Value, cmd: &str) -> Result<bool> {
     match strp(p, "target") {
         None | Some("mask") => Ok(false),
         Some("content") => Ok(true),
@@ -369,12 +388,33 @@ fn add_compare(s: &mut Session, p: &Value) -> Result<Value> {
     push_effect(s, p, kind, BlendMode::Normal)
 }
 
-fn effect_id(p: &Value, cmd: &str) -> Result<LayerId> {
-    u64p(p, "effect").map(LayerId).ok_or_else(|| bad(cmd, "`effect` id is required"))
+/// The `effect` param, or the selected effect.
+pub(crate) fn effect_id(s: &Session, p: &Value, cmd: &str) -> Result<LayerId> {
+    match (u64p(p, "effect"), s.target) {
+        (Some(e), _) => Ok(LayerId(e)),
+        (None, StackTarget::Effect(e)) => Ok(e),
+        (None, _) => Err(bad(cmd, "`effect` is required (no effect is selected)")),
+    }
+}
+
+/// The distribution of the values entering an effect (what a levels effect remaps).
+fn histogram(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "effect.histogram";
+    let eid = effect_id(s, p, CMD)?;
+    let (owner, _) = s.doc.project.effect(eid).ok_or_else(|| bad(CMD, format!("no effect {}", eid.0)))?;
+    let l = s.doc.project.layer(owner)?;
+    let content = l.content_effects.iter().any(|e| e.id == eid);
+    let channel = match channel_param(CMD, p, "channel")? {
+        Some(c) => c,
+        None => l.channels.keys().next().copied().unwrap_or(Channel::BaseColor),
+    };
+    let bins = u64p(p, "bins").unwrap_or(64).clamp(2, 256) as usize;
+    let counts = s.effect_histogram(eid, channel, bins).ok_or_else(|| bad(CMD, "the texture set is not ready"))?;
+    Ok(if content { json!({"target": "content", "channel": channel.id(), "bins": counts}) } else { json!({"target": "mask", "bins": counts}) })
 }
 
 fn set(s: &mut Session, p: &Value) -> Result<Value> {
-    let eid = effect_id(p, "effect.set")?;
+    let eid = effect_id(s, p, "effect.set")?;
     let blend = blend_param("effect.set", p, "blend")?;
     // A fill reading an anchor: `anchor` picks the anchor point, `anchorChannel` alone
     // re-targets the current one.
@@ -431,8 +471,60 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// The stack (a mask's or a layer's content effects) holding effect `eid`, and its position there.
+fn stack_of(project: &mut Project, eid: LayerId) -> Option<(&mut Vec<Effect>, usize)> {
+    project.layers.values_mut().find_map(|l| {
+        l.mask.iter_mut().map(|m| &mut m.effects).chain(std::iter::once(&mut l.content_effects)).find_map(|list| {
+            let i = list.iter().position(|e| e.id == eid)?;
+            Some((list, i))
+        })
+    })
+}
+
+fn duplicate_effect(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "effect.duplicate";
+    let eid = effect_id(s, p, CMD)?;
+    let new = s.edit("Duplicate effect", |s| {
+        let new = s.doc.project.alloc_id();
+        let (list, i) = stack_of(&mut s.doc.project, eid).ok_or_else(|| bad(CMD, format!("no effect {}", eid.0)))?;
+        let mut e = list.get(i).cloned().ok_or_else(|| bad(CMD, format!("no effect {}", eid.0)))?;
+        e.id = new;
+        e.name = format!("{} copy", e.name);
+        list.insert(i + 1, e);
+        // Painted effects keep their pixels (copy-on-write tiles: cheap).
+        let px = &mut s.doc.pixels;
+        if let Some(img) = px.masks.get(&eid).cloned() {
+            px.masks.insert(new, img);
+        }
+        for c in Channel::ALL {
+            if let Some(img) = px.layer(eid, c).cloned() {
+                px.layers.insert((new, c), img);
+            }
+        }
+        Ok(new)
+    })?;
+    if s.target == StackTarget::Effect(eid) {
+        s.target = StackTarget::Effect(new);
+    }
+    Ok(json!({ "effect": new.0 }))
+}
+
+fn move_effect(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "effect.move";
+    let eid = effect_id(s, p, CMD)?;
+    let index = u64p(p, "index").ok_or_else(|| bad(CMD, "`index` is required"))?;
+    s.edit("Move effect", |s| {
+        let (list, i) = stack_of(&mut s.doc.project, eid).ok_or_else(|| bad(CMD, format!("no effect {}", eid.0)))?;
+        let e = list.remove(i);
+        let to = usize::try_from(index).unwrap_or(usize::MAX).min(list.len());
+        list.insert(to, e);
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
 fn remove_effect(s: &mut Session, p: &Value) -> Result<Value> {
-    let eid = effect_id(p, "effect.remove")?;
+    let eid = effect_id(s, p, "effect.remove")?;
     s.edit("Remove effect", |s| {
         let content = match s.doc.project.effect(eid) {
             Some((owner, _)) => s.doc.project.layer(owner)?.content_effects.iter().any(|e| e.id == eid),

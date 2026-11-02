@@ -12,9 +12,11 @@
 //! - [`export`]: texture export from a texture set's composite through [`ExportPreset`]s (file
 //!   name templates, channel packing, virtual maps such as the final normal, padding, resizing)
 //!   to PNG, JPEG, TGA, TIFF, BMP, WebP, EXR and HDR bytes.
+//! - [`materialx`]: a MaterialX (`.mtlx`) OpenPBR document for an exported texture set.
 //! - [`presets`]: the built-in export presets and JSON (de)serialization of user presets.
 //! - [`project_file`]: the `.tcraft` project zip (project JSON, sparse lossless pixel tiles,
 //!   baked maps, the original mesh and a thumbnail).
+//! - `fonts`: the installed fonts' families and styles (native only), for text alphas.
 //!
 //! Every reader takes untrusted bytes and returns an error, never panics. Byte-based functions
 //! work everywhere (including the web build); path-based ones are native only.
@@ -22,7 +24,10 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod export;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod fonts;
 pub mod image_res;
+pub mod materialx;
 pub mod mesh_export;
 pub mod mesh_import;
 pub mod presets;
@@ -31,7 +36,7 @@ pub mod project_file;
 pub use export::{
     Dest, ExportInput, ExportOptions, ExportPreset, ExportedFile, FileFormat, MapSpec, Padding, PlannedFile, SourceRef, VirtualMap, list_outputs, render_maps,
 };
-pub use image_res::{DecodedImage, decode_image};
+pub use image_res::{DecodedImage, coverage_png, decode_image};
 pub use mesh_export::{GlbTextures, UsdExport, UsdFormat, glb_bytes, glb_export_options, obj_bytes, usd_bytes, usd_export_options};
 pub use mesh_import::{HighPolyMesh, ImportedMesh, MeshFile, MeshReport, import_high_poly_bytes, import_mesh_bytes, mesh_report, self_contained_mesh};
 #[cfg(not(target_arch = "wasm32"))]

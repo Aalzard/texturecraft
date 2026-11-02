@@ -56,12 +56,15 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(crate::layer_ops::specs());
         v.extend(crate::instance_cmds::specs());
         v.extend(crate::mask_cmds::specs());
+        v.extend(crate::effect_clipboard::specs());
         v.extend(crate::tool_cmds::specs());
+        v.extend(crate::brush_preset_cmds::specs());
         v.extend(crate::path_tool::specs());
         v.extend(crate::view_cmds::specs());
         v.extend(crate::camera_cmds::specs());
         v.extend(crate::quick_mask::specs());
         v.extend(crate::set_cmds::specs());
+        v.extend(crate::meshmap_cmds::specs());
         v.extend(crate::uv_tile_cmds::specs());
         v.extend(crate::template_cmds::specs());
         v.extend(crate::project_cmds::specs());
@@ -73,6 +76,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(crate::smart_masks::specs());
         v.extend(crate::filter_lib::specs());
         v.extend(crate::decal_cmds::specs());
+        v.extend(crate::text_cmds::specs());
         v
     })
 }

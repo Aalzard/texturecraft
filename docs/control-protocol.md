@@ -13,6 +13,14 @@ Everything TextureCraft does is an engine command with a stable id (`layer.add.f
 Programmatic calls never open dialogs: a command runs with its defaults. Only `ui.menu.invoke`
 behaves like a menu click. `session.inspect` shows every layer, mask, effect, fill source and
 painted tile count, so an agent can verify its work without a screenshot.
+`effect.histogram {effect, channel?, bins?}` counts the values an effect reads (a levels
+effect's input), so an agent can pick its input range from the data. `effect.move {effect,
+index}` reorders an effect within its stack (0 = bottom) and `effect.duplicate {effect}` copies
+one just above itself. `effect.copy {effect?}` and `effect.cut {effect?}` put an effect on the
+layer clipboard, and `effect.paste {layer?, target?}` adds it to another layer's content or mask.
+
+`edit.undo {steps?}` and `edit.redo {steps?}` go back or forward several steps at once (as far
+as the history reaches); `edit.history` lists the steps done and the undone ones, next first.
 
 ## Control channel (desktop app)
 
@@ -100,16 +108,19 @@ print(call("command.run", {"id": "layer.add.fill", "params": {"color": [0.8, 0.1
 - **Headless** (default): an in-process session that starts on the material ball (1024).
   Files are reachable only below the roots given at launch, as forward-slash paths relative to
   them: `--read-root <dir>` for `project_open` / `mesh_import` / `mesh_reimport` / `bake_mesh_add`,
-  `--write-root <dir>` for `project_save` / `material_save` / `textures_export` / `mesh_export`. Without roots there is no file access. `..`, absolute
+  `--write-root <dir>` for `project_save` / `material_save` / `textures_export` / `mesh_export`
+  (`--automation-read-root` / `--automation-write-root`, as in the other crafting apps, are the
+  same flags). Without roots there is no file access. `..`, absolute
   paths, drive letters, device names and symlink or junction escapes are refused.
 - **Bridge**: `--bridge <port>` forwards to a running `texturecraft --control <port>` (token from
   `--token`, `TEXTURECRAFT_CONTROL_TOKEN` or the app's token file). The app reads and writes its
   own files, so the path tools are unavailable there; `project_save` without a path invokes
   File › Save.
 
-Through `command_run`, every `file.*` command but `file.close` (and `file.reimportMesh` without
-a `path`) is refused, and so is any command given a `path` or `dir` (`resource.import`,
-`material.save`, `material.load`, …), in both modes: use the workspace tools below.
+Through `command_run`, every `file.*` command but `file.close` and `file.removeUnused` (and
+`file.reimportMesh` without a `path`) is refused, and so is any command given a `path` or `dir` (`resource.import`,
+`material.save`, `material.load`, …), in both modes: use the workspace tools below. `resource.text`
+takes a font family, not a path: it reads only the system's font folders.
 
 | Tool | Params | Notes |
 |---|---|---|
@@ -124,7 +135,7 @@ a `path`) is refused, and so is any command given a `path` or `dir` (`resource.i
 | `mesh_reimport` | `{path?, preserveStrokes?}` | Reimport the mesh from a file, or (no path) from the project's own copy; bridge mode supports only the latter |
 | `mesh_export` | `{path, format?}` | The mesh as obj, glb, usda, usdc or usdz below the write root (usda / usdc textures next to it) → `{path, textures?}` |
 | `bake_mesh_add` | `{path, cage?}` | Add a high-definition mesh for baking, or set the cage → `{name, meshes}` |
-| `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil` |
+| `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil`, or as a mesh map instead of baking it: `textureSet.meshMap.set {ts?, map, image}` (`textureSet.meshMap.clear {ts?, map}` empties the slot) |
 | `material_save` | `{path, layer?, name?}` | A layer or folder as a `.tcmat` smart material below the write root |
 | `material_load` | `{path}` | Add a `.tcmat` smart material above the selection |
 | `textures_export` | `{dir, preset?, ts?, format?, padding?, size?}` | Writes files below the write root |
@@ -217,7 +228,7 @@ texturecraft-cli --version                                   # TextureCraft 0.1.
 texturecraft-cli info model.glb                              # triangles, materials, UV report
 texturecraft-cli info project.tcraft                         # texture sets, layers, baked maps
 texturecraft-cli commands --filter mask
-texturecraft-cli new builtin:material_ball ball.tcraft --resolution 1024 --sample
+texturecraft-cli new builtin:material_ball ball.tcraft --resolution 1024 --sample   # mesh maps baked at ≤ 1024 px
 texturecraft-cli new model.glb model.tcraft --resolution 2048
 texturecraft-cli run ball.tcraft layer.add.fill '{"color":"#c08040","metallic":1}' -o ball.tcraft
 texturecraft-cli batch script.json
