@@ -67,17 +67,22 @@ fn raw(kind: ProceduralKind, p: Vec3, seed: u32) -> f32 {
             let d = f.x.min(1.0 - f.x).min(f.y.min(1.0 - f.y));
             smoothstep(0.015, 0.035, d) * (0.9 + 0.1 * noise::cell_hash(c.x as i32, c.y as i32, 0, seed))
         }
-        ProceduralKind::Weave => {
-            // Plain weave: in each cell the thread on top alternates (warp along X, weft along Y);
-            // the top thread shows its round cross-section, bulging mid-span.
+        ProceduralKind::Weave | ProceduralKind::Twill => {
+            // Warp along X, weft along Y: in each cell the thread on top shows its round
+            // cross-section, bulging mid-span. A plain weave alternates every cell; a 2/2 twill
+            // floats over two cells and steps one cell per row, so the floats line up in diagonal
+            // ribs, the weft darker than the warp.
             let c = (p * 2.0).floor();
             let f = p * 2.0 - c;
             let pi = std::f32::consts::PI;
-            let warp_on_top = (c.x as i32 + c.y as i32).rem_euclid(2) == 0;
+            let twill = kind == ProceduralKind::Twill;
+            let (period, warp_cells) = if twill { (4, 2) } else { (2, 1) };
+            let warp_on_top = (c.x as i32).wrapping_add(c.y as i32).rem_euclid(period) < warp_cells;
             let (across, along) = if warp_on_top { (f.y, f.x) } else { (f.x, f.y) };
             let thread = (pi * across).sin().max(0.0).sqrt() * (0.8 + 0.2 * (pi * along).sin());
+            let tone = if twill && !warp_on_top { 0.55 } else { 1.0 };
             let fiber = noise::value([p.x * 40.0, p.y * 40.0, p.z], seed);
-            (thread * (0.88 + 0.12 * fiber)).clamp(0.0, 1.0)
+            (thread * tone * (0.88 + 0.12 * fiber)).clamp(0.0, 1.0)
         }
         ProceduralKind::Leather => {
             let w = noise::perlin((p * 0.7).to_array(), seed ^ 0x2D) - 0.5;
@@ -349,6 +354,21 @@ mod tests {
         assert!((c[0] - Vec3::new(-1.0, 0.5, 0.0)).length() < 1e-5 && (c[2] - Vec3::new(1.0, -0.5, 0.0)).length() < 1e-5);
         assert!(decal_axes(&Decal { normal: [0.0; 3], ..d }).is_none());
         assert!(decal_uv(&Decal { size: [f32::NAN; 2], ..d }, Vec3::ZERO, z).is_none());
+    }
+
+    #[test]
+    fn twill_floats_run_in_diagonal_ribs() {
+        // The value at the centre of cell (x, y); cells are half a unit.
+        let at = |k, x: i32, y: i32| raw(k, Vec3::new(x as f32 * 0.5 + 0.25, y as f32 * 0.5 + 0.25, 0.0), 3);
+        for y in 1..8 {
+            let warp: Vec<bool> = (0..8).map(|x| at(ProceduralKind::Twill, x, y) > 0.7).collect();
+            assert_eq!(warp.iter().filter(|w| **w).count(), 4, "row {y}: half the floats are warp");
+            for x in 0..7 {
+                assert_eq!(warp[x as usize], at(ProceduralKind::Twill, x + 1, y - 1) > 0.7, "the rib continues diagonally at ({x}, {y})");
+            }
+        }
+        // A plain weave shows every top thread alike.
+        assert!((0..8).all(|x| at(ProceduralKind::Weave, x, 0) > 0.7));
     }
 
     #[test]

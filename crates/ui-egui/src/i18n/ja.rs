@@ -966,4 +966,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Invert show/hide", "表示/非表示を反転"),
     ("Show or hide texture sets", "テクスチャセットの表示/非表示"),
     ("Focus: show only the active texture set", "フォーカス: アクティブなテクスチャセットのみ表示"),
+    ("Twill weave", "綾織り"),
 ];

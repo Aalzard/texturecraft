@@ -999,4 +999,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Invert show/hide", "Ein-/Ausblenden umkehren"),
     ("Show or hide texture sets", "Texturesets ein- oder ausblenden"),
     ("Focus: show only the active texture set", "Fokus: nur das aktive Textureset zeigen"),
+    ("Twill weave", "Köperbindung"),
 ];

@@ -897,4 +897,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Invert show/hide", "反转显示/隐藏"),
     ("Show or hide texture sets", "显示或隐藏纹理集"),
     ("Focus: show only the active texture set", "聚焦：仅显示当前纹理集"),
+    ("Twill weave", "斜纹织物"),
 ];

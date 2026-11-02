@@ -951,4 +951,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Invert show/hide", "표시/숨기기 반전"),
     ("Show or hide texture sets", "텍스처 세트 표시 또는 숨기기"),
     ("Focus: show only the active texture set", "포커스: 활성 텍스처 세트만 표시"),
+    ("Twill weave", "능직"),
 ];

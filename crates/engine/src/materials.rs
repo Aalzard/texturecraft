@@ -357,15 +357,21 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
         "plastic_glossy" | "plastic_matte" | "ceramic" => one(b, dielectric(rgb(m.base), clouds_rough(9))),
         "plastic_textured" => one(b, plus(dielectric(rgb(m.base), gray(P::Leather, 40.0, 5, 0.66, 0.5)), height(gray(P::Leather, 40.0, 5, -0.01, 0.0)))),
         "rubber" => one(b, dielectric(pat(P::Noise, 0.5, 3, 1.0, [0.025; 3], [0.035; 3]), gray(P::Noise, 0.5, 3, 0.84, 0.94))),
-        "carbon_fiber" => {
-            one(b, plus(dielectric(pat(P::Weave, 24.0, 1, 1.0, [0.01, 0.01, 0.012], [0.06, 0.06, 0.065]), u(r)), height(gray(P::Weave, 24.0, 1, 0.0, 0.006))))
-        }
+        // Twill-woven tows under a clear coat: the warp catches the light, the weft stays dark.
+        "carbon_fiber" => one(
+            b,
+            plus(
+                dielectric(pat(P::Twill, 12.0, 1, 1.0, [0.004, 0.004, 0.005], [0.08, 0.08, 0.085]), gray(P::Twill, 12.0, 1, 0.5, 0.28)),
+                [(CoatWeight, u(1.0)), (CoatRoughness, u(r * 0.2)), (Height, gray(P::Twill, 12.0, 1, 0.0, 0.002))],
+            ),
+        ),
         // ---- Fabric and leather -------------------------------------------------------------
         "fabric" => {
             one(b, plus(dielectric(pat(P::Weave, 18.0, 2, 1.0, [0.27, 0.29, 0.34], [0.6, 0.62, 0.7]), u(r)), height(gray(P::Weave, 18.0, 2, -0.01, 0.0))))
         }
+        // Indigo twill: diagonal ribs.
         "denim" => {
-            one(b, plus(dielectric(pat(P::Weave, 22.0, 5, 1.0, [0.02, 0.03, 0.08], [0.12, 0.16, 0.3]), u(r)), height(gray(P::Weave, 22.0, 5, -0.01, 0.0))))
+            one(b, plus(dielectric(pat(P::Twill, 22.0, 5, 1.0, [0.015, 0.025, 0.07], [0.15, 0.2, 0.38]), u(r)), height(gray(P::Twill, 22.0, 5, -0.01, 0.0))))
         }
         "leather" => one(
             b,
@@ -384,8 +390,9 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
         "velvet" => one(
             b,
             plus(
-                dielectric(pat(P::Weave, 30.0, 3, 1.0, [0.07, 0.008, 0.05], m.base), u(r)),
-                [(SheenWeight, u(1.0)), (SheenColor, rgb([0.95, 0.55, 0.85])), (SheenRoughness, u(0.35)), (Height, gray(P::Weave, 30.0, 3, -0.004, 0.0))],
+                // A pile, not a weave: soft crushed patches under a bright sheen.
+                dielectric(pat(P::Clouds, 3.0, 3, 1.0, [0.06, 0.006, 0.045], m.base), u(r)),
+                [(SheenWeight, u(1.0)), (SheenColor, rgb([0.95, 0.55, 0.85])), (SheenRoughness, u(0.35)), (Height, gray(P::Noise, 1.0, 3, -0.002, 0.0))],
             ),
         ),
         // ---- Coated and translucent ---------------------------------------------------------
