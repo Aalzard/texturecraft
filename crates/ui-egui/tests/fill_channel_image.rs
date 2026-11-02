@@ -6,6 +6,11 @@ use serde_json::json;
 use texturecraft_engine::core::{Channel, LayerId, LayerKind, Source};
 use texturecraft_ui_egui::TextureCraftApp;
 
+/// The Roughness channel's name in Properties (the rightmost "Roughness" label).
+fn roughness<'a>(h: &'a Harness<'_, TextureCraftApp>) -> egui_kittest::Node<'a> {
+    h.get_all_by_label("Roughness").max_by(|a, b| a.rect().right().total_cmp(&b.rect().right())).unwrap()
+}
+
 #[test]
 fn a_fill_channel_takes_an_image_from_its_source_menu() {
     let mut session = texturecraft_engine::sample_session(256, 64).unwrap();
@@ -19,8 +24,11 @@ fn a_fill_channel_takes_an_image_from_its_source_menu() {
     h.state_mut().ui.prefs.language = "en".into();
     h.run_steps(4);
 
-    // The source menu button sits in the row of the channel's name.
-    let row = h.get_all_by_label("Roughness").map(|n| n.rect()).max_by(|a, b| a.right().total_cmp(&b.right())).unwrap().center().y;
+    // The source menu button sits in the row of the channel's name, scrolled into view first.
+    roughness(&h).scroll_to_me();
+    // The scroll animates for about twenty frames.
+    h.run_steps(30);
+    let row = roughness(&h).rect().center().y;
     let menu = h.get_all_by_label(egui_phosphor::regular::DOTS_THREE).find(|n| (n.rect().center().y - row).abs() < 6.0).unwrap();
     menu.click();
     h.run_steps(2);
