@@ -915,6 +915,9 @@ impl Filter {
 pub enum EffectKind {
     /// Painted grayscale (mask) or material (content) pixels keyed by the effect id.
     Paint,
+    /// A path sublayer: pixels keyed by the effect id like [`EffectKind::Paint`], but painted
+    /// only from its stored paths and repainted whenever one is added, edited or removed.
+    Path(Vec<PathShape>),
     /// A uniform or procedural grayscale fill.
     Fill {
         source: Source,
@@ -942,6 +945,21 @@ pub enum EffectKind {
     Anchor,
 }
 
+/// One path of a path sublayer: its control points and how it was painted.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PathShape {
+    /// Surface positions (3D view) or texture coordinates with z = 0 (2D view).
+    pub points: Vec<[f32; 3]>,
+    pub uv: bool,
+    pub closed: bool,
+    /// A closed path fills its interior instead of stroking the curve.
+    pub fill: bool,
+    /// Viewport size (pixels) the path was painted in.
+    pub viewport: [f32; 2],
+    /// Brush, material and camera the engine paints the path with (owned by the engine).
+    pub paint: serde_json::Value,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompareOp {
     LesserThan,
@@ -953,6 +971,7 @@ impl EffectKind {
     pub fn name(&self) -> &'static str {
         match self {
             EffectKind::Paint => "Paint",
+            EffectKind::Path(_) => "Path",
             EffectKind::Fill { .. } => "Fill",
             EffectKind::Generator(_) => "Generator",
             EffectKind::Levels(_) => "Levels",
@@ -970,8 +989,13 @@ impl EffectKind {
         match self {
             EffectKind::Material(_) | EffectKind::Anchor => Some(true),
             EffectKind::Fill { .. } | EffectKind::Generator(_) | EffectKind::ColorSelection { .. } | EffectKind::Compare { .. } => Some(false),
-            EffectKind::Paint | EffectKind::Levels(_) | EffectKind::Filter(_) => None,
+            EffectKind::Paint | EffectKind::Path(_) | EffectKind::Levels(_) | EffectKind::Filter(_) => None,
         }
+    }
+
+    /// Holds painted pixels keyed by the effect id (paint and path sublayers).
+    pub fn painted(&self) -> bool {
+        matches!(self, EffectKind::Paint | EffectKind::Path(_))
     }
 
     /// Anchor points read by this effect's sources.

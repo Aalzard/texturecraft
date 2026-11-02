@@ -78,6 +78,21 @@ fn window_snapshots() {
         texturecraft_engine::execute(s, id, &p).unwrap();
     }
     save(&mut h, &dir, "properties-levels");
+    // A path sublayer: its paths listed in Properties, the second one being edited.
+    let s = &mut h.state_mut().session;
+    for (id, p) in [
+        ("layer.add.paint", serde_json::Value::Null),
+        ("tool.path", serde_json::json!({"uvPoints": [[0.2, 0.5], [0.5, 0.4], [0.8, 0.5]], "commit": true})),
+        ("tool.path", serde_json::json!({"uvPoints": [[0.3, 0.7], [0.7, 0.7], [0.7, 0.9]], "closed": true, "fill": true, "commit": true})),
+    ] {
+        texturecraft_engine::execute(s, id, &p).unwrap();
+    }
+    let effect = match s.target {
+        texturecraft_engine::StackTarget::Effect(e) => e.0,
+        _ => 0,
+    };
+    texturecraft_engine::execute(s, "path.edit", &serde_json::json!({"effect": effect, "index": 1})).unwrap();
+    save(&mut h, &dir, "properties-paths");
     // Ctrl+right drag in the 3D view: the brush cursor where it began and the readout.
     let c = h.state().viewport_rect.center();
     let (m, button) = (egui::Modifiers::COMMAND, egui::PointerButton::Secondary);

@@ -1901,6 +1901,29 @@ fn effect_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, eid:
             ui.label(RichText::new(hint).color(tk.text_dim));
             tool_properties(app, ui);
         }
+        EffectKind::Path(paths) => {
+            ui.label(
+                RichText::new(tr("Paths stay editable: pick one to move its points or change its brush and material, and the sublayer repaints at once. Add paths with the Path tool."))
+                    .color(tk.text_dim),
+            );
+            let editing = app.session.tool.path.editing;
+            for i in 0..paths.len() {
+                ui.horizontal(|ui| {
+                    let on = editing == Some((eid, i));
+                    if ui.selectable_label(on, format!("{} {}", tr("Path"), i + 1)).on_hover_text(tr("Edit")).clicked() {
+                        if on {
+                            app.run("tool.path", json!({"clear": true}));
+                        } else {
+                            app.run("path.edit", json!({"effect": id, "index": i}));
+                        }
+                    }
+                    if icon_button(ui, ic::TRASH, tr("Remove"), false, 22.0).clicked() {
+                        app.run("path.remove", json!({"effect": id, "index": i}));
+                    }
+                });
+            }
+            tool_properties(app, ui);
+        }
         EffectKind::Filter(f) => filter_properties(app, ui, id, f),
         other => {
             ui.label(RichText::new(tr(other.name())).color(tk.text_dim));

@@ -944,6 +944,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Save the changes to {name} before closing?", "关闭前是否保存对 {name} 的更改？"),
     ("Twill weave", "斜纹织物"),
     ("Save the changes to {name} first?", "是否先保存对 {name} 的更改？"),
+    (
+        "Paths stay editable: pick one to move its points or change its brush and material, and the sublayer repaints at once. Add paths with the Path tool.",
+        "路径始终可编辑：选择一条路径来移动其控制点或更改其笔刷和材质，子图层会立即重绘。使用路径工具添加路径。",
+    ),
     ("Import material...", "导入材质..."),
     ("MaterialCraft material", "MaterialCraft 材质"),
     ("Cooked at {size} px", "已按 {size} px 计算"),

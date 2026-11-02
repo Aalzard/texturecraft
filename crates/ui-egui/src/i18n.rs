@@ -176,6 +176,7 @@ mod tests {
         // Effect, view and camera names the engine gives.
         k.extend([
             "Paint",
+            "Path",
             "Fill",
             "Generator",
             "Levels",

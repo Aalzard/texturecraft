@@ -40,6 +40,14 @@ fn effect_json(s: &Session, e: &Effect, content: bool) -> Value {
             ej["generator"] = json!({ "type": format!("{:?}", g.kind), "level": g.level, "softness": g.softness, "noise": g.noise_amount, "invert": g.invert })
         }
         EffectKind::Levels(lv) => ej["levels"] = json!([lv.in_low, lv.in_high, lv.gamma, lv.out_low, lv.out_high]),
+        EffectKind::Path(paths) => {
+            ej["paths"] = json!(paths.iter().map(|p| json!({ "points": p.points.len(), "uv": p.uv, "closed": p.closed, "fill": p.fill })).collect::<Vec<_>>());
+            ej["tiles"] = json!(if content {
+                s.doc.pixels.layers.iter().filter(|((id, _), _)| *id == e.id).map(|(_, img)| img.allocated_count()).sum::<usize>()
+            } else {
+                s.doc.pixels.masks.get(&e.id).map(|i| i.allocated_count()).unwrap_or(0)
+            });
+        }
         EffectKind::Paint if content => {
             ej["tiles"] = json!(s.doc.pixels.layers.iter().filter(|((id, _), _)| *id == e.id).map(|(_, img)| img.allocated_count()).sum::<usize>())
         }

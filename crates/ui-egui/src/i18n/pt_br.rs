@@ -1031,6 +1031,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Save the changes to {name} before closing?", "Salvar as alterações em {name} antes de fechar?"),
     ("Twill weave", "Tecido sarja"),
     ("Save the changes to {name} first?", "Salvar primeiro as alterações em {name}?"),
+    (
+        "Paths stay editable: pick one to move its points or change its brush and material, and the sublayer repaints at once. Add paths with the Path tool.",
+        "Os caminhos continuam editáveis: escolha um para mover seus pontos ou mudar seu pincel e material, e a subcamada é repintada na hora. Adicione caminhos com a ferramenta Caminho.",
+    ),
     ("Import material...", "Importar material..."),
     ("MaterialCraft material", "Material do MaterialCraft"),
     ("Cooked at {size} px", "Calculado em {size} px"),

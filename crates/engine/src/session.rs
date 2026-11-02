@@ -341,6 +341,10 @@ pub struct Session {
     pub images: texturecraft_compose::ImageStore,
     /// Temporary texel mask limiting paint strokes (not saved, not in the history).
     pub quick_mask: crate::quick_mask::QuickMask,
+    /// A path sublayer is being repainted from its paths (the only way to paint into one).
+    pub(crate) painting_paths: bool,
+    /// Pixels of the paths below the one being edited, so live edits skip repainting them.
+    pub(crate) path_cache: Option<crate::path_tool::PathCache>,
     pub path: Option<String>,
     pub modified: bool,
     /// Bumps on every document change.
@@ -392,6 +396,8 @@ impl Session {
             clipboard: None,
             images: Default::default(),
             quick_mask: Default::default(),
+            painting_paths: false,
+            path_cache: None,
             path: None,
             modified: false,
             revision: 1,
@@ -614,6 +620,8 @@ impl Session {
 
     pub fn undo(&mut self) -> Result<String> {
         self.cancel_stroke();
+        // An edited path would otherwise repaint over the restored document.
+        self.stop_path_edit();
         let (label, doc) = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
         let now = std::mem::replace(&mut self.doc, doc);
         self.after_history(&now);
@@ -624,6 +632,8 @@ impl Session {
 
     pub fn redo(&mut self) -> Result<String> {
         self.cancel_stroke();
+        // An edited path would otherwise repaint over the restored document.
+        self.stop_path_edit();
         let (label, doc) = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
         let now = std::mem::replace(&mut self.doc, doc);
         self.after_history(&now);
