@@ -120,7 +120,7 @@ fn a_set_without_the_map_baked_is_left_alone() {
 
 #[test]
 fn painting_or_clearing_the_skew_map_is_a_change() {
-    let (mut s, dir) = baked_session();
+    let (mut s, dir) = baked_session("skew");
     execute(&mut s, "bake.autoRebake", &json!({ "map": "height" })).unwrap();
     assert!(due(&mut s).is_empty());
     execute(&mut s, "bake.skew.set", &json!({ "value": 0.5 })).unwrap();
