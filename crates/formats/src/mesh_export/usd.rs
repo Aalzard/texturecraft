@@ -46,7 +46,7 @@ pub struct UsdExport {
 
 /// A UsdPreviewSurface input fed by a texture: (file stem, input, input type, texture output,
 /// sRGB).
-const SLOTS: [(&str, &str, &str, &str, bool); 8] = [
+pub(crate) const SLOTS: [(&str, &str, &str, &str, bool); 8] = [
     ("BaseColor", "diffuseColor", "color3f", "rgb", true),
     ("Roughness", "roughness", "float", "r", false),
     ("Metallic", "metallic", "float", "r", false),
@@ -293,9 +293,25 @@ fn material(path: &str, id: &str, files: &[(usize, String)]) -> UsdPrim {
 /// to the layer; usdz embeds them.
 pub fn usd_bytes(mesh: &Mesh, name: &str, textures: &[Vec<ExportedFile>], format: UsdFormat) -> Result<UsdExport> {
     let stem = sanitize_file_stem(name);
+    let (names, files) = material_maps(mesh, &stem, textures);
+    let layer = scene(mesh, name, &names)?;
+    Ok(match format {
+        UsdFormat::Usda => UsdExport { bytes: usda(&layer).into_bytes(), textures: files },
+        UsdFormat::Usdc => UsdExport { bytes: super::usdc::write(&layer)?, textures: files },
+        UsdFormat::Usdz => UsdExport { bytes: usdz(&format!("{stem}.usdc"), &super::usdc::write(&layer)?, &files)?, textures: Vec::new() },
+    })
+}
+
+/// Files by name, with their bytes.
+pub type NamedFiles = Vec<(String, Vec<u8>)>;
+
+/// The maps of each material worth writing (`textures[m]`, rendered with
+/// [`usd_export_options`]): per material its [`SLOTS`] indices and file names
+/// (`<stem>_<material>_<slot>.png`), and the files with their bytes.
+pub(crate) fn material_maps(mesh: &Mesh, stem: &str, textures: &[Vec<ExportedFile>]) -> (Vec<Vec<(usize, String)>>, NamedFiles) {
     let mut files = Vec::new();
     let mut names = Vec::with_capacity(mesh.materials.len());
-    for (m, material) in mesh.materials.iter().enumerate() {
+    for (m, material) in super::unique_ids(&mesh.materials, sanitize_file_stem).iter().enumerate() {
         let mut slots = Vec::new();
         let maps = textures.get(m).map_or(&[][..], Vec::as_slice);
         // Without a coat its roughness means nothing.
@@ -311,18 +327,13 @@ pub fn usd_bytes(mesh: &Mesh, name: &str, textures: &[Vec<ExportedFile>], format
             if skip {
                 continue;
             }
-            let file = format!("{stem}_{}_{slot_stem}.png", sanitize_file_stem(material));
+            let file = format!("{stem}_{material}_{slot_stem}.png");
             slots.push((slot, file.clone()));
             files.push((file, f.bytes.clone()));
         }
         names.push(slots);
     }
-    let layer = scene(mesh, name, &names)?;
-    Ok(match format {
-        UsdFormat::Usda => UsdExport { bytes: usda(&layer).into_bytes(), textures: files },
-        UsdFormat::Usdc => UsdExport { bytes: super::usdc::write(&layer)?, textures: files },
-        UsdFormat::Usdz => UsdExport { bytes: usdz(&format!("{stem}.usdc"), &super::usdc::write(&layer)?, &files)?, textures: Vec::new() },
-    })
+    (names, files)
 }
 
 /// A usdz package: the layer first, every entry stored uncompressed at a 64-byte aligned offset.
