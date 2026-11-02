@@ -140,6 +140,14 @@ fn histogram_counts_what_an_effect_reads() {
     assert_eq!(target, "mask");
     assert!(one(&bins, 1), "mask 0.3: {bins:?}");
     assert_eq!(hist(&mut s, json!({"effect": ml})).1.len(), 64);
+    // Below a blur, every tile builds its own neighbourhood field; the texels counted stay the same.
+    let texels: u64 = bins.iter().sum();
+    execute(&mut s, "effect.remove", &json!({"effect": ml})).unwrap();
+    execute(&mut s, "effect.add.filter", &json!({"target": "mask", "filter": "blur", "radius": 4})).unwrap();
+    let ml = id(execute(&mut s, "effect.add.levels", &json!({"target": "mask"})).unwrap(), "effect");
+    let (_, blurred) = hist(&mut s, json!({"effect": ml, "bins": 4}));
+    assert_eq!(blurred.iter().sum::<u64>(), texels);
+    assert_eq!(blurred.iter().enumerate().max_by_key(|(_, b)| **b).map(|(i, _)| i), Some(1), "{blurred:?}");
     // A paint layer with nothing painted yet still has its mask.
     execute(&mut s, "layer.add.paint", &Value::Null).unwrap();
     execute(&mut s, "mask.add.black", &Value::Null).unwrap();

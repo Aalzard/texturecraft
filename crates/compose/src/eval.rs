@@ -1884,20 +1884,31 @@ pub fn effect_histogram(inp: &Inputs, effect: LayerId, channel: Channel, bins: u
     let cut_inp = Inputs { project: &cut, preview: None, ..*inp };
     let channels = cut.texture_set(inp.ts).map(|t| t.channel_list()).unwrap_or_default();
     let tiles = histogram_tiles(inp.gbuf.width, inp.gbuf.height);
-    let fields = neighbourhood_fields(&cut_inp, &channels, &tiles);
+    // A field covers the bounding box of the tiles it is built for, which for a scattered sample
+    // is the whole set: with a neighbourhood filter below, each tile gets its own.
+    let probe = neighbourhood_fields(&cut_inp, &channels, tiles.get(..1).unwrap_or_default());
+    let shared = probe.is_empty().then_some(probe);
     let bin = |v: f32| ((v.clamp(0.0, 1.0) * bins as f32) as usize).min(bins - 1);
     let hist = tiles
         .par_iter()
         .map(|&(tx, ty)| {
+            let own;
+            let fields = match &shared {
+                Some(f) => f,
+                None => {
+                    own = neighbourhood_fields(&cut_inp, &channels, &[(tx, ty)]);
+                    &own
+                }
+            };
             let mut h = vec![0u32; bins];
             // The mask is planned on its own: a layer with nothing drawn plans no node.
-            let mask = if in_mask { layer_mask(&cut, owner).and_then(|m| mask_plan(&cut_inp, owner, m, tx, ty, Some(&fields))) } else { None };
-            let nodes = if in_mask { Vec::new() } else { plan(&cut_inp, &[owner], &channels, tx, ty, 0, Some(&fields)) };
+            let mask = if in_mask { layer_mask(&cut, owner).and_then(|m| mask_plan(&cut_inp, owner, m, tx, ty, Some(fields))) } else { None };
+            let nodes = if in_mask { Vec::new() } else { plan(&cut_inp, &[owner], &channels, tx, ty, 0, Some(fields)) };
             let content = nodes.first().and_then(|n| n.chans.iter().find(|c| Channel::ALL.get(c.ch) == Some(&channel)).map(|c| (n, c)));
             if mask.is_none() && content.is_none() {
                 return h;
             }
-            let full = anchor_plan(&cut_inp, owner, &channels, tx, ty, Some(&fields));
+            let full = anchor_plan(&cut_inp, owner, &channels, tx, ty, Some(fields));
             for (x, y, o) in tile_texels(inp.gbuf, tx, ty) {
                 let mut tex = Texel::new(&cut_inp, x, y, o, 0.0);
                 if !full.is_empty() {
