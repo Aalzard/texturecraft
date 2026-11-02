@@ -545,7 +545,13 @@ fn colour_space_converts_colour_maps_only() {
     let default_png = fx.render(&ExportOptions::new(preset.clone()));
     let mut srgb = ExportOptions::new(preset.clone());
     srgb.color_space = Some(ColorSpace::Srgb);
-    assert_eq!(find(&default_png, "_BaseColor.png").bytes, find(&fx.render(&srgb), "_BaseColor.png").bytes);
+    let srgb_png = fx.render(&srgb);
+    assert_eq!(decode(find(&default_png, "_BaseColor.png")).to_rgb8(), decode(find(&srgb_png, "_BaseColor.png")).to_rgb8());
+    // The chosen one is written into the file as its profile; the default says nothing, as before.
+    assert_eq!(embedded_icc(FileFormat::Png, &find(&srgb_png, "_BaseColor.png").bytes), crate::icc::profile(ColorSpace::Srgb));
+    assert_eq!(embedded_icc(FileFormat::Png, &find(&default_png, "_BaseColor.png").bytes), None);
+    // Data maps carry none, even when a space is chosen.
+    assert_eq!(embedded_icc(FileFormat::Png, &find(&srgb_png, "_Normal.png").bytes), None);
     // An explicit sRGB in a float file is encoded once, not twice.
     let mut float_srgb = ExportOptions::new(preset);
     float_srgb.format_override = Some(FileFormat::Exr);
@@ -596,4 +602,68 @@ fn colour_packed_into_one_channel_warns_instead_of_converting_silently() {
     let opts = |space| ExportOptions { color_space: space, format_override: Some(FileFormat::Exr), ..ExportOptions::new(preset.clone()) };
     assert!(fx.render(&opts(Some(ColorSpace::AcesCg)))[0].warnings.iter().any(|w| w.contains("ACEScg")));
     assert!(fx.render(&opts(None))[0].warnings.is_empty(), "linear Rec.709 needs no conversion");
+}
+
+/// The ICC profile a PNG, TIFF, JPEG or WebP file carries.
+fn embedded_icc(format: FileFormat, bytes: &[u8]) -> Option<Vec<u8>> {
+    use image::ImageDecoder;
+    let c = || Cursor::new(bytes);
+    match format {
+        FileFormat::Png => image::codecs::png::PngDecoder::new(c()).ok()?.icc_profile().ok()?,
+        FileFormat::Tiff => image::codecs::tiff::TiffDecoder::new(c()).ok()?.icc_profile().ok()?,
+        FileFormat::Jpeg => image::codecs::jpeg::JpegDecoder::new(c()).ok()?.icc_profile().ok()?,
+        FileFormat::Webp => image::codecs::webp::WebPDecoder::new(c()).ok()?.icc_profile().ok()?,
+        _ => None,
+    }
+}
+
+#[test]
+fn a_chosen_colour_space_is_embedded_as_an_icc_profile() {
+    let data = vec![0.25f32; 8 * 8 * 3];
+    for format in [FileFormat::Png, FileFormat::Tiff, FileFormat::Jpeg, FileFormat::Webp] {
+        for depth in [8u8, 16] {
+            if depth == 16 && matches!(format, FileFormat::Jpeg | FileFormat::Webp) {
+                continue;
+            }
+            for space in ColorSpace::ALL {
+                let mut warnings = Vec::new();
+                let bytes = encode(format, depth, (8, 8), 3, &data, &[false; 3], Some(space), &mut warnings).unwrap();
+                assert_eq!(embedded_icc(format, &bytes), crate::icc::profile(space), "{format:?} {depth}-bit {space:?}");
+                assert!(warnings.is_empty(), "{warnings:?}");
+            }
+            // No colour space chosen (a data map, or the default): nothing is embedded.
+            let bytes = encode(format, depth, (8, 8), 3, &data, &[false; 3], None, &mut Vec::new()).unwrap();
+            assert_eq!(embedded_icc(format, &bytes), None, "{format:?} {depth}-bit");
+        }
+    }
+}
+
+#[test]
+fn exr_carries_the_chromaticities_of_the_space() {
+    let data = vec![0.25f32; 4 * 4 * 3];
+    let read = |bytes: &[u8]| {
+        let meta = exr::meta::MetaData::read_from_buffered(Cursor::new(bytes), false).unwrap();
+        meta.headers[0].shared_attributes.chromaticities
+    };
+    assert!(read(&encode(FileFormat::Exr, 16, (4, 4), 3, &data, &[false; 3], None, &mut Vec::new()).unwrap()).is_none());
+    for space in ColorSpace::ALL {
+        let c = read(&encode(FileFormat::Exr, 32, (4, 4), 3, &data, &[false; 3], Some(space), &mut Vec::new()).unwrap()).unwrap_or_else(|| panic!("{space:?}"));
+        let [r, g, b, w] = space.chromaticities();
+        for (got, want) in [(c.red, r), (c.green, g), (c.blue, b), (c.white, w)] {
+            assert!((f64::from(got.0) - want[0]).abs() < 1e-5 && (f64::from(got.1) - want[1]).abs() < 1e-5, "{space:?}: {got:?} vs {want:?}");
+        }
+    }
+}
+
+#[test]
+fn formats_without_a_place_for_a_colour_space_say_so() {
+    let data = vec![0.25f32; 4 * 4 * 3];
+    for format in [FileFormat::Tga, FileFormat::Bmp, FileFormat::Hdr] {
+        let mut warnings = Vec::new();
+        encode(format, 8, (4, 4), 3, &data, &[false; 3], Some(ColorSpace::AcesCg), &mut warnings).unwrap();
+        assert!(warnings.iter().any(|w| w.contains("colour space") && w.contains("ACEScg")), "{format:?}: {warnings:?}");
+        let mut quiet = Vec::new();
+        encode(format, 8, (4, 4), 3, &data, &[false; 3], None, &mut quiet).unwrap();
+        assert!(quiet.is_empty(), "{format:?}: nothing to say without a chosen space: {quiet:?}");
+    }
 }

@@ -55,3 +55,38 @@ fn the_plan_reports_the_space_and_clamping_and_bad_names_are_errors() {
         assert!(execute(&mut s, "export.plan", &json!({ "preset": "glTF PBR Metal Roughness", "colorSpace": bad })).is_err(), "{bad:?}");
     }
 }
+
+fn png_icc(path: &str) -> Option<Vec<u8>> {
+    use image::ImageDecoder;
+    let file = std::io::BufReader::new(std::fs::File::open(path).unwrap());
+    image::codecs::png::PngDecoder::new(file).unwrap().icc_profile().unwrap()
+}
+
+fn find<'a>(r: &'a Value, part: &str) -> &'a str {
+    r["files"].as_array().unwrap().iter().map(|f| f.as_str().unwrap()).find(|f| f.contains(part)).unwrap_or_else(|| panic!("no {part} in {r}"))
+}
+
+#[test]
+fn a_chosen_colour_space_is_recorded_in_colour_maps_only() {
+    let mut s = session();
+    let png = |extra: Value| {
+        let mut p = json!({ "format": "png", "bitDepth": 8 });
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        p
+    };
+    let (default, d0) = export(&mut s, "icc_default", png(json!({})));
+    assert_eq!(png_icc(find(&default, "BaseColor")), None, "nothing is written unless a space is chosen");
+    let (aces, d1) = export(&mut s, "icc_aces", png(json!({ "colorSpace": "ACEScg" })));
+    let icc = png_icc(find(&aces, "BaseColor")).expect("the base colour map carries a profile");
+    assert!(icc.windows(6).any(|w| w == b"ACEScg"), "the profile names its space");
+    assert_eq!(Some(icc), texturecraft_formats::icc::profile(ColorSpace::AcesCg));
+    assert_eq!(png_icc(find(&aces, "Normal")), None, "a normal map is data and has no colour space");
+    // Formats that can't hold one say so, once per colour map.
+    let (tga, d2) = export(&mut s, "icc_tga", png(json!({ "colorSpace": "ACEScg", "format": "tga" })));
+    assert!(tga["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("TGA") && w.as_str().unwrap().contains("colour space")), "{tga}");
+    for d in [d0, d1, d2] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
