@@ -139,6 +139,10 @@ fn effects_move_within_their_stack_and_duplicate_with_their_pixels() {
     assert_eq!(order(&s), [fill, paint, copy]);
     assert_eq!(s.target, StackTarget::Effect(LayerId(copy)));
     assert!(s.doc.project.effect(LayerId(copy)).unwrap().1.name.ends_with(" copy"));
+    // Undoing it leaves no missing effect selected, but the stack it was in.
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.target, StackTarget::Content);
+    execute(&mut s, "edit.redo", &Value::Null).unwrap();
     execute(&mut s, "effect.remove", &json!({"effect": paint})).unwrap();
     assert!(center(&mut s, Channel::Roughness)[0] > 0.85, "the copy keeps the strokes");
     assert!(execute(&mut s, "effect.duplicate", &json!({"effect": 999_999})).is_err());
