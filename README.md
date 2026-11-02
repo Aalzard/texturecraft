@@ -159,6 +159,11 @@ Japanese, Chinese, Korean and Arabic interface text uses the fonts of
 build input (releases always use it): `CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p texturecraft`
 (an absolute path). Without it, the desktop app uses the installed system fonts.
 
+If the app cannot start (no usable GPU, say) or has to close, it says why in a message box and
+appends the details to `errors.log` beside its settings (`%APPDATA%\TextureCraft\data` on Windows,
+`~/Library/Application Support/TextureCraft` on macOS, `~/.local/share/texturecraft` on Linux).
+On a machine with several GPUs, `--gpu <part of the name>` or `--power-pref high` picks one.
+
 ### Use it from Claude Code and other agents
 
 Register the MCP server with Claude Code, giving it the folders it may read and write:
