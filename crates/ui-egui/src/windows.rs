@@ -723,7 +723,17 @@ fn bake_panel(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.separator();
     match selected {
         None => common_params(app, ui, &mut b),
-        Some(m) => map_params(ui, m, &mut b),
+        Some(m) => {
+            let mut auto = app.session.auto_rebake.map == Some(m);
+            if ui
+                .checkbox(&mut auto, tr("Auto-rebake"))
+                .on_hover_text(tr("Bake this map again by itself when its bake settings, the low poly or the high polys change"))
+                .changed()
+            {
+                app.run("bake.autoRebake", if auto { json!({ "map": m.id() }) } else { json!({ "off": true }) });
+            }
+            map_params(ui, m, &mut b)
+        }
     }
     if b.direction == [0.0; 3] {
         b.direction = before.direction;

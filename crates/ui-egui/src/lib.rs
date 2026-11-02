@@ -51,6 +51,8 @@ pub struct BakeJob {
     pub queue: Vec<usize>,
     pub current: Option<(usize, Arc<Progress>, std::sync::mpsc::Receiver<texturecraft_engine::Result<texturecraft_engine::bake::BakeOutput>>)>,
     pub total: usize,
+    /// Bake only this map (an Auto-rebake); None bakes every ticked map.
+    pub only: Option<texturecraft_engine::core::BakedMap>,
 }
 
 /// The browser build's notice when WebGPU is unavailable and wgpu fell back to WebGL2.
@@ -188,7 +190,7 @@ impl TextureCraftApp {
             return;
         }
         let total = sets.len();
-        self.bake = Some(BakeJob { queue: sets, current: None, total });
+        self.bake = Some(BakeJob { queue: sets, current: None, total, only: None });
     }
 
     fn poll_bake(&mut self, ctx: &egui::Context) {
@@ -200,19 +202,19 @@ impl TextureCraftApp {
                     let ts = *ts;
                     job.current = None;
                     if let Err(e) = self.session.apply_bake(ts, out) {
+                        self.session.bake_abandoned([ts]);
                         self.toast(e.to_string(), true);
                     }
                 }
                 Ok(Err(e)) => {
-                    job.current = None;
                     let msg = e.to_string();
-                    self.bake = None;
+                    self.cancel_bake();
                     self.toast(msg, true);
                     return;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.bake = None;
+                    self.cancel_bake();
                     self.toast(i18n::tr("The bake worker stopped"), true);
                     return;
                 }
@@ -225,8 +227,9 @@ impl TextureCraftApp {
                 self.toast(i18n::tr("Mesh maps baked"), false);
                 return;
             }
-            let ts = job.queue.remove(0);
-            match self.session.bake_task(ts) {
+            let (ts, only) = (job.queue.remove(0), job.only);
+            self.session.begin_bake(ts);
+            match self.session.bake_task_for(ts, only) {
                 Ok(task) => {
                     let progress = Arc::new(Progress::new());
                     let p = progress.clone();
@@ -235,17 +238,35 @@ impl TextureCraftApp {
                         job.current = Some((ts, progress, rx));
                     }
                 }
-                Err(e) => self.toast(e.to_string(), true),
+                Err(e) => {
+                    self.session.bake_abandoned([ts]);
+                    self.toast(e.to_string(), true);
+                }
             }
         }
     }
 
+    /// Auto-rebake: when the chosen map's bake inputs changed, bake it again in the background
+    /// (one set after another, only that map), unless a bake or a stroke is running.
+    fn drive_auto_rebake(&mut self) {
+        if self.bake.is_some() || self.session.stroke_active() || self.session.auto_rebake.map.is_none() {
+            return;
+        }
+        let due = self.session.auto_rebake_due();
+        if !due.is_empty() {
+            let total = due.len();
+            self.bake = Some(BakeJob { queue: due, current: None, total, only: self.session.auto_rebake.map });
+        }
+    }
+
+    /// Stops the bake job (also after an error). The set being baked and the queued ones wait for
+    /// their next bake input change before Auto-rebake tries them again.
     pub fn cancel_bake(&mut self) {
-        if let Some(job) = self.bake.take()
-            && let Some((_, p, _)) = job.current
-        {
+        let Some(job) = self.bake.take() else { return };
+        if let Some((_, p, _)) = &job.current {
             p.cancel.store(true, Ordering::Relaxed);
         }
+        self.session.bake_abandoned(job.current.map(|(ts, ..)| ts).into_iter().chain(job.queue));
     }
 
     /// Resize texture set `ts` to `resolution` on a worker thread (the document changes when
@@ -381,6 +402,7 @@ impl eframe::App for TextureCraftApp {
             web_files::dropped(self, ctx, f);
         }
         self.poll_bake(ctx);
+        self.drive_auto_rebake();
         self.poll_resize(ctx);
         let scale = self.ui.prefs.ui_scale.clamp(0.5, 3.0);
         if (ctx.zoom_factor() - scale).abs() > 1e-3 {

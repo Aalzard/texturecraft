@@ -709,6 +709,11 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Restore every default shortcut", "Restaurar todos los atajos predeterminados"),
     ("Return to painting mode", "Volver al modo de pintura"),
     ("Return to this step", "Volver a este paso"),
+    ("Auto-rebake", "Rehornear automáticamente"),
+    (
+        "Bake this map again by itself when its bake settings, the low poly or the high polys change",
+        "Vuelve a hornear este mapa automáticamente cuando cambian sus ajustes de horneado, la malla low poly o las high poly",
+    ),
     ("Right-click a layer > Create smart material", "Clic derecho en una capa > Crear material inteligente"),
     ("Rotation", "Rotación"),
     ("Rotation (degrees)", "Rotación (grados)"),

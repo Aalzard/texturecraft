@@ -679,6 +679,11 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Restore every default shortcut", "استعادة كل الاختصارات الافتراضية"),
     ("Return to painting mode", "العودة إلى نمط الرسم"),
     ("Return to this step", "العودة إلى هذه الخطوة"),
+    ("Auto-rebake", "إعادة الخبز تلقائيًا"),
+    (
+        "Bake this map again by itself when its bake settings, the low poly or the high polys change",
+        "يعيد خبز هذه الخريطة تلقائيًا عند تغيّر إعدادات الخبز أو المجسّم منخفض الدقة أو المجسّمات عالية الدقة",
+    ),
     ("Right-click a layer > Create smart material", "انقر بزر الفأرة الأيمن على طبقة > إنشاء مادة ذكية"),
     ("Rotation", "التدوير"),
     ("Rotation (degrees)", "التدوير (بالدرجات)"),
