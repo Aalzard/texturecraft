@@ -893,6 +893,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Voronoi", "ボロノイ"),
     ("Warp", "ワープ"),
     ("Warp Directional", "方向ワープ"),
+    ("Wavefront OBJ with MTL, textures alongside", "Wavefront OBJ（MTL付き）、テクスチャは別ファイル"),
     (
         "WebGPU isn't available in this browser, so TextureCraft runs on WebGL2: Rendering mode path traces on the CPU (slower) and large texture sets show at reduced resolution. A current Chrome, Edge or Safari has WebGPU.",
         "このブラウザーでは WebGPU を利用できないため、TextureCraft は WebGL2 で動作しています。レンダリングモードのパストレーシングは CPU で行われ (低速)、大きなテクスチャセットは解像度を下げて表示されます。最新の Chrome、Edge、Safari は WebGPU に対応しています。",

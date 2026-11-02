@@ -51,7 +51,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export Mesh...",
             ["File"],
             None,
-            "{path: .obj, .glb, .usda, .usdc or .usdz file, format?: obj|glb|usda|usdc|usdz (default: from the extension, else obj); usda/usdc write their textures next to the file} → {path, textures?}",
+            "{path: .obj, .glb, .usda, .usdc or .usdz file, format?: obj|glb|usda|usdc|usdz (default: from the extension, else obj); obj writes its .mtl and textures, usda/usdc their textures, next to the file} → {path, textures?}",
             always,
             export_mesh
         ),
@@ -97,11 +97,20 @@ impl Session {
         texturecraft_formats::obj_bytes(&self.source_mesh(), &self.doc.project.name)
     }
 
+    /// [`Session::mesh_obj_bytes`] with an MTL material library and each material's maps (like
+    /// [`Session::mesh_usd`]'s), to write next to it.
+    pub fn mesh_obj_with_mtl(&mut self) -> Result<(Vec<u8>, texturecraft_formats::NamedFiles)> {
+        // shortcut: UV-tiled sets get no maps (the OBJ keeps the mesh's UDIM UVs and an MTL map is
+        // one image); their tiles export through Export textures with `$udim` names.
+        let files = self.material_files(texturecraft_formats::usd_export_options(), false)?;
+        Ok(texturecraft_formats::obj_with_mtl(&self.source_mesh(), &self.doc.project.name, &files))
+    }
+
     /// The working mesh as binary glTF with each material's textures (from its texture set's
     /// composite, through the texture export pipeline) embedded. glTF has no UV tiles: a
     /// UV-tiled set embeds its tile atlas, with the mesh's UVs in atlas space.
     pub fn mesh_glb_bytes(&mut self) -> Result<Vec<u8>> {
-        let files = self.material_files(texturecraft_formats::glb_export_options())?;
+        let files = self.material_files(texturecraft_formats::glb_export_options(), true)?;
         let textures: Vec<_> = files.into_iter().map(texturecraft_formats::GlbTextures::from_files).collect();
         texturecraft_formats::glb_bytes(&self.mesh, &self.doc.project.name, &textures).map_err(fe)
     }
@@ -109,17 +118,18 @@ impl Session {
     /// The working mesh as USD with a UsdPreviewSurface per material (textures like
     /// [`Session::mesh_glb_bytes`]): usdz packages them, usda / usdc list them to write alongside.
     pub fn mesh_usd(&mut self, format: texturecraft_formats::UsdFormat) -> Result<texturecraft_formats::UsdExport> {
-        let files = self.material_files(texturecraft_formats::usd_export_options())?;
+        let files = self.material_files(texturecraft_formats::usd_export_options(), true)?;
         texturecraft_formats::usd_bytes(&self.mesh, &self.doc.project.name, &files, format).map_err(fe)
     }
 
-    /// Each material's texture set rendered with `opts` (as a tile atlas for UV-tiled sets).
-    fn material_files(&mut self, opts: ExportOptions) -> Result<Vec<Vec<ExportedFile>>> {
+    /// Each material's texture set rendered with `opts` (as a tile atlas for UV-tiled sets, or
+    /// nothing for them without `tiled`).
+    fn material_files(&mut self, opts: ExportOptions, tiled: bool) -> Result<Vec<Vec<ExportedFile>>> {
         let opts = ExportOptions { atlas: true, ..opts };
         (0..self.mesh.materials.len())
             .map(|m| match self.doc.project.texture_sets.iter().position(|t| t.material == m) {
-                Some(ts) => self.export_files(&[ts], &opts),
-                None => Ok(Vec::new()),
+                Some(ts) if tiled || self.doc.project.texture_sets.get(ts).is_some_and(|t| t.tile_grid().is_none()) => self.export_files(&[ts], &opts),
+                _ => Ok(Vec::new()),
             })
             .collect()
     }
@@ -524,8 +534,8 @@ fn export_mesh(s: &mut Session, p: &Value) -> Result<Value> {
 /// The mesh formats `file.exportMesh` writes.
 pub const MESH_EXPORT_FORMATS: [&str; 5] = ["obj", "glb", "usda", "usdc", "usdz"];
 
-/// A mesh export: the mesh file's path (with its extension) and bytes, and (usda, usdc) the
-/// textures it references, by file name, to write next to it.
+/// A mesh export: the mesh file's path (with its extension) and bytes, and (obj, usda, usdc) the
+/// files it references (textures, an OBJ's MTL), by file name, to write next to it.
 pub struct MeshExport {
     pub path: String,
     pub bytes: Vec<u8>,
@@ -556,7 +566,7 @@ impl Session {
                 let usd = self.mesh_usd(format)?;
                 (usd.bytes, usd.textures)
             }
-            _ => (self.mesh_obj_bytes(), Vec::new()),
+            _ => self.mesh_obj_with_mtl()?,
         };
         Ok(MeshExport { path, bytes, textures })
     }
@@ -601,6 +611,24 @@ mod tests {
         let base = dir.join("ball").display().to_string();
         let obj = crate::execute(&mut s, "file.exportMesh", &json!({ "path": base })).unwrap();
         assert!(obj["path"].as_str().unwrap().ends_with("ball.obj"));
+        // The OBJ names its MTL, which names every material and its maps, all written beside it.
+        let text = std::fs::read_to_string(obj["path"].as_str().unwrap()).unwrap();
+        assert!(text.lines().any(|l| l == "mtllib t.mtl"), "{}", &text[..120]);
+        let files: Vec<_> = obj["textures"].as_array().unwrap().iter().map(|f| std::path::PathBuf::from(f.as_str().unwrap())).collect();
+        assert!(files.iter().all(|f| f.is_file()));
+        let mtl = std::fs::read_to_string(&files[0]).unwrap();
+        assert!(files[0].ends_with("t.mtl"));
+        for m in &s.mesh.materials {
+            assert!(mtl.contains(&format!("newmtl {m}")) && text.contains(&format!("usemtl {m}")), "{m}");
+        }
+        for key in ["map_Kd", "map_Pr", "map_Pm", "norm"] {
+            assert_eq!(mtl.lines().filter(|l| l.starts_with(&format!("{key} "))).count(), s.mesh.materials.len(), "{key}");
+        }
+        for f in &files[1..] {
+            assert!(mtl.contains(f.file_name().unwrap().to_str().unwrap()), "{f:?} is used");
+        }
+        let back = texturecraft_formats::import_mesh_bytes("ball.obj", text.as_bytes()).unwrap();
+        assert_eq!(back.mesh.triangle_count(), s.mesh.triangle_count());
         let glb = crate::execute(&mut s, "file.exportMesh", &json!({ "path": base, "format": "glb" })).unwrap();
         let bytes = std::fs::read(glb["path"].as_str().unwrap()).unwrap();
         let back = texturecraft_formats::import_mesh_bytes("ball.glb", &bytes).unwrap();

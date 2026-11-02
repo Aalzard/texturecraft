@@ -133,8 +133,8 @@ pub struct ReimportParams {
 pub struct MeshExportParams {
     /// Output file relative to the write root; the format's extension is appended if missing.
     pub path: String,
-    /// obj, glb (textures embedded), usda, usdc (textures written next to it) or usdz (textures
-    /// packaged); default: from the extension, else obj.
+    /// obj (MTL and textures written next to it), glb (textures embedded), usda, usdc (textures
+    /// written next to it) or usdz (textures packaged); default: from the extension, else obj.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
 }

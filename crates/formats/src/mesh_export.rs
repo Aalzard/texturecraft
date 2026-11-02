@@ -1,5 +1,5 @@
 //! Mesh export of the working mesh: Wavefront OBJ (positions, UVs, normals, one group per
-//! submesh), binary glTF (one primitive per submesh, a metallic-roughness material per
+//! submesh; with an MTL material library and its maps, or alone), binary glTF (one primitive per submesh, a metallic-roughness material per
 //! material with its textures embedded) and USD (usda / usdc / usdz, see [`usd`]).
 
 pub(crate) mod usd;
@@ -13,15 +13,57 @@ use texturecraft_core::{Channel, NormalFormat};
 use texturecraft_geom::glam::Vec3;
 use texturecraft_geom::{Mesh, SubMesh};
 
+use crate::export::sanitize_file_stem;
 use crate::presets::{GLTF_BASE_COLOR, GLTF_CLEARCOAT, GLTF_EMISSIVE, GLTF_NORMAL, GLTF_ORM, GLTF_SHEEN, gltf_pbr_maps};
 use crate::{ExportOptions, ExportPreset, ExportedFile, FileFormat, FormatError, Result};
 
-pub use usd::{UsdExport, UsdFormat, usd_bytes, usd_export_options};
+pub use usd::{NamedFiles, UsdExport, UsdFormat, usd_bytes, usd_export_options};
 
 /// The mesh as OBJ text (UV v flipped back to OBJ's bottom-up convention).
 pub fn obj_bytes(mesh: &Mesh, name: &str) -> Vec<u8> {
+    obj_text(mesh, name, None).into_bytes()
+}
+
+/// The mesh as OBJ with a material library: the OBJ (naming `<name>.mtl`) and the files to write
+/// next to it, the MTL first, then each material's maps (`textures[m]`, rendered with
+/// [`usd_export_options`], named like USD's). Roughness, metallic, normal and coat maps use the
+/// MTL PBR extension's keys.
+pub fn obj_with_mtl(mesh: &Mesh, name: &str, textures: &[Vec<ExportedFile>]) -> (Vec<u8>, NamedFiles) {
+    let stem = sanitize_file_stem(name);
+    let (maps, mut files) = usd::material_maps(mesh, &stem, textures);
+    let mut mtl = format!("# {name}, exported by TextureCraft\n");
+    for (material, maps) in mesh.materials.iter().zip(&maps) {
+        let _ = writeln!(mtl, "\nnewmtl {}\nKd 1 1 1", token(material));
+        for (slot, file) in maps {
+            let keys: &[&str] = match usd::SLOTS.get(*slot).map_or("", |s| s.0) {
+                "BaseColor" => &["map_Kd"],
+                "Roughness" => &["map_Pr"],
+                "Metallic" => &["map_Pm"],
+                // `norm` is the PBR extension's key; many tools read a normal map from `map_Bump`.
+                "Normal" => &["norm", "map_Bump"],
+                // The emissive map scales `Ke`.
+                "Emissive" => &["Ke 1 1 1\nmap_Ke"],
+                "Opacity" => &["map_d"],
+                "Clearcoat" => &["map_Pc"],
+                "ClearcoatRoughness" => &["map_Pcr"],
+                _ => &[],
+            };
+            for key in keys {
+                let _ = writeln!(mtl, "{key} {file}");
+            }
+        }
+    }
+    files.insert(0, (format!("{stem}.mtl"), mtl.into_bytes()));
+    (obj_text(mesh, name, Some(&format!("{stem}.mtl"))).into_bytes(), files)
+}
+
+fn obj_text(mesh: &Mesh, name: &str, mtllib: Option<&str>) -> String {
     let mut s = String::with_capacity(mesh.positions.len() * 96 + mesh.indices.len() * 12);
-    let _ = writeln!(s, "# {name}, exported by TextureCraft\no {}", token(name));
+    let _ = writeln!(s, "# {name}, exported by TextureCraft");
+    if let Some(lib) = mtllib {
+        let _ = writeln!(s, "mtllib {lib}");
+    }
+    let _ = writeln!(s, "o {}", token(name));
     for p in &mesh.positions {
         let _ = writeln!(s, "v {} {} {}", p.x, p.y, p.z);
     }
@@ -55,7 +97,7 @@ pub fn obj_bytes(mesh: &Mesh, name: &str) -> Vec<u8> {
             s.push('\n');
         }
     }
-    s.into_bytes()
+    s
 }
 
 /// The submeshes, or one covering the whole mesh when it has none.

@@ -201,7 +201,7 @@ impl Headless {
     }
 
     /// Export the working mesh to `path` (obj, glb, usda, usdc or usdz, from `format` or the
-    /// extension); usda and usdc write their textures next to it.
+    /// extension); obj writes its .mtl and textures, usda and usdc their textures, next to it.
     pub fn export_mesh(&mut self, path: &str, format: Option<&str>) -> Result<Value, AutomationError> {
         let out = self.session.mesh_export(path, format)?;
         let dir = Path::new(&out.path).parent().and_then(|d| d.to_str()).filter(|d| !d.is_empty()).unwrap_or(".");
