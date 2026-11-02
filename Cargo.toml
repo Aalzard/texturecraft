@@ -32,6 +32,11 @@ serde_json = "1"
 glam = { version = "0.30", features = ["serde", "bytemuck"] }
 bytemuck = { version = "1", features = ["derive"] }
 rayon = "1"
+# Text alphas: shaping and glyph outlines, the versions egui's text layout already builds.
+harfrust = "0.12"
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+# The UI's built-in fonts (Ubuntu Light, Hack): text alphas fall back to them without system fonts.
+epaint_default_fonts = "0.37"
 log = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "tiff", "exr", "hdr", "bmp", "webp"] }
 half = "2"
@@ -40,7 +45,7 @@ eframe = { version = "0.37", default-features = false }
 egui = "0.37"
 wgpu = "30"
 rfd = "0.17"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names", "KHR_materials_emissive_strength"] }
 tobj = { version = "4", default-features = false }
 flate2 = "1"
@@ -54,6 +59,8 @@ schemars = "1"
 base64 = "0.22"
 cap-std = "4"
 getrandom = "0.3"
+# Opening the control token file without following symlinks, and the effective uid (Unix).
+rustix = { version = "1", default-features = false, features = ["std", "fs", "process"] }
 # Shared Craft egui components (widget palette, icon buttons, panel docking): storytold/craft-libs,
 # MIT OR Apache-2.0, pinned to one rev.
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "f8f8829cc7be65d466d687dae381d1ca60e31242", features = ["serde"] }

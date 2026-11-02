@@ -344,19 +344,27 @@ fn usda_usdc_and_usdz_round_trip_with_textures() {
             && !text.contains("Red_Clearcoat"),
         "a coat exports with its roughness; no coat (black) drops both"
     );
-    round_trip(&m, UsdFormat::Usdc, "usdc", &textures);
+    // The primvar reader's varname is a string (usdchecker --arkit refuses a token), in both encodings.
+    assert!(text.contains("string inputs:varname = \"st\""), "{text}");
+    let usdc = round_trip(&m, UsdFormat::Usdc, "usdc", &textures);
+    let layer = super::usdc::read(&usdc, &mut super::Budget::new()).unwrap();
+    let varnames: Vec<&super::Prop> = layer.prims.iter().filter_map(|p| p.props.get("inputs:varname")).collect();
+    assert!(!varnames.is_empty());
+    for v in varnames {
+        assert_eq!((v.type_name.as_str(), v.value.clone()), ("string", Some(super::Val::Tok(vec!["st".into()]))));
+    }
     let usdz = round_trip(&m, UsdFormat::Usdz, "usdz", &textures);
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&usdz)).unwrap();
-    let names: Vec<String> = zip.file_names().map(str::to_string).collect();
+    let names: Vec<String> = zip.file_names().map(|n| n.unwrap().into_owned()).collect();
     assert_eq!(names.first().map(String::as_str), Some("Test_scene.usdc"));
     assert_eq!(names.len(), 1 + 7, "the layer and every non-black texture");
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).unwrap();
         assert_eq!(f.compression(), zip::CompressionMethod::Stored);
-        assert_eq!(f.data_start() % 64, 0, "usdz entries are 64-byte aligned");
+        assert_eq!(f.data_start().unwrap() % 64, 0, "usdz entries are 64-byte aligned");
         let mut data = Vec::new();
         f.read_to_end(&mut data).unwrap();
-        if f.name().ends_with(".png") {
+        if f.name().unwrap().ends_with(".png") {
             assert!(image::load_from_memory(&data).is_ok());
         }
     }

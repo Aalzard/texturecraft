@@ -14,11 +14,23 @@ pub fn dnd_release<T: std::any::Any + Send + Sync>(resp: &Response) -> Option<st
 }
 
 /// A labelled slider in two rows: "Label ........ value" over a slim track with a round knob.
-/// Returns the response of the track (`.changed()` when dragged, `.drag_stopped()` at the end).
+/// Returns the response of the track (`.changed()` while dragged); for a value that is applied
+/// once the edit is done, use [`slider_edit`].
 pub fn slider(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) -> Response {
+    slider_inner(ui, label, value, range, decimals).0
+}
+
+/// [`slider`] for a value re-read from the document every frame: true on the frame an edit is
+/// done (a drag released, a click on the track, a typed value), with `value` holding the result.
+pub fn slider_edit(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) -> bool {
+    slider_inner(ui, label, value, range, decimals).1
+}
+
+fn slider_inner(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) -> (Response, bool) {
     let tk = Tokens::get(ui.ctx());
     let (lo, hi) = (*range.start(), *range.end());
     let w = ui.available_width();
+    let mut done = false;
     ui.horizontal(|ui| {
         ui.label(RichText::new(label).color(tk.text));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -29,6 +41,7 @@ pub fn slider(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeI
                 && v.is_finite()
             {
                 *value = v.clamp(lo, hi);
+                done = true;
             }
         });
     });
@@ -38,14 +51,22 @@ pub fn slider(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeI
     {
         let t = ((p.x - rect.left() - 5.0) / (rect.width() - 10.0).max(1.0)).clamp(0.0, 1.0);
         let v = lo + (hi - lo) * t;
+        // Remembered for the release frame, where the pointer no longer drags.
+        ui.data_mut(|d| d.insert_temp(resp.id, v));
         if (v - *value).abs() > f32::EPSILON {
             *value = v;
             resp.mark_changed();
         }
     }
+    if resp.drag_stopped() || resp.clicked() {
+        if let Some(v) = ui.data_mut(|d| d.remove_temp::<f32>(resp.id)) {
+            *value = v;
+        }
+        done = true;
+    }
     let t = if hi > lo { ((*value - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 };
     track(ui, &resp, rect.left() + 5.0..=rect.right() - 5.0, rect.center().y, t, 2.0, 4.5);
-    resp
+    (resp, done)
 }
 
 /// A small inline slider for the top tool bar: "Label value" above a short track.
@@ -82,6 +103,31 @@ fn track(ui: &Ui, resp: &Response, x: std::ops::RangeInclusive<f32>, y: f32, t: 
     p.line_segment([egui::pos2(x0, y), egui::pos2(xk, y)], Stroke::new(width, tk.accent));
     let ring = if resp.hovered() || resp.dragged() { tk.text_strong } else { tk.text };
     p.circle(egui::pos2(xk, y), knob, tk.panel, Stroke::new(1.5, ring));
+}
+
+/// A histogram of `counts` (buckets over 0..1, scaled to the fullest) in a field-colored well
+/// the width of the panel, the part of 0..1 outside `range` dimmed.
+pub fn histogram(ui: &mut Ui, counts: &[u32], range: (f32, f32)) -> Response {
+    let tk = Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 56.0), Sense::hover());
+    let p = ui.painter_at(rect);
+    p.rect(rect, CornerRadius::same(tk.radius), tk.field, Stroke::new(1.0, tk.field_border), egui::StrokeKind::Inside);
+    let inner = rect.shrink(3.0);
+    let max = counts.iter().copied().max().unwrap_or(0).max(1) as f32;
+    let w = inner.width() / counts.len().max(1) as f32;
+    for (i, c) in counts.iter().enumerate() {
+        let h = inner.height() * *c as f32 / max;
+        let x = inner.left() + i as f32 * w;
+        p.rect_filled(egui::Rect::from_min_max(egui::pos2(x, inner.bottom() - h), egui::pos2(x + w, inner.bottom())), 0.0, tk.text_dim);
+    }
+    let x = |t: f32| inner.left() + inner.width() * t.clamp(0.0, 1.0);
+    let shade = tk.field.gamma_multiply(0.7);
+    p.rect_filled(egui::Rect::from_x_y_ranges(inner.left()..=x(range.0), inner.y_range()), 0.0, shade);
+    p.rect_filled(egui::Rect::from_x_y_ranges(x(range.1)..=inner.right(), inner.y_range()), 0.0, shade);
+    for t in [range.0, range.1] {
+        p.line_segment([egui::pos2(x(t), inner.top()), egui::pos2(x(t), inner.bottom())], Stroke::new(1.0, tk.accent));
+    }
+    resp
 }
 
 /// One line of `text` cut with "…" to fit `max_width`, for list rows that shrink with their panel.
@@ -187,13 +233,88 @@ pub fn color_swatch(ui: &mut Ui, id: &str, linear: &mut [f32; 3], width: f32) ->
     let mut changed = false;
     // Open state lives in memory (`toggle_id` above); `from_response` alone shows it always.
     egui::Popup::from_response(&resp).id(popup).open_memory(None).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        if egui::color_picker::color_picker_color32(ui, &mut c, egui::color_picker::Alpha::Opaque) {
+        // Wider than the R, G, B row at any value, so the popup keeps one size and place.
+        if color_picker(ui, popup.with("picker"), &mut c, 275.0) {
             let lin = [c.r(), c.g(), c.b()].map(|v| texturecraft_engine::texel::srgb_to_linear(v as f32 / 255.0));
             *linear = lin;
             changed = true;
         }
     });
     changed
+}
+
+/// A color picker `width` wide: R, G, B (sRGB 0–255) with a copy button, a saturation/value
+/// square and a hue strip. Returns true when the color changed.
+fn color_picker(ui: &mut Ui, id: egui::Id, c: &mut Color32, width: f32) -> bool {
+    use egui::ecolor::{hsv_from_rgb, rgb_from_hsv};
+    let tk = Tokens::get(ui.ctx());
+    let mut srgb = [c.r(), c.g(), c.b()];
+    let hsv_of = |srgb: [u8; 3]| hsv_from_rgb(srgb.map(|v| v as f32 / 255.0));
+    // Remembered with the color it was for, so hue and saturation survive black, white and grays.
+    let (mut h, mut s, mut v) = ui.data(|d| d.get_temp::<(Color32, (f32, f32, f32))>(id)).filter(|(k, _)| k == c).map_or_else(|| hsv_of(srgb), |(_, hsv)| hsv);
+    let mut typed = false;
+    let mut dragged = false;
+    ui.horizontal(|ui| {
+        for (x, prefix) in srgb.iter_mut().zip(["R ", "G ", "B "]) {
+            typed |= ui.add(egui::DragValue::new(x).speed(0.5).prefix(prefix)).changed();
+        }
+        if icon_button(ui, egui_phosphor::regular::COPY, crate::i18n::tr("Copy RGB values"), false, 20.0).clicked() {
+            ui.copy_text(format!("{}, {}, {}", srgb[0], srgb[1], srgb[2]));
+        }
+    });
+    if typed {
+        (h, s, v) = hsv_of(srgb);
+    }
+    let border = Stroke::new(1.0, tk.field_border);
+    // Saturation across, value up.
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, width), Sense::click_and_drag());
+    if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.clicked()) {
+        (s, v) = (((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0), 1.0 - ((p.y - rect.top()) / rect.height()).clamp(0.0, 1.0));
+        dragged = true;
+    }
+    gradient(ui.painter(), rect, |x, y| rgb_from_hsv((h, x, 1.0 - y)));
+    ui.painter().rect_stroke(rect, 0.0, border, egui::StrokeKind::Inside);
+    let at = rect.lerp_inside(vec2(s, 1.0 - v));
+    ui.painter().circle_stroke(at, 5.0, Stroke::new(2.0, Color32::WHITE));
+    ui.painter().circle_stroke(at, 6.5, Stroke::new(1.0, Color32::BLACK));
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 16.0), Sense::click_and_drag());
+    if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.clicked()) {
+        h = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+        dragged = true;
+    }
+    gradient(ui.painter(), rect, |x, _| rgb_from_hsv((x, 1.0, 1.0)));
+    ui.painter().rect_stroke(rect, 0.0, border, egui::StrokeKind::Inside);
+    let x = rect.left() + rect.width() * h;
+    ui.painter().rect_stroke(egui::Rect::from_x_y_ranges(x - 2.0..=x + 2.0, rect.y_range()), 1.0, Stroke::new(1.5, Color32::WHITE), egui::StrokeKind::Middle);
+    if dragged {
+        srgb = rgb_from_hsv((h, s, v)).map(|x| (x * 255.0 + 0.5) as u8);
+    }
+    let next = Color32::from_rgb(srgb[0], srgb[1], srgb[2]);
+    ui.data_mut(|d| d.insert_temp(id, (next, (h, s, v))));
+    let changed = next != *c;
+    *c = next;
+    changed
+}
+
+/// Fill `rect` with `rgb(x, y)` (sRGB 0..1 over 0..1 across and down), as a shaded mesh.
+fn gradient(painter: &egui::Painter, rect: egui::Rect, rgb: impl Fn(f32, f32) -> [f32; 3]) {
+    const N: u32 = 24;
+    let mut mesh = egui::Mesh::default();
+    for j in 0..=N {
+        for i in 0..=N {
+            let (x, y) = (i as f32 / N as f32, j as f32 / N as f32);
+            let [r, g, b] = rgb(x, y).map(|c| (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            mesh.colored_vertex(rect.lerp_inside(vec2(x, y)), Color32::from_rgb(r, g, b));
+        }
+    }
+    for j in 0..N {
+        for i in 0..N {
+            let k = j * (N + 1) + i;
+            mesh.add_triangle(k, k + 1, k + N + 1);
+            mesh.add_triangle(k + 1, k + N + 2, k + N + 1);
+        }
+    }
+    painter.add(mesh);
 }
 
 /// Panel title row with optional trailing content.

@@ -1018,21 +1018,12 @@ impl Renderer {
         let vb = mk("tc_vb", bytemuck::cast_slice(&verts), wgpu::BufferUsages::VERTEX);
         let ib = mk("tc_ib", &idx_bytes, wgpu::BufferUsages::INDEX);
         let draws: Vec<(u32, u32, usize)> = mesh.submeshes.iter().map(|s| (s.start, s.count, s.material)).collect();
-        // UV edges (each shared edge once) per material, for the 2D view wireframe.
+        // Mesh edges per material (polygons, not their triangles), for the wireframes.
         let mut line_idx: Vec<u32> = Vec::new();
         let mut line_draws = Vec::new();
-        for m in 0..mesh.materials.len().max(1) {
+        for (m, edges) in mesh.wire_edges().into_iter().enumerate() {
             let start = line_idx.len() as u32;
-            let mut seen = std::collections::HashSet::new();
-            for t in mesh.triangles_of(m) {
-                let Some(v) = mesh.tri(t) else { continue };
-                for (a, b) in [(v[0], v[1]), (v[1], v[2]), (v[2], v[0])] {
-                    let key = (a.min(b), a.max(b));
-                    if seen.insert(key) {
-                        line_idx.extend_from_slice(&[key.0 as u32, key.1 as u32]);
-                    }
-                }
-            }
+            line_idx.extend(edges.into_iter().flat_map(|(a, b)| [a, b]));
             line_draws.push((start, line_idx.len() as u32 - start, m));
         }
         let lines = mk("tc_lines", bytemuck::cast_slice(&line_idx), wgpu::BufferUsages::INDEX);
@@ -1593,7 +1584,7 @@ impl Renderer {
             b: [fx(s.vignette), fx(s.sharpen), fx(s.grain), BLOOM_THRESHOLD],
             c: dof_c,
             d: sss_d,
-            e: [flag(cam.ortho), 0.0, 0.0, 0.0],
+            e: [flag(cam.ortho), sample as f32, 0.0, 0.0],
         };
         let Some(v) = self.targets(device, frame.view_id, frame.size, bloom, fx_on, refraction) else { return };
         queue.write_buffer(&v.globals, 0, bytemuck::bytes_of(&raw));

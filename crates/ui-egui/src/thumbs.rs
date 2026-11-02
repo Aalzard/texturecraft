@@ -6,7 +6,8 @@ use std::collections::HashMap;
 
 use egui::{Color32, ColorImage, Painter, Pos2, Rect, TextureHandle, TextureOptions};
 use texturecraft_engine::core::ProceduralKind;
-use texturecraft_engine::paint::{BrushAlpha, alphas};
+use texturecraft_engine::paint::presets::BrushPreset;
+use texturecraft_engine::paint::{BrushAlpha, BrushSettings, Shape, alphas};
 use texturecraft_engine::preview::{self, Sample};
 use texturecraft_engine::texel::linear_to_srgb;
 
@@ -17,7 +18,8 @@ const SPHERE_PX: usize = 72;
 
 #[derive(Default)]
 pub struct Thumbs {
-    /// Shelf thumbnails by key (`mat:<id>`, `mask:<id>`, `filter:<id>`, `proc:<kind>`, `alpha:<id>`).
+    /// Shelf thumbnails by key (`mat:<id>`, `mask:<id>`, `filter:<id>`, `proc:<kind>`, `alpha:<id>`,
+    /// `brush:<id>`).
     shelf: HashMap<String, TextureHandle>,
     images: HashMap<String, TextureHandle>,
     /// (frame, thumbnails rendered in it).
@@ -114,11 +116,18 @@ impl Thumbs {
             return t.clone();
         }
         let n = 64usize;
+        // Letterboxed to keep its proportions, over black where it is transparent.
+        let aspect = img.width as f32 / img.height.max(1) as f32;
+        let (sx, sy) = if aspect >= 1.0 { (1.0, aspect) } else { (1.0 / aspect.max(1e-6), 1.0) };
         let mut ci = ColorImage::filled([n, n], Color32::BLACK);
         for y in 0..n {
             for x in 0..n {
-                let s = img.sample((x as f32 + 0.5) / n as f32, (y as f32 + 0.5) / n as f32);
-                let enc = |v: f32| if img.srgb { (v.clamp(0.0, 1.0) * 255.0) as u8 } else { (linear_to_srgb(v) * 255.0) as u8 };
+                let (u, v) = (((x as f32 + 0.5) / n as f32 - 0.5) * sx + 0.5, ((y as f32 + 0.5) / n as f32 - 0.5) * sy + 0.5);
+                if !((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)) {
+                    continue;
+                }
+                let s = img.sample(u, v);
+                let enc = |c: f32| if img.srgb { (c.clamp(0.0, 1.0) * s[3].clamp(0.0, 1.0) * 255.0) as u8 } else { (linear_to_srgb(c * s[3]) * 255.0) as u8 };
                 ci.pixels[y * n + x] = Color32::from_rgb(enc(s[0]), enc(s[1]), enc(s[2]));
             }
         }
@@ -192,6 +201,54 @@ impl Thumbs {
             ColorImage::new([n, n], a.render(n, 2).into_iter().map(|v| Color32::from_gray((v * 255.0 + 0.5) as u8)).collect())
         })
     }
+
+    /// A brush preset's stroke along an S curve.
+    pub fn brush_preset(&mut self, ctx: &egui::Context, p: &BrushPreset) -> Option<TextureHandle> {
+        self.shelf(ctx, format!("brush:{}", p.id), || stroke_preview(&p.applied(&BrushSettings::default()), 64))
+    }
+}
+
+/// `b`'s stamps (shape, spacing, flow, angle, path following, jitters) along an S curve across
+/// an `n`-pixel square, white on black.
+fn stroke_preview(b: &BrushSettings, n: usize) -> ColorImage {
+    let library = b.alpha_library.as_deref().and_then(alphas::find).map(alphas::LibraryAlpha::image);
+    let radius = n as f32 * 0.11;
+    let shape = Shape { alpha: b.alpha, image: None, library, level: 0 }.at_radius(radius);
+    let curve = |t: f32| (n as f32 * (0.15 + 0.7 * t), n as f32 * (0.5 - 0.22 * (t * std::f32::consts::TAU).sin()));
+    let mut cover = vec![0f32; n * n];
+    // Deterministic jitter per stamp.
+    let rnd = |i: u32, k: u32| (i.wrapping_mul(0x9E37_79B9) ^ k.wrapping_mul(0x85EB_CA6B)).wrapping_mul(0xC2B2_AE35) as f32 / u32::MAX as f32;
+    let step = (b.spacing * 2.0 * radius).max(0.5);
+    let (mut t, mut travelled, mut i) = (0.0f32, step, 0u32);
+    let mut last = curve(0.0);
+    while t <= 1.0 && i < 2000 {
+        let p = curve(t);
+        travelled += (p.0 - last.0).hypot(p.1 - last.1);
+        last = p;
+        t += 0.002;
+        if travelled < step {
+            continue;
+        }
+        travelled = 0.0;
+        i += 1;
+        let r = radius * (1.0 - b.jitter_size * rnd(i, 1));
+        let tangent = if b.follow_path { (curve(t).1 - p.1).atan2(curve(t).0 - p.0) } else { 0.0 };
+        let angle = b.angle.to_radians() + tangent + b.jitter_angle * std::f32::consts::TAU * rnd(i, 2);
+        let (cx, cy) = (p.0 + b.jitter_position * radius * (rnd(i, 3) * 2.0 - 1.0), p.1 + b.jitter_position * radius * (rnd(i, 4) * 2.0 - 1.0));
+        let flow = b.flow * (1.0 - b.jitter_flow * rnd(i, 5));
+        let (sin, cos) = angle.sin_cos();
+        let (x0, x1) = ((cx - r).floor().max(0.0) as usize, ((cx + r).ceil() as usize).min(n));
+        let (y0, y1) = ((cy - r).floor().max(0.0) as usize, ((cy + r).ceil() as usize).min(n));
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let (dx, dy) = ((x as f32 + 0.5 - cx) / r, (cy - y as f32 - 0.5) / r);
+                let a = shape.sample(dx * cos + dy * sin, -dx * sin + dy * cos, b.hardness, i) * flow;
+                let c = &mut cover[y * n + x];
+                *c = 1.0 - (1.0 - *c) * (1.0 - a.clamp(0.0, 1.0));
+            }
+        }
+    }
+    ColorImage::new([n, n], cover.into_iter().map(|v| Color32::from_gray((v * b.opacity * 255.0 + 0.5) as u8)).collect())
 }
 
 /// A small shaded sphere drawn with a vertex-colored mesh (layer thumbnails, previews).

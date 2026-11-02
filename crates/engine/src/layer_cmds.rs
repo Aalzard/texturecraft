@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set fill source",
             [],
             None,
-            "{layer? | effect?: content fill effect id, channel, color?|value?|procedural?: kind, scale?, seed?, contrast?, balance?, invert?, low?, high?|image?|anchor?: anchor effect id, anchorChannel?, enabled?}",
+            "{layer? | effect?: content fill effect id, channel, color?|value?|procedural?: kind, scale?, seed?, contrast?, balance?, invert?, low?, high?|image?|anchor?: anchor effect id, anchorChannel?, enabled?, solo?: true (this channel on, every other one off)}",
             has_layer,
             fill_set
         ),
@@ -303,7 +303,9 @@ fn fill_mut(s: &mut Session, target: FillTarget) -> Result<&mut Fill> {
 fn fill_set(s: &mut Session, p: &Value) -> Result<Value> {
     let target = fill_target(s, p, "layer.fill.set")?;
     let ch = channel_param("layer.fill.set", p, "channel")?.ok_or_else(|| bad("layer.fill.set", "`channel` is required"))?;
-    let enabled = boolp(p, "enabled");
+    // `solo`: this channel on, every other one off.
+    let solo = boolp(p, "solo") == Some(true);
+    let enabled = if solo { Some(true) } else { boolp(p, "enabled") };
     let source = if let Some(kind) = strp(p, "procedural") {
         let kind = ProceduralKind::parse(kind).ok_or_else(|| bad("layer.fill.set", format!("unknown procedural `{kind}`")))?;
         let mut pr = Procedural::new(kind);
@@ -336,7 +338,7 @@ fn fill_set(s: &mut Session, p: &Value) -> Result<Value> {
     } else if enabled.is_some() {
         None
     } else {
-        return Err(bad("layer.fill.set", "give `color`, `value`, `procedural`, `image`, `anchor` or `enabled`"));
+        return Err(bad("layer.fill.set", "give `color`, `value`, `procedural`, `image`, `anchor`, `enabled` or `solo`"));
     };
     s.edit("Set fill", |s| {
         let f = fill_mut(s, target)?;
@@ -348,6 +350,9 @@ fn fill_set(s: &mut Session, p: &Value) -> Result<Value> {
             FillTarget::Effect(_) => {
                 let src = source.unwrap_or_else(|| f.source(ch));
                 f.sources.insert(ch, src);
+                if solo {
+                    f.sources.retain(|c, _| *c == ch);
+                }
             }
             FillTarget::Layer(id) => {
                 if let Some(src) = source {
@@ -358,6 +363,9 @@ fn fill_set(s: &mut Session, p: &Value) -> Result<Value> {
                     l.channels.remove(&ch);
                 } else {
                     l.channels.entry(ch).or_default();
+                }
+                if solo {
+                    l.channels.retain(|c, _| *c == ch);
                 }
             }
         }

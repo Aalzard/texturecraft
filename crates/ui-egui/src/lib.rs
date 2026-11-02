@@ -78,6 +78,8 @@ pub struct TextureCraftApp {
     pub fps: f32,
     /// User smart materials found in the library folder (refreshed on demand).
     pub library: Option<Vec<std::path::PathBuf>>,
+    /// User brush presets found in the brushes folder (refreshed on demand).
+    pub brushes: Option<Vec<std::path::PathBuf>>,
     /// Rendering mode's path tracer.
     pub render: render_mode::RenderView,
     /// Smoothed CPU time spent building the UI per frame (ms).
@@ -132,6 +134,7 @@ impl TextureCraftApp {
             ui_ms: 0.0,
             profiler: profile::Profiler::default(),
             library: None,
+            brushes: None,
             render: render_mode::RenderView::default(),
             last_paint_point: None,
             placing_decal: None,
@@ -378,7 +381,10 @@ impl eframe::App for TextureCraftApp {
         self.autosave(now);
         i18n::set_language(&self.ui.prefs.language);
         #[cfg(target_arch = "wasm32")]
-        keymap::sync_captured(&self.ui.keymap);
+        {
+            keymap::sync_captured(&self.ui.keymap);
+            web_files::sync_unsaved(self);
+        }
         self.fonts.update(ctx, i18n::current().code, self.ui.windows.settings);
         menus::shortcuts(self, ctx);
         profile::drive(self, ctx);

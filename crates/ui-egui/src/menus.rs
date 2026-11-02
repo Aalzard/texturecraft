@@ -117,6 +117,11 @@ pub fn implemented(id: &str) -> bool {
 
 /// Invoke a menu item (menus, shortcuts, palette, control channel `ui.menu.invoke`).
 pub fn invoke(app: &mut TextureCraftApp, ctx: &egui::Context, id: &str) {
+    if matches!(id, "ui.newProject" | "file.open" | "file.close" | "project.sample")
+        && crate::windows::ask_to_save(app, crate::state::Unsaved::Command(id.into()))
+    {
+        return;
+    }
     if let Some(panel) = crate::docking::view_panel(id) {
         app.ui.dock.toggle(panel);
         return;
@@ -255,12 +260,13 @@ fn menu_item(app: &mut TextureCraftApp, ctx: &egui::Context, ui: &mut egui::Ui, 
 /// plus the fixed brush keys.
 /// Keys pressed in a floating panel's own OS window run the shortcuts the main window's keys do.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn forwarded_shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context, events: Vec<egui::Event>, _modifiers: Modifiers) {
+pub fn forwarded_shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context, events: Vec<egui::Event>, held: Modifiers) {
     if crate::keymap::capturing(ctx) {
         return;
     }
     let active = crate::keymap::active(&app.ui.keymap);
     for event in events {
+        let event = clipboard_key(&event, held).unwrap_or(event);
         let egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } = event else { continue };
         let Some((id, _)) = active.iter().find(|(_, sc)| sc.logical_key == key && modifiers.matches_logically(sc.modifiers)) else { continue };
         invoke(app, ctx, id);
@@ -271,6 +277,10 @@ pub fn shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context) {
     if crate::keymap::capturing(ctx) || (ctx.memory(|m| m.focused().is_some()) && ctx.egui_wants_keyboard_input()) {
         return;
     }
+    ctx.input_mut(|i| {
+        let keys: Vec<_> = i.events.iter().filter_map(|e| clipboard_key(e, i.modifiers)).collect();
+        i.events.extend(keys);
+    });
     if !ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. }))) {
         return;
     }
@@ -295,6 +305,25 @@ pub fn shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context) {
         }
     });
     for id in fire {
+        if matches!(id, "layer.copy" | "layer.cut")
+            && let Some(layer) = app.session.selected_layer().and_then(|l| app.session.doc.project.layers.get(&l))
+        {
+            // Ctrl+V reaches the app only while the system clipboard holds text or an image.
+            ctx.copy_text(layer.name.clone());
+        }
         invoke(app, ctx, id);
     }
+}
+
+/// The desktop and web shells turn Ctrl+C, Ctrl+X and Ctrl+V (and Ctrl+Insert, Shift+Delete,
+/// Shift+Insert) into clipboard events instead of key presses. Outside a text field they are the
+/// shortcuts bound to Ctrl+C, Ctrl+X and Ctrl+V (copy, cut and paste a layer by default).
+fn clipboard_key(event: &egui::Event, held: Modifiers) -> Option<egui::Event> {
+    let key = match event {
+        egui::Event::Copy => Key::C,
+        egui::Event::Cut => Key::X,
+        egui::Event::Paste(_) | egui::Event::PasteImage(_) => Key::V,
+        _ => return None,
+    };
+    Some(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: held | Modifiers::COMMAND })
 }

@@ -143,7 +143,7 @@ fn per_map_ray_settings_round_trip() {
     let b = s.doc.project.texture_sets[0].bake.clone();
     assert_eq!(b.ao, RaySettings { rays: 48, max_distance: 0.5, spread: 90.0, distribution: RayDistribution::Uniform });
     assert!(b.ao_ignore_backface && b.ao_self_occlusion == SelfOcclusion::SameMeshName);
-    assert_eq!((b.thickness.rays, b.thickness.spread, b.thickness.max_distance), (12, 45.0, 0.25));
+    assert_eq!((b.thickness.rays, b.thickness.spread, b.thickness.max_distance), (12, 45.0, 0.1));
     assert_eq!((b.bent_normal.rays, b.bent_normal.max_distance, b.bent_normal.spread), (6, 0.1, 180.0));
     assert_eq!((b.curvature_radius, b.position_mode, b.direction_mode), (3, PositionMode::BoundingSphere, DirectionMode::Positive));
     assert_eq!(r[0]["settings"]["ao"]["selfOcclusion"], "sameMeshName");

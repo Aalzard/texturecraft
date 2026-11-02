@@ -35,10 +35,13 @@ USAGE:
       camera saved in the project (camera.add); --samples path traces it instead (Rendering
       mode), on the GPU when it has compute shaders, else (or with --cpu) on the CPU.
   texturecraft-cli new <mesh file | builtin:<id>> <out.tcraft> [--resolution <px>] [--sample]
-      New project; --sample bakes and applies a smart material to every texture set.
+      New project; --sample bakes and applies a smart material to every texture set. The
+      sample's mesh maps are baked at the resolution up to 1024 px (most of the file's size),
+      so a 2048 sample project is as large as a 1024 one.
   texturecraft-cli mcp [--bridge <port>] [--token <token>] [--read-root <dir>] [--write-root <dir>]
       MCP server on stdio: headless (file access only below the roots), or bridged to
-      `texturecraft --control <port>`.
+      `texturecraft --control <port>`. --automation-read-root / --automation-write-root are
+      the same as --read-root / --write-root (mcp and serve).
   texturecraft-cli serve [--port <port>] [--read-root <dir>] [--write-root <dir>]
       JSON lines ({\"id\",\"method\",\"params\"}) on stdio, or on 127.0.0.1:<port> with a token.
 
@@ -57,8 +60,8 @@ const SUBCOMMANDS: &[(&str, &[&str], &[&str])] = &[
     ("export", &["--preset", "--format", "--padding", "--size"], &[]),
     ("render", &["--size", "--view", "--camera", "--yaw", "--pitch", "--samples", "--bounces"], &["--cpu"]),
     ("new", &["--resolution"], &["--sample"]),
-    ("mcp", &["--bridge", "--token", "--read-root", "--write-root"], &[]),
-    ("serve", &["--port", "--read-root", "--write-root"], &[]),
+    ("mcp", &["--bridge", "--token", "--read-root", "--write-root", "--automation-read-root", "--automation-write-root"], &[]),
+    ("serve", &["--port", "--read-root", "--write-root", "--automation-read-root", "--automation-write-root"], &[]),
 ];
 
 struct Args {
@@ -367,7 +370,9 @@ fn new(a: &Args) -> R {
 }
 
 fn workspace(a: &Args) -> Result<Filesystem, String> {
-    let (r, w) = (a.get("--read-root").map(Path::new), a.get("--write-root").map(Path::new));
+    // `--automation-*-root` is the spelling the other crafting apps use.
+    let root = |k: &str| a.get(&format!("--automation-{k}")).or_else(|| a.get(&format!("--{k}"))).map(Path::new);
+    let (r, w) = (root("read-root"), root("write-root"));
     if r.is_none() && w.is_none() {
         return Ok(Filesystem::Denied);
     }
@@ -396,13 +401,16 @@ fn serve(a: &Args) -> R {
     match a.get("--port") {
         None => rpc::serve_lines(&h, std::io::stdin().lock(), std::io::stdout().lock()).map_err(s),
         Some(p) => {
-            let port = port_of(p)?;
-            let (token, file) = server_token(port).map_err(s)?;
-            rpc::serve_tcp(port, h, token, |addr| match file {
+            // Bind first: a port in use must not replace its server's token file, and port 0's
+            // token file is named after the port actually picked.
+            let listener = rpc::bind_tcp(port_of(p)?).map_err(s)?;
+            let addr = listener.local_addr().map_err(s)?;
+            let (token, file) = server_token(addr.port()).map_err(s)?;
+            match file {
                 Some(f) => eprintln!("texturecraft-cli: serving on {addr}; token in {}", f.display()),
                 None => eprintln!("texturecraft-cli: serving on {addr}; token from TEXTURECRAFT_CONTROL_TOKEN"),
-            })
-            .map_err(s)
+            }
+            rpc::serve_listener(listener, h, token).map_err(s)
         }
     }
 }

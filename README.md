@@ -48,7 +48,7 @@
 <br>
 
 <p align="center">
-  <img src="docs/images/texturecraft-workspace.png" alt="The TextureCraft workspace: the material library on the left; the 3D viewport and the 2D UV view of a material ball in chipped red paint with grime and a hand-painted gold stripe, on a rusted iron base; and the texture set list, layer stack and brush properties on the right" width="100%">
+  <img src="docs/images/texturecraft-workspace.png" alt="The TextureCraft workspace: the material library on the left; the 3D viewport and the 2D UV view of a 1970s portable TV in aged cream plastic with a hand-drawn crayon flower; and the texture set list, the layer stack with its Crayon doodle and Wear and dirt folders, and the fill layer properties on the right" width="100%">
   <br><sub><b>The workspace</b>: asset shelf, 3D viewport, 2D UV view, texture sets, layer stack and properties</sub>
 </p>
 
@@ -73,7 +73,7 @@
 <table>
 <tr>
 <td width="50%" valign="top">
-  <img src="docs/images/texturecraft-bake.png" alt="Bake mode: the texture sets and mesh map bakers on the left, the common bake parameters below them, and the Bake selected textures button under the viewport" width="100%">
+  <img src="docs/images/texturecraft-bake.png" alt="Bake mode on the portable TV: its seven texture sets and the mesh map bakers on the left, the common bake parameters below them, and the Bake selected textures button under the viewport" width="100%">
   <p align="center"><sub><b>Bake mesh maps</b>: ambient occlusion, curvature, thickness and more, ray traced on the GPU</sub></p>
 </td>
 <td width="50%" valign="top">
@@ -83,7 +83,7 @@
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <img src="docs/images/texturecraft-rendering.png" alt="Rendering mode: the material ball path traced on the GPU at 256 samples with denoising, the gold stripe catching the studio light, and the render settings in a card over the viewport" width="100%">
+  <img src="docs/images/texturecraft-rendering.png" alt="Rendering mode: the portable TV path traced on the GPU at 256 samples with denoising, the curved screen catching the studio light, and the render settings in a card over the viewport" width="100%">
   <p align="center"><sub><b>Rendering mode</b> (F10): your textures path traced on the GPU, with a denoiser</sub></p>
 </td>
 <td width="50%" valign="top">
@@ -151,10 +151,10 @@ cd apps/texturecraft-web && trunk serve                      # web build
 cargo xtask ci                                               # fmt, clippy, tests, layering, wasm
 ```
 
-You need Rust 1.95 or newer. The app opens with a baked sample project; **File ▸ New project** starts
+You need Rust 1.95 or newer. The app opens with a baked sample project and a start window (new project, open, recent projects); **File ▸ New project** starts
 from a built-in mesh, a project template or your own mesh file (UVs are generated if it has none).
 
-Japanese, Chinese and Korean interface text uses the fonts of
+Japanese, Chinese, Korean and Arabic interface text uses the fonts of
 [storytold/craft-fonts](https://github.com/storytold/craft-fonts) where it has them, an optional
 build input (releases always use it): `CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p texturecraft`
 (an absolute path). Without it, the desktop app uses the installed system fonts.
@@ -184,7 +184,7 @@ area, the remaining work and what's next.
 to end, weighted by how much of the day each area carries: importing meshes, texture sets and UDIM
 tiles, the layer stack with masks, effects and smart materials, every painting tool, baking, the PBR
 viewport and Rendering mode, export presets and templates, and the full menu set. The interface
-speaks English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese and Korean;
+speaks English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese, Korean and Arabic;
 [localization-parity.md](docs/localization-parity.md) has the details. The scores are self-assessed
 from our code against public documentation.
 

@@ -1,15 +1,17 @@
-//! CJK fallback fonts for the UI. egui's default fonts have no Japanese, Chinese or Korean
-//! glyphs, so translated UIs (and CJK layer or file names) need more fonts. They come from:
+//! CJK and Arabic fallback fonts for the UI. egui's default fonts have no Japanese, Chinese,
+//! Korean or Arabic glyphs, so translated UIs (and such layer or file names) need more fonts.
+//! They come from:
 //!
 //! 1. craft-fonts, embedded at build time when `CRAFT_FONTS_DIR` points at a checkout (optional;
 //!    see `build.rs` and storytold/craft-fonts' `docs/integration.md`);
-//! 2. on desktop, the operating system's CJK fonts (Windows, macOS, Linux and BSD paths).
+//! 2. on desktop, the operating system's fonts (Windows, macOS, Linux and BSD paths).
 //!
-//! Fonts load lazily: one script when the UI language needs it, all three while the language
+//! Fonts load lazily: one script when the UI language needs it, all of them while the language
 //! picker shows every language's own name. They are appended after the app's fonts
 //! (`theme::font_definitions`), so Latin text and row heights keep the interface font; the current language's script goes first, so
-//! shared Han characters take that language's glyph forms. In the browser only craft-fonts
-//! can supply them (without it, a CJK language shows its English name in the picker).
+//! shared Han characters take that language's glyph forms. egui shapes Arabic and orders
+//! right-to-left runs itself. In the browser only craft-fonts can supply them (without it, the
+//! language shows its English name in the picker).
 
 use std::sync::Arc;
 
@@ -35,10 +37,11 @@ pub enum Script {
     Japanese,
     Chinese,
     Korean,
+    Arabic,
 }
 
 impl Script {
-    pub const ALL: [Script; 3] = [Script::Japanese, Script::Chinese, Script::Korean];
+    pub const ALL: [Script; 4] = [Script::Japanese, Script::Chinese, Script::Korean, Script::Arabic];
 
     /// The script a UI language needs beyond Latin.
     pub fn of_language(code: &str) -> Option<Script> {
@@ -46,6 +49,7 @@ impl Script {
             "ja" => Some(Script::Japanese),
             "zh-Hans" => Some(Script::Chinese),
             "ko" => Some(Script::Korean),
+            "ar" => Some(Script::Arabic),
             _ => None,
         }
     }
@@ -56,6 +60,7 @@ impl Script {
             Script::Japanese => "Jpan",
             Script::Chinese => "Hans",
             Script::Korean => "Kore",
+            Script::Arabic => "Arab",
         }
     }
 
@@ -70,6 +75,7 @@ impl Script {
                 Script::Japanese => &["YuGothR.ttc", "meiryo.ttc", "msgothic.ttc"],
                 Script::Chinese => &["msyh.ttc", "simsun.ttc", "simhei.ttf"],
                 Script::Korean => &["malgun.ttf", "gulim.ttc"],
+                Script::Arabic => &["segoeui.ttf", "tahoma.ttf", "arial.ttf"],
             };
             v.extend(files.iter().map(|f| (fonts.join(f), 0)));
         } else if cfg!(target_os = "macos") {
@@ -79,13 +85,26 @@ impl Script {
                     &["/System/Library/Fonts/Hiragino Sans GB.ttc", "/System/Library/Fonts/STHeiti Light.ttc", "/System/Library/Fonts/PingFang.ttc"]
                 }
                 Script::Korean => &["/System/Library/Fonts/AppleSDGothicNeo.ttc"],
+                Script::Arabic => &["/System/Library/Fonts/SFArabic.ttf", "/System/Library/Fonts/Supplemental/GeezaPro.ttc"],
             };
             v.extend(files.iter().map(|f| (PathBuf::from(f), 0)));
             v.push((PathBuf::from("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"), 0));
+        } else if self == Script::Arabic {
+            for f in [
+                "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+                "/usr/share/fonts/noto/NotoSansArabic-Regular.ttf",
+                "/usr/share/fonts/google-noto/NotoSansArabic-Regular.ttf",
+                "/usr/local/share/fonts/noto/NotoSansArabic-Regular.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+                "/usr/local/share/fonts/dejavu/DejaVuSans.ttf",
+            ] {
+                v.push((PathBuf::from(f), 0));
+            }
         } else {
             // Noto Sans CJK collections hold JP, KR, SC, TC and HK faces, in that order.
             let face = match self {
-                Script::Japanese => 0,
+                Script::Japanese | Script::Arabic => 0,
                 Script::Korean => 1,
                 Script::Chinese => 2,
             };
@@ -136,7 +155,7 @@ impl UiFonts {
         let mut defs = crate::theme::font_definitions();
         for s in &want {
             let Some(data) = self.data(*s) else { continue };
-            let name = format!("cjk-{}", s.iso());
+            let name = format!("script-{}", s.iso());
             defs.font_data.insert(name.clone(), data);
             for family in [FontFamily::Proportional, FontFamily::Monospace, FontFamily::Name(crate::theme::SEMIBOLD.into())] {
                 defs.families.entry(family).or_default().push(name.clone());
@@ -257,10 +276,12 @@ mod tests {
         assert_eq!(Script::of_language("ja"), Some(Script::Japanese));
         assert_eq!(Script::of_language("zh-Hans"), Some(Script::Chinese));
         assert_eq!(Script::of_language("ko"), Some(Script::Korean));
+        assert_eq!(Script::of_language("ar"), Some(Script::Arabic));
         assert_eq!(Script::of_language("de"), None);
         for l in &crate::i18n::LANGUAGES {
-            let cjk = l.name.chars().any(|c| !c.is_ascii() && c > '\u{2E80}');
-            assert_eq!(cjk, Script::of_language(l.code).is_some(), "{}", l.code);
+            // Past the Latin blocks and their diacritics.
+            let other_script = l.name.chars().any(|c| c > '\u{036F}');
+            assert_eq!(other_script, Script::of_language(l.code).is_some(), "{}", l.code);
         }
     }
 
@@ -273,10 +294,10 @@ mod tests {
         f.update(&ctx, "ko", false);
         assert_eq!(f.installed, [Script::Korean]);
         f.update(&ctx, "ja", true);
-        assert_eq!(f.installed, [Script::Japanese, Script::Chinese, Script::Korean]);
+        assert_eq!(f.installed, Script::ALL);
         // Closing the picker keeps what is loaded; each script was read at most once.
         f.update(&ctx, "ja", false);
-        assert_eq!(f.installed.len(), 3);
-        assert_eq!(f.loaded.len(), 3);
+        assert_eq!(f.installed.len(), Script::ALL.len());
+        assert_eq!(f.loaded.len(), Script::ALL.len());
     }
 }

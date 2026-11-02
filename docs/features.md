@@ -8,12 +8,17 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   angle, flow and position jitter; tangent or camera alignment, angle fade, backface culling, lazy
   mouse, X/Y/Z mirror and radial symmetry (copies paint the far side too) and pen pressure.
   **67 procedural brush alphas** in their own shelf tab, or any imported image as the alpha.
+  **18 brush presets** (basic, wear and grunge, details) in the shelf's Brushes tab set the
+  stroke and keep the size; save your own brushes there too.
 - **Tools:** paint, eraser, **projection** with image stencils (hold S to move, turn and scale the
   stencil), polygon fill (triangle, UV island or the whole mesh), **path** and **lasso fill**, a
   **particle brush**, **smudge**, **clone** (V + click sets the source), color picker, Shift+click
   straight lines, and painting directly in the **2D UV view**.
 - **Geometry decals:** drop an image on the surface, then move, scale and turn its frame; it stays
   an editable fill layer.
+- **Text** in any installed font (or the built-in ones), shaped for every script with kerning and
+  ligatures, one or more lines: stamp it with the brush as its alpha, or place it as a decal in the
+  tool's base color (Properties › Alpha › Text).
 - **Quick mask** (Y): paint a temporary mask (U to edit, Ctrl+Shift+I to invert) that protects
   everything outside it while you paint.
 - **Every channel at once:** base color, metallic, roughness, height, normal, emissive, opacity,
@@ -27,21 +32,24 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   duplicate, group, flatten, cut, copy and paste across texture sets, and **geometry masks** that
   show a layer only on the mesh parts you pick (right-click a layer, or click parts with the
   **Geometry mask** tool, 8).
-- **Filters and content effects** on any layer or mask: **28 filters** (HSL, levels,
-  contrast/luminosity, color balance, gradient map, posterize, clamp, invert, threshold,
-  grayscale, replace color, edge detect, normal invert, baked lighting, blur, directional and
-  slope blur, sharpen, high pass, bevel, glow, warp, directional warp, mosaic and four material
-  finishes), fills and paint.
+- **Filters and content effects** on any layer or mask: **31 filters** (HSL, levels,
+  contrast/luminosity, color balance, gradient map, posterize, clamp, histogram scan, range and
+  shift, invert, threshold, grayscale, replace color, edge detect, normal invert, baked lighting,
+  blur, directional and slope blur, sharpen, high pass, bevel, glow, warp, directional warp,
+  mosaic and four material finishes), fills and paint. **Levels** shows a histogram of what it
+  reads (the mask below it, or a content channel you pick) with its input range marked.
   **Anchor points** record the stack at a layer so masks and fills higher up can react to it.
 - **Masks** with a white or black background and a stack of effects: painted strokes, fills,
   **mesh-map generators** (edge wear, dirt, thin areas, curvature, AO, position and direction
   gradients, all with world-space noise), filters, ID color selection and compare. Alt+click a
   mask to view it alone.
-- **Fill layers** take uniform values, **22 procedurals** (clouds, cells, grunge, scratches, wood
-  grain, bricks, fabric weave, leather grain, marble veins, Voronoi, paint chips…) or your own
+- **Fill layers** take uniform values, **23 procedurals** (clouds, cells, grunge, scratches, wood
+  grain, bricks, fabric weave, twill, leather grain, marble veins, Voronoi, paint chips…) or your own
   **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.
-- **54 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
-  velvet, skin, wax, glass, woods, stone, plastics, fabric, leather, ceramic, rust, cork, paper), **21 smart
+  Alt+click a material channel (of a fill or the brush) to keep that channel alone.
+- **63 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
+  velvet, skin, wax, glass, ice, woods, bark, stone, sand, mud, snow, bone, plastics, fabric,
+  leather, ceramic, rust, cork, paper), **21 smart
   materials** (rusted iron, worn paint, oxidized copper, bronze statue, weathered wood, mossy
   brick and stone, sun-faded paint…) and **18 smart masks**, all procedural, so they work at any
   resolution. Drag them from the tabbed, searchable shelf onto the layer stack or straight onto
@@ -58,9 +66,13 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **UDIM / UV tiles:** detected on import or switched on later, with a resolution per tile and one
   texture per tile on export (`$udim`).
 - **Texture sets** from 128 to 8192 px per material, resampled when you change them, with 21
-  channel types to add or remove.
+  channel types to add or remove. Show, hide or invert them all at once, or **focus** on the
+  active one.
 - **Projects** are a single `.tcraft` file: the mesh, every layer (sparse and lossless), baked maps
-  and imported images. **Project templates** start new work from a saved setup.
+  and imported images. **Project templates** start new work from a saved setup. Closing the app,
+  or opening, starting or closing another project, with unsaved changes asks whether to save them
+  first (in the browser too, where Save downloads the project and closing or reloading the tab
+  asks before the changes are lost).
 
 ## Bake and export
 
@@ -91,6 +103,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   (compute shaders, about 25× the CPU tracer, desktop and WebGPU) or on the CPU.
 - View any channel, any baked mesh map, or a UV checker; Alt+drag to orbit, middle-drag to pan,
   wheel to zoom, F to frame, M / C / B to cycle views.
+- **3D and UV wireframes** that show the mesh's own polygons: quads and n-gons from OBJ, FBX,
+  COLLADA, USD, Alembic and PLY files keep their edges, without the triangulation's diagonals.
 
 ## Interface
 
@@ -101,9 +115,11 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   strip, and Settings › Interface › System title bar for the system's frame instead.
 - **Dockable, tabbed and floating panels**, saved layouts, and panels that reopen where you closed
   them.
+- A **start window** at launch: a new project, a project file, a recent project or the sample
+  (Settings › Interface › Start window).
 - A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.
-- **9 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese and
-  Korean, switchable live.
+- **10 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese,
+  Korean and Arabic, switchable live.
 - **In the browser:** the same app compiled to WebAssembly, on WebGPU or WebGL2, with touch
   navigation and project open, save and download.
 
