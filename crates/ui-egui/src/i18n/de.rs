@@ -999,4 +999,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Invert show/hide", "Ein-/Ausblenden umkehren"),
     ("Show or hide texture sets", "Texturesets ein- oder ausblenden"),
     ("Focus: show only the active texture set", "Fokus: nur das aktive Textureset zeigen"),
+    ("Unsaved changes", "Ungespeicherte Änderungen"),
+    ("Don't save", "Nicht speichern"),
+    ("Save the changes to {name} before closing?", "Änderungen an {name} vor dem Schließen speichern?"),
 ];

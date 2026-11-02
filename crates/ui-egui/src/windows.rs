@@ -29,6 +29,52 @@ pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
     if app.ui.mode == Mode::Baking {
         bake_bar(app, ctx);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    confirm_close(app, ctx);
+}
+
+/// Closing the app with unsaved changes asks whether to save them first.
+#[cfg(not(target_arch = "wasm32"))]
+fn confirm_close(app: &mut TextureCraftApp, ctx: &egui::Context) {
+    if app.session.modified && ctx.input(|i| i.viewport().close_requested()) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        app.ui.windows.confirm_close = true;
+    }
+    if !app.ui.windows.confirm_close {
+        return;
+    }
+    let mut open = true;
+    let mut save = None;
+    let mut cancel = false;
+    dialog("confirm_close", tr("Unsaved changes"), &mut open).show(ctx, |ui| {
+        ui.label(trf("Save the changes to {name} before closing?", &[("name", &app.session.doc.project.name)]));
+        ui.add_space(8.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add(primary_button(ui, tr("Save"))).clicked() {
+                save = Some(true);
+            }
+            if ui.button(tr("Don't save")).clicked() {
+                save = Some(false);
+            }
+            if ui.button(tr("Cancel")).clicked() {
+                cancel = true;
+            }
+        });
+    });
+    app.ui.windows.confirm_close = open && !cancel;
+    match save {
+        Some(true) => {
+            file_action(app, ctx, "file.save");
+        }
+        // Closing anyway: the changes are let go.
+        Some(false) => app.session.modified = false,
+        None => return,
+    }
+    // A cancelled or failed save keeps the app and this dialog open.
+    if !app.session.modified {
+        app.ui.windows.confirm_close = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
 }
 
 /// A titled tool window; `id` keeps its place across UI languages.

@@ -897,4 +897,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Invert show/hide", "反转显示/隐藏"),
     ("Show or hide texture sets", "显示或隐藏纹理集"),
     ("Focus: show only the active texture set", "聚焦：仅显示当前纹理集"),
+    ("Unsaved changes", "未保存的更改"),
+    ("Don't save", "不保存"),
+    ("Save the changes to {name} before closing?", "关闭前是否保存对 {name} 的更改？"),
 ];

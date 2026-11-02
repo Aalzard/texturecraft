@@ -67,7 +67,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   channel types to add or remove. Show, hide or invert them all at once, or **focus** on the
   active one.
 - **Projects** are a single `.tcraft` file: the mesh, every layer (sparse and lossless), baked maps
-  and imported images. **Project templates** start new work from a saved setup.
+  and imported images. **Project templates** start new work from a saved setup. Closing the app
+  with unsaved changes asks whether to save them first.
 
 ## Bake and export
 
