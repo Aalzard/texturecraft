@@ -15,6 +15,18 @@ pub enum Mode {
     Rendering,
 }
 
+/// The Alpha tab's text: what to draw and in which font (empty: the default font).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextUi {
+    pub text: String,
+    pub font: String,
+    pub style: String,
+    /// Installed and built-in families with their styles (`text.fonts`), read when first shown.
+    #[serde(skip)]
+    pub fonts: Vec<(String, Vec<String>)>,
+}
+
 /// Rendering mode settings.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -61,6 +73,12 @@ pub struct Windows {
     /// Browser File › Export Mesh: the download format choice.
     #[serde(default)]
     pub export_mesh: bool,
+    /// The start window: new, open, recent projects (the app opens it at launch).
+    #[serde(skip)]
+    pub start: bool,
+    /// Closing with unsaved changes: save, don't save or cancel (desktop).
+    #[serde(skip)]
+    pub confirm_close: bool,
 }
 
 /// Edit › Settings.
@@ -82,6 +100,8 @@ pub struct Prefs {
     pub accent: crate::theme::Accent,
     /// The system draws the window's title bar instead of TextureCraft (desktop; read at startup).
     pub system_title_bar: bool,
+    /// Show the start window at launch.
+    pub start_window: bool,
 }
 
 impl Default for Prefs {
@@ -94,6 +114,7 @@ impl Default for Prefs {
             brightness: crate::theme::Brightness::default(),
             accent: crate::theme::Accent::default(),
             system_title_bar: false,
+            start_window: true,
         }
     }
 }
@@ -209,6 +230,8 @@ pub struct UiState {
     #[serde(default)]
     pub shelf_tab: usize,
     pub props_tab: PropsTab,
+    #[serde(default)]
+    pub text: TextUi,
     /// Layer being renamed and the edit buffer.
     pub rename: Option<(u64, String)>,
     pub new_project: NewProject,
@@ -232,6 +255,25 @@ pub struct UiState {
     /// The baker whose parameters bake mode shows (None: the common parameters).
     #[serde(default)]
     pub bake_baker: Option<BakedMap>,
+    /// The brush that paints the skew correction map in the 2D view of bake mode.
+    #[serde(default)]
+    pub skew_brush: SkewBrush,
+}
+
+/// Settings of the skew correction brush (radius in UV units).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkewBrush {
+    pub on: bool,
+    pub radius: f32,
+    /// 1 turns the rays onto the base normal, 0 erases.
+    pub value: f32,
+    pub hardness: f32,
+}
+
+impl Default for SkewBrush {
+    fn default() -> Self {
+        SkewBrush { on: false, radius: 0.03, value: 1.0, hardness: 0.5 }
+    }
 }
 
 impl UiState {
@@ -263,6 +305,7 @@ impl Default for UiState {
             shelf_filter: String::new(),
             shelf_tab: 0,
             props_tab: PropsTab::Brush,
+            text: TextUi::default(),
             rename: None,
             new_project: NewProject::default(),
             uv_wireframe: true,
@@ -273,6 +316,7 @@ impl Default for UiState {
             recent: Vec::new(),
             keymap: Keymap::new(),
             bake_baker: None,
+            skew_brush: SkewBrush::default(),
         }
     }
 }

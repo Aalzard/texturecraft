@@ -15,6 +15,7 @@
 
 mod maps;
 pub mod rays;
+mod skew;
 #[cfg(test)]
 mod tests;
 
@@ -29,6 +30,7 @@ use texturecraft_geom::{BaseColor, Bvh, Mesh, NO_TRI, UvGBuffer};
 use texturecraft_texel::DilationMap;
 
 use crate::rays::{CpuTracer, RayScene, Tracer};
+pub use crate::skew::SkewMap;
 
 /// Largest accepted output resolution (per axis).
 pub const MAX_RESOLUTION: u32 = 8192;
@@ -85,6 +87,8 @@ pub struct BakeRequest<'a> {
     pub high: Option<HighPoly<'a>>,
     /// Cage: the low poly inflated (same triangles); transfer rays start on it.
     pub cage: Option<&'a Mesh>,
+    /// Skew correction of the high-poly transfer rays (see [`SkewMap`]); ignored with a cage mesh.
+    pub skew: Option<&'a SkewMap>,
     /// UV tile grid (columns, rows) of the texture set: the maps are `settings.resolution` per
     /// tile, (1, 1) for a classic set. The mesh's UVs are in atlas space (0..1 over the grid).
     pub tiles: (u32, u32),

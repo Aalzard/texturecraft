@@ -170,6 +170,8 @@ fn main() {
     let viewport = title_bar.viewport(viewport);
     let options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, persistence_path, ..Default::default() };
     let control = args.control;
+    // The start window offers new, open and recent projects, unless a file was given or a script drives the app.
+    let start = args.file.is_none() && control.is_none();
     let r = eframe::run_native(
         APP_NAME,
         options,
@@ -181,6 +183,7 @@ fn main() {
             let window_frame = window_frame::service(cc, matches!(title_bar, TitleBar::App(_)));
             let mut app = TextureCraftApp::new(cc, session);
             app.title_bar = title_bar;
+            app.ui.windows.start = start && app.ui.prefs.start_window;
             if let Some(port) = control {
                 app.control = Some(control_server::start(port, cc.egui_ctx.clone()));
             }

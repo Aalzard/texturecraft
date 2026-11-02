@@ -32,6 +32,11 @@ serde_json = "1"
 glam = { version = "0.30", features = ["serde", "bytemuck"] }
 bytemuck = { version = "1", features = ["derive"] }
 rayon = "1"
+# Text alphas: shaping and glyph outlines, the versions egui's text layout already builds.
+harfrust = "0.12"
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+# The UI's built-in fonts (Ubuntu Light, Hack): text alphas fall back to them without system fonts.
+epaint_default_fonts = "0.37"
 log = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "tiff", "exr", "hdr", "bmp", "webp"] }
 half = "2"

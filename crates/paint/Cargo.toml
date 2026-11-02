@@ -14,4 +14,9 @@ texturecraft-texel = { workspace = true }
 texturecraft-geom = { workspace = true }
 texturecraft-compose = { workspace = true }
 rayon = { workspace = true }
+harfrust = { workspace = true }
+skrifa = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+epaint_default_fonts = { workspace = true }
