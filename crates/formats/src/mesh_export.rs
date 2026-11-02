@@ -32,8 +32,8 @@ pub fn obj_with_mtl(mesh: &Mesh, name: &str, textures: &[Vec<ExportedFile>]) -> 
     let stem = sanitize_file_stem(name);
     let (maps, mut files) = usd::material_maps(mesh, &stem, textures);
     let mut mtl = format!("# {name}, exported by TextureCraft\n");
-    for (material, maps) in mesh.materials.iter().zip(&maps) {
-        let _ = writeln!(mtl, "\nnewmtl {}\nKd 1 1 1", token(material));
+    for (material, maps) in unique_ids(&mesh.materials, token).iter().zip(&maps) {
+        let _ = writeln!(mtl, "\nnewmtl {material}\nKd 1 1 1");
         for (slot, file) in maps {
             let keys: &[&str] = match usd::SLOTS.get(*slot).map_or("", |s| s.0) {
                 "BaseColor" => &["map_Kd"],
@@ -79,9 +79,10 @@ fn obj_text(mesh: &Mesh, name: &str, mtllib: Option<&str>) -> String {
             let _ = writeln!(s, "vn {} {} {}", n.x, n.y, n.z);
         }
     }
+    let materials = unique_ids(&mesh.materials, token);
     for sm in &parts(mesh, name) {
-        let material = mesh.materials.get(sm.material).map_or("default", String::as_str);
-        let _ = writeln!(s, "g {}\nusemtl {}", token(&sm.name), token(material));
+        let material = materials.get(sm.material).map_or("default", String::as_str);
+        let _ = writeln!(s, "g {}\nusemtl {material}", token(&sm.name));
         let (a, b) = (sm.start as usize, sm.start as usize + sm.count as usize);
         for tri in mesh.indices.get(a..b).unwrap_or_default().chunks_exact(3) {
             s.push('f');
@@ -98,6 +99,25 @@ fn obj_text(mesh: &Mesh, name: &str, mtllib: Option<&str>) -> String {
         }
     }
     s
+}
+
+/// `id` of each material name, made unique with `_2`, `_3`… where two would be the same.
+pub(crate) fn unique_ids(materials: &[String], id: impl Fn(&str) -> String) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    materials
+        .iter()
+        .map(|m| {
+            let base = id(m);
+            let mut unique = base.clone();
+            for n in 2.. {
+                if seen.insert(unique.clone()) {
+                    break;
+                }
+                unique = format!("{base}_{n}");
+            }
+            unique
+        })
+        .collect()
 }
 
 /// The submeshes, or one covering the whole mesh when it has none.
@@ -356,6 +376,27 @@ fn token(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn materials_whose_names_collide_stay_apart() {
+        let mut mesh = texturecraft_geom::primitives::cube(1.0);
+        mesh.materials = vec!["Mat A".into(), "Mat_A".into()];
+        mesh.submeshes = vec![
+            SubMesh { name: "a".into(), material: 0, start: 0, count: 18 },
+            SubMesh { name: "b".into(), material: 1, start: 18, count: mesh.indices.len() as u32 - 18 },
+        ];
+        let png = |name: &str| ExportedFile { name: name.into(), bytes: vec![1, 2, 3], width: 1, height: 1, warnings: Vec::new() };
+        let (obj, files) = obj_with_mtl(&mesh, "m", &[vec![png("BaseColor.png")], vec![png("BaseColor.png")]]);
+        let obj = String::from_utf8(obj).unwrap();
+        assert!(obj.contains("usemtl Mat_A\n") && obj.contains("usemtl Mat_A_2\n"));
+        let names: Vec<_> = files.iter().map(|f| f.0.as_str()).collect();
+        assert_eq!(names, ["m.mtl", "m_Mat_A_BaseColor.png", "m_Mat_A_2_BaseColor.png"]);
+        let mtl = String::from_utf8(files[0].1.clone()).unwrap();
+        assert!(
+            mtl.contains("newmtl Mat_A\nKd 1 1 1\nmap_Kd m_Mat_A_BaseColor.png") && mtl.contains("newmtl Mat_A_2\nKd 1 1 1\nmap_Kd m_Mat_A_2_BaseColor.png"),
+            "{mtl}"
+        );
+    }
 
     #[test]
     fn obj_round_trips_through_the_importer() {

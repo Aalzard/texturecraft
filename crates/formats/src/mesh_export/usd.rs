@@ -311,7 +311,7 @@ pub type NamedFiles = Vec<(String, Vec<u8>)>;
 pub(crate) fn material_maps(mesh: &Mesh, stem: &str, textures: &[Vec<ExportedFile>]) -> (Vec<Vec<(usize, String)>>, NamedFiles) {
     let mut files = Vec::new();
     let mut names = Vec::with_capacity(mesh.materials.len());
-    for (m, material) in mesh.materials.iter().enumerate() {
+    for (m, material) in super::unique_ids(&mesh.materials, sanitize_file_stem).iter().enumerate() {
         let mut slots = Vec::new();
         let maps = textures.get(m).map_or(&[][..], Vec::as_slice);
         // Without a coat its roughness means nothing.
@@ -327,7 +327,7 @@ pub(crate) fn material_maps(mesh: &Mesh, stem: &str, textures: &[Vec<ExportedFil
             if skip {
                 continue;
             }
-            let file = format!("{stem}_{}_{slot_stem}.png", sanitize_file_stem(material));
+            let file = format!("{stem}_{material}_{slot_stem}.png");
             slots.push((slot, file.clone()));
             files.push((file, f.bytes.clone()));
         }
