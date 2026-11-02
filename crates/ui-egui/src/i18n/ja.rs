@@ -274,6 +274,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Drop an image from the Assets panel here to use it as this mesh map", "アセットパネルから画像をここにドロップすると、このメッシュマップとして使用します"),
     ("Dry streaks", "かすれ"),
+    ("Duplicate effect", "エフェクトを複製"),
     ("Duplicate layer(s)", "レイヤーを複製"),
     ("Duplicate the selected template", "選択中のテンプレートを複製"),
     ("Edge Detect", "エッジ検出"),

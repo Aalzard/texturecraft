@@ -265,6 +265,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Drop an image from the Assets panel here to use it as this mesh map", "أفلت صورة من لوحة الأصول هنا لاستخدامها كخريطة المجسم هذه"),
     ("Dry streaks", "خطوط جافة"),
+    ("Duplicate effect", "تكرار التأثير"),
     ("Duplicate layer(s)", "تكرار الطبقة (الطبقات)"),
     ("Duplicate the selected template", "تكرار القالب المحدد"),
     ("Edge Detect", "اكتشاف الحواف"),

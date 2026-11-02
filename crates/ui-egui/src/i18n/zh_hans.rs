@@ -241,6 +241,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Draws {name} of texture set \"{set}\". Edits to the source show in every instance.", "绘制纹理集“{set}”的 {name}。对源的编辑会显示在每个实例中。"),
     ("Drop an image from the Assets panel here to use it as this mesh map", "将资产面板中的图像拖放到此处，用作此网格贴图"),
     ("Dry streaks", "干笔条纹"),
+    ("Duplicate effect", "创建效果副本"),
     ("Duplicate layer(s)", "创建图层副本"),
     ("Duplicate the selected template", "创建所选模板的副本"),
     ("Edge Detect", "边缘检测"),
