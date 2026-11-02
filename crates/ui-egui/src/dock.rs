@@ -1087,6 +1087,8 @@ fn path_section(app: &mut TextureCraftApp, ui: &mut Ui) {
 fn brush_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     let b = &mut app.session.tool.brush;
     ui.label(caption(tr("Brush")));
+    let hint = tr("Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.");
+    ui.label(RichText::new(hint).size(10.5).color(Tokens::get(ui.ctx()).text_dim));
     section(ui, "sec_size", tr("Size"), true, |ui| {
         let mut size = b.size / 0.25 * 100.0;
         if slider(ui, tr("Size"), &mut size, 0.05..=100.0, 1).changed() {

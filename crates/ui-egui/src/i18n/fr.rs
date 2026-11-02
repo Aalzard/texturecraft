@@ -218,6 +218,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Crate", "Caisse"),
     ("Create", "Créer"),
     ("Create smart material", "Créer un matériau intelligent"),
+    (
+        "Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.",
+        "Ctrl+glisser (clic droit) dans une vue règle la taille et la dureté, Ctrl+glisser (clic gauche) le flux et l'angle.",
+    ),
     ("Cube", "Cube"),
     ("Current layer", "Calque actuel"),
     ("Curvature", "Courbure"),

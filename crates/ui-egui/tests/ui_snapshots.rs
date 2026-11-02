@@ -78,4 +78,16 @@ fn window_snapshots() {
         texturecraft_engine::execute(s, id, &p).unwrap();
     }
     save(&mut h, &dir, "properties-levels");
+    // Ctrl+right drag in the 3D view: the brush cursor where it began and the readout.
+    let c = h.state().viewport_rect.center();
+    let (m, button) = (egui::Modifiers::COMMAND, egui::PointerButton::Secondary);
+    h.event(egui::Event::ModifiersChanged(m));
+    h.event(egui::Event::PointerButton { pos: c, button, pressed: true, modifiers: m });
+    for k in 1..=4 {
+        h.hover_at(c + egui::vec2(15.0 * k as f32, -8.0 * k as f32));
+        h.run_steps(1);
+    }
+    save(&mut h, &dir, "brush-ctrl-drag");
+    h.event(egui::Event::PointerButton { pos: c, button, pressed: false, modifiers: m });
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
 }
