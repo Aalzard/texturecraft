@@ -110,3 +110,82 @@ fn clicking_the_effect_opacity_applies_it() {
     h.run_steps(3);
     assert!(opacity(&h, effect) < 0.5, "a click on the track applies: {}", opacity(&h, effect));
 }
+
+/// The number field in the row of the slider labelled `label`.
+fn number_field<'a>(h: &'a Harness<'_, TextureCraftApp>, label: &str) -> egui_kittest::Node<'a> {
+    let row = h.get_by_label(label).rect().center().y;
+    h.get_all(by().role(Role::TextInput)).find(|n| (n.rect().center().y - row).abs() < 4.0).unwrap()
+}
+
+/// Focus the opacity field and press `keys`, then type `text`, one key per frame like a person.
+fn type_opacity(h: &mut Harness<'_, TextureCraftApp>, keys: &[egui::Key], text: &str) {
+    number_field(h, "Opacity").focus();
+    h.run_steps(2);
+    for k in keys {
+        h.key_press(*k);
+        h.run_steps(1);
+    }
+    for c in text.chars() {
+        number_field(h, "Opacity").type_text(&c.to_string());
+        h.run_steps(1);
+    }
+}
+
+#[test]
+fn a_value_typed_in_the_number_field_applies() {
+    let (mut h, effect) = harness();
+    let steps = h.state().session.history_labels().len();
+    type_opacity(&mut h, &[egui::Key::End, egui::Key::Backspace, egui::Key::Backspace, egui::Key::Backspace, egui::Key::Backspace], "0.25");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(opacity(&h, effect), 0.25);
+    assert_eq!(h.state().session.history_labels().len(), steps + 1);
+}
+
+/// Dragging the track while the number field has focus drops what was typed there: leaving the
+/// field afterwards does not undo the drag.
+#[test]
+fn a_track_drag_drops_text_typed_in_the_number_field() {
+    let (mut h, effect) = harness();
+    type_opacity(&mut h, &[egui::Key::End, egui::Key::Backspace], "5");
+    let t = track(&h, "Opacity");
+    h.drag_at(egui::pos2(t.right(), t.center().y));
+    h.run_steps(2);
+    h.hover_at(egui::pos2(t.left() + 20.0, t.center().y));
+    h.run_steps(2);
+    h.drop_at(egui::pos2(t.left() + 20.0, t.center().y));
+    h.run_steps(2);
+    let dragged = opacity(&h, effect);
+    assert!(dragged < 0.5, "the drag applies: {dragged}");
+    // Leave whatever has focus: a click on empty space.
+    h.drag_at(egui::pos2(5.0, 1390.0));
+    h.drop_at(egui::pos2(5.0, 1390.0));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(opacity(&h, effect), dragged, "the text typed before the drag stays dropped");
+}
+
+/// Leaving the number field without typing, or with Escape, keeps the value (not the rounded
+/// text the field shows) and makes no undo step.
+#[test]
+fn leaving_the_number_field_unchanged_keeps_the_value() {
+    let (mut h, effect) = harness();
+    texturecraft_engine::execute(&mut h.state_mut().session, "effect.set", &json!({"effect": effect.0, "opacity": 0.333})).unwrap();
+    h.run_steps(2);
+    let steps = h.state().session.history_labels().len();
+    type_opacity(&mut h, &[], "");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(opacity(&h, effect), 0.333, "left without typing");
+    type_opacity(&mut h, &[egui::Key::End, egui::Key::Backspace], "9");
+    assert_eq!(number_field(&h, "Opacity").value().as_deref(), Some("0.39"));
+    assert!(number_field(&h, "Opacity").is_focused());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert_eq!(opacity(&h, effect), 0.333);
+    // Typing the value it already has is no edit either.
+    type_opacity(&mut h, &[egui::Key::End, egui::Key::Backspace, egui::Key::Backspace, egui::Key::Backspace, egui::Key::Backspace], "0.333");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().session.history_labels().len(), steps);
+}
