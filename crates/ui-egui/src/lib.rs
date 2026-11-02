@@ -190,19 +190,19 @@ impl TextureCraftApp {
                     let ts = *ts;
                     job.current = None;
                     if let Err(e) = self.session.apply_bake(ts, out) {
+                        self.session.bake_abandoned([ts]);
                         self.toast(e.to_string(), true);
                     }
                 }
                 Ok(Err(e)) => {
-                    job.current = None;
                     let msg = e.to_string();
-                    self.bake = None;
+                    self.cancel_bake();
                     self.toast(msg, true);
                     return;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.bake = None;
+                    self.cancel_bake();
                     self.toast(i18n::tr("The bake worker stopped"), true);
                     return;
                 }
@@ -226,7 +226,10 @@ impl TextureCraftApp {
                         job.current = Some((ts, progress, rx));
                     }
                 }
-                Err(e) => self.toast(e.to_string(), true),
+                Err(e) => {
+                    self.session.bake_abandoned([ts]);
+                    self.toast(e.to_string(), true);
+                }
             }
         }
     }
@@ -244,12 +247,14 @@ impl TextureCraftApp {
         }
     }
 
+    /// Stops the bake job (also after an error). The set being baked and the queued ones wait for
+    /// their next bake input change before Auto-rebake tries them again.
     pub fn cancel_bake(&mut self) {
-        if let Some(job) = self.bake.take()
-            && let Some((_, p, _)) = job.current
-        {
+        let Some(job) = self.bake.take() else { return };
+        if let Some((_, p, _)) = &job.current {
             p.cancel.store(true, Ordering::Relaxed);
         }
+        self.session.bake_abandoned(job.current.map(|(ts, ..)| ts).into_iter().chain(job.queue));
     }
 
     /// Resize texture set `ts` to `resolution` on a worker thread (the document changes when
