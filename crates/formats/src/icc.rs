@@ -95,7 +95,7 @@ pub fn profile(space: ColorSpace) -> Option<Vec<u8>> {
         offsets.push(at);
         if !shared {
             data.extend_from_slice(bytes);
-            while data.len() % 4 != 0 {
+            while !data.len().is_multiple_of(4) {
                 data.push(0);
             }
         }
@@ -160,7 +160,7 @@ mod tests {
             for k in 0..n {
                 let e = 132 + 12 * k;
                 let (at, len) = (u32_at(&p, e + 4) as usize, u32_at(&p, e + 8) as usize);
-                assert!(at % 4 == 0 && at >= 132 + 12 * n && at + len <= p.len(), "{s:?} tag {k}: {at}+{len} of {}", p.len());
+                assert!(at.is_multiple_of(4) && at >= 132 + 12 * n && at + len <= p.len(), "{s:?} tag {k}: {at}+{len} of {}", p.len());
             }
             assert_eq!(profile(s).unwrap(), p, "the same bytes every time");
         }
