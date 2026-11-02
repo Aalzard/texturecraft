@@ -29,9 +29,9 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// Largest accepted resource file.
-const MAX_BYTES: usize = 512 << 20;
+pub(crate) const MAX_BYTES: usize = 512 << 20;
 
-fn decoded(d: texturecraft_formats::DecodedImage) -> Arc<ImageRes> {
+pub(crate) fn decoded(d: texturecraft_formats::DecodedImage) -> Arc<ImageRes> {
     Arc::new(ImageRes { width: d.width, height: d.height, rgba: d.rgba, srgb: d.srgb })
 }
 
