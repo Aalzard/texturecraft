@@ -372,6 +372,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("High poly mesh suffix", "لاحقة المجسم عالي الدقة"),
     ("High poly: {name}", "عالي الدقة: {name}"),
     ("Highlights", "المناطق المضيئة"),
+    ("Histogram Range", "نطاق المدرج التكراري"),
+    ("Histogram Scan", "مسح المدرج التكراري"),
+    ("Histogram Shift", "إزاحة المدرج التكراري"),
     ("History", "السجل"),
     (
         "Hold S: left-drag rotates, right-drag scales, middle-drag moves the stencil.",
@@ -527,6 +530,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Not exported: no source in this texture set", "لم يتم التصدير: لا يوجد مصدر في مجموعة الخامات هذه"),
     ("Not saved: {error}", "لم يتم الحفظ: {error}"),
     ("Off", "معطل"),
+    ("Offset", "إزاحة"),
     ("Offset right", "إزاحة لليمين"),
     ("Offset up", "إزاحة لأعلى"),
     ("Offsets the textures by the height channel, at the height to normal strength", "يزيح الخامات وفق قناة الارتفاع، بقوة تحويل الارتفاع إلى ناظم"),
@@ -609,6 +613,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Radial copies", "نُسخ دائرية"),
     ("Radius (texels at 2K)", "نصف القطر (تكسل بدقة 2K)"),
     ("RENDERING", "التصيير"),
+    ("Range", "النطاق"),
     ("Rebind any menu item, tool or command", "إعادة ربط أي عنصر قائمة، أو أداة أو أمر"),
     ("Recent projects", "المشاريع الأخيرة"),
     (

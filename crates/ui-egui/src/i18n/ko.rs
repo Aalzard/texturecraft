@@ -375,6 +375,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("High poly mesh suffix", "하이 폴리 메시 접미사"),
     ("High poly: {name}", "하이 폴리: {name}"),
     ("Highlights", "밝은 영역"),
+    ("Histogram Range", "히스토그램 범위"),
+    ("Histogram Scan", "히스토그램 스캔"),
+    ("Histogram Shift", "히스토그램 이동"),
     ("History", "히스토리"),
     (
         "Hold S: left-drag rotates, right-drag scales, middle-drag moves the stencil.",
@@ -533,6 +536,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Not exported: no source in this texture set", "내보내지 않음: 이 텍스처 세트에 소스가 없습니다"),
     ("Not saved: {error}", "저장되지 않음: {error}"),
     ("Off", "끄기"),
+    ("Offset", "오프셋"),
     ("Offset right", "오른쪽 오프셋"),
     ("Offset up", "위쪽 오프셋"),
     ("Offsets the textures by the height channel, at the height to normal strength", "높이-노멀 변환 강도로 높이 채널에 따라 텍스처를 오프셋합니다"),
@@ -615,6 +619,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Radial copies", "방사형 복사본"),
     ("Radius (texels at 2K)", "반경 (2K 기준 텍셀)"),
     ("RENDERING", "렌더링"),
+    ("Range", "범위"),
     ("Rebind any menu item, tool or command", "메뉴 항목, 도구 또는 명령의 단축키를 다시 지정합니다"),
     ("Recent projects", "최근 프로젝트"),
     (

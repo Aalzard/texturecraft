@@ -393,6 +393,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("High poly mesh suffix", "Suffisso mesh high poly"),
     ("High poly: {name}", "High poly: {name}"),
     ("Highlights", "Luci"),
+    ("Histogram Range", "Intervallo istogramma"),
+    ("Histogram Scan", "Scansione istogramma"),
+    ("Histogram Shift", "Spostamento istogramma"),
     ("History", "Cronologia"),
     (
         "Hold S: left-drag rotates, right-drag scales, middle-drag moves the stencil.",
@@ -554,6 +557,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Not exported: no source in this texture set", "Non esportato: nessuna sorgente in questo set di texture"),
     ("Not saved: {error}", "Non salvato: {error}"),
     ("Off", "Disattivato"),
+    ("Offset", "Scostamento"),
     ("Offset right", "Offset a destra"),
     ("Offset up", "Offset in alto"),
     (
@@ -645,6 +649,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Radial copies", "Copie radiali"),
     ("Radius (texels at 2K)", "Raggio (texel a 2K)"),
     ("RENDERING", "RENDERING"),
+    ("Range", "Intervallo"),
     ("Rebind any menu item, tool or command", "Riassegna qualsiasi voce di menu, strumento o comando"),
     ("Recent projects", "Progetti recenti"),
     (
