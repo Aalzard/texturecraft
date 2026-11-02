@@ -282,6 +282,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Faites glisser le cadre pour déplacer le décalque, un coin pour le mettre à l'échelle, la poignée ronde pour le faire pivoter",
     ),
     ("Dry streaks", "Traînées sèches"),
+    ("Duplicate effect", "Dupliquer l'effet"),
     ("Duplicate layer(s)", "Dupliquer le(s) calque(s)"),
     ("Duplicate the selected template", "Dupliquer le modèle sélectionné"),
     ("Edge Detect", "Détection des contours"),

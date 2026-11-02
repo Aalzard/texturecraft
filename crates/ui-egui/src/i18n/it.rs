@@ -285,6 +285,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Trascina il riquadro per spostare la decal, un angolo per scalarla, la maniglia rotonda per ruotarla",
     ),
     ("Dry streaks", "Striature secche"),
+    ("Duplicate effect", "Duplica effetto"),
     ("Duplicate layer(s)", "Duplica livello/i"),
     ("Duplicate the selected template", "Duplica il modello selezionato"),
     ("Edge Detect", "Rilevamento bordi"),

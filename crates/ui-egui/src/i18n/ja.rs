@@ -273,6 +273,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "テクスチャセット「{set}」の {name} を描画します。ソースへの編集はすべてのインスタンスに反映されます。",
     ),
     ("Dry streaks", "かすれ"),
+    ("Duplicate effect", "エフェクトを複製"),
     ("Duplicate layer(s)", "レイヤーを複製"),
     ("Duplicate the selected template", "選択中のテンプレートを複製"),
     ("Edge Detect", "エッジ検出"),

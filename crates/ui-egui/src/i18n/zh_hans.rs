@@ -240,6 +240,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Drags the layer stack's values along the stroke into the selected layer.", "沿笔画将图层堆栈的值拖入所选图层。"),
     ("Draws {name} of texture set \"{set}\". Edits to the source show in every instance.", "绘制纹理集“{set}”的 {name}。对源的编辑会显示在每个实例中。"),
     ("Dry streaks", "干笔条纹"),
+    ("Duplicate effect", "创建效果副本"),
     ("Duplicate layer(s)", "创建图层副本"),
     ("Duplicate the selected template", "创建所选模板的副本"),
     ("Edge Detect", "边缘检测"),

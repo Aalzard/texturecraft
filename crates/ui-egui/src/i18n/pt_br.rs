@@ -279,6 +279,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Arraste o quadro para mover o decalque, um canto para redimensioná-lo e a alça redonda para girá-lo",
     ),
     ("Dry streaks", "Estrias secas"),
+    ("Duplicate effect", "Duplicar efeito"),
     ("Duplicate layer(s)", "Duplicar camada(s)"),
     ("Duplicate the selected template", "Duplicar o modelo selecionado"),
     ("Edge Detect", "Detecção de bordas"),

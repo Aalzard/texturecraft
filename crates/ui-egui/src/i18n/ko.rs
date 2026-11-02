@@ -270,6 +270,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "텍스처 세트 \"{set}\"의 {name}을(를) 그립니다. 원본을 편집하면 모든 인스턴스에 반영됩니다.",
     ),
     ("Dry streaks", "마른 붓자국"),
+    ("Duplicate effect", "이펙트 복제"),
     ("Duplicate layer(s)", "레이어 복제"),
     ("Duplicate the selected template", "선택한 템플릿을 복제합니다"),
     ("Edge Detect", "가장자리 검출"),

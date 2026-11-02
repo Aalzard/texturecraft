@@ -282,6 +282,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Rahmen ziehen, um das Decal zu verschieben, eine Ecke zum Skalieren, den runden Griff zum Drehen",
     ),
     ("Dry streaks", "Trockene Schlieren"),
+    ("Duplicate effect", "Effekt duplizieren"),
     ("Duplicate layer(s)", "Ebene(n) duplizieren"),
     ("Duplicate the selected template", "Ausgewählte Vorlage duplizieren"),
     ("Edge Detect", "Kantenerkennung"),

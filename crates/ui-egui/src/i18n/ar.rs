@@ -264,6 +264,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "اسحب الإطار لتحريك الملصق، أو الزاوية لتغيير حجمه، أو المقبض الدائري لتدويره",
     ),
     ("Dry streaks", "خطوط جافة"),
+    ("Duplicate effect", "تكرار التأثير"),
     ("Duplicate layer(s)", "تكرار الطبقة (الطبقات)"),
     ("Duplicate the selected template", "تكرار القالب المحدد"),
     ("Edge Detect", "اكتشاف الحواف"),

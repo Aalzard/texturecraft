@@ -279,6 +279,7 @@ pub const TABLE: &[(&str, &str)] = &[
         "Arrastra el marco para mover la calcomanía, una esquina para escalarla y el tirador redondo para girarla",
     ),
     ("Dry streaks", "Trazos secos"),
+    ("Duplicate effect", "Duplicar efecto"),
     ("Duplicate layer(s)", "Duplicar capa(s)"),
     ("Duplicate the selected template", "Duplicar la plantilla seleccionada"),
     ("Edge Detect", "Detección de bordes"),
