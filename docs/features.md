@@ -50,8 +50,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Fill layers** take uniform values, **23 procedurals** (clouds, cells, grunge, scratches, wood
   grain, bricks, fabric weave, twill, leather grain, marble veins, Voronoi, paint chips…) or your own
   **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection, with
-  the UV scale, rotation and offset, the tri-planar blend sharpness, and the axis and offset of a
-  planar or cylindrical projection in the fill's properties. Each channel takes its own image (a normal, roughness or height map, say): pick it in the channel's
+  the UV scale, rotation and offset, the tri-planar blend sharpness and offset, the planar axis
+  and offset, and the cylindrical axis in the fill's properties. Each channel takes its own image (a normal, roughness or height map, say): pick it in the channel's
   source menu, which also imports one, or drop it from the Assets panel onto the channel.
   Alt+click a material channel (of a fill or the brush) to keep that channel alone.
 - **63 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
