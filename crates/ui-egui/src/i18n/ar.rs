@@ -339,6 +339,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "من قالب"),
     ("From template / project", "من قالب / مشروع"),
     ("Full", "كامل"),
+    ("GPU error: {error}", "خطأ في GPU: {error}"),
     ("Geometry mask", "قناع هندسي"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
@@ -538,6 +539,14 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal map format", "صيغة خريطة النواظم"),
     ("Normal map inverse detail", "عكس تفاصيل خريطة النواظم"),
     ("Normal: painting uses the flat normal", "عادي: يستخدم الرسم الناظم المسطح"),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "لا توجد ذاكرة GPU كافية لعرض مجموعة الخامات \"{name}\" كاملة: خفّض دقة الخامة لمنفذ العرض في الإعدادات. لا يتأثر الرسم والتصدير.",
+    ),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "لا توجد ذاكرة GPU كافية لعرض {count} من مجموعات الخامات كاملة ({names}): خفّض دقة الخامة لمنفذ العرض في الإعدادات. لا يتأثر الرسم والتصدير.",
+    ),
     ("Not exported: no source in this texture set", "لم يتم التصدير: لا يوجد مصدر في مجموعة الخامات هذه"),
     ("Not saved: {error}", "لم يتم الحفظ: {error}"),
     ("Off", "معطل"),

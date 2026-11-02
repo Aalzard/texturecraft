@@ -354,6 +354,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "Do modelo"),
     ("From template / project", "Do modelo / projeto"),
     ("Full", "Completa"),
+    ("GPU error: {error}", "Erro de GPU: {error}"),
     ("Geometry mask", "Máscara de geometria"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
@@ -556,6 +557,14 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal map format", "Formato do mapa normal"),
     ("Normal map inverse detail", "Detalhe inverso de mapa normal"),
     ("Normal: painting uses the flat normal", "Normal: a pintura usa a normal plana"),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "Memória de GPU insuficiente para mostrar o conjunto de texturas \"{name}\" por completo: reduza nas Configurações a resolução das texturas da viewport. A pintura e a exportação não são afetadas.",
+    ),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "Memória de GPU insuficiente para mostrar por completo {count} conjuntos de texturas ({names}): reduza nas Configurações a resolução das texturas da viewport. A pintura e a exportação não são afetadas.",
+    ),
     ("Not exported: no source in this texture set", "Não exportado: sem origem neste conjunto de texturas"),
     ("Not saved: {error}", "Não salvo: {error}"),
     ("Off", "Desligado"),

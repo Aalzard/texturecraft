@@ -17,10 +17,15 @@ texturecraft-bake = { workspace = true }
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
 half = { workspace = true }
+log = { workspace = true }
 rayon = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "0.4"
+
+# The browser's WebGPU resolves error scopes later: their results are awaited on the page.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
 
 [dev-dependencies]
 image = { workspace = true }

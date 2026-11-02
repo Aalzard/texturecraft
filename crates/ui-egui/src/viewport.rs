@@ -95,6 +95,59 @@ fn shade(app: &TextureCraftApp) -> Shade {
     }
 }
 
+/// Show what the GPU side reported (each message once while its toast is up).
+fn gpu_report_toasts(app: &mut TextureCraftApp, reports: crate::gpu::GpuReports) {
+    let names: Vec<String> = reports.memory.iter().filter_map(|ts| app.session.doc.project.texture_sets.get(*ts).map(|t| t.name.clone())).collect();
+    if !names.is_empty() {
+        // One sticky notice for every set the GPU could not hold (they are not retried, so the
+        // notice stays until dismissed); after a dismissal, a new one names only the new sets.
+        let (sets, shown) = &mut app.gpu_memory;
+        let current = shown.take().filter(|text| app.toasts.iter().any(|t| &t.text == text));
+        match &current {
+            Some(text) => app.toasts.retain(|t| &t.text != text),
+            None => sets.clear(),
+        }
+        for n in names {
+            if !sets.contains(&n) {
+                sets.push(n);
+            }
+        }
+        let text = match sets.as_slice() {
+            [one] => trf(
+                "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+                &[("name", one)],
+            ),
+            many => {
+                let short = |n: &String| match n.char_indices().nth(MAX_NAME_CHARS) {
+                    Some((cut, _)) => format!("\"{}...\"", &n[..cut]),
+                    None => format!("\"{n}\""),
+                };
+                let mut list = many.iter().take(MAX_NAMED_SETS).map(short).collect::<Vec<_>>().join(", ");
+                if many.len() > MAX_NAMED_SETS {
+                    list.push_str(", ...");
+                }
+                trf(
+                    "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+                    &[("count", &many.len()), ("names", &list)],
+                )
+            }
+        };
+        app.gpu_memory.1 = Some(text.clone());
+        app.toast_sticky(text);
+    }
+    for e in &reports.errors {
+        let text = trf("GPU error: {error}", &[("error", e)]);
+        if !app.toasts.iter().any(|t| t.text == text) {
+            app.toast(text, true);
+        }
+    }
+}
+
+/// Texture sets a GPU memory notice names before "...".
+const MAX_NAMED_SETS: usize = 5;
+/// Characters of a set name in that notice (long names are cut, with "...").
+const MAX_NAME_CHARS: usize = 32;
+
 /// This frame's scene sync (compositing and GPU uploads), run by the first view drawn, after
 /// that view handled its input: a stroke shows in the frame it is painted, not the next.
 pub struct PendingSync(Option<Option<crate::gpu::AuxView>>);
@@ -105,7 +158,9 @@ fn add_callback(app: &mut TextureCraftApp, ui: &Ui, rect: Rect, frame: Frame, sy
         (Some(aux), Some(g)) => {
             let t0 = crate::now_ms();
             let scene = g.sync(&mut app.session, aux, u32::from(app.ui.prefs.viewport_texture.min(2)), f64::from(app.profiler.logic_ms));
+            let reports = g.take_reports();
             app.profiler.sync_ms += (crate::now_ms() - t0) as f32;
+            gpu_report_toasts(app, reports);
             // Display tiles left for later frames (the frame budget ran out).
             if app.session.caches.iter().any(|c| !c.upload.is_empty()) {
                 ui.ctx().request_repaint();

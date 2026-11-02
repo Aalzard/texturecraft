@@ -351,6 +351,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "テンプレートから"),
     ("From template / project", "テンプレート / プロジェクトから"),
     ("Full", "フル"),
+    ("GPU error: {error}", "GPU エラー: {error}"),
     ("Geometry mask", "ジオメトリマスク"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
@@ -553,6 +554,14 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal map format", "ノーマルマップ形式"),
     ("Normal map inverse detail", "ノーマルマップ 逆ディテール"),
     ("Normal: painting uses the flat normal", "ノーマル: ペイントにはフラットな法線を使用"),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU メモリが不足しているため、テクスチャセット「{name}」を完全には表示できません：設定でビューポートのテクスチャ解像度を下げてください。ペイントと書き出しには影響しません。",
+    ),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU メモリが不足しているため、{count} 個のテクスチャセット（{names}）を完全には表示できません：設定でビューポートのテクスチャ解像度を下げてください。ペイントと書き出しには影響しません。",
+    ),
     ("Not exported: no source in this texture set", "エクスポートされません: このテクスチャセットにソースがありません"),
     ("Not saved: {error}", "保存されていません: {error}"),
     ("Off", "オフ"),

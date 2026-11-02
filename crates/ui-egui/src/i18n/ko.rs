@@ -345,6 +345,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "템플릿 기준"),
     ("From template / project", "템플릿 / 프로젝트 기준"),
     ("Full", "전체"),
+    ("GPU error: {error}", "GPU 오류: {error}"),
     ("Geometry mask", "지오메트리 마스크"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
@@ -547,6 +548,14 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal map format", "노멀 맵 형식"),
     ("Normal map inverse detail", "노멀 맵 역 디테일"),
     ("Normal: painting uses the flat normal", "노멀: 평면 노멀로 페인팅합니다"),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU 메모리가 부족하여 텍스처 세트 \"{name}\"을(를) 모두 표시할 수 없습니다: 설정에서 뷰포트의 텍스처 해상도를 낮추세요. 페인팅과 내보내기에는 영향이 없습니다.",
+    ),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "GPU 메모리가 부족하여 텍스처 세트 {count}개({names})를 모두 표시할 수 없습니다: 설정에서 뷰포트의 텍스처 해상도를 낮추세요. 페인팅과 내보내기에는 영향이 없습니다.",
+    ),
     ("Not exported: no source in this texture set", "내보내지 않음: 이 텍스처 세트에 소스가 없습니다"),
     ("Not saved: {error}", "저장되지 않음: {error}"),
     ("Off", "끄기"),
