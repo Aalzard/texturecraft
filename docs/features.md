@@ -45,6 +45,7 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Fill layers** take uniform values, **22 procedurals** (clouds, cells, grunge, scratches, wood
   grain, bricks, fabric weave, leather grain, marble veins, Voronoi, paint chips…) or your own
   **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.
+  Alt+click a material channel (of a fill or the brush) to keep that channel alone.
 - **54 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
   velvet, skin, wax, glass, woods, stone, plastics, fabric, leather, ceramic, rust, cork, paper), **21 smart
   materials** (rusted iron, worn paint, oxidized copper, bronze statue, weathered wood, mossy
@@ -63,7 +64,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **UDIM / UV tiles:** detected on import or switched on later, with a resolution per tile and one
   texture per tile on export (`$udim`).
 - **Texture sets** from 128 to 8192 px per material, resampled when you change them, with 21
-  channel types to add or remove.
+  channel types to add or remove. Show, hide or invert them all at once, or **focus** on the
+  active one.
 - **Projects** are a single `.tcraft` file: the mesh, every layer (sparse and lossless), baked maps
   and imported images. **Project templates** start new work from a saved setup.
 

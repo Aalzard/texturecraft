@@ -949,4 +949,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Style", "스타일"),
     ("Use as brush alpha", "브러시 알파로 사용"),
     ("Place as decal", "데칼로 배치"),
+    ("Click: turn this channel on or off. Alt+click: this channel only", "클릭: 이 채널 켜기/끄기. Alt+클릭: 이 채널만"),
+    ("Show all", "모두 표시"),
+    ("Hide all", "모두 숨기기"),
+    ("Invert show/hide", "표시/숨기기 반전"),
+    ("Show or hide texture sets", "텍스처 세트 표시 또는 숨기기"),
+    ("Focus: show only the active texture set", "포커스: 활성 텍스처 세트만 표시"),
 ];

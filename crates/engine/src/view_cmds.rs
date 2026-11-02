@@ -1,6 +1,7 @@
 //! Edit, viewport and display commands.
 
 use serde_json::{Value, json};
+use texturecraft_core::project::ENVIRONMENTS;
 use texturecraft_core::{BakedMap, Channel, ToneMapping};
 use texturecraft_geom::glam::Vec3;
 
@@ -164,6 +165,9 @@ fn display(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(bad("display.set", format!("no image resource `{name}` (import it with resource.import)")));
     }
+    if let Some(e) = env.as_deref().filter(|e| !e.starts_with(texturecraft_core::project::ENV_RESOURCE_PREFIX) && !ENVIRONMENTS.contains(e)) {
+        return Err(bad("display.set", format!("unknown environment `{e}`: one of {}, or resource:<image>", ENVIRONMENTS.join(", "))));
+    }
     let d = &mut s.doc.project.display;
     if let Some(e) = env {
         d.environment = e;
@@ -234,6 +238,10 @@ mod tests {
     fn hdr_resources_become_the_environment() {
         let mut s = Session::new_project("t", texturecraft_geom::primitives::sphere(1.0, 16, 8), "builtin:sphere", None, 128).unwrap();
         assert!(execute(&mut s, "display.set", &json!({"environment": "resource:sky.hdr"})).is_err(), "unknown resources are rejected");
+        let e = execute(&mut s, "display.set", &json!({"environment": "nonexistent"})).unwrap_err().to_string();
+        assert!(e.contains("Studio Soft"), "unknown environments are rejected with the valid names: {e}");
+        assert_eq!(s.doc.project.display.environment, "Studio Soft");
+        execute(&mut s, "display.set", &json!({"environment": "Night"})).unwrap();
         let img = image::Rgb32FImage::from_fn(64, 32, |_, y| image::Rgb([if y < 8 { 40.0 } else { 0.5 }; 3]));
         let mut hdr = Vec::new();
         image::DynamicImage::ImageRgb32F(img).write_to(&mut std::io::Cursor::new(&mut hdr), image::ImageFormat::Hdr).unwrap();
