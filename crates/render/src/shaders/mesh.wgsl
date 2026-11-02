@@ -283,10 +283,13 @@ fn hash12(p: vec2<f32>) -> f32 {
 
 const PARALLAX_STEPS: i32 = 16;
 
-// The share of its atlas block a UV tile fills (Extra alpha, packed in compose/src/display.rs):
-// a smaller tile has fewer texels per UV unit, so its height slopes per texel shrink with it.
-fn tile_scale(extra: vec4<f32>) -> f32 {
-    return exp2(-extra.a * 255.0 / 32.0);
+// The share of its atlas block the UV tile at `uv` fills (Extra alpha, packed in
+// compose/src/display.rs): a smaller tile has fewer texels per UV unit, so its height slopes per
+// texel shrink with it. Read unfiltered, so neighbouring blocks and mips never blend scales.
+fn tile_scale(uv: vec2<f32>) -> f32 {
+    let dims = vec2<i32>(textureDimensions(t_extra));
+    let p = clamp(vec2<i32>(floor(uv * vec2<f32>(dims))), vec2<i32>(0), dims - 1);
+    return exp2(-textureLoad(t_extra, p, 0).a * 255.0 / 32.0);
 }
 
 // Parallax occlusion mapping: march the view ray down through the signed height field (the mesh
@@ -298,7 +301,7 @@ fn parallax_uv(uv: vec2<f32>, v_ts: vec3<f32>) -> vec2<f32> {
     let dx = dpdx(uv);
     let dy = dpdy(uv);
     // UV shift per unit of height along the ray (grazing angles capped).
-    let shift = vec2<f32>(v_ts.x, -v_ts.y) / max(v_ts.z, 0.15) * (g.mode.z / 16.0) * tile_scale(textureSampleGrad(t_extra, samp, uv, dx, dy));
+    let shift = vec2<f32>(v_ts.x, -v_ts.y) / max(v_ts.z, 0.15) * (g.mode.z / 16.0) * tile_scale(uv);
     var prev_z = 1.0;
     var prev_d = 1.0 - textureSampleGrad(t_height, samp, uv + shift, dx, dy).r;
     // Heights at the top of the range already hide the ray at entry.
@@ -400,7 +403,7 @@ fn shade_mesh(i: VOut, front: bool) -> Shaded {
 
     // Tangent-space normal: height gradient (+Y = up the image) combined with the normal channel.
     // Same slope rule as texture export: strength 1 tilts 45° for a height change of 1 over 1/16 of the width.
-    let k = g.mode.z * dims.x / 16.0 * tile_scale(extra);
+    let k = g.mode.z * dims.x / 16.0 * tile_scale(uv);
     let n_height = normalize(vec3<f32>(-(hr - hl) * 0.5 * k, (hd - hu) * 0.5 * k, 1.0));
     var n_detail = snorm8(nrm_s);
     n_detail.y *= g.mode.w;
