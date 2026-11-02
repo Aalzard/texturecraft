@@ -72,6 +72,8 @@ pub struct TextureCraftApp {
     pub gpu: Option<gpu::GpuLink>,
     pub control: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     pub toasts: Vec<Toast>,
+    /// Texture sets the GPU could not hold, and the text of the one sticky toast naming them.
+    pub(crate) gpu_memory: (Vec<String>, Option<String>),
     pub bake: Option<BakeJob>,
     pub resize: Option<ResizeJob>,
     pub thumbs: thumbs::Thumbs,
@@ -114,7 +116,7 @@ impl TextureCraftApp {
         // Bakes cast their rays on a GPU device of their own (created on the first bake).
         #[cfg(not(target_arch = "wasm32"))]
         texturecraft_engine::bake_cmds::install_gpu_tracer(Arc::new(texturecraft_render::gpu_bake::GpuBaker::new()));
-        let gpu = cc.wgpu_render_state.as_ref().map(gpu::init);
+        let gpu = cc.wgpu_render_state.as_ref().map(|rs| gpu::init(rs, &cc.egui_ctx));
         // The first run speaks the OS (or browser) language.
         let ui = cc.storage.and_then(|s| eframe::get_value::<UiState>(s, "ui")).unwrap_or_else(|| {
             let mut ui = UiState::default();
@@ -128,6 +130,7 @@ impl TextureCraftApp {
             gpu,
             control: None,
             toasts: Vec::new(),
+            gpu_memory: (Vec::new(), None),
             bake: None,
             resize: None,
             thumbs: thumbs::Thumbs::default(),
@@ -175,6 +178,12 @@ impl TextureCraftApp {
         self.toasts.push(Toast { text: text.into(), error, until: self.last_time + if error { 6.0 } else { 3.0 } });
     }
 
+    /// An error toast that stays until the user dismisses it (for a problem that persists and
+    /// is reported once, like a texture set the GPU could not hold).
+    pub fn toast_sticky(&mut self, text: impl Into<String>) {
+        self.toasts.push(Toast { text: text.into(), error: true, until: f64::INFINITY });
+    }
+
     /// Start baking texture sets in the background (one after another).
     pub fn start_bake(&mut self, sets: Vec<usize>) {
         if self.bake.is_some() || sets.is_empty() {
@@ -193,19 +202,19 @@ impl TextureCraftApp {
                     let ts = *ts;
                     job.current = None;
                     if let Err(e) = self.session.apply_bake(ts, out) {
+                        self.session.bake_abandoned([ts]);
                         self.toast(e.to_string(), true);
                     }
                 }
                 Ok(Err(e)) => {
-                    job.current = None;
                     let msg = e.to_string();
-                    self.bake = None;
+                    self.cancel_bake();
                     self.toast(msg, true);
                     return;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.bake = None;
+                    self.cancel_bake();
                     self.toast(i18n::tr("The bake worker stopped"), true);
                     return;
                 }
@@ -229,7 +238,10 @@ impl TextureCraftApp {
                         job.current = Some((ts, progress, rx));
                     }
                 }
-                Err(e) => self.toast(e.to_string(), true),
+                Err(e) => {
+                    self.session.bake_abandoned([ts]);
+                    self.toast(e.to_string(), true);
+                }
             }
         }
     }
@@ -247,12 +259,14 @@ impl TextureCraftApp {
         }
     }
 
+    /// Stops the bake job (also after an error). The set being baked and the queued ones wait for
+    /// their next bake input change before Auto-rebake tries them again.
     pub fn cancel_bake(&mut self) {
-        if let Some(job) = self.bake.take()
-            && let Some((_, p, _)) = job.current
-        {
+        let Some(job) = self.bake.take() else { return };
+        if let Some((_, p, _)) = &job.current {
             p.cancel.store(true, Ordering::Relaxed);
         }
+        self.session.bake_abandoned(job.current.map(|(ts, ..)| ts).into_iter().chain(job.queue));
     }
 
     /// Resize texture set `ts` to `resolution` on a worker thread (the document changes when
@@ -398,7 +412,10 @@ impl eframe::App for TextureCraftApp {
         self.autosave(now);
         i18n::set_language(&self.ui.prefs.language);
         #[cfg(target_arch = "wasm32")]
-        keymap::sync_captured(&self.ui.keymap);
+        {
+            keymap::sync_captured(&self.ui.keymap);
+            web_files::sync_unsaved(self);
+        }
         self.fonts.update(ctx, i18n::current().code, self.ui.windows.settings);
         menus::shortcuts(self, ctx);
         profile::drive(self, ctx);
@@ -485,10 +502,19 @@ fn toasts(app: &mut TextureCraftApp, ctx: &egui::Context) {
     if app.toasts.is_empty() {
         return;
     }
-    ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    // Expiring toasts need frames to disappear on time; sticky ones wait for a click.
+    if app.toasts.iter().any(|t| t.until.is_finite()) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    }
     let tk = theme::Tokens::get(ctx);
+    let mut dismissed = None;
+    // Toasts fit the window: at most 360 points wide and, for their text, a part of its height
+    // (longer text scrolls), so a sticky toast's dismiss button always stays on screen.
+    let screen = ctx.content_rect().size();
+    let max_width = (screen.x - 52.0).clamp(120.0, 360.0);
+    let max_text_height = (screen.y * 0.35).clamp(48.0, 220.0);
     egui::Area::new(egui::Id::unique("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -36.0)).show(ctx, |ui| {
-        for t in &app.toasts {
+        for (i, t) in app.toasts.iter().enumerate() {
             egui::Frame::NONE
                 .fill(tk.panel)
                 .stroke(egui::Stroke::new(1.0, if t.error { tk.danger } else { tk.accent }))
@@ -496,10 +522,26 @@ fn toasts(app: &mut TextureCraftApp, ctx: &egui::Context) {
                 .shadow(ui.visuals().popup_shadow)
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
-                    ui.set_max_width(360.0);
-                    ui.label(egui::RichText::new(&t.text).color(tk.text_strong));
+                    ui.set_max_width(max_width);
+                    let sticky = t.until.is_infinite();
+                    ui.horizontal_top(|ui| {
+                        // The text wraps in the width the dismiss button leaves.
+                        let width = if sticky { max_width - 28.0 } else { max_width };
+                        ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                            egui::ScrollArea::vertical().id_salt(("toast", i)).max_height(max_text_height).show(ui, |ui| {
+                                ui.set_max_width(width);
+                                ui.add(egui::Label::new(egui::RichText::new(&t.text).color(tk.text_strong)).wrap());
+                            });
+                        });
+                        if sticky && widgets::icon_button(ui, egui_phosphor::regular::X, i18n::tr("Dismiss"), false, 18.0).clicked() {
+                            dismissed = Some(i);
+                        }
+                    });
                 });
             ui.add_space(4.0);
         }
     });
+    if let Some(i) = dismissed.filter(|i| *i < app.toasts.len()) {
+        app.toasts.remove(i);
+    }
 }

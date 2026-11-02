@@ -7,7 +7,7 @@ struct Post {
     b: vec4<f32>, // x vignette, y sharpen, z grain, w bloom threshold
     c: vec4<f32>, // depth of field (fx.wgsl): x circle of confusion at infinity (pixels), y focus depth, z largest circle radius (pixels), w accumulation sample
     d: vec4<f32>, // subsurface blur (fx.wgsl): xyz mean free path per channel (world units), w pixels per world unit at depth 1
-    e: vec4<f32>, // x orthographic camera (1: pixels per world unit don't fall off with depth), yzw -
+    e: vec4<f32>, // x orthographic camera (1: pixels per world unit don't fall off with depth), y accumulation sample, zw -
 };
 
 @group(0) @binding(3) var<uniform> post: Post;

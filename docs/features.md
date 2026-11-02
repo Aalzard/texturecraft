@@ -7,6 +7,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Brushes** with size, flow, stroke opacity, spacing, hardness, angle and follow path; size,
   angle, flow and position jitter; tangent or camera alignment, angle fade, backface culling, lazy
   mouse, X/Y/Z mirror and radial symmetry (copies paint the far side too) and pen pressure.
+  Ctrl+drag in a view sets them on the fly: right-drag the size and hardness, left-drag the flow
+  and angle.
   **67 procedural brush alphas** in their own shelf tab, or any imported image as the alpha.
   **18 brush presets** (basic, wear and grunge, details) in the shelf's Brushes tab set the
   stroke and keep the size; save your own brushes there too.
@@ -32,22 +34,26 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   duplicate, group, flatten, cut, copy and paste across texture sets, and **geometry masks** that
   show a layer only on the mesh parts you pick (right-click a layer, or click parts with the
   **Geometry mask** tool, 8).
-- **Filters and content effects** on any layer or mask: **28 filters** (HSL, levels,
-  contrast/luminosity, color balance, gradient map, posterize, clamp, invert, threshold,
-  grayscale, replace color, edge detect, normal invert, baked lighting, blur, directional and
-  slope blur, sharpen, high pass, bevel, glow, warp, directional warp, mosaic and four material
-  finishes), fills and paint.
+- **Filters and content effects** on any layer or mask: **31 filters** (HSL, levels,
+  contrast/luminosity, color balance, gradient map, posterize, clamp, histogram scan, range and
+  shift, invert, threshold, grayscale, replace color, edge detect, normal invert, baked lighting,
+  blur, directional and slope blur, sharpen, high pass, bevel, glow, warp, directional warp,
+  mosaic and four material finishes), fills and paint. **Levels** shows a histogram of what it
+  reads (the mask below it, or a content channel you pick) with its input range marked.
   **Anchor points** record the stack at a layer so masks and fills higher up can react to it.
 - **Masks** with a white or black background and a stack of effects: painted strokes, fills,
   **mesh-map generators** (edge wear, dirt, thin areas, curvature, AO, position and direction
   gradients, all with world-space noise), filters, ID color selection and compare. Alt+click a
-  mask to view it alone.
-- **Fill layers** take uniform values, **22 procedurals** (clouds, cells, grunge, scratches, wood
-  grain, bricks, fabric weave, leather grain, marble veins, Voronoi, paint chips…) or your own
+  mask to view it alone. Drag an effect to reorder its stack, or right-click it to duplicate it
+  (painted strokes included) or copy it onto another layer or mask (Ctrl+C, Ctrl+V); with an
+  effect selected, Ctrl+D and Delete duplicate or remove it.
+- **Fill layers** take uniform values, **23 procedurals** (clouds, cells, grunge, scratches, wood
+  grain, bricks, fabric weave, twill, leather grain, marble veins, Voronoi, paint chips…) or your own
   **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.
   Alt+click a material channel (of a fill or the brush) to keep that channel alone.
-- **54 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
-  velvet, skin, wax, glass, woods, stone, plastics, fabric, leather, ceramic, rust, cork, paper), **21 smart
+- **63 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
+  velvet, skin, wax, glass, ice, woods, bark, stone, sand, mud, snow, bone, plastics, fabric,
+  leather, ceramic, rust, cork, paper), **21 smart
   materials** (rusted iron, worn paint, oxidized copper, bronze statue, weathered wood, mossy
   brick and stone, sun-faded paint…) and **18 smart masks**, all procedural, so they work at any
   resolution. Drag them from the tabbed, searchable shelf onto the layer stack or straight onto
@@ -67,15 +73,19 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   channel types to add or remove. Show, hide or invert them all at once, or **focus** on the
   active one.
 - **Projects** are a single `.tcraft` file: the mesh, every layer (sparse and lossless), baked maps
-  and imported images. **Project templates** start new work from a saved setup. Closing the app
-  with unsaved changes asks whether to save them first.
+  and imported images. **Project templates** start new work from a saved setup. Closing the app,
+  or opening, starting or closing another project, with unsaved changes asks whether to save them
+  first (in the browser too, where Save downloads the project and closing or reloading the tab
+  asks before the changes are lost).
 
 ## Bake and export
 
 - **Bake mesh maps** on the GPU (ray traced, about 12× the CPU path) or on every CPU core: ambient
   occlusion, curvature, thickness, world-space normal, position, ID, bent normals, opacity, color
   and direction maps, and normal and height maps from high-poly meshes, with a cage, ray distances
-  and matching by mesh name.
+  and matching by mesh name. Or **use your own images** as mesh maps (baked in another app, or
+  edited): drop one from the Assets panel on a slot of the Texture Set Settings, or pick it from
+  the slot's menu.
 - **Export presets** for glTF PBR Metal Roughness, Unreal Engine (packed), Unity HDRP (mask map),
   Unity Standard, Blender (Principled BSDF), Godot 4 (ORM), OpenPBR (with the coat, fuzz,
   anisotropy, transmission and subsurface maps), separate maps, mesh maps and document channels, in
@@ -114,6 +124,7 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - A **start window** at launch: a new project, a project file, a recent project or the sample
   (Settings › Interface › Start window).
 - A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.
+- A **History** panel: click any step to go back to it, or forward again to an undone one.
 - **10 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese,
   Korean and Arabic, switchable live.
 - **In the browser:** the same app compiled to WebAssembly, on WebGPU or WebGL2, with touch

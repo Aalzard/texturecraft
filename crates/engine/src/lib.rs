@@ -14,6 +14,7 @@ pub mod brush_preset_cmds;
 pub mod camera_cmds;
 pub mod commands;
 pub mod decal_cmds;
+pub mod effect_clipboard;
 pub mod file_cmds;
 pub mod filter_lib;
 pub mod inspect;
@@ -23,6 +24,8 @@ pub mod layer_ops;
 pub mod mask_cmds;
 pub mod material_lib;
 pub mod materials;
+pub mod materialx_cmds;
+pub mod meshmap_cmds;
 pub mod painting;
 pub mod path_tool;
 // Mesh reimport reads files: native only.

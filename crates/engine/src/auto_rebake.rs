@@ -20,7 +20,7 @@ use texturecraft_bake::Progress;
 use texturecraft_core::BakedMap;
 
 use crate::bake_cmds::BakeTask;
-use crate::commands::{CommandSpec, always, bad, boolp, strp};
+use crate::commands::{CommandSpec, always, bad, boolp};
 use crate::{Result, Session, cmd};
 
 /// Which map rebakes itself, and what each texture set was last baked from.
@@ -115,12 +115,22 @@ impl Session {
     }
 
     /// Records a finished bake: when it made the Auto-rebake map, the set is up to date.
-    pub(crate) fn note_baked(&mut self, ts: usize, made: impl Iterator<Item = BakedMap>) {
+    pub(crate) fn note_baked(&mut self, ts: usize, mut made: impl Iterator<Item = BakedMap>) {
         let key = self.auto_rebake.pending.remove(&ts);
         if let (Some(key), Some(map)) = (key, self.auto_rebake.map)
-            && made.into_iter().any(|m| m == map)
+            && made.any(|m| m == map)
         {
             self.auto_rebake.seen.insert(ts, key);
+        }
+    }
+
+    /// Records bakes of `sets` that were cancelled, failed or never started: Auto-rebake leaves
+    /// those sets alone until their bake inputs change again, instead of retrying every frame.
+    pub fn bake_abandoned(&mut self, sets: impl IntoIterator<Item = usize>) {
+        for ts in sets {
+            if let Some(key) = self.auto_rebake.pending.remove(&ts).or_else(|| self.bake_inputs_key(ts)) {
+                self.auto_rebake.seen.insert(ts, key);
+            }
         }
     }
 
@@ -153,8 +163,6 @@ fn auto_rebake(s: &mut Session, p: &Value) -> Result<Value> {
         if s.auto_rebake.map != Some(map) {
             s.auto_rebake = AutoRebake { map: Some(map), ..AutoRebake::default() };
         }
-    } else if strp(p, "map").is_some() {
-        return Err(bad("bake.autoRebake", "`map` must be a map id or null"));
     }
     Ok(state(s))
 }

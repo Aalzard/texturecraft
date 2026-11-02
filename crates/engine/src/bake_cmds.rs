@@ -397,7 +397,8 @@ fn skew_image(path: &str) -> Result<(u32, u32, Vec<f32>)> {
         return Err(bad(cmd, format!("{path} is over 256 MiB")));
     }
     let bytes = std::fs::read(path).map_err(|e| bad(cmd, format!("cannot read {path}: {e}")))?;
-    let img = texturecraft_formats::decode_image(&bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+    // The size is checked from the header, before the pixels are decoded.
+    let img = texturecraft_formats::decode_image_within(&bytes, texturecraft_bake::MAX_TEXELS).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     Ok((img.width, img.height, img.rgba.iter().map(|p| (p[0] + p[1] + p[2]) / 3.0).collect()))
 }
 

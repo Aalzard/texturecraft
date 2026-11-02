@@ -1,6 +1,7 @@
 //! German UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "\"{layer}\" ist noch nicht bemalt: Der Filter verändert, was du darauf malst."),
     ("0 turns autosave off. Copies go to {folder}", "0 deaktiviert die automatische Speicherung. Kopien werden in {folder} abgelegt"),
     ("2D view only", "Nur 2D-Ansicht"),
     ("32 bits (float)", "32 Bit (Float)"),
@@ -198,6 +199,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Contrast", "Kontrast"),
     ("Contrast/Luminosity", "Kontrast/Luminanz"),
     ("Converted maps", "Konvertierte Maps"),
+    ("Copy RGB values", "RGB-Werte kopieren"),
+    ("Copy effect", "Effekt kopieren"),
     ("Copy from", "Kopieren aus"),
     ("Copy layer(s)", "Ebene(n) kopieren"),
     ("Copy the selected layer alone (its empty parts copy nothing)", "Nur die ausgewählte Ebene kopieren (ihre leeren Bereiche kopieren nichts)"),
@@ -217,9 +220,14 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Crate", "Kiste"),
     ("Create", "Erstellen"),
     ("Create smart material", "Smart-Material erstellen"),
+    (
+        "Ctrl+right-drag in a view sets the size and hardness, Ctrl+left-drag the flow and angle.",
+        "Strg+Ziehen mit RMT in einer Ansicht stellt Größe und Härte ein, Strg+Ziehen mit LMT Fluss und Winkel.",
+    ),
     ("Cube", "Würfel"),
     ("Current layer", "Aktuelle Ebene"),
     ("Curvature", "Krümmung"),
+    ("Cut effect", "Effekt ausschneiden"),
     ("Cut layer(s)", "Ebene(n) ausschneiden"),
     ("Cyan / red", "Cyan / Rot"),
     ("Cylinder", "Zylinder"),
@@ -280,7 +288,12 @@ pub const TABLE: &[(&str, &str)] = &[
         "Drag the frame to move the decal, a corner to scale it, the round handle to turn it",
         "Rahmen ziehen, um das Decal zu verschieben, eine Ecke zum Skalieren, den runden Griff zum Drehen",
     ),
+    (
+        "Drop an image from the Assets panel here to use it as this mesh map",
+        "Ein Bild aus dem Assets-Panel hier ablegen, um es als diese Mesh-Map zu verwenden",
+    ),
     ("Dry streaks", "Trockene Schlieren"),
+    ("Duplicate effect", "Effekt duplizieren"),
     ("Duplicate layer(s)", "Ebene(n) duplizieren"),
     ("Duplicate the selected template", "Ausgewählte Vorlage duplizieren"),
     ("Edge Detect", "Kantenerkennung"),
@@ -350,6 +363,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("From template", "Aus Vorlage"),
     ("From template / project", "Aus Vorlage / Projekt"),
     ("Full", "Voll"),
+    ("GPU error: {error}", "GPU-Fehler: {error}"),
     ("Geometry mask", "Geometriemaske"),
     (
         "GGX specular with height-correlated Smith visibility, Lambert diffuse, split-sum image-based lighting with spherical-harmonics irradiance and horizon fading.",
@@ -393,6 +407,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("High poly mesh suffix", "Suffix für High-Poly-Mesh"),
     ("High poly: {name}", "High-Poly: {name}"),
     ("Highlights", "Lichter"),
+    ("Histogram Range", "Histogrammbereich"),
+    ("Histogram Scan", "Histogramm-Scan"),
+    ("Histogram Shift", "Histogramm-Verschiebung"),
     ("History", "Verlauf"),
     (
         "Hold S: left-drag rotates, right-drag scales, middle-drag moves the stencil.",
@@ -423,6 +440,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Import images to use them in fills and masks", "Bilder importieren, um sie in Füllungen und Masken zu verwenden"),
     ("Import resources...", "Ressourcen importieren..."),
+    ("Import MaterialX material...", "MaterialX-Material importieren..."),
+    ("MaterialX materials", "MaterialX-Materialien"),
     ("Import...", "Importieren..."),
     ("Imported template \"{name}\"", "Vorlage „{name}“ importiert"),
     ("Imported {name}", "{name} importiert"),
@@ -548,12 +567,22 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Normal from height", "Normale aus Höhe"),
     ("Normal map combine", "Normal-Map kombinieren"),
     ("Normal map detail", "Normal-Map-Detail"),
+    ("Color space", "Farbraum"),
     ("Normal map format", "Normal-Map-Format"),
     ("Normal map inverse detail", "Normal-Map-Detail invertiert"),
     ("Normal: painting uses the flat normal", "Normale: Malen verwendet die flache Normale"),
+    (
+        "Not enough GPU memory to show texture set \"{name}\" fully: lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "Nicht genug GPU-Speicher, um das Texturset \"{name}\" vollständig anzuzeigen: Verringere in den Einstellungen die Texturauflösung des Ansichtsfensters. Malen und Export sind nicht betroffen.",
+    ),
+    (
+        "Not enough GPU memory to show {count} texture sets fully ({names}): lower the viewport Texture resolution in Settings. Painting and export are not affected.",
+        "Nicht genug GPU-Speicher, um {count} Texturesets vollständig anzuzeigen ({names}): Verringere in den Einstellungen die Texturauflösung des Ansichtsfensters. Malen und Export sind nicht betroffen.",
+    ),
     ("Not exported: no source in this texture set", "Nicht exportiert: keine Quelle in diesem Texturset"),
     ("Not saved: {error}", "Nicht gespeichert: {error}"),
     ("Off", "Aus"),
+    ("Offset", "Versatz"),
     ("Offset right", "Versatz rechts"),
     ("Offset up", "Versatz oben"),
     (
@@ -608,6 +637,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Particles", "Partikel"),
     ("Passthrough", "Hindurchwirken"),
     ("Paste as instance", "Als Instanz einfügen"),
+    ("Paste effect", "Effekt einfügen"),
     ("Paste layer(s)", "Ebene(n) einfügen"),
     ("Path", "Pfad"),
     ("Path trace on the processor instead of the graphics card (slower)", "Path Tracing auf dem Prozessor statt auf der Grafikkarte (langsamer)"),
@@ -645,6 +675,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Radial copies", "Radiale Kopien"),
     ("Radius (texels at 2K)", "Radius (Texel bei 2K)"),
     ("RENDERING", "RENDERING"),
+    ("Range", "Bereich"),
     ("Rebind any menu item, tool or command", "Beliebige Menüeinträge, Werkzeuge oder Befehle neu belegen"),
     ("Recent projects", "Letzte Projekte"),
     (
@@ -689,6 +720,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Resizing", "Größe wird geändert"),
     ("Restore every default shortcut", "Alle Standard-Tastenkürzel wiederherstellen"),
     ("Return to painting mode", "Zurück zum Malmodus"),
+    ("Return to this step", "Zu diesem Schritt zurückkehren"),
     ("Auto-rebake", "Automatisch neu backen"),
     (
         "Bake this map again by itself when its bake settings, the low poly or the high polys change",
@@ -1015,4 +1047,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Radius", "Radius"),
     ("Remove skew correction", "Skew-Korrektur entfernen"),
+    ("Twill weave", "Köperbindung"),
+    ("Save the changes to {name} first?", "Änderungen an {name} zuerst speichern?"),
 ];

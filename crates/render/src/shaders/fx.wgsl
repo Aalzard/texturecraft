@@ -22,7 +22,8 @@ fn texel_at(t: texture_2d<f32>, p: vec2<f32>) -> vec4<f32> {
 
 // ---- Subsurface scattering: a separable bilateral blur (Jimenez et al., "Separable Subsurface
 // Scattering", 2015) of the scattering diffuse light, a Gaussian per color channel as wide as
-// its mean free path, cut off across depth discontinuities.
+// its mean free path. A tap across a depth discontinuity (or off the mesh) takes the centre's
+// light instead, so no tap drops out of the sum as it crosses a silhouette.
 
 const SSS_TAPS: i32 = 8;
 
@@ -41,17 +42,22 @@ fn sss_blur(p: vec2<f32>, dir: vec2<f32>) -> vec4<f32> {
     let stride = dir * (smax * 3.0 / f32(SSS_TAPS));
     let depth_range = 3.0 * max(post.d.x, max(post.d.y, post.d.z));
     let inv = 1.0 / (2.0 * sigma * sigma + vec3<f32>(1e-4));
+    // Wide blurs space their taps pixels apart: shifting them per pixel (interleaved gradient
+    // noise) and per accumulated frame turns what would show as copies of edges into fine grain.
+    let ign = fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+    let jitter = fract(ign + post.e.y * 0.618034) - 0.5;
     var sum = c.rgb;
     var wsum = vec3<f32>(1.0);
     for (var k = -SSS_TAPS; k <= SSS_TAPS; k++) {
         if (k == 0) {
             continue;
         }
-        let t = texel_at(src, p + stride * f32(k));
-        let x = f32(k) * smax * 3.0 / f32(SSS_TAPS);
+        let o = f32(k) + jitter;
+        let t = texel_at(src, p + stride * o);
+        let x = o * smax * 3.0 / f32(SSS_TAPS);
         let wd = select(0.0, max(1.0 - abs(t.a - c.a) / depth_range, 0.0), t.a > 0.0);
-        let w = exp(-x * x * inv) * wd;
-        sum += t.rgb * w;
+        let w = exp(-x * x * inv);
+        sum += mix(c.rgb, t.rgb, wd) * w;
         wsum += w;
     }
     return vec4<f32>(sum / wsum, c.a);
