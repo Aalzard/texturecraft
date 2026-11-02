@@ -324,8 +324,16 @@ fn leaning_session(lean: bool) -> Session {
     }
     let high_text = obj(&mesh, 0.1, f32::MAX, [1.0; 3]);
     let mut s = Session::new_project("t", mesh, "builtin:plane", None, 256).unwrap();
-    let high = temp_file(if lean { "lean_high.obj" } else { "flat_high.obj" }, &high_text);
-    execute(&mut s, "bake.highPoly.add", &json!({ "path": high })).unwrap();
+    // A folder of its own per call: tests run in parallel, and another one removes the shared folder.
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("texturecraft-lean-test-{}-{call}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let high = dir.join("high.obj");
+    std::fs::write(&high, high_text).unwrap();
+    execute(&mut s, "bake.highPoly.add", &json!({ "path": high.display().to_string() })).unwrap();
+    // The mesh is parsed and kept on add, so the file can go.
+    let _ = std::fs::remove_dir_all(&dir);
     execute(
         &mut s,
         "bake.settings",
@@ -403,7 +411,7 @@ fn painting_skew_widens_a_map_and_bad_strokes_change_nothing() {
     let r = execute(&mut s, "bake.skew.paint", &json!({ "points": [[0.5, 0.5]], "radius": 0.1, "size": 64 })).unwrap();
     assert_eq!(r["skew"]["width"], 64);
     let map = s.bake_meshes.skew.clone().unwrap();
-    assert!(map.values.iter().any(|v| *v > 0.99) && map.values.iter().any(|v| *v == 0.0));
+    assert!(map.values.iter().any(|v| *v > 0.99) && map.values.contains(&0.0));
     let rev = s.bake_meshes.skew_rev;
     // Erasing with value 0 brings it back down; the size stays.
     execute(&mut s, "bake.skew.paint", &json!({ "points": [[0.5, 0.5]], "radius": 0.2, "value": 0.0, "hardness": 1.0 })).unwrap();
@@ -436,4 +444,14 @@ fn painting_skew_widens_a_map_and_bad_strokes_change_nothing() {
     // And the painted map is saved with the project.
     let back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
     assert_eq!(back.bake_meshes.skew, s.bake_meshes.skew);
+}
+
+#[test]
+fn a_stroke_paints_the_skew_map_in_place() {
+    let mut s = plane_session();
+    let stroke = json!({ "points": [[0.5, 0.5]], "radius": 0.1, "size": 64 });
+    execute(&mut s, "bake.skew.paint", &stroke).unwrap();
+    let first = s.bake_meshes.skew.as_ref().map(std::sync::Arc::as_ptr);
+    execute(&mut s, "bake.skew.paint", &stroke).unwrap();
+    assert_eq!(s.bake_meshes.skew.as_ref().map(std::sync::Arc::as_ptr), first, "a stroke step doesn't copy the whole map");
 }
