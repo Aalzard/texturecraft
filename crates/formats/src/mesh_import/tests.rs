@@ -485,3 +485,12 @@ fn gltf_cameras_become_orbit_cameras() {
     assert!(near(top.pitch, 89f32.to_radians()), "looking down, pitch clamped: {top:?}");
     assert!(import_mesh_bytes("scene.gltf", &embedded_gltf()).unwrap().cameras.is_empty());
 }
+
+#[test]
+fn obj_without_object_name_takes_file_stem() {
+    let name = |file: &str, src: &str| import_mesh_bytes(file, src.as_bytes()).unwrap().mesh.submeshes[0].name.clone();
+    let body = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+    assert_eq!(name("rock.obj", body), "rock");
+    assert_eq!(name("rock.obj", &format!("o Boulder\n{body}")), "Boulder");
+    assert_eq!(name("rock.obj", &format!("g Pebble\n{body}")), "Pebble");
+}
