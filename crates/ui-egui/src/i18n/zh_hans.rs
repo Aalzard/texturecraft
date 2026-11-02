@@ -168,6 +168,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Contrast", "对比度"),
     ("Contrast/Luminosity", "对比度/亮度"),
     ("Converted maps", "转换贴图"),
+    ("Copy RGB values", "复制 RGB 值"),
     ("Copy from", "复制自"),
     ("Copy layer(s)", "复制图层"),
     ("Copy the selected layer alone (its empty parts copy nothing)", "仅复制所选图层（其空白部分不复制任何内容）"),
