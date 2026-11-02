@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use serde_json::{Value, json};
 use texturecraft_bake::Progress;
@@ -31,6 +31,22 @@ pub struct AutoRebake {
     seen: BTreeMap<usize, u64>,
     /// Fingerprint taken when a set's bake started, kept when that bake finishes.
     pending: BTreeMap<usize, u64>,
+    /// What each map image in use was baked from. Undo and redo bring back an older image; its own
+    /// entry says its inputs no longer match. Weak, so a freed image doesn't linger and its
+    /// address can't be taken by a new one.
+    origin: Vec<(Weak<Vec<f32>>, u64)>,
+}
+
+impl AutoRebake {
+    fn remember(&mut self, image: &Arc<Vec<f32>>, key: u64) {
+        self.origin.retain(|(w, _)| w.strong_count() > 0);
+        self.origin.retain(|(w, _)| !std::ptr::eq(w.as_ptr(), Arc::as_ptr(image)));
+        self.origin.push((Arc::downgrade(image), key));
+    }
+
+    fn origin_of(&self, image: &Arc<Vec<f32>>) -> Option<u64> {
+        self.origin.iter().find(|(w, _)| std::ptr::eq(w.as_ptr(), Arc::as_ptr(image))).map(|(_, k)| *k)
+    }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -84,12 +100,20 @@ impl Session {
             let columns = set.tile_grid().map_or(1, |g| g.cols);
             let baked = self.doc.baked.get(&ts).is_some_and(|b| b.maps.contains_key(&map) && b.resolution == set.bake.resolution.saturating_mul(columns));
             let Some(key) = self.bake_inputs_key(ts).filter(|_| baked) else { continue };
-            match self.auto_rebake.seen.get(&ts) {
-                None => {
+            let image = self.doc.baked.get(&ts).and_then(|b| b.maps.get(&map)).cloned();
+            // An image whose inputs are known is judged by them (this is what undo is caught by);
+            // one not seen before is taken as up to date, like a project just opened.
+            match (image.as_ref().and_then(|i| self.auto_rebake.origin_of(i)), self.auto_rebake.seen.get(&ts)) {
+                (Some(made_from), _) if made_from != key => due.push(ts),
+                (Some(_), _) => {}
+                (None, Some(seen)) if *seen != key => due.push(ts),
+                (None, Some(_)) => {}
+                (None, None) => {
                     self.auto_rebake.seen.insert(ts, key);
+                    if let Some(image) = &image {
+                        self.auto_rebake.remember(image, key);
+                    }
                 }
-                Some(seen) if *seen != key => due.push(ts),
-                Some(_) => {}
             }
         }
         due
@@ -120,6 +144,9 @@ impl Session {
             && made.any(|m| m == map)
         {
             self.auto_rebake.seen.insert(ts, key);
+            if let Some(image) = self.doc.baked.get(&ts).and_then(|b| b.maps.get(&map)).cloned() {
+                self.auto_rebake.remember(&image, key);
+            }
         }
     }
 
@@ -129,6 +156,11 @@ impl Session {
         for ts in sets {
             if let Some(key) = self.auto_rebake.pending.remove(&ts).or_else(|| self.bake_inputs_key(ts)) {
                 self.auto_rebake.seen.insert(ts, key);
+                // The map as it stands is left alone for these inputs.
+                let image = self.auto_rebake.map.and_then(|m| self.doc.baked.get(&ts)?.maps.get(&m).cloned());
+                if let Some(image) = image {
+                    self.auto_rebake.remember(&image, key);
+                }
             }
         }
     }

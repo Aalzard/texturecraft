@@ -49,7 +49,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   effect selected, Ctrl+D and Delete duplicate or remove it.
 - **Fill layers** take uniform values, **23 procedurals** (clouds, cells, grunge, scratches, wood
   grain, bricks, fabric weave, twill, leather grain, marble veins, Voronoi, paint chips…) or your own
-  **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection.
+  **images**, through UV, tri-planar, planar, spherical, cylindrical or decal projection. Each
+  channel takes its own image (a normal, roughness or height map, say): pick it in the channel's
+  source menu, which also imports one, or drop it from the Assets panel onto the channel.
   Alt+click a material channel (of a fill or the brush) to keep that channel alone.
 - **63 materials** (metals from measured reflectance, car paint, brushed anisotropic steel,
   velvet, skin, wax, glass, ice, woods, bark, stone, sand, mud, snow, bone, plastics, fabric,
@@ -60,6 +62,14 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   the model.
 - **Your own library:** right-click a layer or folder, choose *Create smart material*, and it
   appears under *My smart materials*, pixels and images included.
+- **MaterialCraft materials:** *File › Import material*, a drop on the window, or MaterialCraft's
+  *File › Send to TextureCraft* (it lands under *My smart materials*) adds a `.mcmat` portable
+  material, or a `.mcraft` package, as a fill layer. Its exposed graph inputs (numbers, vectors,
+  toggles, options, colors) and presets show in the layer's properties; every change re-cooks
+  the maps through MaterialCraft's command line at the texture set's resolution, on a worker
+  thread, with the set's baked mesh maps (curvature, AO, thickness…) feeding graph inputs of the
+  same name. *Open in MaterialCraft* edits the graph itself. In the browser the cooked maps paint,
+  but the inputs are read-only.
 
 ## Files and texture sets
 
@@ -71,7 +81,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   texture per tile on export (`$udim`).
 - **Texture sets** from 128 to 8192 px per material, resampled when you change them, with 21
   channel types to add or remove. Show, hide or invert them all at once, or **focus** on the
-  active one.
+  active one. The project's **normal map format** (OpenGL or DirectX, in Texture Set Settings)
+  says how a normal map image set as a mesh map is read, and is the default for export.
 - **Projects** are a single `.tcraft` file: the mesh, every layer (sparse and lossless), baked maps
   and imported images. **Project templates** start new work from a saved setup. Closing the app,
   or opening, starting or closing another project, with unsaved changes asks whether to save them
@@ -123,6 +134,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   them.
 - A **start window** at launch: a new project, a project file, a recent project or the sample
   (Settings › Interface › Start window).
+- A **data folder** of your choice for autosaves, smart materials, presets, templates and UI
+  layouts, on any drive (Settings › Folders; `Documents/TextureCraft` by default).
 - A **shortcut editor** with conflict detection, and every shortcut shown in its tooltip.
 - A **History** panel: click any step to go back to it, or forward again to an undone one.
 - **10 languages:** English, French, German, Spanish, Portuguese, Italian, Japanese, Chinese,

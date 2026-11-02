@@ -127,6 +127,11 @@ traced on the GPU by `texturecraft-cli render`.
 - **Open.** glTF/GLB, FBX, COLLADA, USD, Alembic, OBJ, PLY and STL in; PNG, JPEG, TGA, TIFF, BMP,
   WEBP, EXR and HDR textures out at 8, 16 or 32 bits, with UDIM tiles; OBJ, textured GLB and USD
   mesh export. Every material, environment, brush alpha and built-in mesh is procedural.
+- **Works with MaterialCraft.** Node-based materials from
+  [MaterialCraft](https://github.com/storytold/materialcraft) (`.mcmat`, sent straight to the
+  shelf) paint and fill like any material, and their graph inputs stay sliders, colors and
+  presets here: each change re-cooks the material at the texture set's resolution, with this
+  mesh's baked maps feeding the graph.
 - **Agent-native.** Every menu item and tool is a command you can drive from the CLI, a JSON
   control channel or an **MCP server**, so Claude and other agents can paint, bake and export the
   way a person does.
@@ -158,6 +163,11 @@ Japanese, Chinese, Korean and Arabic interface text uses the fonts of
 [storytold/craft-fonts](https://github.com/storytold/craft-fonts) where it has them, an optional
 build input (releases always use it): `CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p texturecraft`
 (an absolute path). Without it, the desktop app uses the installed system fonts.
+
+If the app cannot start (no usable GPU, say) or has to close, it says why in a message box and
+appends the details to `errors.log` beside its settings (`%APPDATA%\TextureCraft\data` on Windows,
+`~/Library/Application Support/TextureCraft` on macOS, `~/.local/share/texturecraft` on Linux).
+On a machine with several GPUs, `--gpu <part of the name>` or `--power-pref high` picks one.
 
 ### Use it from Claude Code and other agents
 

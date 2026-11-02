@@ -55,6 +55,14 @@ pub struct BakeJob {
     pub only: Option<texturecraft_engine::core::BakedMap>,
 }
 
+/// A MaterialCraft material re-cooking on a worker thread (one per layer at a time).
+pub struct LinkCook {
+    pub layer: texturecraft_engine::core::LayerId,
+    /// The parameter values it cooks: a result whose values are no longer the layer's is redone.
+    pub values: serde_json::Map<String, Value>,
+    pub rx: std::sync::mpsc::Receiver<texturecraft_engine::Result<Vec<u8>>>,
+}
+
 /// The browser build's notice when WebGPU is unavailable and wgpu fell back to WebGL2.
 pub const WEBGL_NOTICE: &str = i18n::n_(
     "WebGPU isn't available in this browser, so TextureCraft runs on WebGL2: Rendering mode path traces on the CPU (slower) and large texture sets show at reduced resolution. A current Chrome, Edge or Safari has WebGPU.",
@@ -76,6 +84,7 @@ pub struct TextureCraftApp {
     pub(crate) gpu_memory: (Vec<String>, Option<String>),
     pub bake: Option<BakeJob>,
     pub resize: Option<ResizeJob>,
+    pub link_cooks: Vec<LinkCook>,
     pub thumbs: thumbs::Thumbs,
     /// Last frame's viewport rect (logical points), for scripted input.
     pub viewport_rect: egui::Rect,
@@ -108,6 +117,8 @@ pub struct TextureCraftApp {
     next_autosave: f64,
     /// The brightness and accent the style was last built for.
     styled: Option<(theme::Brightness, theme::Accent)>,
+    /// Whether the window had focus last frame.
+    focused: bool,
 }
 
 impl TextureCraftApp {
@@ -133,6 +144,7 @@ impl TextureCraftApp {
             gpu_memory: (Vec::new(), None),
             bake: None,
             resize: None,
+            link_cooks: Vec::new(),
             thumbs: thumbs::Thumbs::default(),
             viewport_rect: egui::Rect::NOTHING,
             fps: 0.0,
@@ -150,6 +162,7 @@ impl TextureCraftApp {
             last_time: 0.0,
             next_autosave,
             styled: None,
+            focused: true,
         };
         app.ui.rename = None;
         app.ui.windows.new_project = false;
@@ -157,6 +170,12 @@ impl TextureCraftApp {
         export_templates::load_library(&mut app, cc.storage);
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // The first window of the process fixes it; a new folder applies on restart.
+            let _ = DATA_FOLDER.set(data_folder(&app.ui.prefs.data_folder));
+            // An export folder still at the default follows the data folder.
+            if app.ui.export.dir == data_folder("").join("export").display().to_string() {
+                app.ui.export.dir = user_dir("export").display().to_string();
+            }
             let skipped = app.session.load_templates(user_dir("templates"));
             app.session.log.extend(skipped.into_iter().map(|w| format!("Project template skipped: {w}")));
         }
@@ -191,6 +210,55 @@ impl TextureCraftApp {
         }
         let total = sets.len();
         self.bake = Some(BakeJob { queue: sets, current: None, total, only: None });
+    }
+
+    /// Re-cook MaterialCraft material layer `layer` in the background. While one cook of the layer
+    /// runs no other starts: when it ends with stale values, it is redone with the current ones.
+    pub fn cook_link(&mut self, layer: texturecraft_engine::core::LayerId) {
+        if self.link_cooks.iter().any(|c| c.layer == layer) {
+            return;
+        }
+        match self.session.link_job(layer, &serde_json::Map::new()) {
+            Ok(job) => {
+                let values = job.values.clone();
+                let rx = spawn_worker("texturecraft-link", move || job.run());
+                self.link_cooks.push(LinkCook { layer, values, rx });
+            }
+            Err(e) => self.toast(e.to_string(), true),
+        }
+    }
+
+    fn poll_link_cooks(&mut self, ctx: &egui::Context) {
+        if self.link_cooks.is_empty() {
+            return;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        let mut done = Vec::new();
+        self.link_cooks.retain(|c| match c.rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Ok(r) => {
+                done.push((c.layer, c.values.clone(), r));
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                done.push((c.layer, c.values.clone(), Err(texturecraft_engine::EngineError::Other("the MaterialCraft cook stopped".into()))));
+                false
+            }
+        });
+        for (layer, values, result) in done {
+            let current = self.session.link_values(layer);
+            match (result, current) {
+                // The layer is gone (undone, deleted): nothing to show.
+                (_, Err(_)) => {}
+                (Ok(_), Ok(now)) if now != values => self.cook_link(layer),
+                (Ok(bytes), Ok(_)) => {
+                    if let Err(e) = self.session.apply_link_cook(layer, &bytes, true) {
+                        self.toast(e.to_string(), true);
+                    }
+                }
+                (Err(e), Ok(_)) => self.toast(e.to_string(), true),
+            }
+        }
     }
 
     fn poll_bake(&mut self, ctx: &egui::Context) {
@@ -249,6 +317,11 @@ impl TextureCraftApp {
     /// Auto-rebake: when the chosen map's bake inputs changed, bake it again in the background
     /// (one set after another, only that map), unless a bake or a stroke is running.
     fn drive_auto_rebake(&mut self) {
+        // The web build runs a bake on the page's own thread, which would freeze the browser: there
+        // Auto-rebake is left to the manual command (`bake.autoRebake.run`).
+        if cfg!(target_arch = "wasm32") {
+            return;
+        }
         if self.bake.is_some() || self.session.stroke_active() || self.session.auto_rebake.map.is_none() {
             return;
         }
@@ -404,6 +477,13 @@ impl eframe::App for TextureCraftApp {
         self.poll_bake(ctx);
         self.drive_auto_rebake();
         self.poll_resize(ctx);
+        self.poll_link_cooks(ctx);
+        // The library shelf rescans when the window comes back (MaterialCraft may have sent a material).
+        let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        if focused && !self.focused {
+            self.library = None;
+        }
+        self.focused = focused;
         let scale = self.ui.prefs.ui_scale.clamp(0.5, 3.0);
         if (ctx.zoom_factor() - scale).abs() > 1e-3 {
             ctx.set_zoom_factor(scale);
@@ -418,6 +498,11 @@ impl eframe::App for TextureCraftApp {
         }
         self.fonts.update(ctx, i18n::current().code, self.ui.windows.settings);
         menus::shortcuts(self, ctx);
+        // A stored path being edited repaints its sublayer as its points, brush or material change.
+        if let Err(e) = self.session.path_live() {
+            self.session.stop_path_edit();
+            self.toast(e.to_string(), true);
+        }
         profile::drive(self, ctx);
         self.toasts.retain(|t| t.until > now);
         self.profiler.logic_ms = (now_ms() - t0) as f32;
@@ -452,11 +537,26 @@ impl eframe::App for TextureCraftApp {
     }
 }
 
-/// `Documents/TextureCraft/<sub>` in the user's home folder.
+/// The data folder chosen in Settings, fixed at startup (unset: the default).
+#[cfg(not(target_arch = "wasm32"))]
+static DATA_FOLDER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// The data folder for a `Prefs::data_folder` value: that path when it is absolute, otherwise
+/// `Documents/TextureCraft` in the user's home folder.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn data_folder(pref: &str) -> std::path::PathBuf {
+    let chosen = std::path::Path::new(pref.trim());
+    if chosen.is_absolute() {
+        return chosen.to_path_buf();
+    }
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_else(|_| ".".into());
+    std::path::Path::new(&home).join("Documents").join("TextureCraft")
+}
+
+/// `<sub>` in the data folder in use (Settings › Folders › Data folder).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn user_dir(sub: &str) -> std::path::PathBuf {
-    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_else(|_| ".".into());
-    std::path::Path::new(&home).join("Documents").join("TextureCraft").join(sub)
+    DATA_FOLDER.get().cloned().unwrap_or_else(|| data_folder("")).join(sub)
 }
 
 /// Folder holding the user's smart materials.

@@ -586,12 +586,30 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
             ui.add_space(8.0);
             ui.label(caption(tr("Folders")));
             form("settings_folders").show(ui, |ui| {
+                ui.label(tr("Data folder"));
+                ui.horizontal(|ui| {
+                    let default = crate::data_folder("").display().to_string();
+                    ui.add(egui::TextEdit::singleline(&mut p.data_folder).hint_text(default).desired_width(260.0));
+                    if ui.button("...").clicked()
+                        && let Some(d) = rfd::FileDialog::new().set_directory(crate::data_folder(&p.data_folder)).pick_folder()
+                    {
+                        p.data_folder = d.display().to_string();
+                    }
+                });
+                ui.end_row();
                 for (label, dir) in [(tr("Smart materials"), crate::library_dir()), (tr("UI layouts"), crate::user_dir("layouts"))] {
                     ui.label(label);
                     ui.label(RichText::new(dir.display().to_string()).small().color(tk.text_dim));
                     ui.end_row();
                 }
             });
+            ui.label(
+                RichText::new(tr(
+                    "Autosaves, smart materials, presets, templates and UI layouts go to the data folder. A new folder applies on restart; files already saved stay where they are.",
+                ))
+                .small()
+                .color(tk.text_dim),
+            );
             ui.add_space(8.0);
         }
         ui.label(caption(tr("Keyboard")));
@@ -1037,6 +1055,12 @@ pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) ->
             }
             true
         }
+        "material.load" => {
+            for p in rfd::FileDialog::new().add_filter(tr("Materials"), crate::web_files::MATERIAL_EXTS).pick_files().unwrap_or_default() {
+                app.run("material.load", json!({"path": p.display().to_string()}));
+            }
+            true
+        }
         "file.importResources" | "resource.import" => {
             let picks = rfd::FileDialog::new().add_filter(tr("Images"), crate::web_files::IMAGE_EXTS).pick_files();
             for p in picks.unwrap_or_default() {
@@ -1113,6 +1137,7 @@ pub fn file_action(app: &mut TextureCraftApp, ctx: &egui::Context, id: &str) -> 
     match id {
         "file.open" => crate::web_files::open(ctx),
         "file.importResources" | "resource.import" => crate::web_files::import_images(ctx),
+        "material.load" => crate::web_files::import_material(ctx),
         "file.save" | "file.saveAs" | "file.saveCopy" => crate::web_files::save_project(app),
         "file.exportMesh" => app.ui.windows.export_mesh = true,
         _ => return false,
