@@ -11,10 +11,12 @@
 //! | Emissive  | sRGB8    | emissive          |                |                   | scattering weight |
 //! | Lobes     | RGBA8    | coat weight       | coat roughness | anisotropy level  | anisotropy angle  |
 //! | Sheen     | sRGB8    | sheen color       |                |                   | sheen weight      |
-//! | Extra     | RGBA8    | coat normal x     | coat normal y  | transmission      |                   |
+//! | Extra     | RGBA8    | coat normal x     | coat normal y  | transmission      | tile scale        |
 //!
 //! Extra packs the coat normal's x and y as `128 + 127 × n` (the default normal is exactly 0;
-//! z is rebuilt in the shader).
+//! z is rebuilt in the shader). Its alpha is the [`Composite::block_scales`] of the texel's UV
+//! tile as `32 × log2(1 / scale)` (0 for a tile filling its block): the shader turns height
+//! slopes down by it.
 //!
 //! Alpha of sRGB formats is linear. Channels a set lacks pack their default values, which switch
 //! the extra lobes off, so the renderer can keep Lobes and Sheen as 1×1 placeholders until a
@@ -44,7 +46,7 @@ pub enum DisplayKind {
     Lobes,
     /// sRGB8: sheen color, alpha = sheen weight.
     Sheen,
-    /// RGBA8 linear: coat normal x and y, transmission.
+    /// RGBA8 linear: coat normal x and y, transmission, tile scale.
     Extra,
 }
 
@@ -139,12 +141,14 @@ pub fn tile_bytes(comp: &Composite, baked: &BakedMaps, kind: DisplayKind, tx: u3
             let (n, transmission) = (get(Channel::CoatNormal), scalar8(Channel::Transmission));
             // Signed 8-bit around 128 so the flat normal packs exactly.
             let snorm = |v: u16| (128.0 + 127.0 * (v as f32 / 65535.0 * 2.0 - 1.0)).round().clamp(0.0, 255.0) as u8;
+            // A TILE never straddles two atlas blocks.
+            let scale = (-32.0 * comp.block_scales.at(tx * TILE, ty * TILE).log2()).round().clamp(0.0, 255.0) as u8;
             for (i, px) in out.chunks_exact_mut(4).enumerate() {
                 for (k, d) in px.iter_mut().take(2).enumerate() {
                     *d = n.and_then(|t| t.get(i * 3 + k)).map_or(128, |v| snorm(*v));
                 }
                 px[2] = transmission(i);
-                px[3] = 0;
+                px[3] = scale;
             }
         }
         DisplayKind::Orm => {
@@ -220,6 +224,17 @@ mod tests {
         assert!((b[1] as i32 - 188).abs() <= 1, "{}", b[1]);
         assert_eq!(b[2], 0);
         assert!((b[3] as i32 - 127).abs() <= 1);
+    }
+
+    #[test]
+    fn extra_alpha_holds_the_tile_scale() {
+        let mut set = texturecraft_core::TextureSet::new("s", 0, 256);
+        set.uv_tiles = vec![1001, 1002];
+        set.tile_resolutions.insert(1002, 64);
+        let comp = Composite { block_scales: set.block_scales(), ..Composite::new(&[], 512) };
+        let alpha = |tx: u32| tile_bytes(&comp, &BakedMaps::default(), DisplayKind::Extra, tx, 0)[3];
+        // Tile 1001 fills its block; 1002 (from texel 256) a quarter of it: 32 × log2(4).
+        assert_eq!((alpha(0), alpha(3), alpha(4), alpha(7)), (0, 0, 64, 64));
     }
 
     #[test]

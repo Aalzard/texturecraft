@@ -6,7 +6,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 
 - **Brushes** with size, flow, stroke opacity, spacing, hardness, angle and follow path; size,
   angle, flow and position jitter; tangent or camera alignment, angle fade, backface culling, lazy
-  mouse, X/Y/Z mirror and radial symmetry (copies paint the far side too) and pen pressure.
+  mouse, X/Y/Z mirror and radial symmetry (copies paint the far side too) and pen pressure in the
+  3D and 2D views (Windows Ink pens, and pens that send touch events in the browser, such as on
+  tablets; on Linux, macOS and desktop browsers a pen works as a mouse for now).
   Ctrl+drag in a view sets them on the fly: right-drag the size and hardness, left-drag the flow
   and angle.
   **67 procedural brush alphas** in their own shelf tab, or any imported image as the alpha.
@@ -79,8 +81,9 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   OBJ, PLY and STL, or a built-in mesh; UVs are generated when a mesh has none. A `.gltf`'s buffers
   and images and a loose USD layer's textures are read from its folder and kept in the project.
   Reimport a changed mesh and your painted strokes stay on the surface.
-- **UDIM / UV tiles:** detected on import or switched on later, with a resolution per tile and one
-  texture per tile on export (`$udim`).
+- **UDIM / UV tiles:** detected on import or switched on later, with a resolution per tile (blurs,
+  other filters and height-to-normal slopes keep their size in UV space at any tile resolution)
+  and one texture per tile on export (`$udim`).
 - **Texture sets** from 128 to 8192 px per material, resampled when you change them, with 21
   channel types to add or remove. Show, hide or invert them all at once, or **focus** on the
   active one. The project's **normal map format** (OpenGL or DirectX, in Texture Set Settings)

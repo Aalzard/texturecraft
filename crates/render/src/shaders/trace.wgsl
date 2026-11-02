@@ -291,7 +291,8 @@ fn surface(hit: Hit, o: vec3<f32>, d: vec3<f32>) -> Surface {
     let extra = textureLoad(t_extra, texel(layer, 7u, uv, 0, 0), layer, 0);
 
     let info = P.sets[layer];
-    let k = info.w * info.x / 16.0;
+    // A UV tile smaller than its atlas block: Extra alpha holds 32 × log2(1 / its share), as in mesh.wgsl.
+    let k = info.w * info.x / 16.0 * exp2(-extra.a * 255.0 / 32.0);
     var n_height = vec3<f32>(0.0, 0.0, 1.0);
     if (k != 0.0) {
         let hx = textureLoad(t_height, texel(layer, 3u, uv, 1, 0), layer, 0).r - textureLoad(t_height, texel(layer, 3u, uv, -1, 0), layer, 0).r;

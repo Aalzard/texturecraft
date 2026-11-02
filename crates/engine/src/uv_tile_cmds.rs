@@ -305,6 +305,72 @@ mod tests {
         }
     }
 
+    /// Paint channel `c` of the first layer over every covered texel as `f(u)`, `u` the texel's
+    /// position across its own UV tile (0..1), so every tile shows the same pattern in UV space.
+    fn paint_across_tiles(s: &mut Session, c: Channel, f: impl Fn(f32) -> Vec<u16>) {
+        let set = s.doc.project.texture_sets[0].clone();
+        let (grid, (w, h)) = (set.tile_grid().unwrap(), set.size());
+        let gbuf = s.caches[0].gbuf.clone();
+        let img = s.doc.pixels.layer_mut(set.stack[0], c, (w, h));
+        for y in 0..h {
+            for x in 0..w {
+                if gbuf.covered((y * w + x) as usize) {
+                    let m = set.from_atlas(&grid, [(x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32]);
+                    img.set(x, y, &f(m[0].rem_euclid(1.0)));
+                }
+            }
+        }
+        s.touched();
+        while s.update() {}
+    }
+
+    /// A tile at half its block's resolution: (session, its block's left texel, its side).
+    fn half_res_tile() -> (Session, u32, u32) {
+        let mut s = udim_session();
+        execute(&mut s, "textureSet.tile.resolution", &json!({"tile": 1002, "resolution": 128})).unwrap();
+        (s, 256, 128)
+    }
+
+    #[test]
+    fn filter_radii_follow_each_tiles_resolution() {
+        let (mut s, x2, side) = half_res_tile();
+        let id = s.doc.project.texture_sets[0].stack[0];
+        execute(&mut s, "effect.add.filter", &json!({"layer": id.0, "target": "content", "filter": "blur", "radius": 60})).unwrap();
+        // Black on the left half of each tile, white on the right: a blurred edge in the middle.
+        paint_across_tiles(&mut s, Channel::BaseColor, |u| {
+            let v = if u < 0.5 { 0 } else { 65535 };
+            vec![v, v, v, 65535]
+        });
+        // Texels of the soft edge along a row through the middle of a tile (away from its borders).
+        let comp = &s.caches[0].composite;
+        let edge = |x0: u32, side: u32| {
+            (x0 + side / 8..x0 + side * 7 / 8).filter(|x| (0.05..0.95).contains(&comp.value(Channel::BaseColor, *x, side / 2)[0])).count() as i64
+        };
+        let (wide, narrow) = (edge(0, 256), edge(x2, side));
+        assert!(wide > 8, "the blur softens the edge: {wide}");
+        // The same width in UV space: half the texels in the half-resolution tile.
+        assert!((2 * narrow - wide).abs() <= 4, "{narrow} texels at 128 vs {wide} at 256");
+    }
+
+    #[test]
+    fn height_slopes_follow_each_tiles_resolution() {
+        let (mut s, _, _) = half_res_tile();
+        s.doc.project.texture_sets[0].height_strength = 8.0;
+        // The same height ramp across each tile.
+        paint_across_tiles(&mut s, Channel::Height, |u| vec![texturecraft_texel::to_u16_signed(0.5 * u), 65535]);
+        let opts = crate::file_cmds::export_options(&s, &json!({"preset": "Document channels + Normal + AO", "format": "png"}), "t").unwrap();
+        let files = s.export_files(&[0], &opts).unwrap();
+        // The red (x) of the exported normal at the middle of a tile.
+        let tilt = |tile: &str| {
+            let f = files.iter().find(|f| f.name.ends_with(&format!("_normal.{tile}.png"))).expect("a normal map per tile");
+            let img = image::load_from_memory(&f.bytes).unwrap().to_rgb8();
+            img.get_pixel(img.width() / 2, img.height() / 2)[0] as i32
+        };
+        let (full, half) = (tilt("1001"), tilt("1002"));
+        assert!(full < 110, "the ramp tilts the normal: {full}");
+        assert!((full - half).abs() <= 2, "the same slope in UV space: {half} at 128 vs {full} at 256");
+    }
+
     #[test]
     fn convert_to_uv_tiles_and_back() {
         let mut s = Session::new_project("u", primitives::builtin("udim_plane").unwrap(), "builtin:udim_plane", None, 256).unwrap();
