@@ -969,5 +969,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Unsaved changes", "未保存の変更"),
     ("Don't save", "保存しない"),
     ("Save the changes to {name} before closing?", "閉じる前に {name} の変更を保存しますか？"),
+    ("Twill weave", "綾織り"),
     ("Save the changes to {name} first?", "先に {name} の変更を保存しますか？"),
 ];

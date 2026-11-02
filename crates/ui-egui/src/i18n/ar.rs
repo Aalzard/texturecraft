@@ -947,5 +947,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Unsaved changes", "تغييرات غير محفوظة"),
     ("Don't save", "عدم الحفظ"),
     ("Save the changes to {name} before closing?", "هل تريد حفظ التغييرات في {name} قبل الإغلاق؟"),
+    ("Twill weave", "نسيج مائل"),
     ("Save the changes to {name} first?", "هل تريد حفظ التغييرات في {name} أولًا؟"),
 ];

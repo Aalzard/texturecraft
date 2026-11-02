@@ -208,6 +208,8 @@ pub fn color_swatch(ui: &mut Ui, id: &str, linear: &mut [f32; 3], width: f32) ->
     let mut changed = false;
     // Open state lives in memory (`toggle_id` above); `from_response` alone shows it always.
     egui::Popup::from_response(&resp).id(popup).open_memory(None).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        // Wider than the R, G, B row at any value, so the popup keeps one size and place.
+        ui.spacing_mut().slider_width = 275.0;
         if egui::color_picker::color_picker_color32(ui, &mut c, egui::color_picker::Alpha::Opaque) {
             let lin = [c.r(), c.g(), c.b()].map(|v| texturecraft_engine::texel::srgb_to_linear(v as f32 / 255.0));
             *linear = lin;
