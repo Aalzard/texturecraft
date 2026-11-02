@@ -536,15 +536,22 @@ fn surface(scene: &TraceScene, tri: u32, u: f32, v: f32, o: Vec3, d: Vec3, t: f3
     let sign = if tan[0].w < 0.0 { -1.0 } else { 1.0 };
 
     let set = scene.tri_set.get(tri as usize).and_then(|s| scene.sets.get(*s));
+    // The composite texel at offset (dx, dy) from the hit.
+    let texel = |s: &TraceSet, dx: i32, dy: i32| {
+        let (w, h) = (s.composite.resolution.max(1) as i32, s.composite.height.max(1) as i32);
+        (((uv.x * w as f32).floor() as i32 + dx).rem_euclid(w) as u32, ((uv.y * h as f32).floor() as i32 + dy).rem_euclid(h) as u32)
+    };
     let ch = |c: Channel, dx: i32, dy: i32| -> [f32; 3] {
         let Some(s) = set else { return c.default_value() };
-        let (w, h) = (s.composite.resolution.max(1) as i32, s.composite.height.max(1) as i32);
-        let x = ((uv.x * w as f32).floor() as i32 + dx).rem_euclid(w) as u32;
-        let y = ((uv.y * h as f32).floor() as i32 + dy).rem_euclid(h) as u32;
+        let (x, y) = texel(s, dx, dy);
         s.composite.value(c, x, y)
     };
     let base = Vec3::from(ch(Channel::BaseColor, 0, 0));
-    let k = set.map_or(0.0, |s| s.height_strength * s.composite.resolution as f32 / 16.0);
+    // A UV tile smaller than its atlas block has fewer texels per UV unit: slopes per texel shrink.
+    let k = set.map_or(0.0, |s| {
+        let (x, y) = texel(s, 0, 0);
+        s.height_strength * s.composite.resolution as f32 / 16.0 * s.composite.block_scales.at(x, y)
+    });
     let n_height = if k != 0.0 {
         let h = |dx, dy| ch(Channel::Height, dx, dy)[0];
         Vec3::new(-(h(1, 0) - h(-1, 0)) * 0.5 * k, (h(0, 1) - h(0, -1)) * 0.5 * k, 1.0).normalize_or(Vec3::Z)

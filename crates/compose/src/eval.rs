@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use rayon::prelude::*;
 use texturecraft_core::{
-    BakedMap, BlendMode, Channel, ChannelKind, CompareOp, Effect, EffectKind, Fill, Filter, Generator, GeneratorKind, HeightMask, Layer, LayerId, LayerKind,
-    Mask, MaskBackground, NormalFormat, Project, Projection, Source, TextureSet, TileGrid, blend1, blend3, lum, mix3, per_unit,
+    BakedMap, BlendMode, BlockScales, Channel, ChannelKind, CompareOp, Effect, EffectKind, Fill, Filter, Generator, GeneratorKind, HeightMask, Layer, LayerId,
+    LayerKind, Mask, MaskBackground, NormalFormat, Project, Projection, Source, TextureSet, TileGrid, blend1, blend3, lum, mix3, per_unit,
 };
 use texturecraft_geom::glam::{Vec2, Vec3};
 use texturecraft_geom::{Mesh, NO_TRI, UvGBuffer};
@@ -106,9 +106,8 @@ impl Inputs<'_> {
         self.project.texture_set(self.ts).ok().and_then(TextureSet::tile_grid)
     }
 
-    /// Texels per UV tile across (the whole width for a classic set): filter radii scale with it.
-    /// shortcut: a tile smaller than its atlas block (per-tile resolution) uses the block's
-    /// radii; scale them by `TextureSet::tile_scale` if filters must match across tile sizes.
+    /// Texels per atlas block across (the whole width for a classic set): filter radii scale
+    /// with it, and with the tile's share of its block.
     fn tile_res(&self) -> u32 {
         self.gbuf.width / self.tile_grid().map_or(1, |g| g.cols.max(1))
     }
@@ -121,6 +120,8 @@ pub struct Composite {
     pub resolution: u32,
     pub height: u32,
     pub channels: BTreeMap<Channel, TileImage>,
+    /// The set's [`TextureSet::block_scales`]: height slopes on the display follow each tile.
+    pub block_scales: BlockScales,
 }
 
 impl Composite {
@@ -130,7 +131,12 @@ impl Composite {
     }
 
     pub fn with_size(channels: &[Channel], width: u32, height: u32) -> Composite {
-        Composite { resolution: width, height, channels: channels.iter().map(|c| (*c, TileImage::new(width, height, c.components()))).collect() }
+        Composite {
+            resolution: width,
+            height,
+            channels: channels.iter().map(|c| (*c, TileImage::new(width, height, c.components()))).collect(),
+            block_scales: BlockScales::default(),
+        }
     }
 
     /// Channel value at a texel (the channel default when absent).
@@ -612,36 +618,60 @@ fn field(inp: &Inputs, channels: &[Channel], below: &Fields, id: LayerId, job: J
         Job::Content(ch) if ch.kind() == ChannelKind::Signed => 0.0,
         _ => 0.5,
     };
-    if !blurs {
-        let mut data = gather(op, &orig, &cover, comps, (rx0, ry0, w, h), r as f32, inp.tile_res(), opacity);
-        unpremultiply(&mut data, comps);
-        return Some(Field { x0: rx0, y0: ry0, w, h, comps, data });
-    }
-    // Weighted so uncovered texels don't bleed in.
-    let (wu, hu, ru) = (w as usize, h as usize, r as usize);
-    let mut weights = cover;
-    blur(&mut weights, wu, hu, ru);
-    let mut data = orig.clone();
-    for p in 0..comps {
-        let mut vals: Vec<f32> = orig.par_chunks(comps).map(|px| px.get(p).copied().unwrap_or(0.0)).collect();
-        blur(&mut vals, wu, hu, ru);
-        data.par_chunks_mut(comps).zip(vals.par_iter()).zip(weights.par_iter()).for_each(|((px, v), wt)| {
-            // Content is premultiplied, so the mid value is too (coverage itself is kept).
-            let cov = if comps == 4 { px.get(3).copied().unwrap_or(0.0) } else { 1.0 };
-            if *wt > 1e-6
-                && let Some(slot) = px.get_mut(p)
-            {
-                let (o, blurred) = (*slot, v / wt);
-                let filtered = match op {
-                    Op::Blur(Some(amount)) => o + amount * (o - blurred),
-                    Op::HighPass if p < 3 => o - blurred + mid * cov,
-                    // Away from 0 by at most the value itself: 0 at the edge, full inside.
-                    Op::Bevel if p < 3 => o.signum() * o.abs().min((2.0 * blurred * o.signum() - o.abs()).max(0.0)),
-                    Op::Glow(amount) if p < 3 => o + amount * blurred,
-                    Op::HighPass | Op::Bevel | Op::Glow(_) => o,
-                    _ => blurred,
-                };
-                *slot = o + (filtered - o) * opacity;
+    // The filter at the radius of a tile filling `scale` of its atlas block (a smaller tile has
+    // fewer texels per UV unit, so its filters reach fewer texels).
+    let filtered = |scale: f32| -> Vec<f32> {
+        let res = ((inp.tile_res() as f32 * scale).round() as u32).max(1);
+        let r = neighbourhood(effects, res).map_or(r, |(_, radius, _)| radius.round().clamp(1.0, r as f32) as u32);
+        if !blurs {
+            return gather(op, &orig, &cover, comps, (rx0, ry0, w, h), r as f32, res, opacity);
+        }
+        // Weighted so uncovered texels don't bleed in.
+        let (wu, hu, ru) = (w as usize, h as usize, r as usize);
+        let mut weights = cover.clone();
+        blur(&mut weights, wu, hu, ru);
+        let mut data = orig.clone();
+        for p in 0..comps {
+            let mut vals: Vec<f32> = orig.par_chunks(comps).map(|px| px.get(p).copied().unwrap_or(0.0)).collect();
+            blur(&mut vals, wu, hu, ru);
+            data.par_chunks_mut(comps).zip(vals.par_iter()).zip(weights.par_iter()).for_each(|((px, v), wt)| {
+                // Content is premultiplied, so the mid value is too (coverage itself is kept).
+                let cov = if comps == 4 { px.get(3).copied().unwrap_or(0.0) } else { 1.0 };
+                if *wt > 1e-6
+                    && let Some(slot) = px.get_mut(p)
+                {
+                    let (o, blurred) = (*slot, v / wt);
+                    let filtered = match op {
+                        Op::Blur(Some(amount)) => o + amount * (o - blurred),
+                        Op::HighPass if p < 3 => o - blurred + mid * cov,
+                        // Away from 0 by at most the value itself: 0 at the edge, full inside.
+                        Op::Bevel if p < 3 => o.signum() * o.abs().min((2.0 * blurred * o.signum() - o.abs()).max(0.0)),
+                        Op::Glow(amount) if p < 3 => o + amount * blurred,
+                        Op::HighPass | Op::Bevel | Op::Glow(_) => o,
+                        _ => blurred,
+                    };
+                    *slot = o + (filtered - o) * opacity;
+                }
+            });
+        }
+        data
+    };
+    // Each block keeps the result at its tile's scale (blocks are TILE aligned).
+    let scales = inp.project.texture_set(inp.ts).map(TextureSet::block_scales).unwrap_or_default();
+    let mut levels: Vec<f32> =
+        (ry0..ry1).step_by(TILE as usize).flat_map(|y| (rx0..rx1).step_by(TILE as usize).map(move |x| (x, y))).map(|(x, y)| scales.at(x, y)).collect();
+    levels.sort_by(f32::total_cmp);
+    levels.dedup();
+    let (first, rest) = levels.split_first().map_or((1.0, &[][..]), |(f, r)| (*f, r));
+    let mut data = filtered(first);
+    for &scale in rest {
+        let other = filtered(scale);
+        let row = w as usize * comps;
+        data.par_chunks_mut(row).zip(other.par_chunks(row)).enumerate().for_each(|(y, (dst, src))| {
+            for (x, (d, s)) in dst.chunks_mut(comps).zip(src.chunks(comps)).enumerate() {
+                if scales.at(rx0 + x as u32, ry0 + y as u32) == scale {
+                    d.copy_from_slice(s);
+                }
             }
         });
     }
