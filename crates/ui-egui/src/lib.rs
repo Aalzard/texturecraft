@@ -387,6 +387,11 @@ impl eframe::App for TextureCraftApp {
         }
         self.fonts.update(ctx, i18n::current().code, self.ui.windows.settings);
         menus::shortcuts(self, ctx);
+        // A stored path being edited repaints its sublayer as its points, brush or material change.
+        if let Err(e) = self.session.path_live() {
+            self.session.stop_path_edit();
+            self.toast(e.to_string(), true);
+        }
         profile::drive(self, ctx);
         self.toasts.retain(|t| t.until > now);
         self.profiler.logic_ms = (now_ms() - t0) as f32;

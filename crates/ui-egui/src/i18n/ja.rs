@@ -977,4 +977,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Save the changes to {name} before closing?", "閉じる前に {name} の変更を保存しますか？"),
     ("Twill weave", "綾織り"),
     ("Save the changes to {name} first?", "先に {name} の変更を保存しますか？"),
+    (
+        "Paths stay editable: pick one to move its points or change its brush and material, and the sublayer repaints at once. Add paths with the Path tool.",
+        "パスは編集可能なままです。パスを選んで点を移動したりブラシやマテリアルを変えたりすると、サブレイヤーがすぐに描き直されます。パスはパスツールで追加します。",
+    ),
 ];

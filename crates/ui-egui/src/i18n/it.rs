@@ -1004,4 +1004,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Save the changes to {name} before closing?", "Salvare le modifiche a {name} prima di chiudere?"),
     ("Twill weave", "Tessuto a saia"),
     ("Save the changes to {name} first?", "Salvare prima le modifiche a {name}?"),
+    (
+        "Paths stay editable: pick one to move its points or change its brush and material, and the sublayer repaints at once. Add paths with the Path tool.",
+        "I tracciati restano modificabili: scegline uno per spostarne i punti o cambiarne pennello e materiale, e il sottolivello si ridipinge subito. Aggiungi tracciati con lo strumento Tracciato.",
+    ),
 ];

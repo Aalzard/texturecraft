@@ -143,3 +143,78 @@ fn radial_symmetry_paints_copies_around_the_axis() {
     s.camera.yaw = std::f32::consts::PI;
     assert!(red_at(&s, 200.0, 200.0), "the radial copy on the back");
 }
+
+/// The selected layer's content path sublayers: (effect id, stored paths).
+fn path_sublayers(s: &Session) -> Vec<(u64, usize)> {
+    let l = s.doc.project.layer(s.selected_layer().unwrap()).unwrap();
+    l.content_effects.iter().filter_map(|e| s.paths(e.id).map(|p| (e.id.0, p.len()))).collect()
+}
+
+#[test]
+fn committed_paths_stay_editable_in_a_path_sublayer() {
+    let mut s = session(primitives::sphere(1.0, 48, 24));
+    let r = execute(&mut s, "tool.path", &json!({"points": [[140, 210], [200, 180], [260, 210]], "commit": true})).unwrap();
+    let eid = r["committed"]["effect"].as_u64().unwrap();
+    assert_eq!(r["committed"]["index"], 0);
+    assert_eq!(path_sublayers(&s), vec![(eid, 1)]);
+    // The next path goes into the same (selected) sublayer.
+    let r = execute(&mut s, "tool.path", &json!({"uvPoints": [[0.2, 0.9], [0.8, 0.9]], "commit": true})).unwrap();
+    assert_eq!((r["committed"]["effect"].as_u64(), r["committed"]["index"].as_u64()), (Some(eid), Some(1)));
+    assert_eq!(path_sublayers(&s), vec![(eid, 2)]);
+    assert!(red_at(&s, 200.0, 180.0) && red_uv(&s, 0.5, 0.9));
+    let inspect = execute(&mut s, "project.inspect", &Value::Null).unwrap().to_string();
+    assert!(inspect.contains("\"paths\""), "inspect lists the paths");
+    // Paths are saved with the project; editing a loaded path repaints only once it changes.
+    let saved = serde_json::to_string(&s.doc.project).unwrap();
+    s.doc.project = serde_json::from_str(&saved).unwrap();
+    assert_eq!(path_sublayers(&s), vec![(eid, 2)]);
+    execute(&mut s, "path.edit", &json!({"effect": eid, "index": 0})).unwrap();
+    assert!(!s.path_live().unwrap(), "a loaded path matches its settings");
+    execute(&mut s, "tool.path", &json!({"clear": true})).unwrap();
+
+    // Manual strokes can't paint over a path sublayer.
+    let err = execute(&mut s, "tool.stroke", &json!({"points": [[200, 240]]})).unwrap_err().to_string();
+    assert!(err.contains("path sublayer"), "{err}");
+
+    // Edit the first path: moving its points repaints it live, the other path stays.
+    let undo_before = s.history_labels().len();
+    let r = execute(&mut s, "path.edit", &json!({"effect": eid, "index": 0})).unwrap();
+    assert_eq!(r["points"], 3);
+    let r = execute(&mut s, "tool.path", &json!({"points": [[140, 250], [200, 230], [260, 250]]})).unwrap();
+    assert_eq!(r["editing"]["index"], 0, "{r}");
+    assert!(red_at(&s, 200.0, 230.0), "the edited curve shows at once");
+    assert!(!red_at(&s, 200.0, 180.0), "the old curve is gone");
+    assert!(red_uv(&s, 0.5, 0.9), "the other path is kept");
+    // Brush changes repaint too, merged into the same undo step.
+    execute(&mut s, "tool.material", &json!({"channel": "baseColor", "color": [0.0, 0.0, 1.0]})).unwrap();
+    execute(&mut s, "tool.path", &json!({})).unwrap();
+    assert!(!red_at(&s, 200.0, 230.0), "repainted with the new color");
+    assert_eq!(s.history_labels().len(), undo_before + 1);
+    execute(&mut s, "tool.path", &json!({"commit": true})).unwrap();
+    assert_eq!(s.history_labels().len(), undo_before + 1, "one step for the whole edit");
+    assert!(s.tool.path.editing.is_none() && s.tool.path.points.is_empty());
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    s.update();
+    assert!(red_at(&s, 200.0, 180.0) && !red_at(&s, 200.0, 230.0), "undo restores the original path");
+
+    // Remove a path: its paint goes, the sublayer keeps the rest.
+    execute(&mut s, "path.remove", &json!({"effect": eid, "index": 0})).unwrap();
+    assert_eq!(path_sublayers(&s), vec![(eid, 1)]);
+    assert!(!red_at(&s, 200.0, 180.0) && red_uv(&s, 0.5, 0.9));
+    assert!(execute(&mut s, "path.edit", &json!({"effect": eid, "index": 5})).is_err());
+    assert!(execute(&mut s, "path.remove", &json!({"effect": 999999, "index": 0})).is_err());
+}
+
+#[test]
+fn undo_while_editing_a_path_stops_the_edit() {
+    let mut s = session(primitives::sphere(1.0, 48, 24));
+    let r = execute(&mut s, "tool.path", &json!({"points": [[140, 210], [200, 180], [260, 210]], "commit": true})).unwrap();
+    let eid = r["committed"]["effect"].as_u64().unwrap();
+    execute(&mut s, "path.edit", &json!({"effect": eid, "index": 0})).unwrap();
+    execute(&mut s, "tool.path", &json!({"points": [[140, 250], [200, 230], [260, 250]]})).unwrap();
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert!(s.tool.path.editing.is_none());
+    assert!(!s.path_live().unwrap(), "nothing repaints over the undone state");
+    s.update();
+    assert!(red_at(&s, 200.0, 180.0));
+}

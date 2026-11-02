@@ -1,14 +1,22 @@
 //! The Path tool: control points placed on the surface (3D view) or in texture space (2D view)
-//! and a smooth curve through them, committed as one brush stroke, or, when closed and filled,
-//! as an antialiased lasso fill of the visible surface (3D) or of the UV region (2D).
+//! and a smooth curve through them, painted with the brush, or, when closed and filled, as an
+//! antialiased lasso fill of the visible surface (3D) or of the UV region (2D).
+//!
+//! Paths are non-destructive: a committed path is stored in a path sublayer
+//! ([`EffectKind::Path`]) that is repainted from its paths whenever one is added, edited
+//! (`path.edit`, live while the points, brush or material change) or removed (`path.remove`).
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use texturecraft_core::{Channel, Effect, EffectKind, LayerId, Mask, MaskBackground, PathShape};
+use texturecraft_geom::OrbitCamera;
 use texturecraft_geom::glam::{Vec2, Vec3};
-use texturecraft_paint::{Lasso, fill_coverage, spline};
+use texturecraft_paint::{BrushSettings, Lasso, fill_coverage, spline};
 
-use crate::commands::{CommandSpec, always, bad, boolp};
-use crate::session::Tool;
+use crate::commands::{CommandSpec, always, bad, boolp, has_layer, u64p};
+use crate::session::{StackTarget, Tool};
 use crate::tool_cmds::{points_param, set_tool, viewport_of};
 use crate::{EngineError, Result, Session, cmd};
 
@@ -29,6 +37,9 @@ pub struct PathState {
     pub closed: bool,
     /// A closed path fills its interior instead of stroking the curve.
     pub fill: bool,
+    /// The stored path being edited: (path sublayer, index). Changes repaint it live.
+    #[serde(default)]
+    pub editing: Option<(LayerId, usize)>,
 }
 
 impl PathState {
@@ -44,16 +55,46 @@ impl PathState {
     }
 }
 
+/// What a stored path is painted with ([`PathShape::paint`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct PathPaint {
+    brush: BrushSettings,
+    values: BTreeMap<Channel, [f32; 3]>,
+    enabled: BTreeSet<Channel>,
+    mask_value: f32,
+    camera: OrbitCamera,
+}
+
 pub fn specs() -> Vec<CommandSpec> {
-    vec![cmd!(
-        "tool.path",
-        "Path",
-        ["Tools"],
-        Some("7"),
-        "{points?: [[x,y],...] viewport pixels on the mesh | uvPoints?: [[u,v],...], viewport?: [w,h], closed?, fill?, commit?: bool, clear?: bool} — selects the Path tool and edits its curve; commit paints the curve with the current brush, or fills a closed, filled path",
-        always,
-        path
-    )]
+    vec![
+        cmd!(
+            "tool.path",
+            "Path",
+            ["Tools"],
+            Some("7"),
+            "{points?: [[x,y],...] viewport pixels on the mesh | uvPoints?: [[u,v],...], viewport?: [w,h], closed?, fill?, commit?: bool, clear?: bool} — selects the Path tool and edits its curve; commit adds the path to the selected path sublayer (or a new one), painted with the current brush or filled when closed and filled. While a stored path is edited (path.edit), changes repaint it at once",
+            always,
+            path
+        ),
+        cmd!(
+            "path.edit",
+            "Edit path",
+            ["Tools"],
+            None,
+            "{effect: path sublayer id, index: path index} — loads a stored path into the Path tool (with its brush and material); changes to it repaint the sublayer live until commit or clear",
+            has_layer,
+            edit_path
+        ),
+        cmd!(
+            "path.remove",
+            "Remove path",
+            ["Tools"],
+            None,
+            "{effect: path sublayer id, index: path index} — removes a stored path and repaints its sublayer",
+            has_layer,
+            remove_path
+        ),
+    ]
 }
 
 fn path(s: &mut Session, p: &Value) -> Result<Value> {
@@ -64,6 +105,7 @@ fn path(s: &mut Session, p: &Value) -> Result<Value> {
     let vp = viewport_of(s, p);
     if boolp(p, "clear") == Some(true) {
         s.tool.path.points.clear();
+        s.tool.path.editing = None;
     }
     let placed = match (points_param(CMD, p, "points")?, points_param(CMD, p, "uvPoints")?) {
         (Some(pts), _) => Some((
@@ -95,10 +137,67 @@ fn path(s: &mut Session, p: &Value) -> Result<Value> {
         s.update();
         r
     } else {
+        if s.path_live()? {
+            s.update();
+        }
         Value::Null
     };
     let st = &s.tool.path;
-    Ok(json!({ "points": st.points.len(), "uv": st.uv, "closed": st.closed, "fill": st.fill, "committed": committed }))
+    let editing = st.editing.map(|(e, i)| json!({ "effect": e.0, "index": i }));
+    Ok(json!({ "points": st.points.len(), "uv": st.uv, "closed": st.closed, "fill": st.fill, "editing": editing, "committed": committed }))
+}
+
+/// The `effect` and `index` params naming a stored path, with the path.
+fn path_ref(s: &Session, cmd: &str, p: &Value) -> Result<(LayerId, usize, PathShape)> {
+    let eid = LayerId(u64p(p, "effect").ok_or_else(|| bad(cmd, "`effect` (a path sublayer id) is required"))?);
+    let index = u64p(p, "index").ok_or_else(|| bad(cmd, "`index` is required"))?;
+    let shapes = s.paths(eid).ok_or_else(|| bad(cmd, format!("{} is not a path sublayer", eid.0)))?;
+    let i =
+        usize::try_from(index).ok().filter(|i| *i < shapes.len()).ok_or_else(|| bad(cmd, format!("no path {index} (the sublayer has {})", shapes.len())))?;
+    let shape = shapes.get(i).cloned().ok_or_else(|| bad(cmd, format!("no path {index}")))?;
+    Ok((eid, i, shape))
+}
+
+fn edit_path(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.edit";
+    let (eid, index, shape) = path_ref(s, CMD, p)?;
+    let paint = read_paint(&shape)?;
+    set_tool(s, Tool::Path)?;
+    s.tool.brush = paint.brush;
+    s.tool.values = paint.values;
+    s.tool.enabled = paint.enabled;
+    s.tool.mask_value = paint.mask_value;
+    s.tool.path = PathState { editing: Some((eid, index)), ..state_of(&shape) };
+    s.target = StackTarget::Effect(eid);
+    Ok(json!({ "effect": eid.0, "index": index, "points": s.tool.path.points.len() }))
+}
+
+fn remove_path(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.remove";
+    let (eid, index, _) = path_ref(s, CMD, p)?;
+    s.edit("Remove path", |s| {
+        if let Some(Effect { kind: EffectKind::Path(shapes), .. }) = s.doc.project.effect_mut(eid)
+            && index < shapes.len()
+        {
+            shapes.remove(index);
+        }
+        s.render_paths(eid)
+    })?;
+    if s.tool.path.editing.is_some_and(|(e, _)| e == eid) {
+        s.stop_path_edit();
+    }
+    s.update();
+    Ok(json!({ "effect": eid.0, "paths": s.paths(eid).map_or(0, <[_]>::len) }))
+}
+
+fn read_paint(shape: &PathShape) -> Result<PathPaint> {
+    serde_json::from_value(shape.paint.clone()).map_err(|e| EngineError::Other(format!("unreadable path settings: {e}")))
+}
+
+/// The Path tool state showing a stored path (finite points only, at most [`MAX_PATH_POINTS`]).
+fn state_of(shape: &PathShape) -> PathState {
+    let points = shape.points.iter().filter(|p| p.iter().all(|v| v.is_finite())).take(MAX_PATH_POINTS).map(|p| Vec3::from_array(*p)).collect();
+    PathState { points, uv: shape.uv, closed: shape.closed, fill: shape.fill, editing: None }
 }
 
 /// NDC (y up) to viewport pixels (origin top-left).
@@ -118,8 +217,169 @@ impl Session {
         path.points.iter().map(|p| self.camera.project(*p, aspect).map(|n| to_pixels(n.truncate(), viewport))).collect()
     }
 
-    /// Paint the path with the current brush (or fill it when closed and filled), then clear it.
+    /// The stored paths of path sublayer `eid` (None if it isn't one).
+    pub fn paths(&self, eid: LayerId) -> Option<&[PathShape]> {
+        match self.doc.project.effect(eid) {
+            Some((_, Effect { kind: EffectKind::Path(shapes), .. })) => Some(shapes),
+            _ => None,
+        }
+    }
+
+    /// The Path tool's curve with the current brush and material, as painted from `camera`.
+    fn path_shape(&self, camera: OrbitCamera, viewport: Vec2) -> PathShape {
+        let (t, path) = (&self.tool, &self.tool.path);
+        let paint = PathPaint { brush: t.brush.clone(), values: t.values.clone(), enabled: t.enabled.clone(), mask_value: t.mask_value, camera };
+        PathShape {
+            points: path.points.iter().map(|p| p.to_array()).collect(),
+            uv: path.uv,
+            closed: path.closed,
+            fill: path.fill,
+            viewport: viewport.to_array(),
+            paint: serde_json::to_value(paint).unwrap_or_default(),
+        }
+    }
+
+    /// Store the Path tool's curve (a new path in the selected path sublayer, or in a new one;
+    /// or the path being edited) and repaint the sublayer, as one undo step. Clears the tool.
     pub fn commit_path(&mut self, viewport: Vec2) -> Result<Value> {
+        let shape = self.path_shape(self.camera, viewport);
+        let editing = self.tool.path.editing;
+        let label = editing.map_or("Path".to_string(), |(_, i)| format!("Edit path {}", i + 1));
+        let out = self.edit_merging(&label, editing.is_some(), |s| {
+            let (eid, index) = match editing {
+                Some(at) => at,
+                None => (s.path_effect()?, usize::MAX),
+            };
+            s.put_path(eid, index, shape)
+        })?;
+        if let Some(eid) = out.get("effect").and_then(Value::as_u64) {
+            self.target = StackTarget::Effect(LayerId(eid));
+        }
+        self.tool.path.points.clear();
+        self.tool.path.editing = None;
+        Ok(out)
+    }
+
+    /// While a stored path is edited, repaint its sublayer when the tool's points, brush or
+    /// material changed (orbiting or resizing the view alone doesn't), merged into one undo
+    /// step. Cheap when nothing changed; the UI calls it every frame. Returns whether it
+    /// repainted.
+    pub fn path_live(&mut self) -> Result<bool> {
+        let Some((eid, index)) = self.tool.path.editing else { return Ok(false) };
+        let Some(stored) = self.paths(eid).and_then(|v| v.get(index)).cloned() else {
+            self.stop_path_edit();
+            return Ok(false);
+        };
+        let path = &self.tool.path;
+        if self.tool.tool != Tool::Path || self.stroke.is_some() || path.points.is_empty() || (path.closed && path.fill && path.points.len() < 3) {
+            return Ok(false);
+        }
+        // Typed comparison: the stored settings went through JSON (f64), maybe a save and load.
+        let unchanged = read_paint(&stored).is_ok_and(|p| {
+            let now = self.path_shape(p.camera, Vec2::from_array(stored.viewport));
+            (&now.points, now.uv, now.closed, now.fill) == (&stored.points, stored.uv, stored.closed, stored.fill) && read_paint(&now).is_ok_and(|n| n == p)
+        });
+        if unchanged {
+            return Ok(false);
+        }
+        let shape = self.path_shape(self.camera, self.viewport);
+        self.edit_merging(&format!("Edit path {}", index + 1), true, |s| s.put_path(eid, index, shape))?;
+        Ok(true)
+    }
+
+    /// Stop editing a stored path (its changes are already applied) and clear the tool.
+    pub fn stop_path_edit(&mut self) {
+        if self.tool.path.editing.take().is_some() {
+            self.tool.path.points.clear();
+        }
+    }
+
+    /// The selected path sublayer, or a new one on the selected layer's content or mask
+    /// (whichever is selected).
+    fn path_effect(&mut self) -> Result<LayerId> {
+        let id = self.selected_layer().ok_or_else(|| EngineError::Other("select a layer to add the path to".into()))?;
+        let p = &self.doc.project;
+        let mask = match self.target {
+            StackTarget::Effect(e) => match p.effect(e) {
+                Some((_, x)) if matches!(x.kind, EffectKind::Path(_)) => return Ok(e),
+                Some((owner, _)) => !p.layer(owner)?.content_effects.iter().any(|x| x.id == e),
+                None => false,
+            },
+            StackTarget::Mask => true,
+            StackTarget::Content => false,
+        };
+        // An instance's content and (unless it has its own) mask belong to its source.
+        let owner = if mask { p.mask_owner(id) } else { p.content_layer(id).map_or(id, |l| l.id) };
+        let eid = self.doc.project.alloc_id();
+        let l = self.doc.project.layer_mut(owner)?;
+        let e = Effect::new(eid, EffectKind::Path(Vec::new()));
+        if mask {
+            l.mask.get_or_insert_with(|| Mask::new(MaskBackground::Black)).effects.push(e);
+        } else if l.is_group() {
+            return Err(EngineError::Other(format!("\"{}\" is a folder: add the path to a layer or a mask", l.name)));
+        } else {
+            l.content_effects.push(e);
+        }
+        Ok(eid)
+    }
+
+    /// Replace path `index` of sublayer `eid` (append when out of range) and repaint the
+    /// sublayer. Returns what painting that path reported, with the sublayer and index.
+    fn put_path(&mut self, eid: LayerId, index: usize, shape: PathShape) -> Result<Value> {
+        let index = match self.doc.project.effect_mut(eid) {
+            Some(Effect { kind: EffectKind::Path(shapes), .. }) => match shapes.get_mut(index) {
+                Some(slot) => {
+                    *slot = shape;
+                    index
+                }
+                None => {
+                    shapes.push(shape);
+                    shapes.len() - 1
+                }
+            },
+            _ => return Err(EngineError::Other(format!("{} is not a path sublayer", eid.0))),
+        };
+        let mut out = self.render_paths(eid)?.get(index).cloned().unwrap_or_else(|| json!({}));
+        out["effect"] = json!(eid.0);
+        out["index"] = json!(index);
+        Ok(out)
+    }
+
+    /// Repaint path sublayer `eid` from scratch with its stored paths, bottom to top. Runs
+    /// inside the caller's undo step.
+    fn render_paths(&mut self, eid: LayerId) -> Result<Vec<Value>> {
+        let shapes = self.paths(eid).ok_or_else(|| EngineError::Other(format!("{} is not a path sublayer", eid.0)))?.to_vec();
+        self.doc.pixels.masks.remove(&eid);
+        self.doc.pixels.layers.retain(|(id, _), _| *id != eid);
+        // Each path goes through the regular stroke and fill code with its own settings; their
+        // own history entries are dropped (the caller records one step).
+        let saved = (self.tool.clone(), self.camera, self.target, self.quick_mask.editing);
+        let history = (std::mem::take(&mut self.undo), std::mem::take(&mut self.redo));
+        self.target = StackTarget::Effect(eid);
+        self.quick_mask.editing = false;
+        self.tool.tool = Tool::Path;
+        self.painting_paths = true;
+        let out = shapes.iter().map(|sh| self.paint_shape(sh)).collect();
+        self.painting_paths = false;
+        (self.tool, self.camera, self.target, self.quick_mask.editing) = saved;
+        (self.undo, self.redo) = history;
+        out
+    }
+
+    fn paint_shape(&mut self, shape: &PathShape) -> Result<Value> {
+        let paint = read_paint(shape)?;
+        self.tool.brush = paint.brush;
+        self.tool.values = paint.values;
+        self.tool.enabled = paint.enabled;
+        self.tool.mask_value = paint.mask_value;
+        self.camera = paint.camera;
+        self.tool.path = state_of(shape);
+        self.paint_path(Vec2::from_array(shape.viewport).max(Vec2::splat(16.0)).min(Vec2::splat(16384.0)))
+    }
+
+    /// Paint the Path tool's curve with the current brush (or fill it when closed and filled)
+    /// into the paint target.
+    fn paint_path(&mut self, viewport: Vec2) -> Result<Value> {
         let (uv, closed) = (self.tool.path.uv, self.tool.path.closed);
         let fill = closed && self.tool.path.fill;
         let pts: Vec<Vec2> = self.path_view_points(viewport).into_iter().flatten().collect();
@@ -130,15 +390,13 @@ impl Session {
             return Err(EngineError::Other("a filled path needs at least three points".into()));
         }
         let curve = spline(&pts, closed, if uv { STEP_UV } else { STEP_PX });
-        let out = if fill {
+        Ok(if fill {
             json!({ "filledTiles": self.lasso_fill(curve, uv, viewport)? })
         } else if uv {
             json!({ "tiles": self.stroke_uv_points(&curve)? })
         } else {
             json!({ "stamps": self.stroke_points(&curve, viewport)? })
-        };
-        self.tool.path.points.clear();
-        Ok(out)
+        })
     }
 
     /// Fill the inside of `poly`: viewport pixels over the visible surface, or texture

@@ -730,7 +730,7 @@ fn effect_plans<'a>(inp: &Inputs<'a>, effects: &'a [Effect], tx: u32, ty: u32, c
                 kind: &e.kind,
                 blend: e.blend,
                 opacity: e.opacity,
-                data: if matches!(e.kind, EffectKind::Paint) { tile_of(inp, img, tx, ty, channel) } else { None },
+                data: if e.kind.painted() { tile_of(inp, img, tx, ty, channel) } else { None },
                 preview: previews(inp, target),
             }
         })
@@ -1109,7 +1109,7 @@ impl<'a, 'b> Texel<'a, 'b> {
         for e in m.effects.iter().skip(skip) {
             let o = e.opacity.clamp(0.0, 1.0);
             match e.kind {
-                EffectKind::Paint => {
+                EffectKind::Paint | EffectKind::Path(_) => {
                     let (mut pv, mut cov) = match e.data.as_deref() {
                         Some(d) => (from_u16(d.get(self.o * 2).copied().unwrap_or(0)), from_u16(d.get(self.o * 2 + 1).copied().unwrap_or(0))),
                         None => (0.0, 0.0),
@@ -1420,7 +1420,7 @@ impl<'a, 'b> Texel<'a, 'b> {
     fn content_effect(&mut self, e: &EffectPlan, c: &ChanPlan, v: [f32; 3], cov: f32) -> ([f32; 3], f32) {
         let o = e.opacity.clamp(0.0, 1.0);
         match e.kind {
-            EffectKind::Paint => {
+            EffectKind::Paint | EffectKind::Path(_) => {
                 let (p, pc) = self.painted(e.data.as_deref(), c, e.preview);
                 over(c, e.blend, v, cov, p, pc * o)
             }

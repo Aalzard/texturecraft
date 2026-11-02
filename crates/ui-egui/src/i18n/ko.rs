@@ -962,4 +962,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Save the changes to {name} before closing?", "닫기 전에 {name}의 변경 사항을 저장할까요?"),
     ("Twill weave", "능직"),
     ("Save the changes to {name} first?", "먼저 {name}의 변경 사항을 저장할까요?"),
+    (
+        "Paths stay editable: pick one to move its points or change its brush and material, and the sublayer repaints at once. Add paths with the Path tool.",
+        "패스는 계속 편집할 수 있습니다. 패스를 골라 점을 옮기거나 브러시와 재질을 바꾸면 하위 레이어가 바로 다시 칠해집니다. 패스는 패스 도구로 추가합니다.",
+    ),
 ];

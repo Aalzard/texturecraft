@@ -1010,4 +1010,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Save the changes to {name} before closing?", "Änderungen an {name} vor dem Schließen speichern?"),
     ("Twill weave", "Köperbindung"),
     ("Save the changes to {name} first?", "Änderungen an {name} zuerst speichern?"),
+    (
+        "Paths stay editable: pick one to move its points or change its brush and material, and the sublayer repaints at once. Add paths with the Path tool.",
+        "Pfade bleiben bearbeitbar: Wähle einen, um seine Punkte zu verschieben oder Pinsel und Material zu ändern, und die Unterebene wird sofort neu gemalt. Füge Pfade mit dem Pfad-Werkzeug hinzu.",
+    ),
 ];

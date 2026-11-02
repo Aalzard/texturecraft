@@ -57,6 +57,14 @@ impl Session {
                     let content = self.doc.project.layer(owner)?.content_effects.iter().any(|x| x.id == e);
                     Ok(if content { PaintTarget::Layer(e) } else { PaintTarget::Mask(e) })
                 }
+                // Path sublayers are painted only from their stored paths.
+                Some((owner, eff)) if matches!(eff.kind, EffectKind::Path(_)) && self.painting_paths => {
+                    let content = self.doc.project.layer(owner)?.content_effects.iter().any(|x| x.id == e);
+                    Ok(if content { PaintTarget::Layer(e) } else { PaintTarget::Mask(e) })
+                }
+                Some((_, eff)) if matches!(eff.kind, EffectKind::Path(_)) => {
+                    Err(EngineError::Other("a path sublayer holds paths only: edit them with the Path tool, or paint on a paint sublayer".into()))
+                }
                 _ => Err(EngineError::Other("the selected effect is not a paint effect".into())),
             },
             StackTarget::Mask => {

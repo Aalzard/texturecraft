@@ -955,4 +955,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Save the changes to {name} before closing?", "هل تريد حفظ التغييرات في {name} قبل الإغلاق؟"),
     ("Twill weave", "نسيج مائل"),
     ("Save the changes to {name} first?", "هل تريد حفظ التغييرات في {name} أولًا؟"),
+    (
+        "Paths stay editable: pick one to move its points or change its brush and material, and the sublayer repaints at once. Add paths with the Path tool.",
+        "تبقى المسارات قابلة للتعديل: اختر مسارًا لتحريك نقاطه أو تغيير فرشاته ومادته، فتُعاد رسم الطبقة الفرعية فورًا. أضف المسارات بأداة المسار.",
+    ),
 ];
