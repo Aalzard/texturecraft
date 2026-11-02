@@ -189,6 +189,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Contrast", "대비"),
     ("Contrast/Luminosity", "대비/광도"),
     ("Converted maps", "변환된 맵"),
+    ("Copy RGB values", "RGB 값 복사"),
     ("Copy from", "복사 원본"),
     ("Copy layer(s)", "레이어 복사"),
     ("Copy the selected layer alone (its empty parts copy nothing)", "선택한 레이어만 복사합니다 (빈 부분은 복사되지 않음)"),

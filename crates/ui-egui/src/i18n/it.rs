@@ -201,6 +201,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Contrast", "Contrasto"),
     ("Contrast/Luminosity", "Contrasto/Luminosità"),
     ("Converted maps", "Mappe convertite"),
+    ("Copy RGB values", "Copia i valori RGB"),
     ("Copy from", "Copia da"),
     ("Copy layer(s)", "Copia livello/i"),
     ("Copy the selected layer alone (its empty parts copy nothing)", "Copia solo il livello selezionato (le sue parti vuote non copiano nulla)"),

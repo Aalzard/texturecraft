@@ -29,13 +29,11 @@ pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
     if app.ui.mode == Mode::Baking {
         bake_bar(app, ctx);
     }
-    #[cfg(not(target_arch = "wasm32"))]
     unsaved(app, ctx);
 }
 
 /// Hold `then` (quitting, opening or closing a project) behind the unsaved-changes dialog when
 /// the project has unsaved changes; false when it can go ahead now.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn ask_to_save(app: &mut TextureCraftApp, then: crate::state::Unsaved) -> bool {
     if app.session.modified {
         app.ui.windows.unsaved = Some(then);
@@ -43,8 +41,8 @@ pub(crate) fn ask_to_save(app: &mut TextureCraftApp, then: crate::state::Unsaved
     app.session.modified
 }
 
-/// Quitting, opening or closing a project with unsaved changes asks whether to save them first.
-#[cfg(not(target_arch = "wasm32"))]
+/// Quitting, opening or closing a project with unsaved changes asks whether to save them first
+/// (in the browser, Save downloads the project).
 fn unsaved(app: &mut TextureCraftApp, ctx: &egui::Context) {
     use crate::state::Unsaved;
     if ctx.input(|i| i.viewport().close_requested()) && ask_to_save(app, Unsaved::Quit) {
@@ -91,7 +89,9 @@ fn unsaved(app: &mut TextureCraftApp, ctx: &egui::Context) {
     match then {
         Unsaved::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         Unsaved::Command(id) => crate::menus::invoke(app, ctx, &id),
+        #[cfg(not(target_arch = "wasm32"))]
         Unsaved::Open(path) => open_path(app, &path),
+        Unsaved::Load(name, bytes) => crate::web_files::load(app, &name, std::sync::Arc::unwrap_or_clone(bytes)),
     }
 }
 

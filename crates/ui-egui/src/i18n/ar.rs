@@ -186,6 +186,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Contrast", "التباين"),
     ("Contrast/Luminosity", "التباين / الإضاءة"),
     ("Converted maps", "الخرائط المحوّلة"),
+    ("Copy RGB values", "نسخ قيم RGB"),
     ("Copy from", "نسخ من"),
     ("Copy layer(s)", "نسخ الطبقة (الطبقات)"),
     ("Copy the selected layer alone (its empty parts copy nothing)", "نسخ الطبقة المحددة وحدها (الأجزاء الفارغة لا تنسخ شيئاً)"),

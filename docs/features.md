@@ -69,7 +69,8 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
 - **Projects** are a single `.tcraft` file: the mesh, every layer (sparse and lossless), baked maps
   and imported images. **Project templates** start new work from a saved setup. Closing the app,
   or opening, starting or closing another project, with unsaved changes asks whether to save them
-  first.
+  first (in the browser too, where Save downloads the project and closing or reloading the tab
+  asks before the changes are lost).
 
 ## Bake and export
 
