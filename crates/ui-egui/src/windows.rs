@@ -1055,6 +1055,12 @@ pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) ->
             }
             true
         }
+        "material.load" => {
+            for p in rfd::FileDialog::new().add_filter(tr("Materials"), crate::web_files::MATERIAL_EXTS).pick_files().unwrap_or_default() {
+                app.run("material.load", json!({"path": p.display().to_string()}));
+            }
+            true
+        }
         "file.importResources" | "resource.import" => {
             let picks = rfd::FileDialog::new().add_filter(tr("Images"), crate::web_files::IMAGE_EXTS).pick_files();
             for p in picks.unwrap_or_default() {
@@ -1131,6 +1137,7 @@ pub fn file_action(app: &mut TextureCraftApp, ctx: &egui::Context, id: &str) -> 
     match id {
         "file.open" => crate::web_files::open(ctx),
         "file.importResources" | "resource.import" => crate::web_files::import_images(ctx),
+        "material.load" => crate::web_files::import_material(ctx),
         "file.save" | "file.saveAs" | "file.saveCopy" => crate::web_files::save_project(app),
         "file.exportMesh" => app.ui.windows.export_mesh = true,
         _ => return false,
