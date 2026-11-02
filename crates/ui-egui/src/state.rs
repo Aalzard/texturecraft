@@ -76,9 +76,19 @@ pub struct Windows {
     /// The start window: new, open, recent projects (the app opens it at launch).
     #[serde(skip)]
     pub start: bool,
-    /// Closing with unsaved changes: save, don't save or cancel (desktop).
+    /// What waits on the unsaved-changes dialog: save, don't save or cancel (desktop).
     #[serde(skip)]
-    pub confirm_close: bool,
+    pub unsaved: Option<Unsaved>,
+}
+
+/// An action that replaces or ends the project, held while the project has unsaved changes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Unsaved {
+    Quit,
+    /// A menu command (New project, Open, Close, Open sample project).
+    Command(String),
+    /// Open this project or mesh file.
+    Open(String),
 }
 
 /// Edit › Settings.

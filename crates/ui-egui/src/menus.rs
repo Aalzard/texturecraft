@@ -117,6 +117,12 @@ pub fn implemented(id: &str) -> bool {
 
 /// Invoke a menu item (menus, shortcuts, palette, control channel `ui.menu.invoke`).
 pub fn invoke(app: &mut TextureCraftApp, ctx: &egui::Context, id: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if matches!(id, "ui.newProject" | "file.open" | "file.close" | "project.sample")
+        && crate::windows::ask_to_save(app, crate::state::Unsaved::Command(id.into()))
+    {
+        return;
+    }
     if let Some(panel) = crate::docking::view_panel(id) {
         app.ui.dock.toggle(panel);
         return;
