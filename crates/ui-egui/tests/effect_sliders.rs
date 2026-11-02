@@ -183,5 +183,9 @@ fn leaving_the_number_field_unchanged_keeps_the_value() {
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
     assert_eq!(opacity(&h, effect), 0.333);
+    // Typing the value it already has is no edit either.
+    type_opacity(&mut h, &[egui::Key::End, egui::Key::Backspace, egui::Key::Backspace, egui::Key::Backspace, egui::Key::Backspace], "0.333");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
     assert_eq!(h.state().session.history_labels().len(), steps);
 }

@@ -55,6 +55,7 @@ fn slider_inner(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::Rang
                         && text != shown
                         && let Ok(v) = text.trim().parse::<f32>()
                         && v.is_finite()
+                        && v.clamp(lo, hi) != *value
                     {
                         *value = v.clamp(lo, hi);
                         edit = Some(false);
