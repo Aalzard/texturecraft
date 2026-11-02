@@ -346,8 +346,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Folders", "폴더"),
     ("Follow path", "패스 따라가기"),
     (
-        "For the whole project: how normal map images (mesh maps and fills) are read, and the default for export",
-        "프로젝트 전체: 노멀 맵 이미지(메시 맵과 채우기)를 읽는 방식과 내보내기 기본값",
+        "For the whole project: how normal map images set as mesh maps are read (set them again after a change), and the default for export",
+        "프로젝트 전체: 메시 맵으로 지정한 노멀 맵 이미지를 읽는 방식(변경 후 다시 지정하세요)과 내보내기 기본값",
     ),
     ("Free and open source (MIT OR Apache-2.0), written in Rust.", "Rust로 작성된 무료 오픈 소스 소프트웨어입니다 (MIT OR Apache-2.0)."),
     ("From normal map", "노멀 맵에서"),

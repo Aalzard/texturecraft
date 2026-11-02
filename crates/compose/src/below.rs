@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use texturecraft_core::project::MAX_DEPTH;
-use texturecraft_core::{BakedMap, Channel, Layer, LayerId, LayerKind, NormalFormat, Project, TextureSet};
+use texturecraft_core::{BakedMap, Channel, Layer, LayerId, LayerKind, Project, TextureSet};
 use texturecraft_texel::TileImage;
 
 use crate::eval::{Inputs, PaintTarget};
@@ -79,8 +79,6 @@ pub struct StackKey {
     pixels: Vec<(LayerId, Option<Channel>, Shared)>,
     baked: (u32, Vec<(BakedMap, usize)>),
     images: Vec<(String, usize)>,
-    /// How image sources on normal channels are read.
-    normal_format: NormalFormat,
 }
 
 impl StackKey {
@@ -122,7 +120,6 @@ impl StackKey {
             pixels,
             baked: (baked.resolution, baked.maps.iter().map(|(m, d)| (*m, Arc::as_ptr(d) as usize)).collect()),
             images,
-            normal_format: project.normal_format,
         })
     }
 }

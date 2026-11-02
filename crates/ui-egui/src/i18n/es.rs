@@ -352,8 +352,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Folders", "Carpetas"),
     ("Follow path", "Seguir trayectoria"),
     (
-        "For the whole project: how normal map images (mesh maps and fills) are read, and the default for export",
-        "Para todo el proyecto: cómo se leen las imágenes de mapas de normales (mapas de malla y rellenos) y el valor predeterminado al exportar",
+        "For the whole project: how normal map images set as mesh maps are read (set them again after a change), and the default for export",
+        "Para todo el proyecto: cómo se leen las imágenes de mapas de normales usadas como mapas de malla (vuelve a asignarlas tras un cambio) y el valor predeterminado al exportar",
     ),
     ("Free and open source (MIT OR Apache-2.0), written in Rust.", "Libre y de código abierto (MIT OR Apache-2.0), escrito en Rust."),
     ("From normal map", "Desde el mapa de normales"),

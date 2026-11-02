@@ -808,7 +808,9 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
                 }
             }
         })
-        .on_hover_text(tr("For the whole project: how normal map images (mesh maps and fills) are read, and the default for export"));
+        .on_hover_text(tr(
+            "For the whole project: how normal map images set as mesh maps are read (set them again after a change), and the default for export",
+        ));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.label(caption(tr("Mesh maps")));
