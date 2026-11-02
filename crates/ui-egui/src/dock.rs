@@ -1222,6 +1222,9 @@ fn text_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     });
 }
 
+/// Tooltip of the material channel chips.
+pub(crate) const SOLO_HINT: &str = "Click: turn this channel on or off. Alt+click: this channel only";
+
 fn material_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     let tk = Tokens::get(ui.ctx());
     ui.label(caption(tr("Material")));
@@ -1229,8 +1232,9 @@ fn material_section(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         for c in &chans {
             let on = app.session.tool.enabled.contains(c);
-            if chip(ui, tr(c.short()), on).clicked() {
-                app.run("tool.material", json!({"channel": c.id(), "enabled": !on}));
+            if chip(ui, tr(c.short()), on).on_hover_text(tr(SOLO_HINT)).clicked() {
+                let solo = ui.input(|i| i.modifiers.alt);
+                app.run("tool.material", json!({"channel": c.id(), "enabled": solo || !on, "solo": solo}));
             }
         }
     });
@@ -1328,8 +1332,9 @@ fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value
     ui.horizontal_wrapped(|ui| {
         for c in &chans {
             let enabled = on.contains(c);
-            if chip(ui, tr(c.short()), enabled).clicked() {
-                app.run("layer.fill.set", with(base, json!({"channel": c.id(), "enabled": !enabled})));
+            if chip(ui, tr(c.short()), enabled).on_hover_text(tr(SOLO_HINT)).clicked() {
+                let solo = ui.input(|i| i.modifiers.alt);
+                app.run("layer.fill.set", with(base, json!({"channel": c.id(), "enabled": solo || !enabled, "solo": solo})));
             }
         }
     });

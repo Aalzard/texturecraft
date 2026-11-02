@@ -945,4 +945,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Style", "스타일"),
     ("Use as brush alpha", "브러시 알파로 사용"),
     ("Place as decal", "데칼로 배치"),
+    ("Click: turn this channel on or off. Alt+click: this channel only", "클릭: 이 채널 켜기/끄기. Alt+클릭: 이 채널만"),
 ];
