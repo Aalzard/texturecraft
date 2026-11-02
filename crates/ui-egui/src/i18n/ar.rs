@@ -148,7 +148,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cell size (texels at 2K)", "حجم الخلية (تكسل بدقة 2K)"),
     ("Cells", "خلايا"),
     ("Channel", "القناة"),
-    ("Channel source: uniform value, procedural or anchor", "مصدر القناة: قيمة موحدة، إجرائي أو نقطة ارتكاز"),
+    ("Channel source: uniform value, procedural, image or anchor", "مصدر القناة: قيمة موحدة، إجرائي، صورة أو نقطة ارتكاز"),
     ("Channels", "القنوات"),
     ("Checker", "رقعة شطرنج"),
     ("Clamp", "تقييد القيم"),

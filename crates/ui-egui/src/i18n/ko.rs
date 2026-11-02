@@ -148,7 +148,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cell size (texels at 2K)", "셀 크기 (2K 기준 텍셀)"),
     ("Cells", "셀"),
     ("Channel", "채널"),
-    ("Channel source: uniform value, procedural or anchor", "채널 소스: 균일 값, 프로시저럴 또는 앵커"),
+    ("Channel source: uniform value, procedural, image or anchor", "채널 소스: 균일 값, 프로시저럴, 이미지 또는 앵커"),
     ("Channels", "채널"),
     ("Checker", "체커"),
     ("Clamp", "클램프"),

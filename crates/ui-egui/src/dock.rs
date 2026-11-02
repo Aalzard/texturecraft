@@ -809,7 +809,6 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
                 }
             });
         });
-        let images: Vec<String> = app.session.doc.resources.keys().cloned().collect();
         for m in BakedMap::ALL {
             let present = app.session.doc.baked.get(&ts).is_some_and(|b| b.maps.contains_key(&m));
             let row = ui.horizontal(|ui| {
@@ -826,16 +825,8 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
                 // An image resource instead of a bake, or no map.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.menu_button(RichText::new(ic::DOTS_THREE).size(13.0), |ui| {
-                        ui.label(caption(tr("Images")));
-                        for name in &images {
-                            if ui.button(name).clicked() {
-                                app.run("textureSet.meshMap.set", json!({"ts": ts, "map": m.id(), "image": name}));
-                                ui.close();
-                            }
-                        }
-                        if ui.button(tr("Import...")).clicked() {
-                            crate::menus::invoke(app, ui.ctx(), "resource.import");
-                            ui.close();
+                        if let Some(name) = image_menu(app, ui) {
+                            app.run("textureSet.meshMap.set", json!({"ts": ts, "map": m.id(), "image": name}));
                         }
                         ui.separator();
                         if ui.add_enabled(present, egui::Button::new(tr("Clear"))).clicked() {
@@ -847,14 +838,46 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
             });
             // A shelf image dropped on the row becomes this mesh map.
             let resp = row.response.interact(Sense::hover()).on_hover_text(tr("Drop an image from the Assets panel here to use it as this mesh map"));
-            if resp.dnd_hover_payload::<ShelfDrag>().is_some_and(|d| matches!(d.asset, Asset::Texture(_))) {
-                ui.painter().rect_stroke(resp.rect.shrink(1.0), 3.0, Stroke::new(2.0, tk.accent), egui::StrokeKind::Inside);
-            }
-            if let Some(Asset::Texture(name)) = dnd_release::<ShelfDrag>(&resp).map(|d| d.asset.clone()) {
+            if let Some(name) = image_drop(ui, &resp) {
                 app.run("textureSet.meshMap.set", json!({"ts": ts, "map": m.id(), "image": name}));
             }
         }
     });
+}
+
+/// Menu items listing the image resources, then Import...: the image picked, if any.
+fn image_menu(app: &mut TextureCraftApp, ui: &mut Ui) -> Option<String> {
+    ui.label(caption(tr("Images")));
+    let mut picked = None;
+    // Bounded, so Import... and the items after it stay on screen with many images.
+    egui::ScrollArea::vertical().id_salt("image_menu").max_height(240.0).show(ui, |ui| {
+        for name in app.session.doc.resources.keys() {
+            if ui.button(name.as_str()).clicked() {
+                picked = Some(name.clone());
+            }
+        }
+    });
+    if ui.button(tr("Import...")).clicked() {
+        crate::menus::invoke(app, ui.ctx(), "resource.import");
+        ui.close();
+    }
+    if picked.is_some() {
+        ui.close();
+    }
+    picked
+}
+
+/// An image from the Assets panel dropped on `resp`, outlined while one hovers it. Other assets
+/// are left for the drop targets around it.
+fn image_drop(ui: &Ui, resp: &egui::Response) -> Option<String> {
+    if !resp.dnd_hover_payload::<ShelfDrag>().is_some_and(|d| matches!(d.asset, Asset::Texture(_))) {
+        return None;
+    }
+    ui.painter().rect_stroke(resp.rect.shrink(1.0), 3.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), egui::StrokeKind::Inside);
+    match dnd_release::<ShelfDrag>(resp).map(|d| d.asset.clone()) {
+        Some(Asset::Texture(name)) => Some(name),
+        _ => None,
+    }
 }
 
 fn mesh_map_color(m: BakedMap) -> Color32 {
@@ -1514,7 +1537,7 @@ fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Valu
     use texturecraft_engine::core::ChannelKind;
     {
         let set = |extra: Value| with(base, with(&json!({"channel": c.id()}), extra));
-        ui.group(|ui| {
+        let group = ui.group(|ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(tr(c.label())).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1535,6 +1558,10 @@ fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Valu
                                 ui.close();
                             }
                         }
+                        ui.separator();
+                        if let Some(name) = image_menu(app, ui) {
+                            app.run("layer.fill.set", set(json!({"image": name})));
+                        }
                         if !anchors.is_empty() {
                             ui.separator();
                         }
@@ -1546,7 +1573,7 @@ fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Valu
                         }
                     })
                     .response
-                    .on_hover_text(tr("Channel source: uniform value, procedural or anchor"));
+                    .on_hover_text(tr("Channel source: uniform value, procedural, image or anchor"));
                 });
             });
             match fill.source(c) {
@@ -1608,6 +1635,10 @@ fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Valu
                 }
             }
         });
+        // A shelf image dropped on the channel becomes its source.
+        if let Some(name) = image_drop(ui, &group.response.interact(Sense::hover())) {
+            app.run("layer.fill.set", set(json!({"image": name})));
+        }
     }
 }
 

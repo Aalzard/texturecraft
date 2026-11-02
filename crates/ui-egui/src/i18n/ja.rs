@@ -154,7 +154,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Cell size (texels at 2K)", "セルサイズ (2K時のテクセル)"),
     ("Cells", "セル"),
     ("Channel", "チャンネル"),
-    ("Channel source: uniform value, procedural or anchor", "チャンネルのソース: 均一値、プロシージャル、アンカー"),
+    ("Channel source: uniform value, procedural, image or anchor", "チャンネルのソース: 均一値、プロシージャル、画像、アンカー"),
     ("Channels", "チャンネル"),
     ("Checker", "チェッカー"),
     ("Clamp", "クランプ"),
