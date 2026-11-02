@@ -40,6 +40,9 @@ pub struct PathState {
     /// The stored path being edited: (path sublayer, index). Changes repaint it live.
     #[serde(default)]
     pub editing: Option<(LayerId, usize)>,
+    /// This edit has already repainted: later changes join its undo step, not an earlier edit's.
+    #[serde(default)]
+    pub edited: bool,
 }
 
 impl PathState {
@@ -190,14 +193,17 @@ fn remove_path(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "effect": eid.0, "paths": s.paths(eid).map_or(0, <[_]>::len) }))
 }
 
+/// A stored path's settings, with the brush clamped like the tool's own (they come from the file).
 fn read_paint(shape: &PathShape) -> Result<PathPaint> {
-    serde_json::from_value(shape.paint.clone()).map_err(|e| EngineError::Other(format!("unreadable path settings: {e}")))
+    let mut paint: PathPaint = serde_json::from_value(shape.paint.clone()).map_err(|e| EngineError::Other(format!("unreadable path settings: {e}")))?;
+    paint.brush = paint.brush.sanitized();
+    Ok(paint)
 }
 
 /// The Path tool state showing a stored path (finite points only, at most [`MAX_PATH_POINTS`]).
 fn state_of(shape: &PathShape) -> PathState {
     let points = shape.points.iter().filter(|p| p.iter().all(|v| v.is_finite())).take(MAX_PATH_POINTS).map(|p| Vec3::from_array(*p)).collect();
-    PathState { points, uv: shape.uv, closed: shape.closed, fill: shape.fill, editing: None }
+    PathState { points, uv: shape.uv, closed: shape.closed, fill: shape.fill, editing: None, edited: false }
 }
 
 /// NDC (y up) to viewport pixels (origin top-left).
@@ -245,7 +251,7 @@ impl Session {
         let shape = self.path_shape(self.camera, viewport);
         let editing = self.tool.path.editing;
         let label = editing.map_or("Path".to_string(), |(_, i)| format!("Edit path {}", i + 1));
-        let out = self.edit_merging(&label, editing.is_some(), |s| {
+        let out = self.edit_merging(&label, editing.is_some() && self.tool.path.edited, |s| {
             let (eid, index) = match editing {
                 Some(at) => at,
                 None => (s.path_effect()?, usize::MAX),
@@ -283,7 +289,8 @@ impl Session {
             return Ok(false);
         }
         let shape = self.path_shape(self.camera, self.viewport);
-        self.edit_merging(&format!("Edit path {}", index + 1), true, |s| s.put_path(eid, index, shape))?;
+        self.edit_merging(&format!("Edit path {}", index + 1), self.tool.path.edited, |s| s.put_path(eid, index, shape))?;
+        self.tool.path.edited = true;
         Ok(true)
     }
 

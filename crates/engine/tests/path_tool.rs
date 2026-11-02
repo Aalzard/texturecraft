@@ -218,3 +218,23 @@ fn undo_while_editing_a_path_stops_the_edit() {
     s.update();
     assert!(red_at(&s, 200.0, 180.0));
 }
+
+#[test]
+fn each_path_and_each_edit_of_one_is_its_own_undo_step() {
+    let mut s = session(primitives::sphere(1.0, 48, 24));
+    let steps = |s: &Session| s.history_labels().len();
+    let start = steps(&s);
+    let r = execute(&mut s, "tool.path", &json!({"points": [[140, 210], [200, 180], [260, 210]], "commit": true})).unwrap();
+    let eid = r["committed"]["effect"].as_u64().unwrap();
+    execute(&mut s, "tool.path", &json!({"uvPoints": [[0.2, 0.9], [0.8, 0.9]], "commit": true})).unwrap();
+    assert_eq!(steps(&s), start + 2, "two paths, two steps");
+    for y in [250, 230] {
+        execute(&mut s, "path.edit", &json!({"effect": eid, "index": 0})).unwrap();
+        execute(&mut s, "tool.path", &json!({"points": [[140, y], [200, y - 20], [260, y]]})).unwrap();
+        execute(&mut s, "tool.path", &json!({"commit": true})).unwrap();
+    }
+    assert_eq!(steps(&s), start + 4, "a second edit of the same path doesn't join the first");
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    s.update();
+    assert!(red_at(&s, 200.0, 230.0), "undo brings back the first edit");
+}
