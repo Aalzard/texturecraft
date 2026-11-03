@@ -18,7 +18,7 @@ use std::io::Cursor;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use texturecraft_compose::{BakedMaps, Composite};
-use texturecraft_core::{AoMixing, BakedMap, Channel, ChannelKind, NormalFormat, NormalMixing, Project, TextureSet};
+use texturecraft_core::{AoMixing, BakedMap, BlockScales, Channel, ChannelKind, NormalFormat, NormalMixing, Project, TextureSet};
 use texturecraft_geom::glam::Vec3;
 use texturecraft_texel::{ColorSpace, DilationMap, linear_to_srgb};
 
@@ -565,9 +565,11 @@ struct Sampler<'a> {
     coverage: &'a [bool],
     /// Composite width.
     res: u32,
-    /// Texels per UV tile (`res` for a classic set): the height slope and the Sobel window
-    /// follow the tile.
+    /// Texels per atlas block (`res` for a classic set): the height slope and the Sobel window
+    /// follow the block.
     tile_res: u32,
+    /// The share of its block each tile fills: a smaller tile's height slope shrinks with it.
+    scales: BlockScales,
     /// Normal convention overriding every normal output.
     normal_override: Option<NormalFormat>,
     project_normal: NormalFormat,
@@ -615,7 +617,7 @@ impl Sampler<'_> {
         };
         let gx = (h(1, -1) + 2.0 * h(1, 0) + h(1, 1) - h(-1, -1) - 2.0 * h(-1, 0) - h(-1, 1)) / 8.0;
         let gy = (h(-1, 1) + 2.0 * h(0, 1) + h(1, 1) - h(-1, -1) - 2.0 * h(0, -1) - h(1, -1)) / 8.0;
-        let s = self.set.height_strength * self.tile_res as f32 / HEIGHT_SPAN;
+        let s = self.set.height_strength * self.tile_res as f32 * self.scales.at(x, y) / HEIGHT_SPAN;
         // Image y points down; OpenGL normals have +Y up the image.
         Vec3::new(-gx * s, gy * s, 1.0).try_normalize().unwrap_or(Vec3::Z)
     }
@@ -707,6 +709,7 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
         coverage: input.coverage,
         res,
         tile_res,
+        scales: set.block_scales(),
         normal_override: opts.normal_format,
         project_normal: input.project.normal_format,
     };
@@ -965,7 +968,9 @@ pub fn write_files(files: &[ExportedFile], dir: &std::path::Path) -> Result<Vec<
     files
         .iter()
         .map(|f| {
-            if f.name.is_empty() || f.name != sanitize_file_stem(&f.name) || f.name.trim_matches('.').is_empty() {
+            // The planned name is `<sanitized stem>.<ext>`; the stem alone is capped at MAX_STEM.
+            let (stem, ext) = f.name.rsplit_once('.').unwrap_or((&f.name, ""));
+            if f.name.is_empty() || stem != sanitize_file_stem(stem) || !ext.chars().all(|c| c.is_ascii_alphanumeric()) || f.name.trim_matches('.').is_empty() {
                 return Err(FormatError::Invalid(format!("\"{}\" is not a plain file name", f.name)));
             }
             let path = dir.join(&f.name);

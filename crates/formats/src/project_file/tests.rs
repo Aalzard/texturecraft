@@ -194,3 +194,20 @@ fn uv_tiled_sets_round_trip_their_atlas_pixels_and_bakes() {
     square.project.texture_sets[0].uv_tiles.clear();
     assert!(load_project_bytes(&save_project_bytes(&square).unwrap()).is_err());
 }
+
+#[test]
+fn duplicate_entry_names_are_made_unique_on_save() {
+    let mut pf = sample().pf;
+    pf.high_poly = vec![("model.obj".into(), vec![1]), ("model.obj".into(), vec![2])];
+    pf.resources = [("a b".to_string(), vec![3]), ("a_b".to_string(), vec![4])].into();
+    let bytes = save_project_bytes(&pf).expect("save with duplicate entry names");
+    let back = load_project_bytes(&bytes).unwrap();
+    assert_eq!(back.high_poly.len(), 2);
+    let mut hp: Vec<_> = back.high_poly.iter().map(|(_, b)| b.clone()).collect();
+    hp.sort();
+    assert_eq!(hp, vec![vec![1], vec![2]]);
+    assert_eq!(back.resources.len(), 2);
+    let mut res: Vec<_> = back.resources.values().cloned().collect();
+    res.sort();
+    assert_eq!(res, vec![vec![3], vec![4]]);
+}

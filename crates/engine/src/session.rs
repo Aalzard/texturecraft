@@ -64,7 +64,7 @@ impl SetCache {
             gbuf: Arc::new(gbuf),
             dilation: Arc::new(dilation),
             covered_tiles: Arc::new(covered),
-            composite: Composite::with_size(&ts.channel_list(), w, h),
+            composite: Composite { block_scales: ts.block_scales(), ..Composite::with_size(&ts.channel_list(), w, h) },
             dirty: all.clone(),
             settle: BTreeSet::new(),
             upload: all,
@@ -583,9 +583,9 @@ impl Session {
         for (i, ts) in sets.iter().enumerate() {
             match self.caches.get_mut(i) {
                 Some(c) if c.size == ts.size() => {
-                    let want = ts.channel_list();
-                    if c.composite.channels.keys().copied().collect::<Vec<_>>() != want {
-                        c.composite = Composite::with_size(&want, c.size.0, c.size.1);
+                    let (want, scales) = (ts.channel_list(), ts.block_scales());
+                    if c.composite.channels.keys().copied().collect::<Vec<_>>() != want || c.composite.block_scales != scales {
+                        c.composite = Composite { block_scales: scales, ..Composite::with_size(&want, c.size.0, c.size.1) };
                         c.upload.extend(texturecraft_compose::all_tiles(c.size.0, c.size.1));
                         c.invalidate_all();
                     }

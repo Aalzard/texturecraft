@@ -376,15 +376,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     if painting && path_tool {
         path_input(app, ui, &resp, false, |app, p| app.session.pick(local(p), vp).map(|h| h.pos), show);
     } else if painting {
-        // Pen pressure arrives as touch force (Windows Ink, Wayland, web); mice report none.
-        // shortcut: egui 0.36 / winit 0.30 report no pen tilt, so tilt can't drive the brush angle yet.
-        let pressure = ui.input(|i| {
-            i.raw.events.iter().rev().find_map(|e| match e {
-                egui::Event::Touch { force: Some(f), .. } if f.is_finite() => Some(f.clamp(0.0, 1.0)),
-                _ => None,
-            })
-        });
-        let pressure = pressure.unwrap_or(1.0);
+        let pressure = pen_pressure(ui);
         if resp.drag_started_by(PointerButton::Primary) || resp.clicked_by(PointerButton::Primary) {
             // Shift+click paints a straight line from where the last stroke ended.
             let line_from = if shift { app.last_paint_point } else { None };
@@ -910,6 +902,35 @@ fn brush_cursor(app: &TextureCraftApp, ui: &Ui, rect: Rect, pos: Vec3, nrm: Vec3
     }
 }
 
+/// This frame's pen pressure (0..1), or 1 without a pen. Pressure arrives as touch force: the
+/// windowing layer reports it for Windows Ink pens, and in the browser for pens that send touch
+/// events (tablets and phones); other pens come through as a mouse.
+/// shortcut: the windowing layer reports no pen tilt, so tilt can't drive the brush angle yet.
+fn pen_pressure(ui: &Ui) -> f32 {
+    let id = egui::Id::unique("pen_pressure");
+    let touch = ui.input(|i| {
+        i.raw.events.iter().rev().find_map(|e| match e {
+            egui::Event::Touch { phase, force, .. } => Some((*phase, force.filter(|f| f.is_finite()))),
+            _ => None,
+        })
+    });
+    match touch {
+        Some((_, Some(f))) => {
+            let f = f.clamp(0.0, 1.0);
+            ui.data_mut(|d| d.insert_temp(id, f));
+            f
+        }
+        // A pen lifts with no pressure, and a tap paints on that frame: keep its contact pressure.
+        Some((egui::TouchPhase::End, None)) => ui.data(|d| d.get_temp(id)).unwrap_or(1.0),
+        // A touch without pressure (a finger) must not inherit an earlier pen's.
+        Some((egui::TouchPhase::Start, None)) => {
+            ui.data_mut(|d| d.remove_temp::<f32>(id));
+            1.0
+        }
+        _ => 1.0,
+    }
+}
+
 fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut PendingSync) {
     let tk = Tokens::get(ui.ctx());
     let resp = ui.interact(rect, ui.scope_id().with("view2d"), Sense::click_and_drag());
@@ -969,9 +990,10 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     if painting && path_tool {
         path_input(app, ui, &resp, true, |_, p| Some(to_uv(p).extend(0.0)), show);
     } else if painting {
+        let pressure = pen_pressure(ui);
         if resp.drag_started_by(PointerButton::Primary) || resp.clicked_by(PointerButton::Primary) {
             if let Some(p) = resp.interact_pointer_pos()
-                && let Err(e) = app.session.begin_stroke_uv(to_uv(p), 1.0)
+                && let Err(e) = app.session.begin_stroke_uv(to_uv(p), pressure)
             {
                 app.toast(e.to_string(), true);
             }
@@ -984,7 +1006,7 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
             && app.session.stroke_active()
             && let Some(p) = resp.interact_pointer_pos()
         {
-            app.session.continue_stroke_uv(to_uv(p), 1.0);
+            app.session.continue_stroke_uv(to_uv(p), pressure);
         }
         if resp.drag_stopped_by(PointerButton::Primary)
             && let Err(e) = app.session.end_stroke()
