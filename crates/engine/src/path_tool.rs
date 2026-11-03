@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use texturecraft_core::{Channel, Effect, EffectKind, LayerId, Mask, MaskBackground, PathShape};
-use texturecraft_geom::OrbitCamera;
 use texturecraft_geom::glam::{Vec2, Vec3};
+use texturecraft_geom::{OrbitCamera, surface_at};
 use texturecraft_paint::{BrushSettings, Lasso, fill_coverage, spline};
 
 use crate::commands::{CommandSpec, always, bad, boolp, has_layer, u64p};
@@ -25,6 +25,9 @@ pub const MAX_PATH_POINTS: usize = 4096;
 /// Curve sampling step in viewport pixels (3D view) and texture units (2D view).
 const STEP_PX: f32 = 2.0;
 const STEP_UV: f32 = 0.001;
+const MIN_PROJECTIVE_W: f32 = 1e-6;
+// Allow ray hits to differ slightly from transformed texel positions
+const RAY_HIT_RELATIVE_TOLERANCE: f32 = 0.001;
 
 /// The curve being edited with the Path tool.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -463,26 +466,50 @@ impl Session {
             let view_proj = self.camera.view_proj(viewport.x.max(1.0) / viewport.y.max(1.0));
             let inv = view_proj.inverse();
             let (cull, mesh, bvh) = (self.tool.brush.backface_culling, &self.mesh, &self.bvh);
+
+            // A visible source inside the lasso can paint each symmetry copy
+            let (lo, hi) = mesh.bounds();
+            let center = (lo + hi) * 0.5;
+            let inverses: Vec<_> = self.tool.brush.sanitized().symmetry.transforms().iter().map(|m| m.inverse()).collect();
+
             fill_coverage(&mut canvas, &gbuf, |i, _| {
                 let Some(s) = gbuf.surface(mesh, i) else { return 0.0 };
-                let c = view_proj * s.pos.extend(1.0);
-                if c.w <= 1e-6 {
-                    return 0.0;
+                let mut best = 0.0f32;
+
+                for m in &inverses {
+                    let pos = center + *m * (s.pos - center);
+                    let c = view_proj * pos.extend(1.0);
+                    if c.w <= MIN_PROJECTIVE_W {
+                        continue;
+                    }
+                    let ndc = Vec2::new(c.x, c.y) / c.w;
+                    let a = lasso.coverage(to_pixels(ndc, viewport));
+                    if a <= best {
+                        continue;
+                    }
+
+                    // Use the source surface normal; a copy may face away from the camera
+                    let o = inv * ndc.extend(0.0).extend(1.0);
+                    let origin = o.truncate() / o.w;
+                    let to = pos - origin;
+                    let d = to.length();
+                    let Some(dir) = to.try_normalize() else { continue };
+                    let Some(hit) =
+                        bvh.closest(origin, dir, d * (1.0 + RAY_HIT_RELATIVE_TOLERANCE)).filter(|hit| hit.t >= d * (1.0 - RAY_HIT_RELATIVE_TOLERANCE))
+                    else {
+                        continue;
+                    };
+
+                    let Some(source) = surface_at(mesh, hit.tri, hit.u, hit.v) else { continue };
+
+                    if cull && source.nrm.dot(dir) >= 0.0 {
+                        continue;
+                    }
+
+                    best = a;
                 }
-                let ndc = Vec2::new(c.x, c.y) / c.w;
-                let a = lasso.coverage(to_pixels(ndc, viewport));
-                if a <= 0.0 {
-                    return 0.0;
-                }
-                // Exact visibility (a depth buffer flickers on grazing surfaces): nothing between
-                // the near plane and the texel.
-                let o = inv * ndc.extend(0.0).extend(1.0);
-                let origin = o.truncate() / o.w;
-                let to = s.pos - origin;
-                let d = to.length();
-                let dir = to / d.max(1e-9);
-                let hidden = (cull && s.nrm.dot(dir) >= 0.0) || bvh.closest(origin, dir, d * 0.999).is_some();
-                if hidden { 0.0 } else { a }
+
+                best
             });
         }
         let tiles = canvas.dirty.len();
