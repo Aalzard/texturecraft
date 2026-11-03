@@ -487,6 +487,15 @@ fn gltf_cameras_become_orbit_cameras() {
 }
 
 #[test]
+fn obj_without_object_name_takes_file_stem() {
+    let name = |file: &str, src: &str| import_mesh_bytes(file, src.as_bytes()).unwrap().mesh.submeshes[0].name.clone();
+    let body = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+    assert_eq!(name("rock.obj", body), "rock");
+    assert_eq!(name("rock.obj", &format!("o Boulder\n{body}")), "Boulder");
+    assert_eq!(name("rock.obj", &format!("g Pebble\n{body}")), "Pebble");
+}
+
+#[test]
 fn ply_face_element_before_vertex_element() {
     let head = "ply\nformat ascii 1.0\nelement face 1\nproperty list uchar int vertex_indices\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nend_header\n";
     let ok = format!("{head}3 0 1 2\n0 0 0\n1 0 0\n0 1 0\n");
