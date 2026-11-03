@@ -197,7 +197,7 @@ pub struct RaySettings {
 
 impl Default for RaySettings {
     fn default() -> Self {
-        RaySettings { rays: 32, max_distance: 0.25, spread: 180.0, distribution: RayDistribution::Cosine }
+        RaySettings { rays: 64, max_distance: 0.1, spread: 180.0, distribution: RayDistribution::Cosine }
     }
 }
 
@@ -254,8 +254,7 @@ impl Default for BakeSettings {
             ao: RaySettings::default(),
             ao_ignore_backface: false,
             ao_self_occlusion: SelfOcclusion::Always,
-            // Thickness is hit distance / max distance: long rays turn thin parts almost black.
-            thickness: RaySettings { max_distance: 0.1, ..RaySettings::default() },
+            thickness: RaySettings::default(),
             bent_normal: RaySettings::default(),
             curvature_strength: 1.0,
             curvature_from_normal: false,
