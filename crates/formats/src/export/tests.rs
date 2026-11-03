@@ -364,6 +364,18 @@ fn write_files_is_atomic_and_refuses_paths() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[test]
+fn write_files_accepts_planned_name_with_max_length_stem() {
+    let fx = Fx::new(&default_channels());
+    let files = fx.render_preset("Unreal Engine (Packed)");
+    let name = format!("{}.png", sanitize_file_stem(&"a".repeat(250)));
+    let dir = std::env::temp_dir().join(format!("tc-formats-export-long-{}", std::process::id()));
+    let long = ExportedFile { name, ..files[0].clone() };
+    let paths = write_files(&[long], &dir).unwrap();
+    assert_eq!(paths.len(), 1);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 fn gray_map(file: &str, src: SourceRef) -> MapSpec {
     MapSpec { file: file.into(), format: FileFormat::Png, bit_depth: 8, channels: vec![(Dest::L, src)] }
 }

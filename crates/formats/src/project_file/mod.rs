@@ -18,7 +18,7 @@
 //! count of 0, followed by `width × height × components` f32 LE. Pixels of a UV-tiled texture
 //! set cover its whole atlas (`resolution` per tile, see `TileGrid`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{Cursor, Read, Seek, Write};
 use std::sync::Arc;
 
@@ -148,6 +148,22 @@ fn sanitize_ext(ext: &str) -> String {
     if e.is_empty() { "bin".into() } else { e }
 }
 
+/// The sanitized `name`, with a numeric suffix before the extension when `used` already holds it.
+fn unique_entry_name(dir: &str, name: &str, used: &mut HashSet<String>) -> String {
+    let base = sanitize_resource_name(name);
+    let mut entry = format!("{dir}/{base}");
+    let mut n = 2u32;
+    while !used.insert(entry.clone()) {
+        let (stem, ext) = match base.rfind('.') {
+            Some(i) if i > 0 => base.split_at(i),
+            _ => (base.as_str(), ""),
+        };
+        entry = format!("{dir}/{stem}_{n}{ext}");
+        n += 1;
+    }
+    entry
+}
+
 fn write_project<W: Write + Seek>(out: W, pf: &ProjectFile) -> Result<()> {
     let mut zip = ZipWriter::new(out);
     let deflate = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated).large_file(true);
@@ -159,8 +175,9 @@ fn write_project<W: Write + Seek>(out: W, pf: &ProjectFile) -> Result<()> {
         zip.start_file(format!("mesh.{}", sanitize_ext(ext)), deflate).map_err(zip_err)?;
         zip.write_all(bytes)?;
     }
+    let mut used = HashSet::new();
     for (dir, (name, bytes)) in pf.high_poly.iter().map(|m| ("highpoly", m)).chain(pf.cage.iter().map(|m| ("cage", m))) {
-        zip.start_file(format!("{dir}/{}", sanitize_resource_name(name)), deflate).map_err(zip_err)?;
+        zip.start_file(unique_entry_name(dir, name, &mut used), deflate).map_err(zip_err)?;
         zip.write_all(bytes)?;
     }
     if let Some(k) = pf.skew.as_ref().filter(|k| k.width > 0 && k.height > 0 && k.values.len() as u64 == u64::from(k.width) * u64::from(k.height)) {
@@ -207,8 +224,9 @@ fn write_project<W: Write + Seek>(out: W, pf: &ProjectFile) -> Result<()> {
         zip.start_file("thumbnail.png", stored).map_err(zip_err)?;
         zip.write_all(png)?;
     }
+    used.clear();
     for (name, bytes) in &pf.resources {
-        zip.start_file(format!("resources/{}", sanitize_resource_name(name)), stored).map_err(zip_err)?;
+        zip.start_file(unique_entry_name("resources", name, &mut used), stored).map_err(zip_err)?;
         zip.write_all(bytes)?;
     }
     zip.finish().map_err(zip_err)?;

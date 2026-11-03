@@ -77,6 +77,9 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("wood_pine", "Pine", WOOD, [0.52, 0.33, 0.16], 0.0, 0.65),
     m("plywood", "Plywood", WOOD, [0.55, 0.38, 0.21], 0.0, 0.75),
     m("bark", "Bark", WOOD, [0.14, 0.1, 0.07], 0.0, 0.9),
+    m("wood_maple", "Maple", WOOD, [0.62, 0.45, 0.27], 0.0, 0.55),
+    m("wood_cherry", "Cherry", WOOD, [0.35, 0.13, 0.06], 0.0, 0.45),
+    m("bamboo", "Bamboo", WOOD, [0.6, 0.5, 0.28], 0.0, 0.5),
     m("wood_painted", "Wood Painted", WOOD, [0.61, 0.59, 0.54], 0.0, 0.48),
     // Stone, masonry and earth.
     m("concrete", "Concrete", STONE, [0.27, 0.26, 0.25], 0.0, 0.9),
@@ -92,6 +95,9 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("terrazzo", "Terrazzo", STONE, [0.7, 0.69, 0.66], 0.0, 0.3),
     m("sand", "Sand", STONE, [0.52, 0.41, 0.26], 0.0, 0.95),
     m("mud", "Mud", STONE, [0.12, 0.08, 0.05], 0.0, 0.6),
+    m("cobblestone", "Cobblestone", STONE, [0.3, 0.29, 0.27], 0.0, 0.8),
+    m("gravel", "Gravel", STONE, [0.35, 0.33, 0.3], 0.0, 0.85),
+    m("plaster", "Plaster", STONE, [0.78, 0.76, 0.72], 0.0, 0.88),
     // Plastics, rubber, composites.
     m("plastic_glossy", "Plastic Glossy", PLASTIC, [0.8, 0.12, 0.08], 0.0, 0.16),
     m("plastic_matte", "Plastic Matte", PLASTIC, [0.18, 0.18, 0.19], 0.0, 0.6),
@@ -104,6 +110,8 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("leather", "Leather", FABRIC, [0.17, 0.08, 0.04], 0.0, 0.52),
     m("leather_black", "Leather Black", FABRIC, [0.025, 0.025, 0.028], 0.0, 0.42),
     m("velvet", "Velvet", FABRIC, [0.12, 0.015, 0.09], 0.0, 0.9),
+    m("linen", "Linen", FABRIC, [0.72, 0.66, 0.55], 0.0, 0.9),
+    m("wool", "Wool", FABRIC, [0.55, 0.52, 0.48], 0.0, 0.97),
     // Ceramic and glass.
     m("ceramic", "Ceramic White", GLASS, [0.8, 0.8, 0.78], 0.0, 0.08),
     m("glass", "Glass Clear", GLASS, [0.88, 0.9, 0.9], 0.0, 0.03),
@@ -117,6 +125,7 @@ pub const MATERIALS: &[SmartMaterial] = &[
     m("paper", "Paper", ORGANIC, [0.82, 0.81, 0.77], 0.0, 0.92),
     m("snow", "Snow", ORGANIC, [0.85, 0.87, 0.9], 0.0, 0.6),
     m("bone", "Bone", ORGANIC, [0.7, 0.63, 0.5], 0.0, 0.55),
+    m("moss", "Moss", ORGANIC, [0.09, 0.14, 0.04], 0.0, 0.85),
     // Smart materials.
     sm("steel_painted_worn", "Steel Painted Worn", METAL, [0.42, 0.06, 0.04], 0.2, 0.45),
     sm("steel_painted_rust", "Steel Painted Rust Leaks", METAL, [0.62, 0.62, 0.6], 0.1, 0.5),
@@ -298,6 +307,38 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
                 height(gray(P::Clouds, 3.0, 29, -0.03, 0.0)),
             ),
         ),
+        // Rounded stones with deep joints between them.
+        "cobblestone" => one(
+            b,
+            plus(
+                dielectric(pat(P::Cells, 6.0, 37, 1.0, m.base.map(|v| v * 1.4), [0.16, 0.15, 0.14]), gray(P::Cells, 6.0, 37, 0.7, 0.95)),
+                height(gray(P::Cells, 6.0, 37, 0.0, -0.05)),
+            ),
+        ),
+        // Small loose stones of mixed tones.
+        "gravel" => one(
+            b,
+            plus(
+                dielectric(pat(P::Voronoi, 30.0, 39, 1.2, [0.18, 0.17, 0.15], [0.52, 0.5, 0.46]), gray(P::Voronoi, 30.0, 39, 0.92, 0.78)),
+                height(gray(P::Cells, 30.0, 39, -0.03, 0.0)),
+            ),
+        ),
+        // Troweled wall: soft patches and a fine sandy tooth.
+        "plaster" => one(
+            b,
+            plus(
+                dielectric(pat(P::Clouds, 2.0, 41, 0.6, [0.7, 0.68, 0.64], [0.84, 0.82, 0.78]), gray(P::Noise, 1.0, 41, 0.82, 0.92)),
+                height(gray(P::Clouds, 2.0, 41, -0.008, 0.0)),
+            ),
+        ),
+        // Low cushions of tiny leaves.
+        "moss" => one(
+            b,
+            plus(
+                dielectric(pat(P::Clouds, 5.0, 43, 1.3, [0.04, 0.07, 0.015], [0.18, 0.26, 0.07]), gray(P::Noise, 1.0, 43, 0.75, 0.95)),
+                [(SheenWeight, u(0.4)), (SheenColor, rgb([0.45, 0.6, 0.25])), (SheenRoughness, u(0.5)), (Height, gray(P::Clouds, 5.0, 43, -0.03, 0.0))],
+            ),
+        ),
         "cork" => {
             one(b, plus(dielectric(pat(P::Noise, 6.0, 17, 1.0, [0.25, 0.14, 0.06], [0.45, 0.28, 0.13]), u(0.85)), height(gray(P::Pores, 20.0, 17, -0.01, 0.0))))
         }
@@ -337,6 +378,30 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
         "bark" => one(
             b,
             plus(dielectric(pat(P::Streaks, 8.0, 25, 1.4, [0.13, 0.105, 0.08], [0.03, 0.022, 0.015]), u(0.9)), height(gray(P::Streaks, 8.0, 25, 0.0, -0.06))),
+        ),
+        // Pale, fine and even grain.
+        "wood_maple" => one(
+            b,
+            plus(
+                dielectric(pat(P::Wood, 3.0, 31, 0.5, [0.52, 0.36, 0.2], [0.7, 0.53, 0.33]), gray(P::Wood, 3.0, 31, 0.6, 0.5)),
+                height(gray(P::Wood, 3.0, 31, -0.006, 0.0)),
+            ),
+        ),
+        // Reddish heartwood with a satin finish.
+        "wood_cherry" => one(
+            b,
+            plus(
+                dielectric(pat(P::Wood, 2.2, 33, 0.9, [0.22, 0.07, 0.03], [0.45, 0.19, 0.09]), gray(P::Wood, 2.2, 33, 0.5, 0.4)),
+                height(gray(P::Wood, 2.2, 33, -0.008, 0.0)),
+            ),
+        ),
+        // Long straight fibres with a few raised ridges.
+        "bamboo" => one(
+            b,
+            plus(
+                dielectric(pat(P::Streaks, 2.0, 35, 0.6, [0.5, 0.4, 0.2], [0.68, 0.58, 0.34]), gray(P::Streaks, 2.0, 35, 0.55, 0.45)),
+                height(gray(P::Stripes, 1.5, 35, 0.0, -0.01)),
+            ),
         ),
         "wood_painted" => one(
             b,
@@ -401,6 +466,18 @@ pub(crate) fn build(b: &mut Builder, id: &str) -> Result<Vec<Layer>> {
         "denim" => {
             one(b, plus(dielectric(pat(P::Twill, 22.0, 5, 1.0, [0.015, 0.025, 0.07], [0.15, 0.2, 0.38]), u(r)), height(gray(P::Twill, 22.0, 5, -0.01, 0.0))))
         }
+        // Coarse, slubby plain weave.
+        "linen" => {
+            one(b, plus(dielectric(pat(P::Weave, 30.0, 45, 1.0, [0.58, 0.52, 0.42], [0.8, 0.74, 0.62]), u(r)), height(gray(P::Weave, 30.0, 45, -0.006, 0.0))))
+        }
+        // Fuzzy knit: no visible threads, a soft sheen at grazing angles.
+        "wool" => one(
+            b,
+            plus(
+                dielectric(pat(P::Noise, 2.0, 47, 1.0, [0.45, 0.42, 0.38], [0.6, 0.57, 0.53]), u(r)),
+                [(SheenWeight, u(0.6)), (SheenColor, rgb([0.85, 0.83, 0.8])), (SheenRoughness, u(0.6)), (Height, gray(P::Noise, 2.0, 47, -0.004, 0.0))],
+            ),
+        ),
         "leather" => one(
             b,
             plus(

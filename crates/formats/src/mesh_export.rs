@@ -30,9 +30,17 @@ pub fn obj_bytes(mesh: &Mesh, name: &str) -> Vec<u8> {
 /// [`usd_export_options`], named like USD's). Roughness, metallic, normal and coat maps use the
 /// MTL PBR extension's keys.
 pub fn obj_with_mtl(mesh: &Mesh, name: &str, stem: &str, textures: &[Vec<ExportedFile>]) -> (Vec<u8>, NamedFiles) {
-    let stem = sanitize_file_stem(stem);
+    let clean = sanitize_file_stem(stem);
+    // OBJ names that sanitize alike (`ball 1`, `ball_1`) must not overwrite each other's files:
+    // a changed name gets a hash of the original (FNV-1a).
+    let stem = if clean == stem {
+        clean
+    } else {
+        let hash = stem.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193));
+        format!("{clean}_{hash:08x}")
+    };
     let (maps, mut files) = usd::material_maps(mesh, &stem, textures);
-    let mut mtl = format!("# {name}, exported by TextureCraft\n");
+    let mut mtl = format!("# {}, exported by TextureCraft\n", token(name));
     for (material, maps) in unique_ids(&mesh.materials, token).iter().zip(&maps) {
         let _ = writeln!(mtl, "\nnewmtl {material}\nKd 1 1 1");
         for (slot, file) in maps {
@@ -60,7 +68,7 @@ pub fn obj_with_mtl(mesh: &Mesh, name: &str, stem: &str, textures: &[Vec<Exporte
 
 fn obj_text(mesh: &Mesh, name: &str, mtllib: Option<&str>) -> String {
     let mut s = String::with_capacity(mesh.positions.len() * 96 + mesh.indices.len() * 12);
-    let _ = writeln!(s, "# {name}, exported by TextureCraft");
+    let _ = writeln!(s, "# {}, exported by TextureCraft", token(name));
     if let Some(lib) = mtllib {
         let _ = writeln!(s, "mtllib {lib}");
     }
@@ -380,6 +388,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn name_with_newline_stays_in_the_header_comment() {
+        let mesh = texturecraft_geom::primitives::cube(1.0);
+        let name = "a\nv 9 9 9\r\nmtllib x";
+        let obj = String::from_utf8(obj_bytes(&mesh, name)).unwrap();
+        assert!(obj.lines().all(|l| !l.starts_with("v 9 9 9") && !l.starts_with("mtllib x")));
+        let (obj, files) = obj_with_mtl(&mesh, name, "m", &[]);
+        let obj = String::from_utf8(obj).unwrap();
+        assert!(obj.lines().all(|l| !l.starts_with("v 9 9 9") && !l.starts_with("mtllib x")));
+        let mtl = String::from_utf8(files[0].1.clone()).unwrap();
+        assert!(mtl.lines().all(|l| !l.starts_with("v 9 9 9") && !l.starts_with("mtllib x")));
+    }
+
+    #[test]
     fn materials_whose_names_collide_even_by_case_stay_apart() {
         let mut mesh = texturecraft_geom::primitives::cube(1.0);
         mesh.materials = vec!["Mat A".into(), "mat_a".into()];
@@ -398,6 +419,17 @@ mod tests {
             mtl.contains("newmtl Mat_A\nKd 1 1 1\nmap_Kd m_Mat_A_BaseColor.png") && mtl.contains("newmtl mat_a_2\nKd 1 1 1\nmap_Kd m_mat_a_2_BaseColor.png"),
             "{mtl}"
         );
+    }
+
+    #[test]
+    fn obj_names_that_sanitize_alike_keep_their_companions_apart() {
+        let mesh = texturecraft_geom::primitives::cube(1.0);
+        let png = || vec![ExportedFile { name: "BaseColor.png".into(), bytes: vec![1], width: 1, height: 1, warnings: Vec::new() }];
+        let names = |stem: &str| obj_with_mtl(&mesh, "p", stem, &[png()]).1.into_iter().map(|f| f.0).collect::<Vec<_>>();
+        let (spaced, plain) = (names("ball 1"), names("ball_1"));
+        assert_eq!(plain, ["ball_1.mtl", "ball_1_Cube_BaseColor.png"], "a clean name is kept");
+        assert!(spaced.iter().all(|n| n.starts_with("ball_1_") && !plain.contains(n)), "{spaced:?}");
+        assert_eq!(spaced, names("ball 1"), "the same name always maps alike");
     }
 
     #[test]
