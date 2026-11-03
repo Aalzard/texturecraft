@@ -192,9 +192,7 @@ impl Bvh {
                 };
 
                 let mid = count / 2;
-                node_order.select_nth_unstable_by(mid, |&a, &b| {
-                    centroids[a as usize][axis].partial_cmp(&centroids[b as usize][axis]).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                node_order.select_nth_unstable_by(mid, |&a, &b| centroids[a as usize][axis].total_cmp(&centroids[b as usize][axis]));
                 mid
             } else {
                 let mut left_count = 0;
