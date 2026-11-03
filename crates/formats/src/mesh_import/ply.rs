@@ -117,7 +117,8 @@ pub(crate) fn read(bytes: &[u8]) -> Result<RawMesh> {
     let mut body = Body { data: bytes.get(body_start..).unwrap_or_default(), pos: 0, enc };
     let mut raw = RawMesh::default();
     let (mut normals, mut uvs, mut colors) = (Vec::new(), Vec::new(), Vec::new());
-    let mut nverts = 0usize;
+    // Elements may appear in any order, so take the vertex count from the header.
+    let nverts: usize = elements.iter().filter(|e| e.name == "vertex").map(|e| e.count).fold(0, usize::saturating_add);
     for el in &elements {
         // Every item takes at least one byte, so the count can never exceed what is left.
         if el.count > body.remaining() {
@@ -137,7 +138,6 @@ pub(crate) fn read(bytes: &[u8]) -> Result<RawMesh> {
                 return Err(malformed(KIND, "vertices have no x, y, z"));
             }
             check_vertices(el.count)?;
-            nverts = el.count;
             raw.positions.reserve(el.count);
         }
         let face_list =
