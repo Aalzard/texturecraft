@@ -81,61 +81,97 @@ fn area(lo: Vec3, hi: Vec3) -> f32 {
 
 impl Bvh {
     pub fn new(mesh: &Mesh) -> Bvh {
-        let n = mesh.triangle_count();
-        let mut tris = Vec::with_capacity(n);
-        for t in 0..n {
-            let Some([a, b, c]) = mesh.tri(t) else { continue };
-            let p = |i: usize| mesh.positions.get(i).copied().unwrap_or(Vec3::ZERO);
-            tris.push([p(a), p(b), p(c)]);
+        let triangle_count = mesh.triangle_count();
+        let mut tris = Vec::with_capacity(triangle_count);
+
+        for triangle in 0..triangle_count {
+            let Some([a, b, c]) = mesh.tri(triangle) else { continue };
+            let position = |i: usize| mesh.positions.get(i).copied().unwrap_or(Vec3::ZERO);
+            tris.push([position(a), position(b), position(c)]);
         }
+
         let mut order: Vec<u32> = (0..tris.len() as u32).collect();
-        let cent: Vec<Vec3> = tris.iter().map(|t| (t[0] + t[1] + t[2]) / 3.0).collect();
+        let centroids: Vec<Vec3> = tris.iter().map(|t| (t[0] + t[1] + t[2]) / 3.0).collect();
+
         let mut nodes = vec![Node { lo: Vec3A::ZERO, hi: Vec3A::ZERO, first: 0, count: tris.len() as u32 }];
         let mut stack = vec![0usize];
-        while let Some(ni) = stack.pop() {
-            let Node { first, count, .. } = nodes[ni];
-            let (f, c) = (first as usize, count as usize);
-            let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-            let (mut clo, mut chi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-            for &t in &order[f..f + c] {
-                for p in tris[t as usize] {
-                    grow(&mut lo, &mut hi, p);
+
+        while let Some(node_index) = stack.pop() {
+            let Node { first, count, .. } = nodes[node_index];
+            let (start, count) = (first as usize, count as usize);
+            let (mut bounds_min, mut bounds_max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            let (mut centroid_min, mut centroid_max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+
+            for &triangle in &order[start..start + count] {
+                for position in tris[triangle as usize] {
+                    grow(&mut bounds_min, &mut bounds_max, position);
                 }
-                grow(&mut clo, &mut chi, cent[t as usize]);
+                grow(&mut centroid_min, &mut centroid_max, centroids[triangle as usize]);
             }
-            nodes[ni].lo = lo.into();
-            nodes[ni].hi = hi.into();
-            if c <= LEAF {
+
+            nodes[node_index].lo = bounds_min.into();
+            nodes[node_index].hi = bounds_max.into();
+
+            if count <= LEAF {
                 continue;
             }
-            // Binned SAH across all 3 centroid axes.
-            let ext = chi - clo;
+
+            let centroid_extent = centroid_max - centroid_min;
+            let bin_of = |triangle: u32, axis: usize| {
+                let offset = centroids[triangle as usize][axis] - centroid_min[axis];
+                ((offset / centroid_extent[axis] * BINS as f32) as usize).min(BINS - 1)
+            };
+
+            // Reuse each triangle's bounds across all three axes
+            let mut axis_bins = [[(0u32, Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)); BINS]; 3];
+
+            for &triangle in &order[start..start + count] {
+                let [a, b, c] = tris[triangle as usize];
+                let (triangle_min, triangle_max) = (a.min(b).min(c), a.max(b).max(c));
+
+                for axis in 0..3 {
+                    if centroid_extent[axis] <= 1e-12 {
+                        continue;
+                    }
+
+                    let bin = &mut axis_bins[axis][bin_of(triangle, axis)];
+                    bin.0 += 1;
+                    bin.1 = bin.1.min(triangle_min);
+                    bin.2 = bin.2.max(triangle_max);
+                }
+            }
+
             let mut best_axis = 0;
             let mut best_split = 0;
             let mut best_cost = f32::MAX;
+
             for axis in 0..3 {
-                if ext[axis] <= 1e-12 {
+                if centroid_extent[axis] <= 1e-12 {
                     continue;
                 }
-                let mut bins = [(0u32, Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)); BINS];
-                let bin_of = |p: Vec3| (((p[axis] - clo[axis]) / ext[axis] * BINS as f32) as usize).min(BINS - 1);
-                for &t in &order[f..f + c] {
-                    let b = &mut bins[bin_of(cent[t as usize])];
-                    b.0 += 1;
-                    for p in tris[t as usize] {
-                        grow(&mut b.1, &mut b.2, p);
-                    }
+
+                let bins = axis_bins[axis];
+
+                // Cache right bounds once and advance the left bounds per split
+                let mut suffix = bins;
+                for i in (0..BINS - 1).rev() {
+                    suffix[i] = (suffix[i].0 + suffix[i + 1].0, suffix[i].1.min(suffix[i + 1].1), suffix[i].2.max(suffix[i + 1].2));
                 }
+
+                let (mut left_count, mut left_min, mut left_max) = (0u32, Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+
                 for split in 1..BINS {
-                    let side = |r: std::ops::Range<usize>| {
-                        r.fold((0u32, Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(n, l, h), i| (n + bins[i].0, l.min(bins[i].1), h.max(bins[i].2)))
-                    };
-                    let (nl, ll, lh) = side(0..split);
-                    let (nr, rl, rh) = side(split..BINS);
-                    if nl == 0 || nr == 0 {
+                    let bin = bins[split - 1];
+                    left_count += bin.0;
+                    left_min = left_min.min(bin.1);
+                    left_max = left_max.max(bin.2);
+
+                    let (right_count, right_min, right_max) = suffix[split];
+                    if left_count == 0 || right_count == 0 {
                         continue;
                     }
-                    let cost = nl as f32 * area(ll, lh) + nr as f32 * area(rl, rh);
+
+                    let cost = left_count as f32 * area(left_min, left_max) + right_count as f32 * area(right_min, right_max);
                     if cost < best_cost {
                         best_cost = cost;
                         best_axis = axis;
@@ -143,55 +179,51 @@ impl Bvh {
                     }
                 }
             }
-            let split_axis;
-            let mut fallback = false;
-            if best_split == 0 || best_cost >= c as f32 * area(lo, hi) {
-                // When large triangles (e.g. backing plates or ground planes) span the node,
-                // SAH may see no split that lowers cost. Partition along the widest centroid
-                // axis at the median so small triangles can separate from large ones on subsequent levels.
-                let widest_axis = if ext.x >= ext.y && ext.x >= ext.z {
+
+            let node_order = &mut order[start..start + count];
+            let left_count = if best_split == 0 || best_cost >= count as f32 * area(bounds_min, bounds_max) {
+                // Split by count when SAH cannot help, including tied centroids
+                let axis = if centroid_extent.x >= centroid_extent.y && centroid_extent.x >= centroid_extent.z {
                     0
-                } else if ext.y >= ext.z {
+                } else if centroid_extent.y >= centroid_extent.z {
                     1
                 } else {
                     2
                 };
-                if ext[widest_axis] <= 1e-12 {
-                    continue;
-                }
-                split_axis = widest_axis;
-                fallback = true;
-            } else {
-                split_axis = best_axis;
-            }
-            let slice = &mut order[f..f + c];
-            let mut i = 0;
-            if fallback {
-                let mid = c / 2;
-                slice.select_nth_unstable_by(mid, |&a, &b| {
-                    cent[a as usize][split_axis].partial_cmp(&cent[b as usize][split_axis]).unwrap_or(std::cmp::Ordering::Equal)
+
+                let mid = count / 2;
+                node_order.select_nth_unstable_by(mid, |&a, &b| {
+                    centroids[a as usize][axis].partial_cmp(&centroids[b as usize][axis]).unwrap_or(std::cmp::Ordering::Equal)
                 });
-                i = mid;
+                mid
             } else {
-                let bin_of = |p: Vec3| (((p[split_axis] - clo[split_axis]) / ext[split_axis] * BINS as f32) as usize).min(BINS - 1);
-                for j in 0..slice.len() {
-                    if bin_of(cent[slice[j] as usize]) < best_split {
-                        slice.swap(i, j);
-                        i += 1;
+                let mut left_count = 0;
+
+                for i in 0..node_order.len() {
+                    if bin_of(node_order[i], best_axis) < best_split {
+                        node_order.swap(left_count, i);
+                        left_count += 1;
                     }
                 }
-            }
-            if i == 0 || i == c {
+
+                left_count
+            };
+
+            if left_count == 0 || left_count == count {
                 continue;
             }
-            let left = nodes.len();
-            nodes.push(Node { lo: Vec3A::ZERO, hi: Vec3A::ZERO, first, count: i as u32 });
-            nodes.push(Node { lo: Vec3A::ZERO, hi: Vec3A::ZERO, first: first + i as u32, count: (c - i) as u32 });
-            nodes[ni].first = left as u32;
-            nodes[ni].count = 0;
-            stack.push(left);
-            stack.push(left + 1);
+
+            let left_child = nodes.len();
+            nodes.push(Node { lo: Vec3A::ZERO, hi: Vec3A::ZERO, first, count: left_count as u32 });
+            nodes.push(Node { lo: Vec3A::ZERO, hi: Vec3A::ZERO, first: first + left_count as u32, count: (count - left_count) as u32 });
+
+            nodes[node_index].first = left_child as u32;
+            nodes[node_index].count = 0;
+
+            stack.push(left_child);
+            stack.push(left_child + 1);
         }
+
         let tris = order.iter().map(|t| tris[*t as usize]).collect();
         Bvh { nodes, tris, order }
     }
@@ -523,10 +555,12 @@ mod tests {
         let mut indices = Vec::new();
         let w = 200.0f32;
         let h = 100.0f32;
+
         // Large plate at z = 0
         let b = positions.len() as u32;
         positions.extend_from_slice(&[Vec3::new(0.0, 0.0, 0.0), Vec3::new(w, 0.0, 0.0), Vec3::new(w, h, 0.0), Vec3::new(0.0, h, 0.0)]);
         indices.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
+
         // 500 small triangles sitting at z = 0.5
         for i in 0..500 {
             let x = 20.0 + (i % 160) as f32;
@@ -537,6 +571,7 @@ mod tests {
             positions.push(Vec3::new(x, y + 0.5, 0.6));
             indices.extend_from_slice(&[idx, idx + 1, idx + 2]);
         }
+
         let mesh = Mesh {
             positions,
             normals: Vec::new(),
@@ -548,13 +583,16 @@ mod tests {
             materials: Vec::new(),
             diagonals: Vec::new(),
         };
+
         let bvh = Bvh::new(&mesh);
+
         for (_, _, _, count) in bvh.nodes() {
             if count > 0 {
                 assert!(count <= LEAF as u32, "leaf has too many triangles: {count}");
             }
         }
-        // Rays hit the small triangle in front, not the plate behind
+
+        // The foreground triangle is the closest hit
         let hit = bvh.closest(Vec3::new(20.1, 10.1, 10.0), Vec3::NEG_Z, 100.0).unwrap();
         assert!((hit.t - 9.5).abs() < 0.1, "hit t: {}", hit.t);
     }
@@ -565,19 +603,22 @@ mod tests {
         let mut indices = Vec::new();
         let w = 200.0f32;
         let h = 100.0f32;
+
         let b = positions.len() as u32;
         positions.extend_from_slice(&[Vec3::new(0.0, 0.0, 0.0), Vec3::new(w, 0.0, 0.0), Vec3::new(w, h, 0.0), Vec3::new(0.0, h, 0.0)]);
         indices.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
-        // 500 small coplanar triangles in the last bin so split and unsplit SAH costs match
+
+        // Shared bins keep every SAH split as costly as an unsplit leaf
         for i in 0..500 {
-            let x = 190.0 + (i % 10) as f32;
-            let y = 90.0 + (i / 10) as f32 * 0.1;
+            let x = 130.0 + (i % 10) as f32 * 0.1;
+            let y = 64.0 + (i / 10) as f32 * 0.02;
             let idx = positions.len() as u32;
             positions.push(Vec3::new(x, y, 0.0));
-            positions.push(Vec3::new(x + 0.1, y, 0.0));
-            positions.push(Vec3::new(x, y + 0.1, 0.0));
+            positions.push(Vec3::new(x + 0.01, y, 0.0));
+            positions.push(Vec3::new(x, y + 0.01, 0.0));
             indices.extend_from_slice(&[idx, idx + 1, idx + 2]);
         }
+
         let mesh = Mesh {
             positions,
             normals: Vec::new(),
@@ -589,11 +630,51 @@ mod tests {
             materials: Vec::new(),
             diagonals: Vec::new(),
         };
+
         let bvh = Bvh::new(&mesh);
+
         for (_, _, _, count) in bvh.nodes() {
             if count > 0 {
                 assert!(count <= LEAF as u32, "leaf has too many triangles: {count}");
             }
         }
+    }
+
+    #[test]
+    fn coincident_centroids_still_partition_large_and_small_triangles() {
+        let mut mesh = Mesh::default();
+
+        // Different triangle sizes share an exact centroid
+        for i in 0..=500 {
+            let size = if i == 0 { 100.0 } else { 0.01 + i as f32 * 0.0001 };
+            let first = mesh.positions.len() as u32;
+            mesh.positions.extend([Vec3::new(-size, -size, 0.0), Vec3::new(size, -size, 0.0), Vec3::new(0.0, 2.0 * size, 0.0)]);
+            mesh.indices.extend([first, first + 1, first + 2]);
+        }
+
+        mesh.normals.resize(mesh.positions.len(), Vec3::Z);
+        mesh.uvs.resize(mesh.positions.len(), glam::Vec2::ZERO);
+        mesh.tangents.resize(mesh.positions.len(), glam::Vec4::new(1.0, 0.0, 0.0, 1.0));
+        mesh.validate().unwrap();
+
+        let bvh = Bvh::new(&mesh);
+
+        for (_, _, _, count) in bvh.nodes() {
+            assert!(count <= LEAF as u32, "leaf has too many triangles: {count}");
+        }
+
+        // The outer ray only hits the large triangle
+        let origin = Vec3::new(50.0, 0.0, 10.0);
+        let hit = bvh.closest(origin, Vec3::NEG_Z, 100.0).unwrap();
+        assert_eq!(hit.tri, 0);
+        assert_eq!(hit.t, 10.0);
+
+        assert!(bvh.occluded(origin, Vec3::NEG_Z, 100.0));
+        assert!(!bvh.occluded(origin, Vec3::NEG_Z, 5.0));
+
+        // Median partitions preserve original triangle IDs
+        let hit = bvh.closest_filtered(Vec3::new(0.0, 0.0, 10.0), Vec3::NEG_Z, 100.0, &|t| t == 500).unwrap();
+        assert_eq!(hit.tri, 500);
+        assert_eq!(hit.t, 10.0);
     }
 }
