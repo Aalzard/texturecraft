@@ -92,11 +92,40 @@ fn closed_filled_path_fills_the_inside_only() {
 fn closed_filled_path_is_symmetrized() {
     let mut s = session(primitives::sphere(1.0, 48, 24));
     execute(&mut s, "tool.brush", &json!({"symmetryX": true})).unwrap();
+
     let square = json!([[230, 160], [270, 160], [270, 240], [230, 240]]);
     execute(&mut s, "tool.path", &json!({"points": square, "closed": true, "fill": true, "commit": true})).unwrap();
+
     assert!(red_at(&s, 250.0, 200.0), "the drawn side");
     assert!(red_at(&s, 150.0, 200.0), "the mirrored side");
     assert!(!red_at(&s, 200.0, 200.0), "between the two");
+}
+
+#[test]
+fn closed_filled_path_copies_from_visible_source_to_backfacing_destination() {
+    let mut mesh = wall();
+    for (position, normal) in mesh.positions.iter().zip(&mut mesh.normals) {
+        *normal = if position.x < 0.0 { Vec3::NEG_Z } else { Vec3::Z };
+    }
+
+    let mut s = session(mesh.clone());
+    execute(&mut s, "tool.brush", &json!({"symmetryX": true})).unwrap();
+
+    let square = json!([[230, 170], [270, 170], [270, 230], [230, 230]]);
+    execute(&mut s, "tool.path", &json!({"points": square, "closed": true, "fill": true, "commit": true})).unwrap();
+
+    assert!(red_at(&s, 250.0, 200.0), "visible source");
+    assert!(red_at(&s, 150.0, 200.0), "backfacing symmetry copy");
+    assert!(!red_at(&s, 200.0, 200.0), "outside the lasso and its copy");
+
+    let mut s = session(mesh);
+    execute(&mut s, "tool.brush", &json!({"symmetryX": true})).unwrap();
+
+    let square = json!([[130, 170], [170, 170], [170, 230], [130, 230]]);
+    execute(&mut s, "tool.path", &json!({"points": square, "closed": true, "fill": true, "commit": true})).unwrap();
+
+    assert!(!red_at(&s, 150.0, 200.0), "backfacing source");
+    assert!(!red_at(&s, 250.0, 200.0), "no copy from a hidden source");
 }
 
 /// A 2×2 wall facing the camera (+Z): v grows downward (world −Y).
