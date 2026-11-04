@@ -11,6 +11,7 @@ use bytemuck::{Pod, Zeroable};
 use rayon::prelude::*;
 use texturecraft_bake::BakeError;
 use texturecraft_bake::tracing::{ANY, Hemisphere, Query, Ray, RayKind, RayScene, TraceMesh, Tracer};
+use texturecraft_core::{AmbientOcclusionAttenuation, BackfaceMode};
 use texturecraft_geom::Hit;
 use texturecraft_geom::glam::Vec3;
 
@@ -42,6 +43,10 @@ struct Params {
     lanes: u32,
     /// First result row of the pass.
     out: u32,
+    min_distance: f32,
+    attenuation: u32,
+    ground_height: f32,
+    backface_mode: u32,
 }
 
 struct Gpu {
@@ -152,7 +157,9 @@ impl Tracer for GpuBaker {
             }
             let base = ((nodes.len() / 2) as u32, (tris.len() / 4) as u32);
             roots.push(base.0);
-            let (n, t) = bvh_rows(m.bvh, base, |o| ([m.keys.get(o).copied().unwrap_or(ANY), 0, 0], [0, 0, 0, o as u32]));
+            let (n, t) = bvh_rows(m.bvh, base, |o| {
+                ([m.keys.get(o).copied().unwrap_or(ANY), u32::from(m.backface_culling.get(o).copied().unwrap_or(false)), 0], [0, 0, 0, o as u32])
+            });
             nodes.extend(n);
             tris.extend(t);
         }
@@ -300,8 +307,12 @@ fn row(v: Vec3, w: u32) -> [u32; 4] {
 }
 
 impl RayScene for GpuScene<'_> {
-    fn closest(&mut self, mesh: usize, rays: &[Ray]) -> Result<Vec<Option<Hit>>, BakeError> {
-        let pass = Pass { params: Params { root: self.root(mesh)?, ..Params::default() }, per_dispatch: RAYS_PER_DISPATCH, per_group: WORKGROUP as usize };
+    fn closest(&mut self, mesh: usize, rays: &[Ray], ignore_backface: bool) -> Result<Vec<Option<Hit>>, BakeError> {
+        let pass = Pass {
+            params: Params { root: self.root(mesh)?, flags: u32::from(ignore_backface) * IGNORE_BACKFACE, ..Params::default() },
+            per_dispatch: RAYS_PER_DISPATCH,
+            per_group: WORKGROUP as usize,
+        };
         let gpu = self.gpu;
         self.run(&gpu.transfer, bytemuck::cast_slice(rays), rays.len(), &[pass], |out| {
             out.par_iter().map(|&[t, u, v, tri]| (tri != NONE).then(|| Hit { t: f32::from_bits(t), tri, u: f32::from_bits(u), v: f32::from_bits(v) })).collect()
@@ -323,14 +334,24 @@ impl RayScene for GpuScene<'_> {
             .map(|h| {
                 // A sample's rays spread over `lanes` threads of a workgroup (a power of two).
                 let lanes = h.rays.clamp(1, WORKGROUP).next_power_of_two();
-                let flags = [(h.uniform, UNIFORM), (h.ignore_backface, IGNORE_BACKFACE), (h.same_key, SAME_KEY)]
-                    .iter()
-                    .filter(|(on, _)| *on)
-                    .fold(0, |f, (_, b)| f | b);
+                let flags =
+                    [(h.uniform, UNIFORM), (h.ground_height.is_some(), 8), (h.same_key, SAME_KEY)].iter().filter(|(on, _)| *on).fold(0, |f, (_, b)| f | b);
                 let params = Params {
                     kind: u32::from(h.kind == RayKind::Thickness),
                     rays: h.rays,
                     dmax: h.dmax,
+                    min_distance: h.min_distance,
+                    attenuation: match h.attenuation {
+                        AmbientOcclusionAttenuation::None => 0,
+                        AmbientOcclusionAttenuation::Linear => 1,
+                        AmbientOcclusionAttenuation::Smooth => 2,
+                    },
+                    ground_height: h.ground_height.unwrap_or(0.0),
+                    backface_mode: match h.ignore_backface {
+                        BackfaceMode::Never => 0,
+                        BackfaceMode::Always => 1,
+                        BackfaceMode::ByMeshName => 2,
+                    },
                     eps: h.eps,
                     cos_max: h.cos_max,
                     sin_max: h.sin_max,
@@ -376,8 +397,9 @@ mod tests {
 
     fn run(low: &Mesh, high: Option<&Mesh>, s: &BakeSettings, tracer: Option<&GpuBaker>) -> BakeOutput {
         let (lb, hb) = (Bvh::new(low), high.map(Bvh::new));
-        let high = high.zip(hb.as_ref()).map(|(mesh, bvh)| HighPoly { mesh, bvh, base_color: &[] });
-        let req = BakeRequest { mesh: low, bvh: &lb, material: 0, settings: s, high, cage: None, skew: None, tiles: (1, 1) };
+        let high = high.zip(hb.as_ref()).map(|(mesh, bvh)| HighPoly { file_ids: &[], mesh, bvh, base_color: &[] });
+        let req =
+            BakeRequest { low_base_color: &[], mesh: low, bvh: &lb, material: 0, settings: s, high, cage: None, skew: None, cage_paint: None, tiles: (1, 1) };
         match tracer {
             Some(t) => bake_on(&req, &Progress::new(), t).unwrap(),
             None => bake(&req, &Progress::new()).unwrap(),
@@ -396,6 +418,34 @@ mod tests {
             let off = d.iter().filter(|v| **v > 0.05).count() as f32 / d.len() as f32;
             eprintln!("{m:?}: mean {mean:.2e}, p99 {p99:.2e}, off {:.3}%", off * 100.0);
             assert!(mean < 2e-3 && p99 < 0.02 && off < 0.005, "{m:?}: mean {mean}, p99 {p99}, off {off}");
+        }
+    }
+
+    #[test]
+    fn gpu_respects_secondary_ray_filters_and_ground_plane() {
+        let Some(gpu) = gpu() else { return };
+
+        let mut mesh = primitives::material_ball();
+        for part in &mut mesh.submeshes {
+            part.name.push_str("_ignorebf");
+        }
+        let mut settings = BakeSettings::default();
+        settings.common.resolution = BakeResolution::R64;
+        settings.common.apply_diffusion = false;
+        settings.maps.select([BakedMap::AmbientOcclusion, BakedMap::BentNormal, BakedMap::Thickness]);
+        settings.high_poly.ignore_backface_suffix = "_ignorebf".into();
+        settings.maps.ao.parameters.rays.min_distance = 0.02;
+        settings.maps.ao.parameters.ignore_backface = BackfaceMode::ByMeshName;
+        settings.maps.ao.parameters.self_occlusion = SelfOcclusion::SameMeshName;
+        settings.maps.ao.parameters.ground_plane.enabled = true;
+        settings.maps.ao.parameters.ground_plane.offset = 0.1;
+        settings.maps.bent_normal.parameters.rays.min_distance = 0.02;
+        settings.maps.bent_normal.parameters.ignore_backface = BackfaceMode::ByMeshName;
+        settings.maps.thickness.parameters.rays.min_distance = 0.02;
+        settings.maps.thickness.parameters.self_occlusion = SelfOcclusion::SameMeshName;
+        for attenuation in [AmbientOcclusionAttenuation::None, AmbientOcclusionAttenuation::Smooth] {
+            settings.maps.ao.parameters.attenuation = attenuation;
+            assert_agree(&run(&mesh, None, &settings, None), &run(&mesh, None, &settings, Some(&gpu)));
         }
     }
 
@@ -447,7 +497,12 @@ mod tests {
                 BakedMap::Curvature,
             ]);
             base.cage = CageSettings { max_frontal: 0.02, max_rear: 0.02, ..base.cage };
-            base.high_poly = HighPolySettings { low_suffix: String::new(), use_low_as_high: false, ..base.high_poly };
+            base.high_poly = HighPolySettings {
+                match_mode: texturecraft_core::MeshMatchMode::ByMeshName,
+                low_suffix: String::new(),
+                use_low_as_high: false,
+                ..base.high_poly
+            };
             base.maps.ao.parameters = AmbientOcclusionSettings {
                 rays: RaySettings { rays: 16, ..RaySettings::default() },
                 self_occlusion: SelfOcclusion::SameMeshName,

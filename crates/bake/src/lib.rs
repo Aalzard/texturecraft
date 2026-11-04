@@ -30,8 +30,9 @@ use texturecraft_geom::glam::{Vec2, Vec3};
 use texturecraft_geom::{Mesh, NO_TRI, Surface, UvGBuffer};
 use texturecraft_texel::DilationMap;
 
-pub use crate::skew::SkewMap;
+mod bake_paint_map;
 use crate::tracing::{CpuTracer, RayScene, Tracer};
+pub use bake_paint_map::BakePaintMap;
 
 pub const MAX_RESOLUTION: u32 = 8192;
 pub const MAX_RAYS: u32 = 4096;
@@ -45,11 +46,11 @@ const CURVATURE_BATCH: usize = 1 << 15;
 fn validate(request: &BakeRequest) -> Result<(), BakeError> {
     let settings = request.settings;
     let invalid = |message: String| Err(BakeError::Invalid(message));
-    let resolution = settings.common.resolution.pixels();
+    let (resolution, resolution_height) = settings.common.output_size();
 
     let (columns, rows) = request.tiles;
     let width = u64::from(resolution) * u64::from(columns);
-    let height = u64::from(resolution) * u64::from(rows);
+    let height = u64::from(resolution_height) * u64::from(rows);
     if columns == 0 || rows == 0 || width.saturating_mul(height) > MAX_TEXELS {
         return invalid(format!("{columns} × {rows} UV tiles at {} exceed {MAX_TEXELS} texels", resolution));
     }
@@ -71,13 +72,46 @@ fn validate(request: &BakeRequest) -> Result<(), BakeError> {
             return invalid(format!("{} max distance {} must be positive", map.id(), ray_settings.max_distance));
         }
 
-        if !ray_settings.spread.is_finite() {
+        if !(ray_settings.min_distance.is_finite() && ray_settings.min_distance >= 0.0 && ray_settings.min_distance <= ray_settings.max_distance) {
+            return invalid(format!("{} minimum distance must be finite and between zero and its maximum distance", map.id()));
+        }
+        if !ray_settings.spread.is_finite() || !(0.0..=180.0).contains(&ray_settings.spread) {
             return invalid(format!("{} spread angle is not finite", map.id()));
         }
     }
 
     if !(settings.cage.max_frontal.is_finite() && settings.cage.max_frontal >= 0.0 && settings.cage.max_rear.is_finite() && settings.cage.max_rear >= 0.0) {
         return invalid(format!("frontal/rear distances {}/{} must be finite and ≥ 0", settings.cage.max_frontal, settings.cage.max_rear));
+    }
+    let curvature = settings.maps.curvature.parameters;
+    if settings.maps.curvature.is_enabled {
+        if curvature.mesh.rays == 0 || curvature.mesh.rays > MAX_RAYS || !curvature.mesh.sampling_radius.is_finite() || curvature.mesh.sampling_radius <= 0.0 {
+            return invalid("curvature requires a positive finite radius and a supported ray count".into());
+        }
+        if !curvature.mesh.value_min.is_finite()
+            || !curvature.mesh.value_max.is_finite()
+            || (!curvature.mesh.auto_tonemapping && curvature.mesh.value_min >= curvature.mesh.value_max)
+        {
+            return invalid("curvature bounds must be finite, with minimum below maximum".into());
+        }
+    }
+    for (name, value) in [
+        ("edge distance", settings.skew.edge_distance),
+        ("edge contrast", settings.skew.edge_contrast),
+        ("curvature details", curvature.normal_map.details),
+        ("seam intensity", curvature.normal_map.seams_intensity),
+    ] {
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return invalid(format!("{name} must be finite and in 0..=1"));
+        }
+    }
+    if settings.maps.height.is_enabled
+        && (!settings.maps.height.parameters.scaling_divisor.is_finite() || settings.maps.height.parameters.scaling_divisor <= 0.0)
+    {
+        return invalid("height scaling divisor must be finite and positive".into());
+    }
+    if !settings.maps.ao.parameters.ground_plane.offset.is_finite() || settings.maps.ao.parameters.ground_plane.offset < 0.0 {
+        return invalid("ground plane offset must be finite and nonnegative".into());
     }
     request.mesh.validate().map_err(|e| BakeError::Invalid(e.to_string()))?;
     if request.material >= request.mesh.materials.len().max(1) {
@@ -88,6 +122,9 @@ fn validate(request: &BakeRequest) -> Result<(), BakeError> {
         high.mesh.validate().map_err(|e| BakeError::Invalid(format!("high poly: {e}")))?;
     }
 
+    if let Some(map) = request.cage_paint {
+        map.validate()?;
+    }
     if let Some(cage) = request.cage {
         cage.validate().map_err(|e| BakeError::Invalid(format!("cage: {e}")))?;
         if cage.indices.len() != request.mesh.indices.len() {
@@ -126,8 +163,10 @@ type OutRow<'a> = Vec<&'a mut [f32]>;
 fn bake_in_strips(request: &BakeRequest, progress: &Progress, strip_texels: usize, tracer: &dyn Tracer) -> Result<BakeOutput, BakeError> {
     validate(request)?;
     let settings = request.settings;
-    let (tile_resolution, samples_per_axis) = (settings.common.resolution.pixels() as usize, settings.common.antialiasing.samples_per_axis() as usize);
-    let (width, height) = (tile_resolution * request.tiles.0 as usize, tile_resolution * request.tiles.1 as usize);
+    let (tile_width, tile_height) = settings.common.output_size();
+    let tile_size = (tile_width as usize, tile_height as usize);
+    let samples_per_axis = settings.common.antialiasing.samples_per_axis() as usize;
+    let (width, height) = (tile_size.0 * request.tiles.0 as usize, tile_size.1 * request.tiles.1 as usize);
     let context = map::BakeContext::new(request)?;
     let tracer = if context.casts_rays() { tracer } else { &CpuTracer };
     let meshes = context.trace_meshes();
@@ -203,10 +242,11 @@ fn bake_in_strips(request: &BakeRequest, progress: &Progress, strip_texels: usiz
             }
             Ok(())
         };
-        if strip_start + rows < height || settings.common.dilation == 0 {
+        if strip_start + rows < height || (settings.common.dilation == 0 && !settings.common.apply_diffusion) {
             bake_strip()?;
         } else {
-            let padding = || DilationMap::in_blocks(&covered, width as u32, height as u32, Some(settings.common.dilation), settings.common.resolution.pixels());
+            let padding =
+                || DilationMap::in_rectangular_blocks(&covered, width as u32, height as u32, Some(settings.common.dilation), (tile_width, tile_height));
             let (padding, baked) = rayon::join(padding, bake_strip);
             baked?;
             padding_map = Some(padding);
@@ -217,13 +257,25 @@ fn bake_in_strips(request: &BakeRequest, progress: &Progress, strip_texels: usiz
     if from_normal {
         let normal = if settings.maps.is_enabled(BakedMap::Normal) { output.get(&BakedMap::Normal).cloned() } else { output.remove(&BakedMap::Normal) };
         if let (Some(normal), Some(curvature_pixels)) = (normal, output.get_mut(&BakedMap::Curvature)) {
-            map::curvature_from_normal(&normal, &covered, width, tile_resolution, curvature_pixels);
+            let parameters = settings.maps.curvature.parameters.normal_map;
+            map::curvature_from_normal(&normal, &covered, width, tile_size, parameters, curvature_pixels);
+            if parameters.enable_seams {
+                map::fix_seams(request.mesh, request.material, &covered, (width, height), parameters.seams_intensity, curvature_pixels);
+            }
         }
     }
+    let (bounds_min, bounds_max) = request.mesh.bounds();
+    map::normalize(&mut output, &covered, width, tile_size, settings, (bounds_max - bounds_min).max_element().max(1e-6));
     if let Some(padding_map) = padding_map {
         for (map, data) in output.iter_mut() {
             padding_map.apply(data, map.components());
+            if settings.common.apply_diffusion {
+                map::diffuse(data, map.components(), &padding_map, tile_size);
+            }
         }
+    }
+    if progress.cancel.load(Relaxed) {
+        return Err(BakeError::Cancelled);
     }
     progress.done.store(10_000, Relaxed);
     Ok(BakeOutput { resolution: width as u32, height: height as u32, maps: output, tracer: tracer.name() })
@@ -273,7 +325,7 @@ fn bake_rows(
     let transfers = match context.has_high() {
         true => {
             let (rays, frontal_distances): (Vec<tracing::Ray>, Vec<f32>) = samples().map(|sample| context.transfer_ray(&sample.surface, sample.bary)).unzip();
-            let hits = scene.closest(1, &rays)?;
+            let hits = scene.closest(1, &rays, context.ignore_transfer_backface())?;
             hits.into_par_iter().zip(frontal_distances).map(|(hit, front)| context.transfer(hit, front)).collect()
         }
         false => Vec::new(),

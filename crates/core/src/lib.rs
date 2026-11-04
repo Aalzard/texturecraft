@@ -14,10 +14,11 @@ pub mod layer;
 pub mod project;
 
 pub use bake::{
-    AmbientOcclusionAttenuation, AmbientOcclusionSettings, BackfaceMode, BakeAntialiasing, BakeResolution, BakeSettings, BakedMap, BentNormalSettings,
-    CageSettings, CageType, CommonBakeSettings, CurvatureMethod, CurvatureSettings, GroundPlaneSettings, HeightNormalization, HeightSettings, HighPolySettings,
-    IdColorGenerator, IdColorSource, IdSettings, MapSettings, MeshCurvatureSettings, MeshMapSettings, NormalMapCurvatureSettings, PositionAxis, PositionMode,
-    PositionNormalizationScale, PositionSettings, RayDistribution, RaySettings, SelfOcclusion, SkewSettings, ThicknessNormalization, ThicknessSettings,
+    AmbientOcclusionAttenuation, AmbientOcclusionSettings, BackfaceMode, BakeAntialiasing, BakePaintTarget, BakeResolution, BakeSettings, BakedMap,
+    BentNormalSettings, CageSettings, CageType, CommonBakeSettings, CurvatureMethod, CurvatureSettings, GroundPlaneSettings, HeightNormalization,
+    HeightSettings, HighPolySettings, IdColorGenerator, IdColorSource, IdSettings, MapSettings, MeshCurvatureSettings, MeshMapSettings, MeshMatchMode,
+    NormalMapCurvatureSettings, PositionAxis, PositionMode, PositionNormalizationScale, PositionSettings, RayDistribution, RaySettings, SelfOcclusion,
+    SkewCorrectionMethod, SkewSettings, ThicknessNormalization, ThicknessSettings,
 };
 pub use blend::{BlendMode, blend1, blend3, lum, mix3};
 pub use channel::{Channel, ChannelFormat, ChannelKind};

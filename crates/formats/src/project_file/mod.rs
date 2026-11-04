@@ -6,7 +6,7 @@
 //! | `mesh.<ext>` | the original imported mesh file (absent for built-in meshes, `Project.mesh = "builtin:<id>"`) |
 //! | `highpoly/<name>` | a high-definition mesh file for baking, in list order |
 //! | `cage/<name>` | the baking cage mesh file |
-//! | `skew.bin` | the skew correction map of the bake (magic `TCSK`, version, width, height, edge distance, edge contrast, method byte (0 mesh normals, 1 triangle normals); then `width × height` f32 LE) |
+//! | `bake_paint/<ts>_<target>.bin` | cage or skew paint, stored as a one-component baked map |
 //! | `pixels/layer_<id>_<channelId>.bin` | painted pixels of a paint layer (or content paint effect) channel |
 //! | `pixels/mask_<id>.bin` | painted pixels of a mask paint effect |
 //! | `baked/<ts>_<mapId>.bin` | a baked mesh map of texture set `<ts>` |
@@ -23,7 +23,7 @@ use std::io::{Cursor, Read, Seek, Write};
 use std::sync::Arc;
 
 use texturecraft_compose::{BakedMaps, PixelStore};
-use texturecraft_core::{BakedMap, Channel, FORMAT_VERSION, LayerId, Project};
+use texturecraft_core::{BakePaintTarget, BakedMap, Channel, FORMAT_VERSION, LayerId, Project};
 use texturecraft_texel::{TILE_AREA, TileImage};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -34,7 +34,6 @@ const KIND: &str = "project file";
 const MAGIC: &[u8; 4] = b"TCTX";
 /// Version of the `.bin` layout.
 const BIN_VERSION: u32 = 1;
-const SKEW_MAGIC: &[u8; 4] = b"TCSK";
 const MAX_JSON: u64 = 256 << 20;
 const MAX_THUMBNAIL: u64 = 64 << 20;
 const MAX_RESOURCE: u64 = 512 << 20;
@@ -44,16 +43,8 @@ const MAX_TOTAL: u64 = 8 << 30;
 /// Largest image (texels) of a texture set or baked map: UV-tiled sets hold several tiles.
 const MAX_TEXELS: u64 = 1 << 28;
 
-/// The skew correction map of a bake, as stored (the baker's `SkewMap` without its type).
-#[derive(Clone, Debug, PartialEq)]
-pub struct SkewData {
-    pub width: u32,
-    pub height: u32,
-    /// `width * height` values, row 0 at the top.
-    pub values: Vec<f32>,
-    pub edge_distance: f32,
-    pub edge_contrast: f32,
-}
+mod bake_paint_data;
+pub use bake_paint_data::BakePaintData;
 
 /// Everything a project file holds.
 #[derive(Clone, Debug)]
@@ -69,8 +60,7 @@ pub struct ProjectFile {
     pub high_poly: Vec<(String, Vec<u8>)>,
     /// Baking cage mesh file: (file name, bytes).
     pub cage: Option<(String, Vec<u8>)>,
-    /// Skew correction of the bake rays.
-    pub skew: Option<SkewData>,
+    pub bake_paint: BTreeMap<(usize, BakePaintTarget), BakePaintData>,
     pub thumbnail: Option<Vec<u8>>,
     /// Imported resources (images used by fills, alphas, stencils), by name: original bytes.
     pub resources: BTreeMap<String, Vec<u8>>,
@@ -179,18 +169,19 @@ fn write_project<W: Write + Seek>(out: W, pf: &ProjectFile) -> Result<()> {
         zip.start_file(unique_entry_name(dir, name, &mut used), deflate).map_err(zip_err)?;
         zip.write_all(bytes)?;
     }
-    if let Some(k) = pf.skew.as_ref().filter(|k| k.width > 0 && k.height > 0 && k.values.len() as u64 == u64::from(k.width) * u64::from(k.height)) {
-        zip.start_file("skew.bin", deflate).map_err(zip_err)?;
-        let mut b = SKEW_MAGIC.to_vec();
-        b.extend_from_slice(&BIN_VERSION.to_le_bytes());
-        for v in [k.width, k.height] {
-            b.extend_from_slice(&v.to_le_bytes());
+    for ((texture_set, target), map) in &pf.bake_paint {
+        if map.width == 0 || map.height == 0 || map.values.len() as u64 != u64::from(map.width) * u64::from(map.height) {
+            return Err(FormatError::Invalid("bake paint map dimensions do not match its values".into()));
         }
-        for v in [k.edge_distance, k.edge_contrast] {
-            b.extend_from_slice(&v.to_le_bytes());
+        let target_name = match target {
+            BakePaintTarget::Cage => "cage",
+            BakePaintTarget::Skew => "skew",
+        };
+        zip.start_file(format!("bake_paint/{texture_set}_{target_name}.bin"), deflate).map_err(zip_err)?;
+        zip.write_all(&header(map.width, map.height, 1, 0))?;
+        for value in &map.values {
+            zip.write_all(&value.to_le_bytes())?;
         }
-        b.extend(k.values.iter().flat_map(|v| v.to_le_bytes()));
-        zip.write_all(&b)?;
     }
     let mut layers: Vec<_> = pf.pixels.layers.iter().collect();
     layers.sort_by_key(|(k, _)| **k);
@@ -339,36 +330,6 @@ fn read_baked(r: &mut impl Read, comps: usize, budget: &mut Budget, what: &str) 
     Ok((w, h, bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()))
 }
 
-/// Decode the skew header and pixel values
-fn read_skew(reader: &mut impl Read, budget: &mut Budget, entry: &str) -> Result<SkewData> {
-    let mut header = [0u8; 24];
-    read_exact(reader, &mut header, entry)?;
-    if header.get(..4) != Some(SKEW_MAGIC.as_slice()) {
-        return Err(malformed(KIND, format!("{entry}: bad magic")));
-    }
-
-    let version = u32_at(&header, 1);
-    if version > BIN_VERSION {
-        return Err(FormatError::NewerVersion { found: version, supported: BIN_VERSION });
-    }
-
-    let (width, height) = (u32_at(&header, 2), u32_at(&header, 3));
-    let (edge_distance, edge_contrast) = (f32::from_bits(u32_at(&header, 4)), f32::from_bits(u32_at(&header, 5)));
-    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_TEXELS {
-        return Err(malformed(KIND, format!("{entry}: bad size {width}×{height}")));
-    }
-
-    let pixel_count = (width as usize) * (height as usize);
-    budget.take(pixel_count as u64 * 4)?;
-    let mut bytes = vec![0u8; pixel_count * 4];
-    read_exact(reader, &mut bytes, entry)?;
-    expect_end(reader, entry)?;
-
-    // The caller validates pixel values after decoding
-    let values = bytes.chunks_exact(4).map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])).collect();
-    Ok(SkewData { width, height, values, edge_distance, edge_contrast })
-}
-
 /// Texture set holding a paint layer, a content effect or a mask effect id.
 fn texture_set_of(project: &Project, id: LayerId) -> Option<usize> {
     let owner = if project.layers.contains_key(&id) { id } else { project.effect(id)?.0 };
@@ -403,7 +364,7 @@ fn load<R: Read + Seek>(reader: R) -> Result<ProjectFile> {
         mesh: None,
         high_poly: Vec::new(),
         cage: None,
-        skew: None,
+        bake_paint: BTreeMap::new(),
         thumbnail: None,
         resources: BTreeMap::new(),
         project,
@@ -429,8 +390,19 @@ fn load<R: Read + Seek>(reader: R) -> Result<ProjectFile> {
                 "cage" => pf.cage = Some(entry),
                 _ => pf.high_poly.push(entry),
             }
-        } else if name == "skew.bin" {
-            pf.skew = Some(read_skew(&mut f, &mut budget, &name)?);
+        } else if let Some(rest) = name.strip_prefix("bake_paint/").and_then(|name| name.strip_suffix(".bin")) {
+            let (texture_set, target) = rest.split_once('_').ok_or_else(|| malformed(KIND, format!("bad entry {name}")))?;
+            let texture_set: usize = texture_set.parse().map_err(|_| malformed(KIND, format!("bad entry {name}")))?;
+            if texture_set >= pf.project.texture_sets.len() {
+                return Err(malformed(KIND, format!("unknown texture set in {name}")));
+            }
+            let target = match target {
+                "cage" => BakePaintTarget::Cage,
+                "skew" => BakePaintTarget::Skew,
+                _ => return Err(malformed(KIND, format!("unknown bake paint target in {name}"))),
+            };
+            let (width, height, values) = read_baked(&mut f, 1, &mut budget, &name)?;
+            pf.bake_paint.insert((texture_set, target), BakePaintData { width, height, values });
         } else if let Some(ext) = name.strip_prefix("mesh.").filter(|e| !e.contains('/')) {
             let bytes = read_all(&mut f, crate::mesh_import::MAX_MESH_FILE_BYTES, &mut budget, &name)?;
             pf.mesh = Some((ext.to_string(), bytes));

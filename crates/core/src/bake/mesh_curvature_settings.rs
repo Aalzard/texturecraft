@@ -24,7 +24,7 @@ impl Default for MeshCurvatureSettings {
             self_intersection: SelfOcclusion::Always,
             auto_tonemapping: true,
             value_min: -1.0,
-            value_max: -1.0,
+            value_max: 1.0,
         }
     }
 }

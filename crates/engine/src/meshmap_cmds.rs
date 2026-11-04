@@ -46,7 +46,10 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let (cols, rows) = tiles.as_ref().map_or((1, 1), |(g, _)| (g.cols, g.rows));
     let (res, height) = match s.doc.baked.get(&ts).filter(|b| !b.maps.is_empty()) {
         Some(b) => (b.resolution, b.maps.keys().next().map_or(b.resolution, |m| b.height(*m))),
-        None => (set.bake.common.resolution.pixels().saturating_mul(cols), set.bake.common.resolution.pixels().saturating_mul(rows)),
+        None => {
+            let (width, height) = set.bake.common.output_size();
+            (width.saturating_mul(cols), height.saturating_mul(rows))
+        }
     };
     if res == 0 || height == 0 || u64::from(res) * u64::from(height) > texturecraft_bake::MAX_TEXELS || (tiles.is_none() && res > MAX_RESOLUTION) {
         return Err(bad(CMD, format!("mesh map size {res} × {height} is too large or empty")));

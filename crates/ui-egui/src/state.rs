@@ -279,23 +279,7 @@ pub struct UiState {
     pub keymap: Keymap,
     /// The brush that paints the skew correction map in the 2D view of bake mode.
     #[serde(default)]
-    pub skew_brush: SkewBrush,
-}
-
-/// Settings of the skew correction brush (radius in UV units).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SkewBrush {
-    pub on: bool,
-    pub radius: f32,
-    /// 1 turns the rays onto the base normal, 0 erases.
-    pub value: f32,
-    pub hardness: f32,
-}
-
-impl Default for SkewBrush {
-    fn default() -> Self {
-        SkewBrush { on: false, radius: 0.03, value: 1.0, hardness: 0.5 }
-    }
+    pub bake_paint_brush: crate::bake_mode::BakePaintBrush,
 }
 
 impl UiState {
@@ -347,7 +331,7 @@ impl Default for UiState {
             export: ExportUi::default(),
             recent: Vec::new(),
             keymap: Keymap::new(),
-            skew_brush: SkewBrush::default(),
+            bake_paint_brush: crate::bake_mode::BakePaintBrush::default(),
         }
     }
 }

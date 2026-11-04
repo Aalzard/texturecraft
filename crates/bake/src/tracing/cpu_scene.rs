@@ -12,13 +12,18 @@ impl CpuScene<'_> {
 }
 
 impl RayScene for CpuScene<'_> {
-    fn closest(&mut self, mesh: usize, rays: &[Ray]) -> Result<Vec<Option<Hit>>, BakeError> {
+    fn closest(&mut self, mesh: usize, rays: &[Ray], ignore_backface: bool) -> Result<Vec<Option<Hit>>, BakeError> {
         let trace_mesh = self.mesh(mesh)?;
         Ok(rays
             .par_iter()
-            .map(|ray| match ray.key {
-                ANY => trace_mesh.bvh.closest(ray.origin, ray.direction, ray.max_distance),
-                key => trace_mesh.bvh.closest_filtered(ray.origin, ray.direction, ray.max_distance, &|triangle| trace_mesh.key_matches(triangle, key)),
+            .map(|ray| {
+                if ray.key == ANY && !ignore_backface {
+                    trace_mesh.bvh.closest(ray.origin, ray.direction, ray.max_distance)
+                } else {
+                    trace_mesh.bvh.closest_filtered(ray.origin, ray.direction, ray.max_distance, &|triangle| {
+                        trace_mesh.key_matches(triangle, ray.key) && !(ignore_backface && trace_mesh.back_facing(triangle, ray.direction))
+                    })
+                }
             })
             .collect())
     }

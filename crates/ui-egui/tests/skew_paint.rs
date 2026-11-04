@@ -19,23 +19,23 @@ fn harness() -> Harness<'static, TextureCraftApp> {
 }
 
 #[test]
-fn the_bake_panel_has_the_skew_brush_and_dragging_paints_the_map() {
+fn the_bake_panel_has_the_bake_paint_brush_and_dragging_paints_the_map() {
     let mut h = harness();
     h.get_by_label("Skew Correction");
-    assert!(h.state().session.bake_meshes.skew.is_none() && !h.state().ui.skew_brush.on);
+    assert!(h.state().session.doc.bake_paint.is_empty() && !h.state().ui.bake_paint_brush.on);
     // Off: a drag in the view paints nothing.
     h.drag_at(egui::pos2(600.0, 500.0));
     h.hover_at(egui::pos2(800.0, 500.0));
     h.drop_at(egui::pos2(800.0, 500.0));
     h.run_steps(3);
-    assert!(h.state().session.bake_meshes.skew.is_none(), "the brush is off");
+    assert!(h.state().session.doc.bake_paint.is_empty(), "the brush is off");
 
     // On: the checkbox turns it on, and the same drag makes a map with paint along the stroke.
     h.get_by_label("Paint Skew Correction").scroll_to_me();
     h.run_steps(3);
     h.get_by_label("Paint Skew Correction").click();
     h.run_steps(3);
-    assert!(h.state().ui.skew_brush.on);
+    assert!(h.state().ui.bake_paint_brush.on);
     h.get_by_label("Radius");
     h.drag_at(egui::pos2(600.0, 500.0));
     h.run_steps(2);
@@ -43,7 +43,7 @@ fn the_bake_panel_has_the_skew_brush_and_dragging_paints_the_map() {
     h.run_steps(2);
     h.drop_at(egui::pos2(800.0, 500.0));
     h.run_steps(3);
-    let map = h.state().session.bake_meshes.skew.clone().expect("the stroke made a skew map");
+    let map = h.state().session.doc.bake_paint.get(&(0, texturecraft_engine::core::BakePaintTarget::Skew)).cloned().expect("the stroke made a skew map");
     let painted = map.values.iter().filter(|v| **v > 0.5).count();
     assert!(painted > 50 && painted < map.values.len() / 2, "a stroke, not the whole map: {painted} of {}", map.values.len());
 
@@ -52,5 +52,5 @@ fn the_bake_panel_has_the_skew_brush_and_dragging_paints_the_map() {
     h.run_steps(3);
     h.get_by_label("Remove Skew Correction").click();
     h.run_steps(3);
-    assert!(h.state().session.bake_meshes.skew.is_none());
+    assert!(h.state().session.doc.bake_paint.is_empty());
 }

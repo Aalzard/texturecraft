@@ -14,13 +14,20 @@ use texturecraft_geom::primitives;
 
 use super::*;
 
+#[path = "test/setting.rs"]
+mod setting;
+
 fn settings(resolution: u32, maps: &[BakedMap]) -> BakeSettings {
     with_rays(
         {
             let mut base = BakeSettings::default();
-            base.common = CommonBakeSettings { resolution: BakeResolution::from_pixels(resolution).unwrap(), dilation: 0, ..base.common };
+            base.common =
+                CommonBakeSettings { resolution: BakeResolution::from_pixels(resolution).unwrap(), dilation: 0, apply_diffusion: false, ..base.common };
             base.maps.curvature.parameters = CurvatureSettings { method: CurvatureMethod::Mesh, ..base.maps.curvature.parameters };
             base.maps.position.parameters = PositionSettings { normalization: PositionMode::BoundingBox, ..base.maps.position.parameters };
+            base.maps.curvature.parameters.mesh.auto_tonemapping = false;
+            base.maps.height.parameters.normalization = texturecraft_core::HeightNormalization::RelativeToRayDistances;
+            base.maps.thickness.parameters.normalization = texturecraft_core::ThicknessNormalization::RelativeToRayDistances;
             base.maps.select(maps.iter().copied());
             base
         },
@@ -38,7 +45,10 @@ fn with_rays(mut s: BakeSettings, rays: u32, max_distance: f32) -> BakeSettings 
 
 fn run(mesh: &Mesh, s: &BakeSettings) -> Result<BakeOutput, BakeError> {
     let bvh = Bvh::new(mesh);
-    bake(&BakeRequest { mesh, bvh: &bvh, material: 0, settings: s, high: None, cage: None, skew: None, tiles: (1, 1) }, &Progress::new())
+    bake(
+        &BakeRequest { low_base_color: &[], mesh, bvh: &bvh, material: 0, settings: s, high: None, cage: None, skew: None, cage_paint: None, tiles: (1, 1) },
+        &Progress::new(),
+    )
 }
 
 fn covered_values(mesh: &Mesh, out: &BakeOutput, map: BakedMap) -> Vec<(Vec3, f32)> {
@@ -284,7 +294,18 @@ fn strips_match_a_single_pass() {
         4,
         0.25,
     );
-    let req = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, skew: None, tiles: (1, 1) };
+    let req = BakeRequest {
+        low_base_color: &[],
+        mesh: &m,
+        bvh: &bvh,
+        material: 0,
+        settings: &s,
+        high: None,
+        cage: None,
+        skew: None,
+        cage_paint: None,
+        tiles: (1, 1),
+    };
     let whole = bake(&req, &Progress::new()).unwrap();
     let strips = bake_in_strips(&req, &Progress::new(), 128 * 2, &CpuTracer).unwrap();
     for (map, a) in &whole.maps {
@@ -299,7 +320,18 @@ fn cancel_and_progress() {
     let m = primitives::sphere(1.0, 16, 8);
     let bvh = Bvh::new(&m);
     let s = settings(16, &[BakedMap::AmbientOcclusion, BakedMap::Position]);
-    let req = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, skew: None, tiles: (1, 1) };
+    let req = BakeRequest {
+        low_base_color: &[],
+        mesh: &m,
+        bvh: &bvh,
+        material: 0,
+        settings: &s,
+        high: None,
+        cage: None,
+        skew: None,
+        cage_paint: None,
+        tiles: (1, 1),
+    };
     let p = Progress::new();
     p.cancel();
     assert!(matches!(bake(&req, &p), Err(BakeError::Cancelled)));
@@ -314,7 +346,18 @@ fn a_curvature_bake_can_be_cancelled_midway_and_reports_progress() {
     let m = primitives::rounded_box(Vec3::ONE, 0.15);
     let bvh = Bvh::new(&m);
     let s = settings(2048, &[BakedMap::Curvature]);
-    let req = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, skew: None, tiles: (1, 1) };
+    let req = BakeRequest {
+        low_base_color: &[],
+        mesh: &m,
+        bvh: &bvh,
+        material: 0,
+        settings: &s,
+        high: None,
+        cage: None,
+        skew: None,
+        cage_paint: None,
+        tiles: (1, 1),
+    };
     let p = Progress::new();
     std::thread::scope(|t| {
         let baking = t.spawn(|| bake(&req, &p));
@@ -337,7 +380,18 @@ fn hostile_tile_dimensions_are_rejected() {
     let settings = settings(16, &[BakedMap::Position]);
 
     for tiles in [(1 << 31, 1 << 31), (u32::MAX, u32::MAX), (MAX_TEXELS as u32, 1), (0, 1), (1, 0)] {
-        let request = BakeRequest { mesh: &mesh, bvh: &bvh, material: 0, settings: &settings, high: None, cage: None, skew: None, tiles };
+        let request = BakeRequest {
+            low_base_color: &[],
+            mesh: &mesh,
+            bvh: &bvh,
+            material: 0,
+            settings: &settings,
+            high: None,
+            cage: None,
+            skew: None,
+            cage_paint: None,
+            tiles,
+        };
 
         assert!(matches!(validate(&request), Err(BakeError::Invalid(_))), "{tiles:?}");
         assert!(matches!(bake(&request, &Progress::new()), Err(BakeError::Invalid(_))), "{tiles:?}");
@@ -389,7 +443,10 @@ fn invalid_requests_are_errors() {
     }
     let bvh = Bvh::new(&m);
     let req = |mesh: &Mesh, material| {
-        bake(&BakeRequest { mesh, bvh: &bvh, material, settings: &ok, high: None, cage: None, skew: None, tiles: (1, 1) }, &Progress::new())
+        bake(
+            &BakeRequest { low_base_color: &[], mesh, bvh: &bvh, material, settings: &ok, high: None, cage: None, skew: None, cage_paint: None, tiles: (1, 1) },
+            &Progress::new(),
+        )
     };
     assert!(matches!(req(&m, 1), Err(BakeError::Invalid(_))));
     let mut broken = m.clone();
@@ -440,13 +497,15 @@ fn normal_and_height_transfer_from_a_high_poly() {
     let s = settings(16, &[BakedMap::Normal, BakedMap::Height]);
     let out = bake(
         &BakeRequest {
+            low_base_color: &[],
             mesh: &low,
             bvh: &lb,
             material: 0,
             settings: &s,
-            high: Some(HighPoly { mesh: &high, bvh: &hb, base_color: &[] }),
+            high: Some(HighPoly { file_ids: &[], mesh: &high, bvh: &hb, base_color: &[] }),
             cage: None,
             skew: None,
+            cage_paint: None,
             tiles: (1, 1),
         },
         &Progress::new(),
@@ -455,7 +514,7 @@ fn normal_and_height_transfer_from_a_high_poly() {
     let i = 8 * 16 + 8;
     let n = &out.maps[&BakedMap::Normal][i * 3..i * 3 + 3];
     assert!((n[0] - (0.5 + 0.5 * tilt.x)).abs() < 1e-3 && (n[1] - 0.5).abs() < 1e-3 && (n[2] - (0.5 + 0.5 * tilt.y)).abs() < 1e-3, "{n:?}");
-    let diag = 8.0f32.sqrt();
+    let diag = 2.0;
     let expected = 0.5 + 0.005 / (0.02 * diag);
     assert!((out.maps[&BakedMap::Height][i] - expected).abs() < 1e-3, "{}", out.maps[&BakedMap::Height][i]);
     let flat = run(&low, &s).unwrap();
@@ -465,15 +524,21 @@ fn normal_and_height_transfer_from_a_high_poly() {
 
 fn transfer(low: &Mesh, high: &Mesh, cage: Option<&Mesh>, s: &BakeSettings) -> Result<BakeOutput, BakeError> {
     let (lb, hb) = (Bvh::new(low), Bvh::new(high));
+    let mut settings = s.clone();
+    if cage.is_some() {
+        settings.cage.kind = texturecraft_core::CageType::CustomFile;
+    }
     bake(
         &BakeRequest {
+            low_base_color: &[],
             mesh: low,
             bvh: &lb,
             material: 0,
-            settings: s,
-            high: Some(HighPoly { mesh: high, bvh: &hb, base_color: &[] }),
+            settings: &settings,
+            high: Some(HighPoly { file_ids: &[], mesh: high, bvh: &hb, base_color: &[] }),
             cage,
             skew: None,
+            cage_paint: None,
             tiles: (1, 1),
         },
         &Progress::new(),
@@ -631,7 +696,7 @@ fn ray_distances_and_the_cage_limit_hits() {
     let low = quad();
     let mut high = quad();
     high.positions.iter_mut().for_each(|p| p.y += 0.2);
-    let diag = 8.0f32.sqrt();
+    let diag = 2.0;
     let opacity = |s: &BakeSettings, cage: Option<&Mesh>| transfer(&low, &high, cage, s).map(|o| o.maps[&BakedMap::Opacity][quad_texel(16, 0.0, 0.0)]);
     let near = settings(16, &[BakedMap::Opacity]);
     assert_eq!(opacity(&near, None).unwrap(), 0.0, "0.2 above is beyond the default frontal distance");
@@ -689,8 +754,22 @@ fn bench_material_ball_2k() {
             base
         };
         let t = std::time::Instant::now();
-        let out =
-            bake(&BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, skew: None, tiles: (1, 1) }, &Progress::new()).unwrap();
+        let out = bake(
+            &BakeRequest {
+                low_base_color: &[],
+                mesh: &m,
+                bvh: &bvh,
+                material: 0,
+                settings: &s,
+                high: None,
+                cage: None,
+                skew: None,
+                cage_paint: None,
+                tiles: (1, 1),
+            },
+            &Progress::new(),
+        )
+        .unwrap();
         println!("material ball, material 0, {}² × {:?}, {} rays: {:.2?}", out.resolution, out.maps.keys(), s.maps.ao.parameters.rays.rays, t.elapsed());
     }
 }
@@ -706,8 +785,22 @@ fn uv_tiles_bake_side_by_side_in_one_atlas() {
         base
     };
     let bvh = Bvh::new(&m);
-    let out =
-        bake(&BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, skew: None, tiles: (2, 1) }, &Progress::new()).unwrap();
+    let out = bake(
+        &BakeRequest {
+            low_base_color: &[],
+            mesh: &m,
+            bvh: &bvh,
+            material: 0,
+            settings: &s,
+            high: None,
+            cage: None,
+            skew: None,
+            cage_paint: None,
+            tiles: (2, 1),
+        },
+        &Progress::new(),
+    )
+    .unwrap();
     assert_eq!((out.resolution, out.height), (64, 32));
     let pos = &out.maps[&BakedMap::Position];
     assert_eq!(pos.len(), 64 * 32 * 3);
@@ -716,7 +809,18 @@ fn uv_tiles_bake_side_by_side_in_one_atlas() {
         assert!(x_at(2, y) < 0.3 && x_at(29, y) < 0.5, "tile 1001 holds the left plane");
         assert!(x_at(34, y) > 0.5 && x_at(62, y) > 0.7, "tile 1002 holds the right plane");
     }
-    let too_many = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, skew: None, tiles: (0, 1) };
+    let too_many = BakeRequest {
+        low_base_color: &[],
+        mesh: &m,
+        bvh: &bvh,
+        material: 0,
+        settings: &s,
+        high: None,
+        cage: None,
+        skew: None,
+        cage_paint: None,
+        tiles: (0, 1),
+    };
     assert!(bake(&too_many, &Progress::new()).is_err());
 }
 
@@ -732,7 +836,11 @@ fn curvature_on_uv_tiles_matches_a_single_tile() {
     };
     let bake_tiles = |m: &Mesh, tiles| {
         let bvh = Bvh::new(m);
-        bake(&BakeRequest { mesh: m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, skew: None, tiles }, &Progress::new()).unwrap()
+        bake(
+            &BakeRequest { low_base_color: &[], mesh: m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, skew: None, cage_paint: None, tiles },
+            &Progress::new(),
+        )
+        .unwrap()
     };
     let (a, b) = (bake_tiles(&one, (1, 1)), bake_tiles(&two, (2, 1)));
     let (a, b) = (&a.maps[&BakedMap::Curvature], &b.maps[&BakedMap::Curvature]);
@@ -767,7 +875,9 @@ fn near_wall(m: &Mesh, s: &BakeSettings, map: BakedMap) -> f32 {
 #[test]
 fn ambient_occlusion_settings_shape_the_occlusion() {
     let mesh = floor_and_wall(false);
-    let base = with_rays(settings(32, &[BakedMap::AmbientOcclusion]), 64, 2.0);
+    let mut base = with_rays(settings(32, &[BakedMap::AmbientOcclusion]), 64, 2.0);
+    base.maps.ao.parameters.rays.relative_to_bounding_box = false;
+    base.maps.ao.parameters.rays.max_distance = (mesh.bounds().1 - mesh.bounds().0).length() * 2.0;
     let ao = |configure: &dyn Fn(&mut BakeSettings)| {
         let mut bake_settings = base.clone();
         configure(&mut bake_settings);
@@ -865,7 +975,7 @@ fn position_modes() {
 
     let (box_positions, sphere_positions) = (positions(PositionMode::BoundingBox), positions(PositionMode::BoundingSphere));
     assert!(box_positions.iter().all(|p| p[1] == 0.0) && box_positions.iter().any(|p| p[0] < 0.05) && box_positions.iter().any(|p| p[0] > 0.95));
-    let unit_scale = 0.5 / 8.0f32.sqrt();
+    let unit_scale = 0.25;
     assert!(sphere_positions.iter().all(|p| p[1] == 0.5 && (p[0] - 0.5).abs() <= 2.0 * unit_scale + 1e-4 && (p[2] - 0.5).abs() <= 2.0 * unit_scale + 1e-4));
 
     let raw_settings = {
@@ -898,13 +1008,15 @@ fn opacity_samples_the_high_poly_base_color_texture() {
     let bake_with = |base_color: BaseColor| {
         let base_color = [Some(Arc::new(base_color))];
         let request = BakeRequest {
+            low_base_color: &[],
             mesh: &low,
             bvh: &low_bvh,
             material: 0,
             settings: &bake_settings,
-            high: Some(HighPoly { mesh: &high, bvh: &high_bvh, base_color: &base_color }),
+            high: Some(HighPoly { file_ids: &[], mesh: &high, bvh: &high_bvh, base_color: &base_color }),
             cage: None,
             skew: None,
+            cage_paint: None,
             tiles: (1, 1),
         };
         bake(&request, &Progress::new()).unwrap()
@@ -937,7 +1049,18 @@ fn a_failing_tracer_falls_back_to_the_cpu() {
     let m = floor_and_wall(false);
     let bvh = Bvh::new(&m);
     let s = with_rays(settings(16, &[BakedMap::AmbientOcclusion, BakedMap::Thickness]), 8, 1.0);
-    let req = BakeRequest { mesh: &m, bvh: &bvh, material: 0, settings: &s, high: None, cage: None, skew: None, tiles: (1, 1) };
+    let req = BakeRequest {
+        low_base_color: &[],
+        mesh: &m,
+        bvh: &bvh,
+        material: 0,
+        settings: &s,
+        high: None,
+        cage: None,
+        skew: None,
+        cage_paint: None,
+        tiles: (1, 1),
+    };
     let out = bake_on(&req, &Progress::new(), &Broken).unwrap();
     assert_eq!(out.tracer, "CPU (Broken unavailable: no device)");
     assert_eq!(out.maps, bake(&req, &Progress::new()).unwrap().maps);
@@ -946,7 +1069,7 @@ fn a_failing_tracer_falls_back_to_the_cpu() {
         base.maps.select([BakedMap::Position]);
         base
     };
-    assert_eq!(bake_on(&BakeRequest { settings: &flat, ..req }, &Progress::new(), &Broken).unwrap().tracer, "CPU");
+    assert_eq!(bake_on(&BakeRequest { low_base_color: &[], settings: &flat, ..req }, &Progress::new(), &Broken).unwrap().tracer, "CPU");
 }
 
 fn plane(y: f32, half: f32, n: Vec3) -> Mesh {
@@ -970,17 +1093,19 @@ fn skew_correction_preserves_uniform_mesh_normals_and_rejects_invalid_values() {
         base.cage = CageSettings { max_frontal: 0.5, max_rear: 0.1, average_normals: true, ..base.cage };
         base
     };
-    let diag = (low.bounds().1 - low.bounds().0).length();
+    let diag = (low.bounds().1 - low.bounds().0).max_element();
     let (front, rear) = (0.5 * diag, 0.1 * diag);
-    let height = |skew: Option<&SkewMap>| {
+    let height = |skew: Option<&BakePaintMap>| {
         let req = BakeRequest {
+            low_base_color: &[],
             mesh: &low,
             bvh: &lb,
             material: 0,
             settings: &s,
-            high: Some(HighPoly { mesh: &high, bvh: &hb, base_color: &[] }),
+            high: Some(HighPoly { file_ids: &[], mesh: &high, bvh: &hb, base_color: &[] }),
             cage: None,
             skew,
+            cage_paint: None,
             tiles: (1, 1),
         };
         bake(&req, &Progress::new()).unwrap().maps[&BakedMap::Height][8 * 16 + 8]
@@ -988,9 +1113,20 @@ fn skew_correction_preserves_uniform_mesh_normals_and_rejects_invalid_values() {
     let expect = |c: f32| 0.5 + (0.3 / c) / (front + rear);
     let plain = height(None);
     assert!((plain - expect(0.8)).abs() < 1e-3, "leaning rays: {plain} vs {}", expect(0.8));
-    assert!((height(Some(&SkewMap::constant(0.0))) - plain).abs() < 1e-6, "black leaves the rays alone");
-    assert!((height(Some(&SkewMap::constant(1.0))) - plain).abs() < 1e-4);
-    let bad = SkewMap { values: vec![f32::NAN], ..SkewMap::constant(0.0) };
-    let req = BakeRequest { mesh: &low, bvh: &lb, material: 0, settings: &s, high: None, cage: None, skew: Some(&bad), tiles: (1, 1) };
+    assert!((height(Some(&BakePaintMap::constant(0.0))) - plain).abs() < 1e-6, "black leaves the rays alone");
+    assert!((height(Some(&BakePaintMap::constant(1.0))) - plain).abs() < 1e-4);
+    let bad = BakePaintMap { values: vec![f32::NAN], ..BakePaintMap::constant(0.0) };
+    let req = BakeRequest {
+        low_base_color: &[],
+        mesh: &low,
+        bvh: &lb,
+        material: 0,
+        settings: &s,
+        high: None,
+        cage: None,
+        skew: Some(&bad),
+        cage_paint: None,
+        tiles: (1, 1),
+    };
     assert!(matches!(bake(&req, &Progress::new()), Err(BakeError::Invalid(_))));
 }

@@ -91,11 +91,11 @@ fn curvature_controls_follow_the_method_and_notes_visibility_rules() {
     assert_eq!(harness.state().session.doc.project.texture_sets[0].bake.maps.curvature.parameters.method, CurvatureMethod::Mesh);
     assert!(harness.query_by_label("Details").is_none());
     harness.get_by_label("Sampling Radius");
-    harness.get_by_label("Value Bounds Min");
-    harness.get_by_label("Value Bounds Max");
-    click(&mut harness, "Auto Tonemapping");
     assert!(harness.query_by_label("Value Bounds Min").is_none());
     assert!(harness.query_by_label("Value Bounds Max").is_none());
+    click(&mut harness, "Auto Tonemapping");
+    harness.get_by_label("Value Bounds Min");
+    harness.get_by_label("Value Bounds Max");
     assert!(!harness.state().session.doc.project.texture_sets[0].bake.maps.curvature.parameters.mesh.auto_tonemapping);
 }
 

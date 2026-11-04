@@ -5,7 +5,9 @@ use crate::widgets::icon_button;
 use egui::Ui;
 use egui_phosphor::regular as icon;
 use serde_json::json;
-use texturecraft_engine::core::{BakeAntialiasing, BakeResolution, BakeSettings, CageType, CommonBakeSettings};
+use texturecraft_engine::core::{
+    BakeAntialiasing, BakePaintTarget, BakeResolution, BakeSettings, CageType, CommonBakeSettings, MeshMatchMode, SkewCorrectionMethod,
+};
 
 pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSettings) {
     ui.push_id("common", |ui| {
@@ -36,6 +38,12 @@ pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSe
             high_poly_files(app, ui);
             if !app.session.bake_meshes.high.is_empty() {
                 ui.checkbox(&mut settings.high_poly.ignore_backface, tr("Ignore Backface"));
+                choice(
+                    ui,
+                    tr("Match"),
+                    &mut settings.high_poly.match_mode,
+                    &[(MeshMatchMode::Always, tr("Always")), (MeshMatchMode::ByMeshName, tr("By Mesh Name"))],
+                );
                 text_input(ui, tr("Low Poly Mesh Suffix"), &mut settings.high_poly.low_suffix);
                 text_input(ui, tr("High Poly Mesh Suffix"), &mut settings.high_poly.high_suffix);
                 text_input(ui, tr("Ignore Backface Suffix"), &mut settings.high_poly.ignore_backface_suffix);
@@ -56,7 +64,7 @@ pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSe
                 );
                 match settings.cage.kind {
                     CageType::DistanceBased => {
-                        ui.add_enabled(false, egui::Button::new(tr("Paint Cage")));
+                        paint_brush(app, ui, BakePaintTarget::Cage);
                         number(ui, tr("Max Frontal Distance"), &mut settings.cage.max_frontal, 0.0..=0.05, 4);
                         number(ui, tr("Max Rear Distance"), &mut settings.cage.max_rear, 0.0..=0.05, 4);
                         ui.checkbox(&mut settings.cage.relative_to_bounding_box, tr("Relative to Bounding Box"));
@@ -72,7 +80,16 @@ pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSe
             ui.add_space(8.0);
             ui.push_id("skew", |ui| {
                 if section(ui, tr("Skew Correction"), None, |ui| {
-                    skew_brush(app, ui);
+                    choice(
+                        ui,
+                        tr("Skew Correction Method"),
+                        &mut settings.skew.method,
+                        &[
+                            (SkewCorrectionMethod::MeshNormalsBased, tr("Mesh Normals Based")),
+                            (SkewCorrectionMethod::FaceNormalsBased, tr("Face Normals Based")),
+                        ],
+                    );
+                    paint_brush(app, ui, BakePaintTarget::Skew);
                     ui.checkbox(&mut settings.skew.edge_protection, tr("Edge Protection"));
                     number(ui, tr("Edge Distance"), &mut settings.skew.edge_distance, 0.0..=1.0, 2);
                     number(ui, tr("Edge Contrast"), &mut settings.skew.edge_contrast, 0.0..=1.0, 2);
@@ -145,21 +162,33 @@ fn cage_file(app: &mut TextureCraftApp, ui: &mut Ui) {
     });
 }
 
-fn skew_brush(app: &mut TextureCraftApp, ui: &mut Ui) {
-    let mut brush = app.ui.skew_brush;
-    if ui.add(egui::Button::new(tr("Paint Skew Correction")).selected(brush.on)).clicked() {
-        brush.on = !brush.on;
+fn paint_brush(app: &mut TextureCraftApp, ui: &mut Ui, target: BakePaintTarget) {
+    let (label, clear_label, clear_command) = match target {
+        BakePaintTarget::Cage => ("Paint Cage", "Reset Painted Cage", "bake.cage.reset"),
+        BakePaintTarget::Skew => ("Paint Skew Correction", "Remove Skew Correction", "bake.skew.clear"),
+    };
+    let mut brush = app.ui.bake_paint_brush;
+    let active = brush.on && brush.target == target;
+    if ui.add(egui::Button::new(tr(label)).selected(active)).clicked() {
+        brush.on = !active;
+        if brush.target != target {
+            brush.value = match target {
+                BakePaintTarget::Cage => 0.5,
+                BakePaintTarget::Skew => 1.0,
+            };
+        }
+        brush.target = target;
     }
-    if brush.on {
+    if brush.on && brush.target == target {
         number(ui, tr("Radius"), &mut brush.radius, 0.002..=0.2, 3);
         number(ui, tr("Value"), &mut brush.value, 0.0..=1.0, 2);
         number(ui, tr("Hardness"), &mut brush.hardness, 0.0..=1.0, 2);
+        if app.ui.layout == crate::state::ViewLayout::Only3D {
+            app.ui.layout = crate::state::ViewLayout::Split;
+        }
     }
-    if brush.on && !app.ui.skew_brush.on && app.ui.layout == crate::state::ViewLayout::Only3D {
-        app.ui.layout = crate::state::ViewLayout::Split;
-    }
-    app.ui.skew_brush = brush;
-    if app.session.bake_meshes.skew.is_some() && ui.button(tr("Remove Skew Correction")).clicked() {
-        app.run("bake.skew.clear", json!({}));
+    app.ui.bake_paint_brush = brush;
+    if app.session.doc.bake_paint.contains_key(&(app.session.ts(), target)) && ui.button(tr(clear_label)).clicked() {
+        app.run(clear_command, json!({}));
     }
 }

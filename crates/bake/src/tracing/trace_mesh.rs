@@ -8,6 +8,7 @@ pub struct TraceMesh<'a> {
     pub bvh: &'a Bvh,
     /// Part key per triangle in original mesh order
     pub keys: &'a [u32],
+    pub backface_culling: &'a [bool],
 }
 
 impl TraceMesh<'_> {

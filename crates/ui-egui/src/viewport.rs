@@ -36,17 +36,13 @@ pub fn set_focus_picking(ctx: &egui::Context, on: bool) {
 
 pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
     let mode = app.ui.mode;
-    let skew_painting = mode == crate::state::Mode::Baking
-        && app.ui.skew_brush.on
+    let bake_painting = mode == crate::state::Mode::Baking
+        && app.ui.bake_paint_brush.on
         && !app.session.bake_meshes.high.is_empty()
-        && app
-            .session
-            .doc
-            .project
-            .texture_sets
-            .get(app.session.ts())
-            .is_some_and(|texture_set| texture_set.bake.cage.kind == texturecraft_engine::core::CageType::DistanceBased);
-    app.ui.skew_brush.on = skew_painting;
+        && app.session.doc.project.texture_sets.get(app.session.ts()).is_some_and(|texture_set| {
+            !texture_set.bake.high_poly.use_low_as_high && texture_set.bake.cage.kind == texturecraft_engine::core::CageType::DistanceBased
+        });
+    app.ui.bake_paint_brush.on = bake_painting;
     if mode == crate::state::Mode::Painting && !app.ui.hide_ui {
         crate::toolbar::paint_bar(app, ui);
     }
@@ -62,7 +58,7 @@ pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
     let full = ui.available_rect_before_wrap();
     path_keys(app, ui);
     // Skew painting needs the 2D view alongside the 3D Bake preview
-    let layout = if mode == crate::state::Mode::Painting || skew_painting { app.ui.layout } else { ViewLayout::Only3D };
+    let layout = if mode == crate::state::Mode::Painting || bake_painting { app.ui.layout } else { ViewLayout::Only3D };
     match layout {
         ViewLayout::Only3D => view_3d(app, ui, full, &mut sync),
         ViewLayout::Only2D => view_2d(app, ui, full, &mut sync),
@@ -1008,9 +1004,9 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         let uv = to_uv(p);
         app.run("tool.cloneSource", json!({"uv": [uv.x, uv.y]}));
     }
-    let skew_on = app.ui.mode == crate::state::Mode::Baking && app.ui.skew_brush.on && !alt;
-    if skew_on {
-        skew_input(app, ui, &resp, &to_uv);
+    let bake_paint_on = app.ui.mode == crate::state::Mode::Baking && app.ui.bake_paint_brush.on && !alt;
+    if bake_paint_on {
+        bake_paint_input(app, ui, &resp, &to_uv);
     }
     let painting = app.ui.mode == crate::state::Mode::Painting && !alt && !adjusting && !v_held;
     if painting && path_tool {
@@ -1076,9 +1072,9 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         path_overlay(app, ui, rect, &resp, true, show);
     }
     if app.ui.mode == crate::state::Mode::Baking {
-        skew_overlay(app, ui, &painter, to(0.0, 1.0), to(1.0, 0.0));
-        if skew_on && let Some(hover) = resp.hover_pos() {
-            let r = (to(app.ui.skew_brush.radius, 0.0).x - to(0.0, 0.0).x).abs().max(2.0);
+        bake_paint_overlay(app, ui, &painter, to(0.0, 1.0), to(1.0, 0.0));
+        if bake_paint_on && let Some(hover) = resp.hover_pos() {
+            let r = (to(app.ui.bake_paint_brush.radius, 0.0).x - to(0.0, 0.0).x).abs().max(2.0);
             painter.circle_stroke(hover, r, Stroke::new(1.0, Color32::from_white_alpha(200)));
         }
     }
@@ -1091,9 +1087,9 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
 }
 
 /// Paint the skew map under the pointer in the 2D view (a click is one dab, a drag a stroke).
-fn skew_input(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, to_uv: &dyn Fn(egui::Pos2) -> Vec2) {
-    let last = ui.scope_id().with("skew_last");
-    let brush = app.ui.skew_brush;
+fn bake_paint_input(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, to_uv: &dyn Fn(egui::Pos2) -> Vec2) {
+    let last = ui.scope_id().with(("bake_paint_last", app.session.ts(), app.ui.bake_paint_brush.target as u8));
+    let brush = app.ui.bake_paint_brush;
     let started = resp.drag_started_by(PointerButton::Primary) || resp.clicked_by(PointerButton::Primary);
     if !(started || resp.dragged_by(PointerButton::Primary)) {
         return;
@@ -1102,16 +1098,20 @@ fn skew_input(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, to_uv: 
     let uv = to_uv(p);
     let previous: Option<[f32; 2]> = if started { None } else { ui.data(|d| d.get_temp(last)) };
     let points: Vec<[f32; 2]> = previous.into_iter().chain([[uv.x, uv.y]]).collect();
-    if app.run("bake.skew.paint", json!({"points": points, "radius": brush.radius, "value": brush.value, "hardness": brush.hardness})).is_some() {
+    let command = match brush.target {
+        texturecraft_engine::core::BakePaintTarget::Skew => "bake.skew.paint",
+        texturecraft_engine::core::BakePaintTarget::Cage => "bake.cage.paint",
+    };
+    if app.run(command, json!({"points": points, "radius": brush.radius, "value": brush.value, "hardness": brush.hardness, "continue": !started})).is_some() {
         ui.data_mut(|d| d.insert_temp(last, [uv.x, uv.y]));
     }
 }
 
 /// The skew map as a translucent orange layer over the UV square from `top_left` to `bottom_right`.
-fn skew_overlay(app: &TextureCraftApp, ui: &Ui, painter: &egui::Painter, top_left: egui::Pos2, bottom_right: egui::Pos2) {
-    let Some(k) = app.session.bake_meshes.skew.as_ref().filter(|k| k.values.len() > 1) else { return };
-    let key = (app.session.bake_meshes.skew_rev, std::sync::Arc::as_ptr(k) as usize);
-    let id = ui.scope_id().with("skew_overlay_texture");
+fn bake_paint_overlay(app: &TextureCraftApp, ui: &Ui, painter: &egui::Painter, top_left: egui::Pos2, bottom_right: egui::Pos2) {
+    let Some(k) = app.session.doc.bake_paint.get(&(app.session.ts(), app.ui.bake_paint_brush.target)).filter(|k| k.values.len() > 1) else { return };
+    let key = (app.session.revision, std::sync::Arc::as_ptr(k) as usize);
+    let id = ui.scope_id().with("bake_paint_overlay_texture");
     let cached: Option<((u64, usize), egui::TextureHandle)> = ui.data(|d| d.get_temp(id));
     let tex = match cached {
         Some((c, t)) if c == key => t,
@@ -1123,10 +1123,14 @@ fn skew_overlay(app: &TextureCraftApp, ui: &Ui, painter: &egui::Painter, top_lef
             for y in 0..oh {
                 for x in 0..ow {
                     let v = k.values.get((y * h / oh) * w + x * w / ow).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                    let v = match app.ui.bake_paint_brush.target {
+                        texturecraft_engine::core::BakePaintTarget::Skew => v,
+                        texturecraft_engine::core::BakePaintTarget::Cage => 1.0 - v,
+                    };
                     rgba.extend_from_slice(&[255, 140, 40, (v * 170.0) as u8]);
                 }
             }
-            let tex = ui.ctx().load_texture("skew_overlay", egui::ColorImage::from_rgba_unmultiplied([ow, oh], &rgba), egui::TextureOptions::NEAREST);
+            let tex = ui.ctx().load_texture("bake_paint_overlay", egui::ColorImage::from_rgba_unmultiplied([ow, oh], &rgba), egui::TextureOptions::NEAREST);
             ui.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
             tex
         }

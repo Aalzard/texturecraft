@@ -1,26 +1,28 @@
-use super::SkewMap;
 use crate::BakeError;
+use crate::BakePaintMap;
 use std::collections::HashMap;
+use texturecraft_core::{SkewCorrectionMethod, SkewSettings};
 use texturecraft_geom::glam::Vec3;
 use texturecraft_geom::{Mesh, Surface};
 
 const HARD_EDGE_COS: f32 = 0.866;
 
 pub(crate) struct PreparedSkew<'a> {
-    map: &'a SkewMap,
+    map: &'a BakePaintMap,
+    settings: SkewSettings,
     hard: Vec<[bool; 3]>,
-    mesh_diagonal: f32,
+    mesh_scale: f32,
 }
 
 impl<'a> PreparedSkew<'a> {
-    pub(crate) fn new(map: &'a SkewMap, mesh: &Mesh, mesh_diagonal: f32) -> Result<PreparedSkew<'a>, BakeError> {
+    pub(crate) fn new(map: &'a BakePaintMap, mesh: &Mesh, mesh_scale: f32, settings: SkewSettings) -> Result<PreparedSkew<'a>, BakeError> {
         map.validate()?;
-        let hard = if map.edge_distance > 0.0 { hard_edges(mesh) } else { Vec::new() };
-        Ok(PreparedSkew { map, hard, mesh_diagonal })
+        let hard = if settings.edge_protection && settings.edge_distance > 0.0 { hard_edges(mesh) } else { Vec::new() };
+        Ok(PreparedSkew { map, settings, hard, mesh_scale })
     }
 
     pub(crate) fn correct(&self, mesh: &Mesh, surface: &Surface, up: Vec3) -> Vec3 {
-        let amount = self.map.at(surface.uv);
+        let amount = self.map.sample(surface.uv);
         if amount <= 0.0 {
             return up;
         }
@@ -34,11 +36,20 @@ impl<'a> PreparedSkew<'a> {
                         Some(segment_distance(surface.pos, *edge_start, *edge_end))
                     })
                     .fold(f32::INFINITY, f32::min);
-                (nearest_edge_distance / (self.map.edge_distance * self.mesh_diagonal).max(1e-9)).clamp(0.0, 1.0).powf(self.map.edge_contrast)
+                (nearest_edge_distance / (self.settings.edge_distance * self.mesh_scale).max(1e-9)).clamp(0.0, 1.0).powf(self.settings.edge_contrast.max(1e-6))
             }
             _ => 1.0,
         };
-        let base = surface.nrm;
+        let base = match self.settings.method {
+            SkewCorrectionMethod::MeshNormalsBased => surface.nrm,
+            SkewCorrectionMethod::FaceNormalsBased => {
+                if surface.geo_nrm.dot(surface.nrm) < 0.0 {
+                    -surface.geo_nrm
+                } else {
+                    surface.geo_nrm
+                }
+            }
+        };
         let blend = amount * protection;
         (up * (1.0 - blend) + base * blend).try_normalize().unwrap_or(up)
     }

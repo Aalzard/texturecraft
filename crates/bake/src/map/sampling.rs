@@ -44,7 +44,7 @@ pub(super) fn pack(v: Vec3) -> [f32; 3] {
     (v * 0.5 + 0.5).clamp(Vec3::ZERO, Vec3::ONE).to_array()
 }
 
-pub(super) fn material_color(part: usize) -> [f32; 3] {
+pub(super) fn generated_hue(part: usize) -> [f32; 3] {
     let h = ((part as f64 * 0.618_033_988_75 + 0.05).fract() * 6.0) as f32;
     let (s, v) = (0.7f32, 0.95f32);
     let f = h.fract();

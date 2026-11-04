@@ -1,8 +1,15 @@
 mod bake_context;
 mod curvature;
 mod curvature_tuning;
+mod diffusion;
 mod normal_curvature;
+mod normalization;
+pub(crate) use diffusion::diffuse;
+pub(crate) use normalization::normalize;
 mod sample;
+mod seam;
+pub(crate) use seam::fix_seams;
+mod position_projection;
 mod sampling;
 mod source;
 mod traced;

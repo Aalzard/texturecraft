@@ -1,6 +1,8 @@
 //! Bake Mode presentation; persisted settings live in core and edits use engine commands
 
+mod bake_paint_brush;
 mod common_settings;
+pub use bake_paint_brush::BakePaintBrush;
 mod controls;
 mod map_settings;
 

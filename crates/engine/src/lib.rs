@@ -9,6 +9,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod bake_cmds;
+#[path = "bake/mod.rs"]
+mod bake_data;
+mod bake_paint_cmds;
 pub mod brush_preset_cmds;
 pub mod camera_cmds;
 pub mod commands;
@@ -45,7 +48,7 @@ pub mod tool_cmds;
 pub mod uv_tile_cmds;
 pub mod view_cmds;
 
-pub use bake_cmds::{BakeMesh, BakeMeshes, BakeTask};
+pub use bake_data::{BakeMesh, BakeMeshes, BakeTask};
 pub use commands::{CommandSpec, command_specs, execute, find};
 pub use path_tool::PathState;
 pub use project_cmds::sample_session;

@@ -121,7 +121,7 @@ fn curvature(ui: &mut Ui, settings: &mut CurvatureSettings) {
             }
             occlusion(ui, tr("Self Intersection"), &mut mesh.self_intersection);
             ui.checkbox(&mut mesh.auto_tonemapping, tr("Auto Tonemapping"));
-            if mesh.auto_tonemapping {
+            if !mesh.auto_tonemapping {
                 number(ui, tr("Value Bounds Min"), &mut mesh.value_min, -10.0..=10.0, 2);
                 number(ui, tr("Value Bounds Max"), &mut mesh.value_max, -10.0..=10.0, 2);
             }

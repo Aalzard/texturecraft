@@ -2,16 +2,17 @@
 //! high-definition mesh list, the cage, and running a bake. Bakes cast their rays on the GPU
 //! tracer the app installs ([`install_gpu_tracer`]) and on the CPU otherwise.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
+use texturecraft_core::BakePaintTarget;
 
+use crate::{BakeMesh, BakeTask};
 use serde_json::{Value, json};
 use texturecraft_bake::tracing::Tracer;
-use texturecraft_bake::{BakeOutput, BakeRequest, HighPoly, MAX_RAYS, Progress, SkewMap, bake, bake_on};
+use texturecraft_bake::{BakeOutput, BakePaintMap, MAX_RAYS, Progress};
 use texturecraft_core::{
     BackfaceMode, BakeAntialiasing, BakeResolution, BakeSettings, BakedMap, CurvatureMethod, PositionMode, RayDistribution, RaySettings, SelfOcclusion,
 };
-use texturecraft_geom::{BaseColor, Bvh, Mesh};
 
 use crate::commands::{CommandSpec, always, bad, boolp, f32p, strp, u64p};
 use crate::{EngineError, Result, Session, cmd};
@@ -53,53 +54,11 @@ pub fn specs() -> Vec<CommandSpec> {
             s.modified = true;
             Ok(meshes_json(s))
         }),
-        cmd!(
-            "bake.skew.set",
-            "Set skew correction",
-            [],
-            None,
-            "{value?: 0..1 (a constant map, default 1) | path: a greyscale image over the UV atlas (white turns the rays onto the base normal, black keeps the cage's averaged direction), edgeDistance?: fraction of the mesh diagonal over which hard edges hold the correction back (default 0), edgeContrast?: falloff exponent (default 1)} → {skew}. Applies to the transfer rays of a bake from the built-in distance cage; a cage mesh ignores it",
-            always,
-            skew_set
-        ),
-        cmd!(
-            "bake.skew.paint",
-            "Paint skew correction",
-            [],
-            None,
-            "{points: [[u, v], ...] (atlas uv, a stroke), radius?: uv units (default 0.03), value?: 0..1 (1 turns rays onto the base normal, 0 erases; default 1), hardness?: 0..1 (default 0.5), strength?: 0..1 per dab (default 1), size?: px of a new or constant map (default 1024, 16..4096)} → {skew}. Paints into the skew map; a missing or constant map is first widened to `size`",
-            always,
-            skew_paint
-        ),
-        cmd!("bake.skew.clear", "Remove skew correction", [], None, "{}", always, |s, _| {
-            s.bake_meshes.skew = None;
-            s.bake_meshes.skew_rev += 1;
-            s.modified = true;
-            Ok(meshes_json(s))
-        }),
     ]
 }
 
 /// A mesh file as saved in a project: (file name, bytes).
 type MeshFile = (String, Vec<u8>);
-
-/// A mesh file the baker reads (high poly or cage): its name, original bytes (saved in the
-/// project), parsed mesh and its materials' base colors (high polys).
-#[derive(Clone, Debug)]
-pub struct BakeMesh {
-    pub name: String,
-    pub bytes: Arc<Vec<u8>>,
-    pub mesh: Arc<Mesh>,
-    pub base_color: Vec<Option<Arc<BaseColor>>>,
-}
-
-/// Every high poly appended into one mesh, its BVH and per-material base colors.
-#[derive(Clone, Debug)]
-pub struct MergedHigh {
-    pub mesh: Arc<Mesh>,
-    pub bvh: Arc<Bvh>,
-    pub base_color: Arc<Vec<Option<Arc<BaseColor>>>>,
-}
 
 static GPU_TRACER: OnceLock<Arc<dyn Tracer>> = OnceLock::new();
 
@@ -107,74 +66,6 @@ static GPU_TRACER: OnceLock<Arc<dyn Tracer>> = OnceLock::new();
 /// the first call wins.
 pub fn install_gpu_tracer(tracer: Arc<dyn Tracer>) {
     let _ = GPU_TRACER.set(tracer);
-}
-
-/// The high-definition meshes and the cage. Like the low-poly mesh they are not part of the
-/// undo history.
-#[derive(Clone, Debug, Default)]
-pub struct BakeMeshes {
-    pub high: Vec<BakeMesh>,
-    pub cage: Option<BakeMesh>,
-    /// Skew correction of the transfer rays (saved in the project as `skew.bin`).
-    pub skew: Option<Arc<SkewMap>>,
-    /// Counts changes to `skew`, so a view knows when to redraw it.
-    pub skew_rev: u64,
-    /// Every high poly appended into one mesh (rebuilt when the list changes).
-    merged: Option<MergedHigh>,
-}
-
-impl BakeMeshes {
-    // shortcut: the merged copy doubles high-poly memory; build the BVH over the parts in place if
-    // multi-million-triangle sets run out of memory.
-    fn rebuild(&mut self) {
-        self.merged = (!self.high.is_empty()).then(|| {
-            let (mut all, mut base_color) = (Mesh::default(), Vec::new());
-            for h in &self.high {
-                all.append(&h.mesh);
-                base_color.extend(h.base_color.iter().cloned().chain(std::iter::repeat(None)).take(h.mesh.materials.len()));
-            }
-            let bvh = Bvh::new(&all);
-            MergedHigh { mesh: Arc::new(all), bvh: Arc::new(bvh), base_color: Arc::new(base_color) }
-        });
-    }
-}
-
-/// A self-contained bake task that can run on another thread.
-pub struct BakeTask {
-    pub ts: usize,
-    pub mesh: Arc<Mesh>,
-    pub bvh: Arc<Bvh>,
-    pub material: usize,
-    pub settings: BakeSettings,
-    /// The merged high polys, unless the set bakes from the low poly.
-    pub high: Option<MergedHigh>,
-    pub cage: Option<Arc<Mesh>>,
-    pub skew: Option<Arc<SkewMap>>,
-    /// UV tile grid (columns, rows) of the set; (1, 1) without UV tiles.
-    pub tiles: (u32, u32),
-    /// The GPU ray tracer, if installed and not turned off (`bake.run {cpu: true}`).
-    pub tracer: Option<Arc<dyn Tracer>>,
-}
-
-impl BakeTask {
-    pub fn run(&self, progress: &Progress) -> Result<BakeOutput> {
-        let high = self.high.as_ref().map(|h| HighPoly { mesh: &h.mesh, bvh: &h.bvh, base_color: &h.base_color });
-        let req = BakeRequest {
-            mesh: &self.mesh,
-            bvh: &self.bvh,
-            material: self.material,
-            settings: &self.settings,
-            high,
-            cage: self.cage.as_deref(),
-            skew: self.skew.as_deref(),
-            tiles: self.tiles,
-        };
-        match &self.tracer {
-            Some(t) => bake_on(&req, progress, t.as_ref()),
-            None => bake(&req, progress),
-        }
-        .map_err(|e| EngineError::Other(format!("bake failed: {e}")))
-    }
 }
 
 /// A mesh file name made unique among `taken` (and safe as a project file entry).
@@ -199,27 +90,66 @@ fn parse_mesh(file_name: &str, bytes: Vec<u8>) -> Result<BakeMesh> {
 impl Session {
     pub fn bake_task(&self, ts: usize) -> Result<BakeTask> {
         let set = self.doc.project.texture_set(ts)?;
+        let needs_low_color = set.bake.maps.opacity.is_enabled
+            || (set.bake.maps.id.is_enabled && set.bake.maps.id.parameters.source == texturecraft_core::IdColorSource::MaterialColor);
+        let low_base_color = if needs_low_color && (set.bake.high_poly.use_low_as_high || self.bake_meshes.high.is_empty()) {
+            self.bake_meshes
+                .low_base_color
+                .get_or_init(|| match &self.mesh_source {
+                    Some((extension, bytes)) => texturecraft_formats::import_high_poly_bytes(&format!("mesh.{extension}"), bytes)
+                        .map(|imported| Arc::new(imported.base_color.into_iter().map(|color| color.map(Arc::new)).collect()))
+                        .map_err(|error| error.to_string()),
+                    None => Ok(Arc::new(Vec::new())),
+                })
+                .clone()
+                .map_err(EngineError::Other)?
+        } else {
+            Arc::new(Vec::new())
+        };
         let high = if set.bake.high_poly.use_low_as_high { None } else { self.bake_meshes.merged.clone() };
-        let cage = high.as_ref().and(self.bake_meshes.cage.as_ref()).map(|c| c.mesh.clone());
-        let skew = high.as_ref().and(self.bake_meshes.skew.clone());
+        let cage = if high.is_some() && set.bake.cage.kind == texturecraft_core::CageType::CustomFile {
+            Some(self.bake_meshes.cage.as_ref().ok_or_else(|| EngineError::Other("Custom File requires a cage mesh".into()))?.mesh.clone())
+        } else {
+            None
+        };
+        let skew = high.as_ref().and(self.doc.bake_paint.get(&(ts, BakePaintTarget::Skew)).cloned());
+        let cage_paint = high.as_ref().and(self.doc.bake_paint.get(&(ts, BakePaintTarget::Cage)).cloned());
         let tiles = set.tile_grid().map_or((1, 1), |g| (g.cols, g.rows));
         let tracer = GPU_TRACER.get().cloned();
-        Ok(BakeTask { ts, mesh: self.mesh.clone(), bvh: self.bvh.clone(), material: set.material, settings: set.bake.clone(), high, cage, skew, tiles, tracer })
+        Ok(BakeTask {
+            low_base_color,
+            ts,
+            mesh: self.mesh.clone(),
+            bvh: self.bvh.clone(),
+            material: set.material,
+            settings: set.bake.clone(),
+            high,
+            cage,
+            skew,
+            cage_paint,
+            tiles,
+            tracer,
+        })
     }
 
-    /// Store a finished bake (one undo step).
-    pub fn apply_bake(&mut self, ts: usize, out: BakeOutput) -> Result<()> {
-        self.log.push(format!("Baked texture set {ts} ({})", out.tracer));
-        self.edit("Bake mesh maps", |s| {
-            let maps: BTreeSet<BakedMap> = out.maps.keys().copied().collect();
-            let entry = s.doc.baked.entry(ts).or_default();
-            entry.resolution = out.resolution;
-            for (m, data) in out.maps {
-                entry.maps.insert(m, Arc::new(data));
-            }
-            s.doc.project.texture_set_mut(ts)?.baked.extend(maps);
-            Ok(())
-        })?;
+    /// Store a finished bake as one undo step
+    pub fn apply_bake(&mut self, texture_set: usize, output: BakeOutput) -> Result<()> {
+        let tracer = output.tracer.clone();
+        self.edit("Bake mesh maps", |session| session.store_bake(texture_set, output))?;
+        self.log.push(format!("Baked texture set {texture_set} ({tracer})"));
+        Ok(())
+    }
+
+    fn store_bake(&mut self, texture_set: usize, output: BakeOutput) -> Result<()> {
+        let entry = self.doc.baked.entry(texture_set).or_default();
+        if entry.resolution != output.resolution || entry.maps.keys().any(|map| entry.height(*map) != output.height) {
+            entry.maps.clear();
+        }
+        entry.resolution = output.resolution;
+        for (map, pixels) in output.maps {
+            entry.maps.insert(map, Arc::new(pixels));
+        }
+        self.doc.project.texture_set_mut(texture_set)?.baked = entry.maps.keys().copied().collect();
         Ok(())
     }
 
@@ -306,29 +236,28 @@ impl Session {
         }
     }
 
-    /// The skew map of a project file, if it passes the baker's checks.
-    pub(crate) fn load_skew(&mut self, skew: Option<texturecraft_formats::SkewData>) {
-        let Some(k) = skew else { return };
-        let map = SkewMap { width: k.width, height: k.height, values: k.values, edge_distance: k.edge_distance, edge_contrast: k.edge_contrast };
-        match map.validate() {
-            Ok(()) => {
-                self.bake_meshes.skew = Some(Arc::new(map));
-                self.bake_meshes.skew_rev += 1;
+    pub(crate) fn load_bake_paint(&mut self, maps: BTreeMap<(usize, BakePaintTarget), texturecraft_formats::BakePaintData>) {
+        for (key, data) in maps {
+            if key.0 >= self.doc.project.texture_sets.len() {
+                self.log.push(format!("skipped bake paint map for missing texture set {}", key.0));
+                continue;
             }
-            Err(e) => self.log.push(format!("skipped skew map: {e}")),
+            let map = BakePaintMap { width: data.width, height: data.height, values: data.values };
+            match map.validate() {
+                Ok(()) => {
+                    self.doc.bake_paint.insert(key, Arc::new(map));
+                }
+                Err(error) => self.log.push(format!("skipped bake paint map: {error}")),
+            }
         }
     }
 
-    /// The skew map for a project file.
-    pub(crate) fn saved_skew(&self) -> Option<texturecraft_formats::SkewData> {
-        let k = self.bake_meshes.skew.as_ref()?;
-        Some(texturecraft_formats::SkewData {
-            width: k.width,
-            height: k.height,
-            values: k.values.clone(),
-            edge_distance: k.edge_distance,
-            edge_contrast: k.edge_contrast,
-        })
+    pub(crate) fn saved_bake_paint(&self) -> BTreeMap<(usize, BakePaintTarget), texturecraft_formats::BakePaintData> {
+        self.doc
+            .bake_paint
+            .iter()
+            .map(|(key, map)| (*key, texturecraft_formats::BakePaintData { width: map.width, height: map.height, values: map.values.clone() }))
+            .collect()
     }
 
     /// The bake meshes for a project file: (high polys, cage).
@@ -341,9 +270,11 @@ impl Session {
 /// `bake.highPoly.list`: the high polys and the cage (also part of `project.inspect`).
 pub fn meshes_json(s: &Session) -> Value {
     let one = |m: &BakeMesh| json!({ "name": m.name, "triangles": m.mesh.triangle_count(), "parts": m.mesh.submeshes.iter().map(|p| p.name.as_str()).collect::<Vec<_>>() });
-    let skew =
-        s.bake_meshes.skew.as_ref().map(|k| json!({ "width": k.width, "height": k.height, "edgeDistance": k.edge_distance, "edgeContrast": k.edge_contrast }));
-    json!({ "highPoly": s.bake_meshes.high.iter().map(one).collect::<Vec<_>>(), "cage": s.bake_meshes.cage.as_ref().map(one), "skew": skew })
+    let painted = |target| s.doc.bake_paint.get(&(s.ts(), target)).map(|map| json!({ "width": map.width, "height": map.height }));
+    json!({ "highPoly": s.bake_meshes.high.iter().map(one).collect::<Vec<_>>(), "cage": s.bake_meshes.cage.as_ref().map(one), "skew": painted(BakePaintTarget::Skew), "paintedCage": painted(BakePaintTarget::Cage), "paintMaps": s.doc.bake_paint.iter().map(|((texture_set, target), map)| {
+        let default = match target { BakePaintTarget::Cage => 1.0, BakePaintTarget::Skew => 0.0 };
+        json!({"textureSet": texture_set, "target": target, "width": map.width, "height": map.height, "paintedTexels": map.values.iter().filter(|value| **value != default).count()})
+    }).collect::<Vec<_>>() })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -374,44 +305,6 @@ fn high_remove(s: &mut Session, p: &Value) -> Result<Value> {
         (None, None) => return Err(bad("bake.highPoly.remove", "`index`, `name` or `all` is required")),
     };
     s.remove_high_poly(index)?;
-    Ok(meshes_json(s))
-}
-
-/// The greyscale skew map of an image file (the mean of its colour channels, as stored).
-#[cfg(not(target_arch = "wasm32"))]
-fn skew_image(path: &str) -> Result<(u32, u32, Vec<f32>)> {
-    const MAX_BYTES: u64 = 256 << 20;
-    let cmd = "bake.skew.set";
-    let len = std::fs::metadata(path).map_err(|e| bad(cmd, format!("cannot read {path}: {e}")))?.len();
-    if len > MAX_BYTES {
-        return Err(bad(cmd, format!("{path} is over 256 MiB")));
-    }
-    let bytes = std::fs::read(path).map_err(|e| bad(cmd, format!("cannot read {path}: {e}")))?;
-    // The size is checked from the header, before the pixels are decoded.
-    let img = texturecraft_formats::decode_image_within(&bytes, texturecraft_bake::MAX_TEXELS).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-    Ok((img.width, img.height, img.rgba.iter().map(|p| (p[0] + p[1] + p[2]) / 3.0).collect()))
-}
-
-#[cfg(target_arch = "wasm32")]
-fn skew_image(_: &str) -> Result<(u32, u32, Vec<f32>)> {
-    Err(EngineError::Other("file paths are not available in the browser".into()))
-}
-
-fn skew_set(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "bake.skew.set";
-    let mut map = match strp(p, "path") {
-        Some(path) => {
-            let (width, height, values) = skew_image(path)?;
-            SkewMap { width, height, values: values.into_iter().map(|v| v.clamp(0.0, 1.0)).collect(), ..SkewMap::constant(0.0) }
-        }
-        None => SkewMap::constant(f32p(p, "value").unwrap_or(1.0).clamp(0.0, 1.0)),
-    };
-    map.edge_distance = f32p(p, "edgeDistance").unwrap_or(0.0);
-    map.edge_contrast = f32p(p, "edgeContrast").unwrap_or(1.0);
-    map.validate().map_err(|e| bad(cmd, e.to_string()))?;
-    s.bake_meshes.skew = Some(Arc::new(map));
-    s.bake_meshes.skew_rev += 1;
-    s.modified = true;
     Ok(meshes_json(s))
 }
 
@@ -603,10 +496,16 @@ fn validate_model_settings(settings: &BakeSettings, command: &str) -> Result<()>
         range("minimum occluder distance", rays.min_distance, 0.00001, 1.0)?;
         range("maximum occluder distance", rays.max_distance, 0.00001, if rays.relative_to_bounding_box { 1.0 } else { 10.0 })?;
         range("spread angle", rays.spread, 0.0, 180.0)?;
+        if rays.min_distance > rays.max_distance {
+            return Err(bad(command, "minimum occluder distance must not exceed maximum distance"));
+        }
     }
     let curvature = &settings.maps.curvature.parameters;
     if !(1..=256).contains(&curvature.mesh.rays) {
         return Err(bad(command, "curvature rays must be in 1..=256"));
+    }
+    if !curvature.mesh.auto_tonemapping && curvature.mesh.value_min >= curvature.mesh.value_max {
+        return Err(bad(command, "curvature minimum must be below maximum"));
     }
     range("sampling radius", curvature.mesh.sampling_radius, 0.00001, if curvature.mesh.relative_to_bounding_box { 10.0 } else { 1.0 })?;
     for (name, value, minimum, maximum) in [
@@ -662,24 +561,28 @@ fn apply_rays(settings: &mut RaySettings, params: &Value, command: &str) -> Resu
     Ok(())
 }
 
-/// Validate every target before applying settings
+fn updated_settings(session: &Session, params: &Value, command: &str) -> Result<Vec<(usize, BakeSettings)>> {
+    sets_param(session, command, params)?
+        .into_iter()
+        .map(|index| {
+            let mut settings = session.doc.project.texture_set(index)?.bake.clone();
+            apply_settings(&mut settings, params, command)?;
+            Ok((index, settings))
+        })
+        .collect()
+}
+
 fn set_settings(session: &mut Session, params: &Value, command: &str) -> Result<Vec<usize>> {
-    let sets = sets_param(session, command, params)?;
-    let mut next = Vec::with_capacity(sets.len());
-    for &set_index in &sets {
-        let mut settings = session.doc.project.texture_set(set_index)?.bake.clone();
-        apply_settings(&mut settings, params, command)?;
-        next.push((set_index, settings));
+    let next = updated_settings(session, params, command)?;
+    let sets = next.iter().map(|(index, _)| *index).collect();
+    if next.iter().any(|(index, settings)| session.doc.project.texture_sets.get(*index).is_some_and(|set| set.bake != *settings)) {
+        session.edit("Bake Settings", |session| {
+            for (index, settings) in next {
+                session.doc.project.texture_set_mut(index)?.bake = settings;
+            }
+            Ok(())
+        })?;
     }
-
-    for (set_index, settings) in next {
-        let texture_set = session.doc.project.texture_set_mut(set_index)?;
-        if texture_set.bake != settings {
-            texture_set.bake = settings;
-            session.modified = true;
-        }
-    }
-
     Ok(sets)
 }
 
@@ -700,57 +603,27 @@ fn settings(session: &mut Session, params: &Value) -> Result<Value> {
     Ok(json!(result))
 }
 
-fn bake_run(s: &mut Session, p: &Value) -> Result<Value> {
-    let sets = set_settings(s, p, "bake.run")?;
-    let cpu = boolp(p, "cpu") == Some(true);
-    let tracer = sets.iter().map(|&ts| s.bake_now(ts, cpu)).collect::<Result<Vec<_>>>()?;
-    s.update();
-    Ok(json!({ "baked": sets, "tracer": tracer }))
-}
-
-fn skew_paint(s: &mut Session, p: &Value) -> Result<Value> {
-    use texturecraft_geom::glam::Vec2;
-    let cmd = "bake.skew.paint";
-    const MAX_POINTS: usize = 100_000;
-    let points: Vec<Vec2> = p
-        .get("points")
-        .and_then(Value::as_array)
-        .ok_or_else(|| bad(cmd, "`points` is required: [[u, v], ...]"))?
-        .iter()
-        .map(|q| match (q.get(0).and_then(Value::as_f64), q.get(1).and_then(Value::as_f64)) {
-            (Some(u), Some(v)) => Ok(Vec2::new(u as f32, v as f32)),
-            _ => Err(bad(cmd, "each point is [u, v]")),
-        })
-        .collect::<Result<_>>()?;
-    if points.is_empty() || points.len() > MAX_POINTS {
-        return Err(bad(cmd, format!("give 1 to {MAX_POINTS} points")));
-    }
-    let size = p.get("size").and_then(Value::as_u64).unwrap_or(1024);
-    if !(16..=4096).contains(&size) {
-        return Err(bad(cmd, "`size` is 16 to 4096"));
-    }
-    let (value, radius) = (f32p(p, "value").unwrap_or(1.0), f32p(p, "radius").unwrap_or(0.03));
-    if !(radius.is_finite() && radius > 0.0 && radius <= 1.0) {
-        return Err(bad(cmd, "`radius` is above 0 and at most 1 (uv units)"));
-    }
-    let (hardness, strength) = (f32p(p, "hardness").unwrap_or(0.5), f32p(p, "strength").unwrap_or(1.0));
-    let stroke = |m: &mut SkewMap| m.paint(&points, radius, value, hardness, strength).map_err(|e| bad(cmd, e.to_string()));
-    match s.bake_meshes.skew.as_mut() {
-        // In place: the map is copied only while a running bake still holds it, and `paint`
-        // refuses a stroke before it changes a texel.
-        Some(k) if k.values.len() > 1 => stroke(Arc::make_mut(k))?,
-        // A constant map has no resolution to paint at: widen it, keeping its value everywhere.
-        k => {
-            let mut map = match k {
-                Some(k) => k.resized(size as u32, size as u32),
-                None => SkewMap::constant(0.0).resized(size as u32, size as u32),
+fn bake_run(session: &mut Session, params: &Value) -> Result<Value> {
+    let next = updated_settings(session, params, "bake.run")?;
+    let sets: Vec<usize> = next.iter().map(|(index, _)| *index).collect();
+    let cpu = boolp(params, "cpu") == Some(true);
+    let tracers = session.edit("Bake mesh maps", |session| {
+        let mut tracers = Vec::with_capacity(next.len());
+        for (index, settings) in next {
+            session.doc.project.texture_set_mut(index)?.bake = settings;
+            let mut task = session.bake_task(index)?;
+            if cpu {
+                task.tracer = None;
             }
-            .map_err(|e| bad(cmd, e.to_string()))?;
-            stroke(&mut map)?;
-            s.bake_meshes.skew = Some(Arc::new(map));
+            let output = task.run(&Progress::new())?;
+            tracers.push(output.tracer.clone());
+            session.store_bake(index, output)?;
         }
+        Ok(tracers)
+    })?;
+    for (index, tracer) in sets.iter().zip(&tracers) {
+        session.log.push(format!("Baked texture set {index} ({tracer})"));
     }
-    s.bake_meshes.skew_rev += 1;
-    s.modified = true;
-    Ok(meshes_json(s))
+    session.update();
+    Ok(json!({ "baked": sets, "tracer": tracers }))
 }

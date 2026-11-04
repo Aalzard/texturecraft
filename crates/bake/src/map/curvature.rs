@@ -5,8 +5,7 @@ use texturecraft_core::{BakeSettings, BakedMap, CurvatureMethod};
 use texturecraft_geom::glam::Vec3;
 use texturecraft_geom::{Hit, Mesh, Surface};
 
-pub(super) const RAYS_PER_RING: usize = 8;
-pub(super) const RING_COUNT: usize = 4;
+const RING_COUNT: usize = 4;
 const WALL_RADIUS_TEXELS: f32 = 1.5;
 const CONCAVE_WEIGHT: f32 = 1.5;
 const LOW_POLY_CONVEX_WEIGHT: f32 = 1.5;
@@ -24,15 +23,18 @@ pub(super) struct Curvature {
     spread: f32,
     fallback: f32,
     texels: Vec<f32>,
-    ring: [(f32, f32); RAYS_PER_RING],
+    ring: [Vec<(f32, f32)>; RING_COUNT],
+    pub(super) rays_per_sample: usize,
+    pub(super) wall_count: usize,
     pub(super) low: CurvatureTuning,
     pub(super) high: CurvatureTuning,
 }
 
 impl Curvature {
-    pub(super) fn new(settings: &BakeSettings, low: &Mesh, mesh_diagonal: f32, tiles: (u32, u32)) -> Curvature {
+    pub(super) fn new(settings: &BakeSettings, low: &Mesh, mesh_scale: f32, tiles: (u32, u32)) -> Curvature {
         let is_enabled = settings.maps.is_enabled(BakedMap::Curvature) && settings.maps.curvature.parameters.method == CurvatureMethod::Mesh;
-        let resolution = settings.common.resolution.pixels() as f32 * ((tiles.0.max(1) * tiles.1.max(1)) as f32).sqrt();
+        let (width, height) = settings.common.output_size();
+        let resolution = (width as f32 * height as f32 * tiles.0.max(1) as f32 * tiles.1.max(1) as f32).sqrt();
         let texel = |triangle: usize| {
             let [a, b, c] = low.tri(triangle)?;
             let (position_a, position_b, position_c) = (*low.positions.get(a)?, *low.positions.get(b)?, *low.positions.get(c)?);
@@ -41,29 +43,41 @@ impl Curvature {
             let uv_area = (uv_b - uv_a).perp_dot(uv_c - uv_a).abs();
             (uv_area > 1e-12 && world_area > 0.0).then(|| (world_area / uv_area).sqrt() / resolution)
         };
-        let fallback = mesh_diagonal * 1e-3;
+        let fallback = mesh_scale * 1e-3;
         let triangle_count = if is_enabled { low.triangle_count() } else { 0 };
-        let walls = WALL_RADIUS_TEXELS;
+        let parameters = settings.maps.curvature.parameters.mesh;
+        let radius = parameters.sampling_radius * if parameters.relative_to_bounding_box { mesh_scale } else { 1.0 };
+        let radius_scale = radius / (mesh_scale * 0.001);
+        let walls = WALL_RADIUS_TEXELS * radius_scale;
+        let rays_per_sample = parameters.rays as usize;
+        let ring: [Vec<(f32, f32)>; RING_COUNT] = std::array::from_fn(|ring_index| {
+            let count = rays_per_sample / RING_COUNT + usize::from(ring_index < rays_per_sample % RING_COUNT);
+            (0..count)
+                .map(|index| {
+                    let angle = std::f32::consts::TAU * index as f32 / count.max(1) as f32;
+                    (angle.cos(), angle.sin())
+                })
+                .collect()
+        });
         Curvature {
             is_enabled,
+            rays_per_sample,
+            wall_count: ring.first().map_or(0, Vec::len),
             walls,
             spread: walls * 4.0 / 3.0,
             fallback,
             texels: (0..triangle_count).into_par_iter().map(|t| texel(t).filter(|v| v.is_finite()).unwrap_or(fallback)).collect(),
             low: CurvatureTuning {
                 convex: LOW_POLY_CONVEX_WEIGHT,
-                true_radius: mesh_diagonal * LOW_POLY_CURVATURE_RADIUS_RATIO,
+                true_radius: mesh_scale * LOW_POLY_CURVATURE_RADIUS_RATIO * radius_scale,
                 true_strength: LOW_POLY_CURVATURE_WEIGHT,
             },
             high: CurvatureTuning {
                 convex: HIGH_POLY_CONVEX_WEIGHT,
-                true_radius: mesh_diagonal * HIGH_POLY_CURVATURE_RADIUS_RATIO,
+                true_radius: mesh_scale * HIGH_POLY_CURVATURE_RADIUS_RATIO * radius_scale,
                 true_strength: HIGH_POLY_CURVATURE_WEIGHT,
             },
-            ring: std::array::from_fn(|i| {
-                let a = std::f32::consts::TAU * i as f32 / RAYS_PER_RING as f32;
-                (a.cos(), a.sin())
-            }),
+            ring,
         }
     }
 
@@ -76,16 +90,18 @@ impl Curvature {
         [r, r, self.spread * texel, tuning.true_radius]
     }
 
-    fn directions(&self, tangent: Vec3, bitangent: Vec3) -> [Vec3; RAYS_PER_RING] {
-        self.ring.map(|(cos, sin)| tangent * cos + bitangent * sin)
+    fn directions(&self, ring: usize, tangent: Vec3, bitangent: Vec3) -> impl Iterator<Item = Vec3> + '_ {
+        self.ring.get(ring).into_iter().flatten().map(move |(cosine, sine)| tangent * *cosine + bitangent * *sine)
     }
 
     pub(super) fn rays(&self, tuning: &CurvatureTuning, surface: &Surface, texel_size: f32, key: u32, output: &mut [Ray]) {
         let (geometric_normal, tangent, bitangent) = surface_frame(surface);
-        let directions = self.directions(tangent, bitangent);
-        let radii = self.radii(tuning, texel_size);
-        for (ring, (rays, radius)) in output.chunks_exact_mut(RAYS_PER_RING).zip(radii).enumerate() {
-            for (ray, direction) in rays.iter_mut().zip(directions) {
+        let mut output = output.iter_mut();
+        for (ring, radius) in self.radii(tuning, texel_size).into_iter().enumerate() {
+            for direction in self.directions(ring, tangent, bitangent) {
+                let Some(ray) = output.next() else {
+                    return;
+                };
                 *ray = match ring {
                     0 => Ray { origin: surface.pos + geometric_normal * (0.15 * radius), direction, max_distance: radius, key },
                     1 => Ray { origin: surface.pos - geometric_normal * (0.15 * radius), direction, max_distance: radius, key },
@@ -103,7 +119,7 @@ impl Curvature {
     pub(super) fn ground_rays(&self, surface: &Surface, texel_size: f32, key: u32, walls: &[Option<Hit>], output: &mut Vec<Ray>) {
         let (geometric_normal, tangent, bitangent) = surface_frame(surface);
         let radius = self.walls * texel_size;
-        for (w, direction) in walls.iter().zip(self.directions(tangent, bitangent)) {
+        for (w, direction) in walls.iter().zip(self.directions(0, tangent, bitangent)) {
             if let Some(hit) = w {
                 output.push(Ray {
                     origin: surface.pos + geometric_normal * (0.15 * radius) + direction * (hit.t * 0.85),
@@ -126,7 +142,7 @@ impl Curvature {
             let hard = ((1.0 - shaded.dot(surface.nrm)) / HARD_EDGE_NORMAL_CHANGE_THRESHOLD).clamp(0.0, 1.0);
             sum += (1.0 - hit.t / radius) * upright * hard;
         }
-        sum / RAYS_PER_RING as f32
+        sum / hits.len().max(1) as f32
     }
 
     fn spread(
@@ -134,7 +150,7 @@ impl Curvature {
         source: &Source,
         surface: &Surface,
         geometric_normal: Vec3,
-        directions: &[Vec3; RAYS_PER_RING],
+        directions: impl Iterator<Item = Vec3>,
         hits: &[Option<Hit>],
         turn: f32,
     ) -> (f32, f32) {
@@ -143,14 +159,14 @@ impl Curvature {
             let Some(hit) = hit else { continue };
             let normal = interpolate(source.mesh, &source.mesh.normals, hit.tri, [hit.u, hit.v]).and_then(Vec3::try_normalize).unwrap_or(surface.nrm);
             if 1.0 - normal.dot(surface.nrm) <= turn {
-                shading += (normal - surface.nrm).dot(*direction);
+                shading += (normal - surface.nrm).dot(direction);
                 if let Some(f) = triangle_normal(source.mesh, hit.tri) {
                     let f = if f.dot(geometric_normal) < 0.0 { -f } else { f };
-                    faces += (f - geometric_normal).dot(*direction);
+                    faces += (f - geometric_normal).dot(direction);
                 }
             }
         }
-        (shading / RAYS_PER_RING as f32, faces / RAYS_PER_RING as f32)
+        (shading / hits.len().max(1) as f32, faces / hits.len().max(1) as f32)
     }
 
     pub(super) fn value(
@@ -163,17 +179,20 @@ impl Curvature {
         ground_hits: &[Option<Hit>],
     ) -> f32 {
         let (geometric_normal, tangent, bitangent) = surface_frame(surface);
-        let directions = self.directions(tangent, bitangent);
-        let ring = |ring_index: usize| hits.get(ring_index * RAYS_PER_RING..(ring_index + 1) * RAYS_PER_RING).unwrap_or_default();
+        let ring = |ring_index: usize| {
+            let start: usize = self.ring.iter().take(ring_index).map(Vec::len).sum();
+            let count = self.ring.get(ring_index).map_or(0, Vec::len);
+            hits.get(start..start + count).unwrap_or_default()
+        };
         let radius = self.walls * texel_size;
         let mut next = ground_hits.iter();
         let above = self.wall(source, surface, geometric_normal, radius, ring(0), &mut || next.next().copied().flatten().is_some_and(|g| g.t < 0.3 * radius));
         let below = self.wall(source, surface, geometric_normal, radius, ring(1), &mut || true);
-        let (shading, _) = self.spread(source, surface, geometric_normal, &directions, ring(2), 2.0);
-        let (true_shading, true_faces) = self.spread(source, surface, geometric_normal, &directions, ring(3), 2.0);
+        let (shading, _) = self.spread(source, surface, geometric_normal, self.directions(2, tangent, bitangent), ring(2), 2.0);
+        let (true_shading, true_faces) = self.spread(source, surface, geometric_normal, self.directions(3, tangent, bitangent), ring(3), 2.0);
         let value =
             -above * CONCAVE_WEIGHT + (below - above).max(0.0) * tuning.convex + shading * 0.5 + tight(agreed(true_shading, true_faces) * tuning.true_strength);
-        (0.5 + value).clamp(0.0, 1.0)
+        (value * 2.0).clamp(-1.0, 1.0)
     }
 }
 

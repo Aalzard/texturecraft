@@ -14,15 +14,15 @@ fn reference_defaults_cover_common_and_per_map_settings() {
     thickness_rays["max_distance"] = json!(0.1);
     let mut expected = json!({
         "common": {"is_enabled": true, "resolution": "R2048", "resolution_height": null, "antialiasing": "None", "dilation": 1, "apply_diffusion": true},
-        "high_poly": {"use_low_as_high": false, "ignore_backface": true, "low_suffix": "_low", "high_suffix": "_high", "ignore_backface_suffix": "_ignorebf"},
+        "high_poly": {"match_mode": "Always", "use_low_as_high": false, "ignore_backface": true, "low_suffix": "_low", "high_suffix": "_high", "ignore_backface_suffix": "_ignorebf"},
         "cage": {"kind": "DistanceBased", "max_frontal": 0.01, "max_rear": 0.01, "relative_to_bounding_box": true, "average_normals": true},
-        "skew": {"edge_protection": false, "edge_distance": 0.15, "edge_contrast": 0.5},
+        "skew": {"method": "MeshNormalsBased", "edge_protection": false, "edge_distance": 0.15, "edge_contrast": 0.5},
         "id": {"source": "MaterialColor", "generator": "HueShift"},
         "ao": {"rays": rays, "ignore_backface": "Never", "self_occlusion": "Always", "attenuation": "Linear", "ground_plane": {"enabled": false, "offset": 0.0}},
         "curvature": {
             "method": "NormalMap",
             "normal_map": {"details": 0.5, "enable_seams": true, "seams_intensity": 1.0},
-            "mesh": {"rays": 32, "sampling_radius": 0.001, "relative_to_bounding_box": true, "self_intersection": "Always", "auto_tonemapping": true, "value_min": -1.0, "value_max": -1.0}
+            "mesh": {"rays": 32, "sampling_radius": 0.001, "relative_to_bounding_box": true, "self_intersection": "Always", "auto_tonemapping": true, "value_min": -1.0, "value_max": 1.0}
         },
         "position": {"axis": "All", "normalization": "BoundingSphere", "scale": "FullScene"},
         "thickness": {"rays": thickness_rays, "self_occlusion": "Always", "normalization": "RelativeToMinMax"},
@@ -75,6 +75,8 @@ fn assert_choices<T: Copy + std::fmt::Debug + PartialEq + Serialize + Deserializ
 
 #[test]
 fn all_dropdowns_store_enum_choices() {
+    assert_choices(&[bake::MeshMatchMode::Always, bake::MeshMatchMode::ByMeshName]);
+    assert_choices(&[bake::SkewCorrectionMethod::MeshNormalsBased, bake::SkewCorrectionMethod::FaceNormalsBased]);
     assert_choices(&bake::BakeResolution::ALL);
     assert_choices(&bake::BakeAntialiasing::ALL);
     assert_choices(&[bake::CageType::DistanceBased, bake::CageType::CustomFile]);

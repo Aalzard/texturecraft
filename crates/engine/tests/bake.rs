@@ -485,17 +485,22 @@ fn leaning_session(lean: bool) -> Session {
 #[test]
 fn the_skew_map_is_saved_with_the_project() {
     let mut s = leaning_session(false);
-    execute(&mut s, "bake.skew.set", &json!({ "value": 0.25, "edgeDistance": 0.1, "edgeContrast": 3.0 })).unwrap();
+    execute(&mut s, "bake.skew.set", &json!({ "value": 0.25 })).unwrap();
     let back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
-    assert_eq!(back.bake_meshes.skew, s.bake_meshes.skew);
+    assert_eq!(back.doc.bake_paint, s.doc.bake_paint);
     // No skew: none comes back.
     execute(&mut s, "bake.skew.clear", &Value::Null).unwrap();
-    assert!(Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap().bake_meshes.skew.is_none());
+    assert!(Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap().doc.bake_paint.is_empty());
     // A map with a non-finite value is skipped with a log line, and the project still opens.
     let mut pf = s.project_file();
-    pf.skew = Some(texturecraft_formats::SkewData { width: 1, height: 1, values: vec![f32::NAN], edge_distance: 0.0, edge_contrast: 1.0 });
+    pf.bake_paint.insert((0, texturecraft_core::BakePaintTarget::Skew), texturecraft_formats::BakePaintData { width: 1, height: 1, values: vec![f32::NAN] });
     let opened = Session::from_project_file(pf).unwrap();
-    assert!(opened.bake_meshes.skew.is_none() && opened.log.iter().any(|l| l.contains("skew")), "{:?}", opened.log);
+    assert!(
+        !opened.doc.bake_paint.contains_key(&(0, texturecraft_core::BakePaintTarget::Skew))
+            && opened.log.iter().any(|line| line.contains("skipped bake paint map")),
+        "{:?}",
+        opened.log
+    );
 }
 
 #[test]
@@ -504,22 +509,22 @@ fn painting_skew_widens_a_map_and_bad_strokes_change_nothing() {
     // Painting with no map makes a black one at `size` and puts the dab in it.
     let r = execute(&mut s, "bake.skew.paint", &json!({ "points": [[0.5, 0.5]], "radius": 0.1, "size": 64 })).unwrap();
     assert_eq!(r["skew"]["width"], 64);
-    let map = s.bake_meshes.skew.clone().unwrap();
+    let map = s.doc.bake_paint.get(&(0, texturecraft_core::BakePaintTarget::Skew)).cloned().unwrap();
     assert!(map.values.iter().any(|v| *v > 0.99) && map.values.contains(&0.0));
-    let rev = s.bake_meshes.skew_rev;
+    let rev = s.revision;
     // Erasing with value 0 brings it back down; the size stays.
     execute(&mut s, "bake.skew.paint", &json!({ "points": [[0.5, 0.5]], "radius": 0.2, "value": 0.0, "hardness": 1.0 })).unwrap();
-    let after = s.bake_meshes.skew.clone().unwrap();
+    let after = s.doc.bake_paint.get(&(0, texturecraft_core::BakePaintTarget::Skew)).cloned().unwrap();
     assert_eq!(after.width, 64);
-    assert!(after.values.iter().all(|v| *v < 0.01) && s.bake_meshes.skew_rev > rev);
+    assert!(after.values.iter().all(|v| *v < 0.01) && s.revision > rev);
     // A constant map is widened, keeping its value where nothing is painted.
     execute(&mut s, "bake.skew.set", &json!({ "value": 0.5 })).unwrap();
     execute(&mut s, "bake.skew.paint", &json!({ "points": [[0.1, 0.1]], "radius": 0.05, "size": 32 })).unwrap();
-    let wide = s.bake_meshes.skew.clone().unwrap();
+    let wide = s.doc.bake_paint.get(&(0, texturecraft_core::BakePaintTarget::Skew)).cloned().unwrap();
     assert_eq!(wide.width, 32);
     assert!((wide.values[wide.values.len() / 2] - 0.5).abs() < 1e-5, "{}", wide.values[wide.values.len() / 2]);
     // Hostile input is an error and leaves the map alone.
-    let before = s.bake_meshes.skew.clone();
+    let before = s.doc.bake_paint.get(&(0, texturecraft_core::BakePaintTarget::Skew)).cloned();
     for bad in [
         json!({}),
         json!({ "points": [] }),
@@ -534,18 +539,75 @@ fn painting_skew_widens_a_map_and_bad_strokes_change_nothing() {
     ] {
         assert!(execute(&mut s, "bake.skew.paint", &bad).is_err(), "{bad}");
     }
-    assert_eq!(s.bake_meshes.skew, before);
+    assert_eq!(s.doc.bake_paint.get(&(0, texturecraft_core::BakePaintTarget::Skew)).cloned(), before);
     // And the painted map is saved with the project.
     let back = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
-    assert_eq!(back.bake_meshes.skew, s.bake_meshes.skew);
+    assert_eq!(back.doc.bake_paint, s.doc.bake_paint);
 }
 
 #[test]
-fn a_stroke_paints_the_skew_map_in_place() {
-    let mut s = plane_session();
-    let stroke = json!({ "points": [[0.5, 0.5]], "radius": 0.1, "size": 64 });
-    execute(&mut s, "bake.skew.paint", &stroke).unwrap();
-    let first = s.bake_meshes.skew.as_ref().map(std::sync::Arc::as_ptr);
-    execute(&mut s, "bake.skew.paint", &stroke).unwrap();
-    assert_eq!(s.bake_meshes.skew.as_ref().map(std::sync::Arc::as_ptr), first, "a stroke step doesn't copy the whole map");
+fn bake_brush_strokes_are_undoable_and_continuations_merge() {
+    use texturecraft_core::BakePaintTarget;
+    let mut session = plane_session();
+    let key = (0, BakePaintTarget::Skew);
+    execute(&mut session, "bake.skew.paint", &json!({"points": [[0.2, 0.2]], "radius": 0.1, "size": 64})).unwrap();
+    execute(&mut session, "bake.skew.paint", &json!({"points": [[0.2, 0.2], [0.8, 0.8]], "radius": 0.1, "continue": true})).unwrap();
+    let painted = session.doc.bake_paint.get(&key).cloned().unwrap();
+    session.undo().unwrap();
+    assert!(!session.doc.bake_paint.contains_key(&key));
+    session.redo().unwrap();
+    assert_eq!(session.doc.bake_paint.get(&key), Some(&painted));
+}
+
+#[test]
+fn cage_paint_is_scoped_saved_and_undoable() {
+    use texturecraft_core::BakePaintTarget;
+    let mut session = plane_session();
+    let mut second_set = session.doc.project.texture_sets[0].clone();
+    second_set.stack.clear();
+    session.doc.project.texture_sets.push(second_set);
+    execute(&mut session, "bake.cage.paint", &json!({"ts": 1, "points": [[0.25, 0.25]], "radius": 0.1, "value": 0.2, "size": 32})).unwrap();
+    let key = (1, BakePaintTarget::Cage);
+    let painted = session.doc.bake_paint[&key].clone();
+    assert!(painted.values.iter().any(|value| *value < 0.5));
+    assert!(painted.values.contains(&1.0));
+    assert!(!session.doc.bake_paint.contains_key(&(0, BakePaintTarget::Cage)));
+    let reloaded = Session::from_project_bytes(&session.to_project_bytes().unwrap()).unwrap();
+    assert_eq!(reloaded.doc.bake_paint[&key], painted);
+    execute(&mut session, "edit.undo", &Value::Null).unwrap();
+    assert!(!session.doc.bake_paint.contains_key(&key));
+    execute(&mut session, "edit.redo", &Value::Null).unwrap();
+    assert_eq!(session.doc.bake_paint[&key], painted);
+    execute(&mut session, "bake.cage.reset", &json!({"ts": 1})).unwrap();
+    assert!(!session.doc.bake_paint.contains_key(&key));
+}
+
+#[test]
+fn changing_bake_aspect_replaces_incompatible_maps() {
+    let mut session = plane_session();
+    execute(&mut session, "bake.run", &json!({"resolution": 64, "maps": ["normal", "id"]})).unwrap();
+    execute(&mut session, "bake.settings", &json!({"model": {"common": {"resolution": "R64", "resolution_height": "R128"}}})).unwrap();
+    execute(&mut session, "bake.run", &json!({"maps": ["id"]})).unwrap();
+    let baked = &session.doc.baked[&0];
+    assert_eq!((baked.resolution, baked.height(BakedMap::Id)), (64, 128));
+    assert_eq!(baked.maps.len(), 1);
+    assert_eq!(session.doc.project.texture_sets[0].baked.len(), 1);
+    let reloaded = Session::from_project_bytes(&session.to_project_bytes().unwrap()).unwrap();
+    assert_eq!(reloaded.doc.baked[&0], *baked);
+}
+
+#[test]
+fn a_failed_multi_set_bake_restores_settings_pixels_and_history() {
+    let mut session = leaning_session(false);
+    let mut second = session.doc.project.texture_sets[0].clone();
+    second.stack.clear();
+    second.bake.cage.kind = texturecraft_core::CageType::CustomFile;
+    session.doc.project.texture_sets.push(second);
+    let original = session.doc.clone();
+    let history = session.history_labels();
+    let error = execute(&mut session, "bake.run", &json!({"ts": "all", "resolution": 64, "maps": ["id"]})).unwrap_err();
+    assert!(error.to_string().contains("requires a cage"), "{error}");
+    assert_eq!(session.doc.project, original.project);
+    assert_eq!(session.doc.baked, original.baked);
+    assert_eq!(session.history_labels(), history);
 }

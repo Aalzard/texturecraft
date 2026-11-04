@@ -24,6 +24,7 @@ pub struct Document {
     pub project: Project,
     pub pixels: PixelStore,
     pub baked: BTreeMap<usize, BakedMaps>,
+    pub bake_paint: BTreeMap<(usize, texturecraft_core::BakePaintTarget), Arc<texturecraft_bake::BakePaintMap>>,
     /// Imported image resources by name: original file bytes.
     pub resources: BTreeMap<String, Arc<Vec<u8>>>,
 }
@@ -448,7 +449,11 @@ impl Session {
             ts.stack.push(id);
             project.texture_sets.push(ts);
         }
-        let mut s = Session::new(Document { project, pixels: PixelStore::default(), baked: BTreeMap::new(), resources: BTreeMap::new() }, mesh, mesh_source)?;
+        let mut s = Session::new(
+            Document { bake_paint: BTreeMap::new(), project, pixels: PixelStore::default(), baked: BTreeMap::new(), resources: BTreeMap::new() },
+            mesh,
+            mesh_source,
+        )?;
         s.log.extend(log);
         Ok(s)
     }

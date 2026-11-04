@@ -1,12 +1,14 @@
-use super::curvature::{Curvature, RAYS_PER_RING, RING_COUNT};
-use super::sampling::{interpolate, material_color, pack, splitmix64, tangent_normal, welded};
-use super::{source::Source, traced::Traced, transfer::Transfer};
+use super::curvature::Curvature;
+use super::sampling::{interpolate, pack, splitmix64, tangent_normal, welded};
+use super::{position_projection::PositionProjection, source::Source, traced::Traced, transfer::Transfer};
 use crate::skew::PreparedSkew;
 use crate::tracing::{ANY, Hemisphere, Query, Ray, RayKind, RayScene, TraceMesh};
 use crate::{BakeError, BakeRequest};
 use rayon::prelude::*;
 use std::collections::HashMap;
-use texturecraft_core::{BackfaceMode, BakedMap, CurvatureMethod, PositionMode, RayDistribution, RaySettings, SelfOcclusion};
+use texturecraft_core::{
+    AmbientOcclusionAttenuation, BackfaceMode, BakeSettings, BakedMap, CageType, CurvatureMethod, MeshMatchMode, RayDistribution, RaySettings, SelfOcclusion,
+};
 use texturecraft_geom::glam::Vec3;
 use texturecraft_geom::{Hit, Mesh, Surface, surface_at};
 
@@ -17,13 +19,13 @@ pub(crate) struct BakeContext<'a> {
     high: Option<Source<'a>>,
     cage: Option<&'a Mesh>,
     skew: Option<PreparedSkew<'a>>,
+    cage_paint: Option<&'a crate::BakePaintMap>,
     ray_normals: Vec<Vec3>,
-    lo: Vec3,
-    extent: Vec3,
+    settings: &'a BakeSettings,
     eps: f32,
     frontal: f32,
     rear: f32,
-    position_mode: PositionMode,
+    position: PositionProjection,
     curvature_method: CurvatureMethod,
     curvature: Curvature,
     pub ao: Option<Hemisphere>,
@@ -40,10 +42,20 @@ impl<'a> BakeContext<'a> {
             return Err(BakeError::Invalid("mesh bounds are too large".into()));
         }
 
+        let mesh_scale = (bounds_max - bounds_min).max_element().max(1e-6);
         let mut name_keys = HashMap::new();
-        let low = Source::new(request.mesh, request.bvh, &[], &settings.high_poly.low_suffix, &mut name_keys);
-        let high =
-            request.high.map(|high_mesh| Source::new(high_mesh.mesh, high_mesh.bvh, high_mesh.base_color, &settings.high_poly.high_suffix, &mut name_keys));
+        let low = Source::new(request.mesh, request.bvh, request.low_base_color, &[], &settings.high_poly.low_suffix, &settings.high_poly, &mut name_keys);
+        let high = request.high.map(|high_mesh| {
+            Source::new(
+                high_mesh.mesh,
+                high_mesh.bvh,
+                high_mesh.base_color,
+                high_mesh.file_ids,
+                &settings.high_poly.high_suffix,
+                &settings.high_poly,
+                &mut name_keys,
+            )
+        });
         let ray_normals = match settings.cage.average_normals && high.is_some() {
             true => {
                 let (welded_indices, _, normals) = welded(request.mesh, mesh_diagonal);
@@ -52,42 +64,67 @@ impl<'a> BakeContext<'a> {
             false => Vec::new(),
         };
 
-        let skew = request.skew.map(|skew_map| PreparedSkew::new(skew_map, request.mesh, mesh_diagonal)).transpose()?;
-        let ray_epsilon = 1e-4 * mesh_diagonal;
+        let skew = request.skew.map(|skew_map| PreparedSkew::new(skew_map, request.mesh, mesh_scale, settings.skew)).transpose()?;
+        let ray_epsilon = 1e-6 * mesh_diagonal;
         let pass = |map: BakedMap, ray_settings: &RaySettings, kind: RayKind| {
             let half_angle_radians = (ray_settings.spread.clamp(0.0, 180.0) * 0.5).to_radians();
-            let occlusion = kind == RayKind::Occlusion;
+            let units = if ray_settings.relative_to_bounding_box { mesh_scale } else { 1.0 };
             settings.maps.is_enabled(map).then_some(Hemisphere {
                 kind,
                 rays: ray_settings.rays,
-                dmax: ray_settings.max_distance * mesh_diagonal,
+                dmax: ray_settings.max_distance * units,
+                min_distance: ray_settings.min_distance * units,
+                attenuation: AmbientOcclusionAttenuation::None,
+                ground_height: None,
                 eps: ray_epsilon,
                 cos_max: half_angle_radians.cos(),
                 sin_max: half_angle_radians.sin(),
                 uniform: ray_settings.distribution == RayDistribution::Uniform,
-                ignore_backface: occlusion && settings.maps.ao.parameters.ignore_backface != BackfaceMode::Never,
-                same_key: occlusion && settings.maps.ao.parameters.self_occlusion == SelfOcclusion::SameMeshName,
+                ignore_backface: BackfaceMode::Never,
+                same_key: false,
             })
         };
 
+        let mut ao = pass(BakedMap::AmbientOcclusion, &settings.maps.ao.parameters.rays, RayKind::Occlusion);
+        if let Some(pass) = &mut ao {
+            let parameters = settings.maps.ao.parameters;
+            pass.ignore_backface = parameters.ignore_backface;
+            pass.same_key = parameters.self_occlusion == SelfOcclusion::SameMeshName;
+            pass.attenuation = parameters.attenuation;
+            pass.ground_height = parameters.ground_plane.enabled.then_some(bounds_min.y - parameters.ground_plane.offset);
+        }
+        let mut bent = pass(BakedMap::BentNormal, &settings.maps.bent_normal.parameters.rays, RayKind::Occlusion);
+        if let Some(pass) = &mut bent {
+            pass.ignore_backface = settings.maps.bent_normal.parameters.ignore_backface;
+            pass.same_key = settings.maps.bent_normal.parameters.self_occlusion == SelfOcclusion::SameMeshName;
+        }
+        let mut thickness = pass(BakedMap::Thickness, &settings.maps.thickness.parameters.rays, RayKind::Thickness);
+        if let Some(pass) = &mut thickness {
+            pass.same_key = settings.maps.thickness.parameters.self_occlusion == SelfOcclusion::SameMeshName;
+        }
+        let cage_units = if settings.cage.relative_to_bounding_box { mesh_scale } else { 1.0 };
         Ok(BakeContext {
             low,
             high,
-            cage: request.cage,
+            cage: if settings.cage.kind == CageType::CustomFile { request.cage } else { None },
             skew,
+            cage_paint: request.cage_paint,
             ray_normals,
-            lo: bounds_min,
-            extent: bounds_max - bounds_min,
+            settings,
             eps: ray_epsilon,
-            frontal: settings.cage.max_frontal * mesh_diagonal,
-            rear: settings.cage.max_rear * mesh_diagonal,
-            position_mode: settings.maps.position.parameters.normalization,
+            frontal: settings.cage.max_frontal * cage_units,
+            rear: settings.cage.max_rear * cage_units,
+            position: PositionProjection::new(request.mesh, request.material, settings.maps.position.parameters),
             curvature_method: settings.maps.curvature.parameters.method,
-            curvature: Curvature::new(settings, request.mesh, mesh_diagonal, request.tiles),
-            ao: pass(BakedMap::AmbientOcclusion, &settings.maps.ao.parameters.rays, RayKind::Occlusion),
-            bent: pass(BakedMap::BentNormal, &settings.maps.bent_normal.parameters.rays, RayKind::Occlusion),
-            thickness: pass(BakedMap::Thickness, &settings.maps.thickness.parameters.rays, RayKind::Thickness),
+            curvature: Curvature::new(settings, request.mesh, mesh_scale, request.tiles),
+            ao,
+            bent,
+            thickness,
         })
+    }
+
+    pub(crate) fn ignore_transfer_backface(&self) -> bool {
+        self.settings.high_poly.ignore_backface
     }
 
     pub(crate) fn has_high(&self) -> bool {
@@ -109,6 +146,7 @@ impl<'a> BakeContext<'a> {
             .and_then(|cage_mesh| interpolate(cage_mesh, &cage_mesh.positions, surface.tri, barycentric))
             .map(|cage_position| surface.pos - cage_position)
             .filter(|offset| offset.length() > self.eps);
+        let cage_scale = self.cage_paint.map_or(1.0, |map| map.sample(surface.uv));
         let (origin, direction, front) = match cage {
             Some(offset) => (surface.pos - offset, offset.normalize(), offset.length()),
             None => {
@@ -116,10 +154,14 @@ impl<'a> BakeContext<'a> {
                     Some(skew) => skew.correct(self.low.mesh, surface, averaged_normal),
                     None => averaged_normal,
                 };
-                (surface.pos + up * self.frontal, -up, self.frontal)
+                (surface.pos + up * self.frontal * cage_scale, -up, self.frontal * cage_scale)
             }
         };
-        (Ray { origin, direction, max_distance: front + self.rear, key: ANY }, front)
+        let key = match self.settings.high_poly.match_mode {
+            MeshMatchMode::Always => ANY,
+            MeshMatchMode::ByMeshName => self.low.key.get(surface.tri as usize).copied().unwrap_or(ANY),
+        };
+        (Ray { origin, direction, max_distance: front + self.rear, key }, front)
     }
 
     pub(crate) fn transfer(&self, hit: Option<Hit>, front: f32) -> Option<Transfer> {
@@ -161,22 +203,33 @@ impl<'a> BakeContext<'a> {
                     Some((sample_index, surface, curvature.texel(low_surface.tri)))
                 })
                 .collect();
-            let rays_per_sample = RING_COUNT * RAYS_PER_RING;
-            for chunk in chosen.chunks(CURVATURE_CHUNK) {
+            let rays_per_sample = curvature.rays_per_sample.max(1);
+            let key_for = |surface: &Surface| {
+                if self.settings.maps.curvature.parameters.mesh.self_intersection == SelfOcclusion::SameMeshName {
+                    source.key.get(surface.tri as usize).copied().unwrap_or(ANY)
+                } else {
+                    ANY
+                }
+            };
+            let chunk_size = CURVATURE_CHUNK.min((1_048_576 / rays_per_sample).max(1));
+            for chunk in chosen.chunks(chunk_size) {
                 let mut rays: Vec<Ray> = bytemuck::zeroed_vec(chunk.len() * rays_per_sample);
-                rays.par_chunks_mut(rays_per_sample).zip(chunk).for_each(|(output, (_, surface, texel))| curvature.rays(tuning, surface, *texel, ANY, output));
-                let hits = scene.closest(mesh, &rays)?;
-                let walls = |chunk_index: usize| hits.get(chunk_index * rays_per_sample..chunk_index * rays_per_sample + RAYS_PER_RING).unwrap_or_default();
+                rays.par_chunks_mut(rays_per_sample)
+                    .zip(chunk)
+                    .for_each(|(output, (_, surface, texel))| curvature.rays(tuning, surface, *texel, key_for(surface), output));
+                let hits = scene.closest(mesh, &rays, false)?;
+                let walls =
+                    |chunk_index: usize| hits.get(chunk_index * rays_per_sample..chunk_index * rays_per_sample + curvature.wall_count).unwrap_or_default();
                 let grounds: Vec<Ray> = chunk
                     .par_iter()
                     .enumerate()
                     .flat_map_iter(|(chunk_index, (_, surface, texel))| {
                         let mut value = Vec::new();
-                        curvature.ground_rays(surface, *texel, ANY, walls(chunk_index), &mut value);
+                        curvature.ground_rays(surface, *texel, key_for(surface), walls(chunk_index), &mut value);
                         value
                     })
                     .collect();
-                let ground_hits = scene.closest(mesh, &grounds)?;
+                let ground_hits = scene.closest(mesh, &grounds, false)?;
                 let ground_offsets: Vec<usize> = (0..chunk.len())
                     .scan(0, |first, chunk_index| {
                         let offset = *first;
@@ -228,23 +281,19 @@ impl<'a> BakeContext<'a> {
                 BakedMap::Curvature if self.curvature_method == CurvatureMethod::NormalMap => [0.5; 3],
                 BakedMap::Curvature => [traced.curvature; 3],
                 BakedMap::WorldNormal => pack(surface.nrm),
-                BakedMap::Position => self.position(surface.pos),
-                BakedMap::Id => material_color(source.part.get(surface.tri as usize).copied().unwrap_or(0) as usize),
+                BakedMap::Position => self.position.evaluate(surface.pos),
+                BakedMap::Id => source.id_color(surface, source_barycentric, self.settings.maps.id.parameters),
                 BakedMap::Normal => transfer.map_or(map.neutral(), |hit| tangent_normal(low_surface, hit.surface.nrm)),
-                BakedMap::Height => [transfer.map_or(0.5, |hit| (0.5 + (hit.front - hit.t) / (hit.front + self.rear)).clamp(0.0, 1.0)); 3],
+                BakedMap::Height => {
+                    let relative_to_rays = self.settings.maps.height.parameters.normalization == texturecraft_core::HeightNormalization::RelativeToRayDistances;
+                    [transfer.map_or(if relative_to_rays { 0.5 } else { 0.0 }, |hit| {
+                        let height = hit.front - hit.t;
+                        if relative_to_rays { (0.5 + height / (hit.front + self.rear).max(1e-20)).clamp(0.0, 1.0) } else { height }
+                    }); 3]
+                }
                 BakedMap::Opacity if missed => [0.0; 3],
                 BakedMap::Opacity => [source.color(surface, source_barycentric).w; 3],
             };
         }
-    }
-
-    fn position(&self, position: Vec3) -> [f32; 3] {
-        let normalized = match self.position_mode {
-            PositionMode::BoundingBox => (position - self.lo) / self.extent.max(Vec3::splat(1e-20)),
-            PositionMode::BoundingSphere => (position - (self.lo + self.extent * 0.5)) / self.extent.length().max(1e-20) + 0.5,
-            PositionMode::None => return position.to_array(),
-        };
-
-        normalized.clamp(Vec3::ZERO, Vec3::ONE).to_array()
     }
 }

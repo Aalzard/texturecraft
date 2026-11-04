@@ -386,7 +386,7 @@ fn images_fill_mesh_map_slots() {
     let res = s.doc.project.texture_sets[0].bake.common.resolution.pixels();
     assert_eq!(r, json!({"map": "ambientOcclusion", "resolution": res}));
     assert!(s.doc.project.texture_sets[0].baked.contains(&BakedMap::AmbientOcclusion));
-    let sample = |s: &Session, m: BakedMap, x: u32| s.baked(0).unwrap().sample(m, x, 50, 100).unwrap();
+    let sample = |s: &Session, m: BakedMap, x: u32| s.baked(0).unwrap().sample(m, x, 50, (100, 100)).unwrap();
     assert!((sample(&s, BakedMap::AmbientOcclusion, 10)[0] - 64.0 / 255.0).abs() < 1e-3, "raw file values, not linearized");
     assert!((sample(&s, BakedMap::AmbientOcclusion, 90)[0] - 192.0 / 255.0).abs() < 1e-3);
     // A normal map is read in the project's normal format (DirectX: green flipped).
@@ -397,7 +397,7 @@ fn images_fill_mesh_map_slots() {
     assert!((v[1] - (1.0 - 64.0 / 255.0)).abs() < 1e-3 && (v[2] - 1.0).abs() < 1e-3, "{v:?}");
     // Clearing empties the slot (one undo step); bad params are errors.
     execute(&mut s, "textureSet.meshMap.clear", &json!({"map": "ambientOcclusion"})).unwrap();
-    assert!(s.baked(0).unwrap().sample(BakedMap::AmbientOcclusion, 0, 0, 100).is_none());
+    assert!(s.baked(0).unwrap().sample(BakedMap::AmbientOcclusion, 0, 0, (100, 100)).is_none());
     assert!(!s.doc.project.texture_sets[0].baked.contains(&BakedMap::AmbientOcclusion));
     assert!(execute(&mut s, "textureSet.meshMap.clear", &json!({"map": "ambientOcclusion"})).is_err(), "already empty");
     execute(&mut s, "edit.undo", &Value::Null).unwrap();
