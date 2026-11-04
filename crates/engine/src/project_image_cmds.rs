@@ -34,10 +34,11 @@ fn project(s: &mut Session, p: &Value) -> Result<Value> {
     let b = &s.tool.brush;
     let culling = boolp(p, "backfaceCulling").unwrap_or(b.backface_culling);
     let mut fade = b.angle_fade;
-    if let Some([a, z]) = p.get("angleFade").and_then(Value::as_array).and_then(|v| Some([v.first()?.as_f64()?, v.get(1)?.as_f64()?])) {
-        if a.is_finite() && z.is_finite() {
-            fade = (a.clamp(0.0, 90.0) as f32, z.clamp(0.0, 90.0) as f32);
-        }
+    if let Some([a, z]) = p.get("angleFade").and_then(Value::as_array).and_then(|v| Some([v.first()?.as_f64()?, v.get(1)?.as_f64()?]))
+        && a.is_finite()
+        && z.is_finite()
+    {
+        fade = (a.clamp(0.0, 90.0) as f32, z.clamp(0.0, 90.0) as f32);
     }
     let depth = if boolp(p, "occlusion").unwrap_or(true) { Some(s.eye_depth(viewport)) } else { None };
     let mesh = s.mesh.clone();
