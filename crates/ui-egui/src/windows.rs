@@ -76,7 +76,7 @@ fn import_summary(app: &mut TextureCraftApp, ctx: &egui::Context) {
             }
         });
         ui.add_space(4.0);
-        if primary_button(ui, tr("Close")).clicked() {
+        if ui.add(primary_button(ui, tr("Close"))).clicked() {
             close = true;
         }
     });

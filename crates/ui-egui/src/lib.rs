@@ -34,6 +34,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use serde_json::Value;
+
+use crate::i18n::trf;
 use texturecraft_engine::Session;
 use texturecraft_engine::bake::Progress;
 
@@ -213,7 +215,7 @@ impl TextureCraftApp {
         if differences == 0 && report.get("more_issues").and_then(|m| m.as_u64()).unwrap_or(0) == 0 {
             self.toast(trf("Imported {name}", &[("name", &name)]), false);
         } else {
-            self.toast(trf("Imported {name}: {count} differences (see the import summary)", &[("name", &name), ("count", &differences)]), false);
+            self.toast(trf("Imported {name}: {count} differences (see the import summary)", &[("name", &name), ("count", &differences.to_string())]), false);
             self.ui.windows.import_summary = Some(report);
         }
     }

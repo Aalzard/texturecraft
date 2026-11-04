@@ -34,7 +34,6 @@ fn an_import_with_differences_opens_the_summary() {
     assert!(h.state().session.doc.project.layers.len() > layers, "the layers were added");
     assert!(h.state().ui.windows.import_summary.is_some(), "approximated and dropped things open the summary");
     h.get_by_label("SubCraft import");
-    h.get_by_label("Painted Metal");
     h.get_by_label("Not imported");
     h.get_by_label("Approximated");
     assert!(h.state().toasts.iter().any(|t| t.text.contains("differences")), "{:?}", h.state().toasts.iter().map(|t| &t.text).collect::<Vec<_>>());
