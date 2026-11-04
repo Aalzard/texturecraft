@@ -4,7 +4,7 @@
 
 use serde_json::{Value, json};
 use texturecraft_core::Channel;
-use texturecraft_core::swatch::{self, MAX_PALETTE_BYTES, MAX_RECENT, MAX_SWATCHES, Swatch};
+use texturecraft_core::swatch::{self, MAX_RECENT, MAX_SWATCHES, Swatch};
 
 use crate::commands::{CommandSpec, always, bad, color_param, strp, u64p};
 use crate::{Result, Session, cmd};
@@ -86,7 +86,7 @@ fn scope(cmd: &str, p: &Value) -> Result<Scope> {
     }
 }
 
-fn items<'a>(s: &'a Session, scope: Scope) -> &'a [Swatch] {
+fn items(s: &Session, scope: Scope) -> &[Swatch] {
     match scope {
         Scope::Project => &s.doc.project.swatches,
         Scope::Global => &s.swatches.global,
@@ -259,9 +259,9 @@ fn read_file(cmd: &str, path: &str) -> Result<String> {
     use std::io::Read as _;
     let mut bytes = Vec::new();
     std::fs::File::open(path)
-        .and_then(|f| f.take(MAX_PALETTE_BYTES as u64 + 1).read_to_end(&mut bytes))
+        .and_then(|f| f.take(swatch::MAX_PALETTE_BYTES as u64 + 1).read_to_end(&mut bytes))
         .map_err(|e| bad(cmd, format!("cannot read {path}: {e}")))?;
-    if bytes.len() > MAX_PALETTE_BYTES {
+    if bytes.len() > swatch::MAX_PALETTE_BYTES {
         return Err(bad(cmd, format!("{path} is too large for a palette")));
     }
     Ok(String::from_utf8_lossy(&bytes).into_owned())

@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use texturecraft_engine::core::swatch::{self, MAX_SWATCHES, Swatch};
 
 use crate::TextureCraftApp;
-use crate::i18n::{tr, trf};
+use crate::i18n::tr;
 use crate::theme::Tokens;
 use crate::widgets::{dnd_release, icon_button};
 
@@ -55,6 +55,8 @@ enum Act {
     Delete(Scope, usize),
     Move(Scope, usize, usize),
     Copy(Scope, usize, Scope),
+    /// Desktop only: the browser has no palette import yet.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Import(Scope),
     Export(Scope),
 }
@@ -163,7 +165,7 @@ fn row_label(ui: &mut Ui, text: &str) {
 fn square(ui: &mut Ui, linear: [f32; 3], marked: bool, label: &str) -> egui::Response {
     let tk = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click_and_drag());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     ui.painter().rect_filled(rect, 3.0, display(linear));
     let stroke = if marked {
         Stroke::new(2.0, tk.accent)
@@ -195,7 +197,7 @@ fn swatch_cell(ui: &mut Ui, scope: Scope, i: usize, sw: &Swatch, current: [f32; 
         acts.push(Act::Apply(scope, i));
     }
     resp.context_menu(|ui| {
-        let id = ui.id().with((salt, scope.id(), i, "rename"));
+        let id = ui.scope_id().with((salt, scope.id(), i, "rename"));
         let mut name = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| sw.name.clone());
         let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text(tr("Name")).desired_width(130.0).char_limit(swatch::MAX_NAME_CHARS));
         let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -264,7 +266,6 @@ fn run(app: &mut TextureCraftApp, act: Act, current: [f32; 3], target: Target<'_
         }
         Act::Import(s) => import(app, s),
         Act::Export(s) => export(app, s),
-        _ => {}
     }
 }
 
@@ -285,7 +286,7 @@ fn import(app: &mut TextureCraftApp, scope: Scope) {
     if let Some(r) = app.run("swatch.import", json!({ "path": path.display().to_string(), "scope": scope.id() })) {
         let n = r["added"].as_u64().unwrap_or(0);
         let skipped = r["skipped"].as_u64().unwrap_or(0);
-        app.toast(trf("Imported {n} colors ({skipped} lines skipped)", &[("n", &n), ("skipped", &skipped)]), false);
+        app.toast(crate::i18n::trf("Imported {n} colors ({skipped} lines skipped)", &[("n", &n), ("skipped", &skipped)]), false);
     }
 }
 
@@ -298,7 +299,7 @@ fn export(app: &mut TextureCraftApp, scope: Scope) {
     let Some(path) = dialog.save_file() else { return };
     if let Some(r) = app.run("swatch.export", json!({ "path": path.display().to_string(), "scope": scope.id() })) {
         let n = r["count"].as_u64().unwrap_or(0);
-        app.toast(trf("Exported {n} colors", &[("n", &n)]), false);
+        app.toast(crate::i18n::trf("Exported {n} colors", &[("n", &n)]), false);
     }
 }
 

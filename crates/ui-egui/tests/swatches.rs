@@ -18,6 +18,8 @@ fn harness() -> Harness<'static, TextureCraftApp> {
     for (name, c) in [("Brick", "#a03020"), ("Moss", "#406020")] {
         app.run("swatch.add", json!({"color": c, "name": name}));
     }
+    // The colour editor is on the Properties panel's Material tab.
+    h.state_mut().ui.props_tab = texturecraft_ui_egui::state::PropsTab::Material;
     h.run_steps(4);
     h
 }
