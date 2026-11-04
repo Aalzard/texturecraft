@@ -50,7 +50,9 @@ fn rect_id() -> Id {
 
 /// Display textures by (reference, grayscale), with the decoded image they were made from.
 #[derive(Clone, Default)]
-struct Textures(Arc<Mutex<HashMap<(u64, bool), (usize, TextureHandle)>>>);
+struct Textures(Arc<Mutex<TextureMap>>);
+
+type TextureMap = HashMap<(u64, bool), (usize, TextureHandle)>;
 
 /// The egui texture of reference `id` (grayscale applied), made again when the image changed.
 fn texture(ctx: &egui::Context, session: &Session, id: u64, gray: bool) -> Option<TextureHandle> {
@@ -212,7 +214,7 @@ pub fn panel(app: &mut TextureCraftApp, ui: &mut Ui) {
 
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        if icon_button(ui, ic::PLUS, &tr("Add reference images"), false, 24.0).clicked() {
+        if icon_button(ui, ic::PLUS, tr("Add reference images"), false, 24.0).clicked() {
             #[cfg(not(target_arch = "wasm32"))]
             choose_files(app, st.link);
             #[cfg(target_arch = "wasm32")]
@@ -220,10 +222,10 @@ pub fn panel(app: &mut TextureCraftApp, ui: &mut Ui) {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if icon_button(ui, ic::CLIPBOARD, &tr("Paste an image from the clipboard"), false, 24.0).clicked() {
+            if icon_button(ui, ic::CLIPBOARD, tr("Paste an image from the clipboard"), false, 24.0).clicked() {
                 paste(app);
             }
-            if chip(ui, &tr("Link files"), st.link)
+            if chip(ui, tr("Link files"), st.link)
                 .on_hover_text(tr("Keep a link to the file (a path next to the project) instead of a copy inside the project."))
                 .clicked()
             {
@@ -260,26 +262,26 @@ pub fn panel(app: &mut TextureCraftApp, ui: &mut Ui) {
     let pinned = app.session.doc.project.reference_overlay.reference == Some(sel.id);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        if icon_button(ui, ic::FLIP_HORIZONTAL, &tr("Flip horizontally"), sel.flip_h, 24.0).clicked() {
+        if icon_button(ui, ic::FLIP_HORIZONTAL, tr("Flip horizontally"), sel.flip_h, 24.0).clicked() {
             app.run("reference.set", json!({"id": sel.id, "flipH": !sel.flip_h}));
         }
-        if icon_button(ui, ic::FLIP_VERTICAL, &tr("Flip vertically"), sel.flip_v, 24.0).clicked() {
+        if icon_button(ui, ic::FLIP_VERTICAL, tr("Flip vertically"), sel.flip_v, 24.0).clicked() {
             app.run("reference.set", json!({"id": sel.id, "flipV": !sel.flip_v}));
         }
-        if icon_button(ui, ic::CIRCLE_HALF, &tr("Grayscale"), sel.grayscale, 24.0).clicked() {
+        if icon_button(ui, ic::CIRCLE_HALF, tr("Grayscale"), sel.grayscale, 24.0).clicked() {
             app.run("reference.set", json!({"id": sel.id, "grayscale": !sel.grayscale}));
         }
-        if icon_button(ui, ic::PUSH_PIN, &tr("Pin over the 3D view"), pinned, 24.0).clicked() {
+        if icon_button(ui, ic::PUSH_PIN, tr("Pin over the 3D view"), pinned, 24.0).clicked() {
             app.run("reference.overlay", json!({"reference": if pinned { None } else { Some(sel.id) }}));
         }
-        if icon_button(ui, ic::MAGNIFYING_GLASS, &tr("Fit in the panel"), false, 24.0).clicked() {
+        if icon_button(ui, ic::MAGNIFYING_GLASS, tr("Fit in the panel"), false, 24.0).clicked() {
             st.zoom = 1.0;
             st.pan = Vec2::ZERO;
         }
-        if app.session.reference_error(sel.id).is_some() && icon_button(ui, ic::ARROWS_CLOCKWISE, &tr("Read the file again"), false, 24.0).clicked() {
+        if app.session.reference_error(sel.id).is_some() && icon_button(ui, ic::ARROWS_CLOCKWISE, tr("Read the file again"), false, 24.0).clicked() {
             app.run("reference.reload", json!({"id": sel.id}));
         }
-        if icon_button(ui, ic::TRASH, &tr("Remove this reference"), false, 24.0).clicked() {
+        if icon_button(ui, ic::TRASH, tr("Remove this reference"), false, 24.0).clicked() {
             app.run("reference.remove", json!({"id": sel.id}));
         }
     });

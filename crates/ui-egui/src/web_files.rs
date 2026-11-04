@@ -62,7 +62,7 @@ pub fn poll(app: &mut TextureCraftApp) {
                 load(app, &name, bytes);
                 continue;
             }
-            Pick::Reference => app.session.add_reference_bytes(&name, bytes).map(|id| crate::reference::select(id)),
+            Pick::Reference => app.session.add_reference_bytes(&name, bytes).map(crate::reference::select),
             Pick::Environment => app.session.import_resource_bytes(&name, bytes).map(|res| use_environment(app, &res)),
             Pick::HighPoly => app.session.add_high_poly_bytes(&name, bytes).map(|n| app.toast(trf("High poly: {name}", &[("name", &n)]), false)),
             Pick::Cage => app.session.set_cage_bytes(&name, bytes).map(|n| app.toast(trf("Cage: {name}", &[("name", &n)]), false)),
