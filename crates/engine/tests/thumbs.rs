@@ -4,11 +4,11 @@
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use texturecraft_engine::compose::{Composite, Inputs, ThumbImage, ThumbTarget, all_tiles, composite_tiles, mask_image};
+use texturecraft_engine::compose::{Inputs, ThumbImage, ThumbTarget, all_tiles, flatten_layer, mask_image};
 use texturecraft_engine::core::{Channel, ChannelKind, LayerId};
 use texturecraft_engine::geom::UvGBuffer;
 use texturecraft_engine::geom::primitives;
-use texturecraft_engine::texel::linear_to_srgb;
+use texturecraft_engine::texel::{from_u16, from_u16_signed, linear_to_srgb};
 use texturecraft_engine::thumbs::{CACHE_ENTRIES, ThumbService};
 use texturecraft_engine::{Session, execute};
 
@@ -46,8 +46,8 @@ fn inputs<'a>(s: &'a Session, project: &'a texturecraft_engine::core::Project, g
     Inputs { project, ts: 0, mesh: &s.mesh, gbuf, pixels: &s.doc.pixels, baked, preview: None, images: &s.images, bounds: s.mesh.bounds() }
 }
 
-/// The reference: the same sub-stack built by hand and composited at 64 px with the ordinary
-/// evaluator, then encoded for display.
+/// The reference: the same sub-stack cut by hand and evaluated at 64 px with the ordinary CPU
+/// evaluator (the mask with `mask_image`, the content with `flatten_layer`), then encoded.
 fn oracle(s: &Session, target: ThumbTarget) -> ThumbImage {
     let gbuf = UvGBuffer::new(&s.mesh, 0, N, N);
     let mut p = s.doc.project.clone();
@@ -77,20 +77,27 @@ fn oracle(s: &Session, target: ThumbTarget) -> ThumbImage {
         let k = l.content_effects.iter().position(|x| x.id == e).unwrap();
         l.content_effects.truncate(k + 1);
     }
-    let channels = p.texture_set(0).unwrap().channel_list();
-    let mut comp = Composite::new(&channels, N);
-    composite_tiles(&inputs(s, &p, &gbuf), &mut comp, &all_tiles(N, N));
+    // A paint or fill layer: its own (premultiplied value, coverage), coverage as alpha.
+    let flat = flatten_layer(&inputs(s, &p, &gbuf), layer, &all_tiles(N, N)).unwrap();
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-    let mut rgba = Vec::new();
-    for y in 0..N {
-        for x in 0..N {
-            let v = comp.value(channel, x, y);
+    let mut rgba = vec![0u8; (N * N * 4) as usize];
+    let comps = channel.components();
+    for (_, _, buf) in flat.iter().filter(|(c, _, _)| *c == channel) {
+        for (i, px) in buf.chunks_exact(comps + 1).enumerate() {
+            let a = from_u16(px[comps]);
+            if a <= 0.0 {
+                continue;
+            }
+            let v: [f32; 3] = std::array::from_fn(|k| {
+                let raw = px[k.min(comps - 1)];
+                (if channel.kind() == ChannelKind::Signed { from_u16_signed(raw) } else { from_u16(raw) }) / a
+            });
             let px = match channel.kind() {
                 ChannelKind::Color => v.map(|c| byte(linear_to_srgb(c.clamp(0.0, 1.0)))),
                 ChannelKind::Signed => v.map(|c| byte(c * 0.5 + 0.5)),
                 _ => v.map(byte),
             };
-            rgba.extend_from_slice(&[px[0], px[1], px[2], if gbuf.covered((y * N + x) as usize) { 255 } else { 0 }]);
+            rgba[i * 4..i * 4 + 4].copy_from_slice(&[px[0], px[1], px[2], byte(a)]);
         }
     }
     ThumbImage { width: N, height: N, rgba }
@@ -291,4 +298,20 @@ fn only_requested_rows_render_and_the_cache_is_bounded() {
     svc.begin_frame(&s, clock);
     svc.poll(&s);
     assert!(svc.cached() <= CACHE_ENTRIES, "{}", svc.cached());
+}
+
+#[test]
+fn an_empty_paint_layer_is_transparent_and_a_folder_composites_its_children() {
+    let mut s = session();
+    let paint = id(execute(&mut s, "layer.add.paint", &Value::Null).unwrap(), "layer");
+    let fill = id(execute(&mut s, "layer.add.fill", &json!({"color": "#336699"})).unwrap(), "layer");
+    let folder = id(execute(&mut s, "layer.group", &json!({"layer": fill.0})).unwrap(), "layer");
+    let base = Channel::BaseColor;
+    let (p, f) = (ThumbTarget::Content { layer: paint, channel: base }, ThumbTarget::Content { layer: folder, channel: base });
+    let (mut svc, mut clock) = (ThumbService::new(), 0.0);
+    settle(&mut svc, &s, &[p, f], &mut clock);
+    assert!(image(&mut svc, &s, p).rgba.chunks_exact(4).all(|px| px[3] == 0), "nothing painted: nothing shown");
+    let folder_img = image(&mut svc, &s, f);
+    let px = folder_img.rgba.chunks_exact(4).find(|px| px[3] == 255).unwrap();
+    assert!((px[0] as i32 - 51).abs() <= 1 && (px[2] as i32 - 153).abs() <= 1, "{px:?}");
 }

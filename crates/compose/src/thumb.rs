@@ -8,9 +8,9 @@
 //! what the stack really computes. Nothing here mutates the caller's project.
 
 use texturecraft_core::{BlendMode, Channel, ChannelBlend, ChannelKind, LayerId, Project};
-use texturecraft_texel::linear_to_srgb;
+use texturecraft_texel::{TILE, from_u16, from_u16_signed, linear_to_srgb};
 
-use crate::eval::{Composite, Inputs, all_tiles, composite_tiles, mask_image};
+use crate::eval::{Composite, FlatTile, Inputs, all_tiles, composite_tiles, flatten_layer, mask_image};
 
 /// Edge length (texels) the thumbnails are computed at.
 pub const THUMB_TEXELS: u32 = 64;
@@ -27,8 +27,9 @@ pub enum ThumbTarget {
     Stage { effect: LayerId, channel: Channel },
 }
 
-/// An 8-bit RGBA thumbnail. Alpha is 0 where the mesh does not cover the texture (the view
-/// paints its own background there) and 255 elsewhere.
+/// An 8-bit RGBA thumbnail (straight alpha). Alpha is 0 where the mesh does not cover the
+/// texture and, for a paint or fill layer's content, where the layer has nothing; the view
+/// paints its own background there.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThumbImage {
     pub width: u32,
@@ -101,9 +102,55 @@ fn content(inp: &Inputs, layer: LayerId, channel: Channel, upto: Option<LayerId>
     }
     let cut_inp = Inputs { project: &cut, preview: None, ..*inp };
     let (w, h) = (inp.gbuf.width, inp.gbuf.height);
+    // A paint or fill layer shows its own coverage (transparent where nothing is painted); a
+    // folder shows its children composited over the channel's default.
+    if !cut.layers.get(&owner)?.is_group() {
+        let flat = flatten_layer(&cut_inp, layer, &all_tiles(w, h))?;
+        return Some(encode_flat(&flat, channel, w, h));
+    }
     let mut comp = Composite::with_size(&set.channel_list(), w, h);
     composite_tiles(&cut_inp, &mut comp, &all_tiles(w, h));
     Some(encode_channel(&comp, channel, inp))
+}
+
+/// Encode the flattened (premultiplied value, coverage) tiles of `channel`: alpha is coverage.
+fn encode_flat(flat: &[FlatTile], channel: Channel, w: u32, h: u32) -> ThumbImage {
+    let mut rgba = vec![0u8; (w * h) as usize * 4];
+    let comps = channel.components();
+    let signed = channel.kind() == ChannelKind::Signed;
+    for (c, (tx, ty), buf) in flat {
+        if *c != channel {
+            continue;
+        }
+        for (o, px) in buf.chunks_exact(comps + 1).enumerate() {
+            let (x, y) = (tx * TILE + o as u32 % TILE, ty * TILE + o as u32 / TILE);
+            let a = px.get(comps).map_or(0.0, |v| from_u16(*v));
+            if x >= w || y >= h || a <= 0.0 {
+                continue;
+            }
+            let mut v = [0.0f32; 3];
+            for (k, slot) in v.iter_mut().enumerate() {
+                let raw = px.get(k.min(comps - 1)).copied().unwrap_or(0);
+                *slot = if signed { from_u16_signed(raw) } else { from_u16(raw) } / a;
+            }
+            let p = display(channel, v);
+            let i = ((y * w + x) * 4) as usize;
+            if let Some(d) = rgba.get_mut(i..i + 4) {
+                d.copy_from_slice(&[p[0], p[1], p[2], to_byte(a)]);
+            }
+        }
+    }
+    ThumbImage { width: w, height: h, rgba }
+}
+
+/// A channel value as display bytes: colors linear → sRGB, signed values with 0 at mid gray,
+/// normal maps and scalars as stored.
+fn display(channel: Channel, v: [f32; 3]) -> [u8; 3] {
+    match channel.kind() {
+        ChannelKind::Color => v.map(|c| to_byte(linear_to_srgb(c.clamp(0.0, 1.0)))),
+        ChannelKind::Signed => v.map(|c| to_byte(c * 0.5 + 0.5)),
+        ChannelKind::Scalar | ChannelKind::NormalMap => v.map(to_byte),
+    }
 }
 
 fn mask(inp: &Inputs, layer: LayerId, upto: Option<LayerId>) -> Option<ThumbImage> {
@@ -138,11 +185,7 @@ fn encode_channel(comp: &Composite, channel: Channel, inp: &Inputs) -> ThumbImag
     for y in 0..h {
         for x in 0..w {
             let v = comp.value(channel, x, y);
-            let px = match channel.kind() {
-                ChannelKind::Color => v.map(|c| to_byte(linear_to_srgb(c.clamp(0.0, 1.0)))),
-                ChannelKind::Signed => v.map(|c| to_byte(c * 0.5 + 0.5)),
-                ChannelKind::Scalar | ChannelKind::NormalMap => v.map(to_byte),
-            };
+            let px = display(channel, v);
             let covered = inp.gbuf.covered((y * w + x) as usize);
             rgba.extend_from_slice(&[px[0], px[1], px[2], if covered { 255 } else { 0 }]);
         }
