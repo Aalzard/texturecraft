@@ -223,6 +223,15 @@ printf '%s\n' '{"id":1,"method":"command.run","params":{"id":"project.new","para
               '{"id":2,"method":"render","params":{"width":512,"height":512}}' | texturecraft-cli serve
 ```
 
+## Camera bookmarks
+
+Saved cameras (`Project.cameras`, stored in the `.tcraft` file) are the camera bookmarks.
+`camera.add {name?}` saves the current view, `camera.list` lists them (`current` is the one the view
+is at), `camera.select {index? | name?}` restores one, `camera.rename {index? | name?, to}` and
+`camera.remove {index? | name?}` edit them. `camera.bookmark1` … `camera.bookmark9` (Ctrl+1 … Ctrl+9)
+go to the first nine. Commands jump straight to the view; the desktop UI glides there over about a third
+of a second.
+
 ## MaterialCraft materials
 
 A `.mcmat` portable material (MaterialCraft's format, read here by `formats::mcmat`; the manifest is
