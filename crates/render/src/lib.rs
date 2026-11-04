@@ -21,6 +21,7 @@ pub mod gpu_trace;
 pub mod headless;
 pub mod ibl;
 pub mod mesh_maps;
+pub mod output;
 pub mod readback;
 pub mod renderer;
 mod subdivide;

@@ -66,16 +66,18 @@ pub fn paint_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
 }
 
 fn view_buttons_width(button_size: f32, spacing: f32) -> f32 {
-    // Five icons, two separators and the six gaps between them
-    5.0 * button_size + 2.0 * BAR_SEPARATOR_WIDTH + 6.0 * spacing
+    // Six icons, two separators and the seven gaps between them
+    6.0 * button_size + 2.0 * BAR_SEPARATOR_WIDTH + 7.0 * spacing
 }
 
-/// View buttons in a right-to-left layout, with the screenshot button at the end
+/// View buttons in a right-to-left layout, with the Export image button and the AA toggle at the end
 fn view_buttons(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     let button_size = ui.spacing().interact_size.y;
-    if icon_button(ui, ic::CAMERA, tr("Screenshot of the viewport"), false, button_size).clicked() {
-        app.toast(tr("Use the control channel or `texturecraft-cli render` for screenshots"), false);
+    let export_tip = tip(&app.ui.keymap, tr("Export image (resolution, render scale, transparency)"), "ui.imageExport");
+    if icon_button(ui, ic::CAMERA, &export_tip, app.ui.windows.image_export, button_size).clicked() {
+        crate::image_export::toggle(app);
     }
+    aa_toggle(app, ui);
 
     ui.add(egui::Separator::default().spacing(BAR_SEPARATOR_WIDTH));
     for (layout, icon, label, command) in [
@@ -255,6 +257,32 @@ fn mode_buttons(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
 }
 
 /// Path tool options and actions (top bar and properties)
+
+/// The viewport anti-aliasing switch: a labelled toggle ("AA") on the top bar, lit while on.
+/// It switches `display.taa` (idle temporal refinement on top of the always-on 4× MSAA) and
+/// remembers the choice in the preferences; Alt+A (`ui.viewportAa`) does the same from the
+/// keyboard, and the button takes keyboard focus like any other.
+fn aa_toggle(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
+    let on = app.session.doc.project.display.taa;
+    let hint = tip(
+        &app.ui.keymap,
+        if on {
+            tr("Anti-aliasing on: smooth edges, refined while the view is still. Click for crisp texels (faster).")
+        } else {
+            tr("Anti-aliasing off: crisp texels, no refinement while still. Click to smooth edges.")
+        },
+        "ui.viewportAa",
+    );
+    // "AA" is the label in every language (like the units on the sliders); the tooltip and the
+    // accessible name are translated.
+    let resp = icon_button(ui, "AA", &hint, on, ui.spacing().interact_size.y);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, tr("Anti-aliasing")));
+    if resp.clicked() {
+        app.toggle_viewport_aa();
+    }
+}
+
+/// Path tool options and actions (top bar and properties).
 pub fn path_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     let button_size = ui.spacing().interact_size.y;
     let path = &mut app.session.tool.path;

@@ -1957,6 +1957,12 @@ impl Renderer {
         crate::readback::Readback::blocking(device, queue, &self.views.get(&id)?.resolve)
     }
 
+    /// The frame a view last rendered (its kind, size, camera and shading), if any: what an
+    /// image export renders again at another resolution.
+    pub fn last_frame(&self, id: u64) -> Option<&Frame> {
+        self.views.get(&id)?.history.as_ref().map(|(f, _)| f)
+    }
+
     /// Forget a view's targets (e.g. a closed panel).
     pub fn drop_view(&mut self, id: u64) {
         self.views.remove(&id);

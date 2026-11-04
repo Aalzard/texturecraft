@@ -29,6 +29,11 @@ impl Gpu {
         &self.h.adapter_name
     }
 
+    /// The largest render edge this device allows (its 2D texture limit).
+    pub fn max_side(&self) -> u32 {
+        self.h.device.limits().max_texture_dimension_2d
+    }
+
     /// Bring the GPU up to date with `s` (mesh, texture sets, environment, dirty tiles).
     fn sync(&mut self, s: &mut Session) {
         s.update();
@@ -129,20 +134,23 @@ fn trace_inputs(s: &mut Session) -> (TraceScene, TraceDisplay) {
 }
 
 /// A progressive CPU path trace of the session's 3D view (the app's Rendering mode), finished
-/// after `samples` passes and denoised; RGBA8 (sRGB) pixels.
+/// after `samples` passes and denoised; RGBA8 (sRGB) pixels. `transparent` leaves out the
+/// backdrop: only the mesh, with its coverage as straight alpha.
 pub fn path_trace(
     s: &mut Session,
     size: [u32; 2],
     camera: texturecraft_engine::geom::OrbitCamera,
     samples: u32,
     settings: &TraceSettings,
+    transparent: bool,
 ) -> (u32, u32, Vec<u8>) {
     let (scene, display) = trace_inputs(s);
     let mut tracer = Tracer::new(size[0], size[1]);
     for _ in 0..samples {
         tracer.pass(&scene, &camera, settings);
     }
-    (tracer.width, tracer.height, tracer.rgba8(&display))
+    let rgba = if transparent { tracer.rgba8_transparent(&display) } else { tracer.rgba8(&display) };
+    (tracer.width, tracer.height, rgba)
 }
 
 /// How the viewport shades the session (the app's `viewport::shade`).
@@ -220,7 +228,7 @@ mod tests {
                 return;
             }
         };
-        let (_, _, c) = path_trace(&mut s, size, cam, 384, &settings);
+        let (_, _, c) = path_trace(&mut s, size, cam, 384, &settings, false);
         // Mean luminance per 8×8 block (8-bit levels) agrees.
         let lum = |img: &[u8], x: usize, y: usize| {
             let p = &img[(y * 64 + x) * 4..(y * 64 + x) * 4 + 3];

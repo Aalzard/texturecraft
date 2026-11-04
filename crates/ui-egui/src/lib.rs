@@ -15,6 +15,7 @@ pub mod export_templates;
 pub mod fonts;
 pub mod gpu;
 pub mod i18n;
+pub mod image_export;
 pub mod keymap;
 pub mod menus;
 pub mod parity;
@@ -118,9 +119,27 @@ pub struct TextureCraftApp {
     styled: Option<(theme::Brightness, theme::Accent)>,
     /// Whether the window had focus last frame.
     focused: bool,
+    /// The mesh (project) the viewport anti-aliasing preference was last applied to.
+    aa_mesh_id: u64,
 }
 
 impl TextureCraftApp {
+    /// A new or opened project (a new mesh) takes the viewport anti-aliasing preference.
+    pub fn apply_viewport_aa(&mut self) {
+        if self.aa_mesh_id != self.session.mesh_id {
+            self.aa_mesh_id = self.session.mesh_id;
+            self.session.doc.project.display.taa = self.ui.prefs.viewport_aa;
+        }
+    }
+
+    /// The top-bar AA toggle (`ui.viewportAa`, Alt+A): switch the 3D view's temporal
+    /// anti-aliasing and remember the choice in the preferences.
+    pub fn toggle_viewport_aa(&mut self) {
+        let on = !self.session.doc.project.display.taa;
+        self.session.doc.project.display.taa = on;
+        self.ui.prefs.viewport_aa = on;
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>, session: Session) -> TextureCraftApp {
         theme::install(&cc.egui_ctx);
         // Bakes cast their rays on a GPU device of their own (created on the first bake).
@@ -162,6 +181,7 @@ impl TextureCraftApp {
             next_autosave,
             styled: None,
             focused: true,
+            aa_mesh_id: 0,
         };
         app.ui.rename = None;
         app.ui.windows.new_project = false;
@@ -442,6 +462,7 @@ impl eframe::App for TextureCraftApp {
             theme::apply(ctx, style.0, style.1);
             self.styled = Some(style);
         }
+        self.apply_viewport_aa();
         control::poll(self, ctx);
         web_files::poll(self);
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
