@@ -1005,4 +1005,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Mirror across {axis} through the model center", "沿模型中心的 {axis} 轴镜像"),
     ("Show symmetry guides", "显示对称参考线"),
     ("Press {key} to toggle mirror X", "按 {key} 切换 X 镜像"),
+    ("Toggle mirror symmetry (X)", "切换镜像对称 (X)"),
 ];

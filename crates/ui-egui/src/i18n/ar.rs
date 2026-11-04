@@ -1046,4 +1046,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Mirror across {axis} through the model center", "انعكاس حول المحور {axis} عبر مركز النموذج"),
     ("Show symmetry guides", "إظهار أدلة التناظر"),
     ("Press {key} to toggle mirror X", "اضغط {key} لتبديل المرآة X"),
+    ("Toggle mirror symmetry (X)", "تبديل تناظر المرآة (X)"),
 ];

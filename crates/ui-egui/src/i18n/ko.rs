@@ -1059,4 +1059,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Mirror across {axis} through the model center", "모델 중심을 지나는 {axis} 기준 미러"),
     ("Show symmetry guides", "대칭 가이드 표시"),
     ("Press {key} to toggle mirror X", "{key} 키로 미러 X 전환"),
+    ("Toggle mirror symmetry (X)", "미러 대칭 전환 (X)"),
 ];

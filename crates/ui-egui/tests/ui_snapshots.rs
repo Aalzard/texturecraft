@@ -158,3 +158,24 @@ fn window_snapshots() {
     harness.event(egui::Event::PointerButton { pos: cursor_position, button, pressed: false, modifiers });
     harness.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
 }
+
+/// The viewport bar's mirror popover with mirror X and Y on, and the red guides on the model.
+#[test]
+#[ignore]
+fn symmetry_snapshots() {
+    use egui_kittest::kittest::Queryable;
+    let Some(dir) = std::env::var_os("TC_UI_SNAPSHOTS").map(PathBuf::from) else {
+        eprintln!("set TC_UI_SNAPSHOTS=<dir> to write the pictures");
+        return;
+    };
+    std::fs::create_dir_all(&dir).unwrap();
+    let session = texturecraft_engine::sample_session(1024, 256).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 960.0)).with_pixels_per_point(1.0).wgpu().build_eframe(|cc| TextureCraftApp::new(cc, session));
+    let s = &mut h.state_mut().session;
+    for axis in ["x", "y"] {
+        texturecraft_engine::execute(s, "tool.symmetry", &serde_json::json!({"axis": axis, "enabled": true})).unwrap();
+    }
+    save(&mut h, &dir, "symmetry-guides");
+    h.get_by_label("Symmetry and lazy mouse (X)").click();
+    save(&mut h, &dir, "symmetry-popover");
+}

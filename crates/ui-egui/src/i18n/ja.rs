@@ -1074,4 +1074,5 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Mirror across {axis} through the model center", "モデル中心を通る {axis} でミラー"),
     ("Show symmetry guides", "対称ガイドを表示"),
     ("Press {key} to toggle mirror X", "{key} キーでミラー X を切り替え"),
+    ("Toggle mirror symmetry (X)", "ミラー対称の切り替え (X)"),
 ];
