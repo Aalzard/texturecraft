@@ -1,7 +1,7 @@
 # AGENTS.md: guide for AI agents and contributors
 
 TextureCraft is an open-source, native 3D texture painter: a clean-room implementation of the
-workflow known from Adobe Substance 3D Painter, written in **Rust only** (no JavaScript or TypeScript). **No Tauri, Electron or webview
+workflow of the reference app, written in **Rust only** (no JavaScript or TypeScript). **No Tauri, Electron or webview
 shells:** the desktop app is native egui/eframe on wgpu, and the web build is the same Rust compiled
 to WebAssembly (trunk + wasm-bindgen). Never add Tauri (or any webview/JS UI framework) as a
 dependency, build step or packaging target. The product name is always written **TextureCraft**
@@ -15,7 +15,7 @@ to this repo, or `storytold/craftrules`). Read its `AGENTS.md` at the start of a
 standards, and contribute reusable learnings back there. Shared code goes only in craft-libs
 (`standards/shared-libraries.md`); otherwise copy, don't depend.
 
-The goal is 1:1 parity with Substance 3D Painter's workflow (same panels, menus, shortcuts, layer
+The goal is 1:1 parity with the reference app's workflow (same panels, menus, shortcuts, layer
 stack semantics and export conventions) with better performance, every feature drivable by agents,
 and builds for Windows, macOS, Linux, FreeBSD and the web. Read this file first, then `docs/`.
 
@@ -26,7 +26,7 @@ and builds for Windows, macOS, Linux, FreeBSD and the web. Read this file first,
 | `docs/architecture.md` | Crate map, layers, the CPU texel engine + GPU viewport split, data flow |
 | `docs/control-protocol.md` | The JSON control channel and MCP: how agents drive the running app |
 | `ROADMAP.md` | Honest parity estimate, milestones, **current focus** |
-| `docs/parity.md` | Generated list of Painter menu items: live or missing |
+| `docs/parity.md` | Generated list of menu items in the reference app: live or missing |
 | `docs/releasing.md` | Versioning (`cargo xtask version`), the `release` branch, packaging |
 | `ATTRIBUTION.md` | Every bundled asset with author, source, license |
 | `crates/<name>/README.md` (where present) | Public API of that crate |
@@ -58,10 +58,18 @@ replace it without touching the engine.
 
 ## 3. Golden rules
 
+### Never name the reference product (absolutely essential)
+
+- The repository never names the commercial product TextureCraft is modeled on, nor its vendor,
+  in code, comments, docs, commit messages, test names, file names or UI text. Say "the reference
+  app", "the professional model-painter workflow" or describe the feature itself.
+- Notes that name it may live only in the gitignored `plan/` folder.
+
 ### Assets, icons and images (absolutely essential)
 
 - **Never use any icon, image, logo, texture, material, brush, environment, font or other asset
-  from Adobe, Avid, Image-Line or Autodesk products**, and never copy files from any installed
+  from the reference app, any other products from its vendor, or Avid, Image-Line or Autodesk
+  products**, and never copy files from any installed
   commercial application (proprietary formats such as `.sbsar`, `.spexp`, `.sppr` or `.spsm`, HDR
   environments, UI icons). Not as reference files in the repo either.
 - Every image or icon must be **open source, public domain, Creative Commons (CC0/CC-BY), or
@@ -84,8 +92,8 @@ workflow. Work from public documentation, general domain knowledge, public algor
 (GGX/Smith/Schlick, split-sum IBL, MikkTSpace, jump-flood/BFS dilation, Möller–Trumbore, SAH BVH,
 spherical harmonics, reoriented normal mapping, W3C blend modes) and public engine conventions
 (glTF, Unreal, Unity packing). Never copy proprietary code, shaders, presets or file formats;
-Painter file compatibility (`.spp`, `.spexp`, `.sbsar`) is a non-goal. Always describe TextureCraft
-as a clean-room implementation, in code, docs and commits.
+File compatibility with the reference app (`.spp`, `.spexp`, `.sbsar`) is a non-goal. Always describe
+TextureCraft as a clean-room implementation, in code, docs and commits.
 
 ### Never crash (outranks feature work)
 
@@ -168,7 +176,7 @@ after every arc of work that builds and passes.
 ## 7. Where things are tracked
 
 - `ROADMAP.md`: milestones, parity estimate and remaining effort.
-- `docs/parity.md`: generated Painter menu coverage.
+- `docs/parity.md`: generated menu coverage for the reference app.
 - `docs/releasing.md` and `../craftrules/release/playbook.md`: release builds and signing.
 - `plan/` (local, gitignored): execution plan and notes.
 - `log/` (local, gitignored): the dev log.

@@ -931,6 +931,51 @@ fn ambient_occlusion_settings_shape_the_occlusion() {
 }
 
 #[test]
+fn occlusion_falls_off_linearly_to_the_max_distance() {
+    let ceiling_height = 0.5;
+    let corners = |height: f32| [Vec3::new(-1.0, height, -1.0), Vec3::new(1.0, height, -1.0), Vec3::new(1.0, height, 1.0), Vec3::new(-1.0, height, 1.0)];
+    let mut uvs = vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0)];
+    // The ceiling occludes the floor without contributing baked texels
+    uvs.extend([Vec2::ZERO; 4]);
+    let normals = [[Vec3::Y; 4], [Vec3::NEG_Y; 4]].concat();
+    let mesh = Mesh::from_parts(
+        corners(0.0).into_iter().chain(corners(ceiling_height)).collect(),
+        Some(normals),
+        uvs,
+        vec![0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7],
+        "Room",
+    )
+    .unwrap();
+
+    // Nearly vertical rays meet the ceiling at half their maximum distance
+    let mut parameters = settings(16, &[BakedMap::AmbientOcclusion]);
+    parameters.maps.ao.parameters.rays =
+        RaySettings { max_distance: 2.0 * ceiling_height, relative_to_bounding_box: false, spread: 2.0, ..parameters.maps.ao.parameters.rays };
+    let output = run(&mesh, &parameters).unwrap();
+    let ambient_occlusion = mean(covered_values(&mesh, &output, BakedMap::AmbientOcclusion).into_iter().map(|(_, value)| value));
+
+    assert!((ambient_occlusion - 0.5).abs() < 0.01, "{ambient_occlusion}");
+}
+
+#[test]
+fn secondary_ray_defaults_preserve_per_map_distances() {
+    let parameters = BakeSettings::default();
+    let expected_rays = RaySettings {
+        rays: 64,
+        min_distance: 0.00001,
+        max_distance: 1.0,
+        relative_to_bounding_box: true,
+        spread: 180.0,
+        distribution: RayDistribution::Cosine,
+    };
+
+    assert_eq!(parameters.maps.ao.parameters.rays, expected_rays);
+    assert_eq!(parameters.maps.ao.parameters.attenuation, texturecraft_core::AmbientOcclusionAttenuation::Linear);
+    assert_eq!(parameters.maps.bent_normal.parameters.rays, expected_rays);
+    assert_eq!(parameters.maps.thickness.parameters.rays, RaySettings { max_distance: 0.1, ..expected_rays });
+}
+
+#[test]
 fn bent_normals_and_thickness_have_their_own_rays() {
     let m = floor_and_wall(false);
     let s = with_rays(settings(32, &[BakedMap::BentNormal, BakedMap::AmbientOcclusion]), 64, 2.0);
