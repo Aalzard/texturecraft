@@ -102,6 +102,19 @@ values, the texture set's resolution and its baked mesh maps (`LinkJob::run`, on
 in the UI). Every cook stores its maps under fresh resource names, so undo, redo and the decoded
 image cache never disagree. The apps share the file format and the command line, never code.
 
+## SubCraft smart materials
+
+`formats::scsmart` reads a SubCraft `.scsmart` (a zip of `fragment.json`, sparse half-float raster
+tiles and the original image files) into the same shape a `.tcmat` has: a one-texture-set
+`ProjectFile` whose last root layer is the smart material, plus an `ImportReport` of what could
+not be mapped (`note`, `approximated`, `dropped`). The polymorphic parts of the JSON are read
+leniently, so an unknown kind lands in the report instead of failing the file; only structural
+damage and the size limits are errors. `engine::material_lib` adds that project to a document the
+way it adds a `.tcmat` (`copy_tree`: ids remapped, pixels resampled to the set's resolution,
+images shared by content-hashed names) in one undo step, via `material.importScsmart` or
+`material.load`, and returns the report. The UI opens the summary window from any command result
+carrying an `import` key. See [scsmart.md](scsmart.md).
+
 ## Commands and automation
 
 Every action is a `CommandSpec` in `engine::commands` (id, label, menu path, shortcut, params doc,

@@ -79,6 +79,10 @@ pub struct Windows {
     /// What waits on the unsaved-changes dialog: save, don't save or cancel.
     #[serde(skip)]
     pub unsaved: Option<Unsaved>,
+    /// The report of a SubCraft smart material import that did not map exactly (the engine's
+    /// `import` result), shown until dismissed.
+    #[serde(skip)]
+    pub import_summary: Option<serde_json::Value>,
 }
 
 /// An action that replaces or ends the project, held while the project has unsaved changes.

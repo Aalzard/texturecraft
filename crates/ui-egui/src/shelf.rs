@@ -276,7 +276,7 @@ fn library(app: &mut TextureCraftApp, ui: &mut Ui, filter: &str) {
     let tk = Tokens::get(ui.ctx());
     if app.library.is_none() {
         let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(crate::library_dir())
-            .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "tcmat" || x == MCMAT_EXT)).collect())
+            .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "tcmat" || x == "scsmart" || x == MCMAT_EXT)).collect())
             .unwrap_or_default();
         files.sort();
         app.library = Some(files);
@@ -291,6 +291,9 @@ fn library(app: &mut TextureCraftApp, ui: &mut Ui, filter: &str) {
         header(ui, tr("My smart materials"));
         if ui.small_button(ic::ARROW_CLOCKWISE).on_hover_text(tr("Rescan the library folder")).clicked() {
             app.library = None;
+        }
+        if ui.small_button(ic::DOWNLOAD_SIMPLE).on_hover_text(tr("Import SubCraft smart materials (.scsmart) into the library")).clicked() {
+            import_scsmart_files(app);
         }
     });
     if files.is_empty() {
@@ -314,6 +317,45 @@ fn library(app: &mut TextureCraftApp, ui: &mut Ui, filter: &str) {
         }
     }
     ui.add_space(6.0);
+}
+
+/// Copy SubCraft smart materials (`.scsmart`) picked by the user into the library folder, where
+/// they appear under My smart materials (the file stays as it is; it is mapped when added).
+#[cfg(not(target_arch = "wasm32"))]
+fn import_scsmart_files(app: &mut TextureCraftApp) {
+    let picked = rfd::FileDialog::new().add_filter(tr("SubCraft smart materials"), crate::web_files::SCSMART_EXTS).pick_files().unwrap_or_default();
+    let dir = crate::library_dir();
+    let mut added = 0usize;
+    for src in picked {
+        let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("material.scsmart").to_string();
+        let result = std::fs::metadata(&src)
+            .map_err(|e| e.to_string())
+            .and_then(|m| {
+                if m.len() > texturecraft_engine::formats::scsmart::MAX_FILE_BYTES {
+                    Err("too large".to_string())
+                } else {
+                    std::fs::read(&src).map_err(|e| e.to_string())
+                }
+            })
+            .and_then(|bytes| {
+                if !texturecraft_engine::formats::scsmart::is_scsmart(&bytes) {
+                    return Err("not a SubCraft smart material".to_string());
+                }
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let stem = texturecraft_engine::formats::sanitize_resource_name(src.file_stem().and_then(|s| s.to_str()).unwrap_or("material"));
+                let dest =
+                    (0..).map(|n| if n == 0 { format!("{stem}.scsmart") } else { format!("{stem} ({n}).scsmart") }).map(|f| dir.join(f)).find(|p| !p.exists());
+                dest.ok_or_else(|| "no free name".to_string()).and_then(|d| std::fs::write(d, bytes).map_err(|e| e.to_string()))
+            });
+        match result {
+            Ok(()) => added += 1,
+            Err(e) => app.toast(trf("Couldn't import {name}: {error}", &[("name", &name), ("error", &e)]), true),
+        }
+    }
+    if added > 0 {
+        app.toast(trf("Added to the library: {count}", &[("count", &added)]), false);
+        app.library = None;
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

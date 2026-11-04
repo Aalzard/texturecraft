@@ -1033,4 +1033,18 @@ pub const TABLE: &[(&str, &str)] = &[
         "MaterialCraft에서 열었습니다. 변경 내용을 가져오려면 그곳에서 파일 > TextureCraft로 보내기를 사용하세요",
     ),
     ("Parameters change in the desktop app, with MaterialCraft installed", "매개변수는 MaterialCraft가 설치된 데스크톱 앱에서 바꿀 수 있습니다"),
+    ("Import SubCraft smart material...", "SubCraft 스마트 머티리얼 가져오기..."),
+    ("SubCraft smart materials", "SubCraft 스마트 머티리얼"),
+    ("SubCraft import", "SubCraft 가져오기"),
+    (
+        "{layers} layers, {masks} masks, {effects} effects and {images} images imported",
+        "레이어 {layers}개, 마스크 {masks}개, 효과 {effects}개, 이미지 {images}개를 가져왔습니다",
+    ),
+    ("Not imported", "가져오지 못함"),
+    ("Approximated", "근사 처리"),
+    ("Notes", "참고"),
+    ("on {layer}", "{layer}에서"),
+    ("Imported {name}: {count} differences (see the import summary)", "{name}을(를) 가져왔습니다: 차이 {count}건 (가져오기 요약 참고)"),
+    ("Import SubCraft smart materials (.scsmart) into the library", "SubCraft 스마트 머티리얼(.scsmart)을 라이브러리로 가져오기"),
+    ("Added to the library: {count}", "라이브러리에 추가됨: {count}"),
 ];

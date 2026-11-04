@@ -25,6 +25,16 @@ licensed and keep their license file next to them.
 | `docs/images/texturecraft-camera.png` | README render: a rangefinder camera (original procedural mesh) in black enamel worn to brass, leatherette, chrome and coated glass; the lens distance scale is an original image drawn in code (`texturecraft-cli render --camera Hero --samples 2048`, 1200×900) | TextureCraft contributors | original model and render by TextureCraft | MIT OR Apache-2.0 |
 | `docs/brand/artcraft-*.svg`, `docs/brand/artcraft-*.png` | ArtCraft logo and mark | ArtCraft Team | storytold/craftrules `assets/brand/` | ArtCraft brand terms, not open source ([`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt)) |
 
+## File formats read for compatibility
+
+Formats of sibling apps that TextureCraft reads with its own code. No file, asset or code of the
+other app is bundled; the reader is written from the format description and its tests build their
+fixtures in code.
+
+| Format | Used for | Author | Source | License |
+|---|---|---|---|---|
+| `.scsmart` (SubCraft smart material; `crates/formats/src/scsmart/`, mapping in [`docs/scsmart.md`](docs/scsmart.md)) | Importing SubCraft smart materials as layers | Aalzard and the SubCraft contributors | https://github.com/Aalzard/subcraft (`crates/project`, fragment format) | MIT OR Apache-2.0 |
+
 ## Third-party assets compiled into the binary
 
 These come from Rust crate dependencies (not files in this repository) and keep their licenses.

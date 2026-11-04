@@ -1048,4 +1048,18 @@ pub const TABLE: &[(&str, &str)] = &[
         "MaterialCraft で開きました。変更を戻すには、そちらで「ファイル > TextureCraft に送る」を使います",
     ),
     ("Parameters change in the desktop app, with MaterialCraft installed", "パラメーターは MaterialCraft をインストールしたデスクトップ版で変更できます"),
+    ("Import SubCraft smart material...", "SubCraftスマートマテリアルを読み込む..."),
+    ("SubCraft smart materials", "SubCraftスマートマテリアル"),
+    ("SubCraft import", "SubCraftの読み込み"),
+    (
+        "{layers} layers, {masks} masks, {effects} effects and {images} images imported",
+        "レイヤー{layers}個、マスク{masks}個、エフェクト{effects}個、画像{images}個を読み込みました",
+    ),
+    ("Not imported", "読み込めなかった項目"),
+    ("Approximated", "近似した項目"),
+    ("Notes", "メモ"),
+    ("on {layer}", "{layer} 上"),
+    ("Imported {name}: {count} differences (see the import summary)", "{name}を読み込みました: 差異が{count}件あります(読み込みの概要を参照)"),
+    ("Import SubCraft smart materials (.scsmart) into the library", "SubCraftスマートマテリアル(.scsmart)をライブラリに読み込む"),
+    ("Added to the library: {count}", "ライブラリに追加しました: {count}"),
 ];

@@ -185,11 +185,36 @@ impl TextureCraftApp {
     /// Run an engine command, reporting errors as toasts. Returns the result on success.
     pub fn run(&mut self, id: &str, params: Value) -> Option<Value> {
         match texturecraft_engine::execute(&mut self.session, id, &params) {
-            Ok(v) => Some(v),
+            Ok(v) => {
+                if let Some(report) = v.get("import") {
+                    self.note_import(report.clone());
+                }
+                Some(v)
+            }
             Err(e) => {
                 self.toast(e.to_string(), true);
                 None
             }
+        }
+    }
+
+    /// A SubCraft smart material was imported (`report` is the engine's `import` result): toast it,
+    /// and open the summary when anything did not map exactly.
+    pub fn note_import(&mut self, report: Value) {
+        let name = report.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
+        let differences: u64 = report
+            .get("issues")
+            .and_then(|i| i.as_array())
+            .into_iter()
+            .flatten()
+            .filter(|i| i.get("severity").and_then(|s| s.as_str()) != Some("note"))
+            .map(|i| i.get("count").and_then(|c| c.as_u64()).unwrap_or(1))
+            .sum();
+        if differences == 0 && report.get("more_issues").and_then(|m| m.as_u64()).unwrap_or(0) == 0 {
+            self.toast(trf("Imported {name}", &[("name", &name)]), false);
+        } else {
+            self.toast(trf("Imported {name}: {count} differences (see the import summary)", &[("name", &name), ("count", &differences)]), false);
+            self.ui.windows.import_summary = Some(report);
         }
     }
 

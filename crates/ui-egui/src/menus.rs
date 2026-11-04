@@ -47,6 +47,7 @@ pub const CATALOG: &[Item] = &[
     it("File", "Import resources...", "resource.import", None),
     it("File", "Import MaterialX material...", "file.importMaterialX", None),
     it("File", "Import material...", "material.load", None),
+    it("File", "Import SubCraft smart material...", "material.importScsmart", None),
     it("File", "Export Textures...", "ui.export", Some("Ctrl+Shift+E")),
     it("File", "Export Mesh...", "file.exportMesh", None),
     sep("File"),

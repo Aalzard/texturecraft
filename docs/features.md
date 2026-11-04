@@ -74,6 +74,12 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   thread, with the set's baked mesh maps (curvature, AO, thickness…) feeding graph inputs of the
   same name. *Open in MaterialCraft* edits the graph itself. In the browser the cooked maps paint,
   but the inputs are read-only.
+- **SubCraft smart materials:** *File › Import SubCraft smart material*, *File › Import material*,
+  a drop on the window, or the import button of *My smart materials* adds a SubCraft `.scsmart`
+  as a folder of layers with its fills, painted pixels, masks, generators and embedded images
+  mapped to TextureCraft's equivalents. Anything without a counterpart (an unknown blend mode, a
+  median filter, a mesh-map fill) is left out or approximated, and an import summary lists it
+  instead of failing. See [scsmart.md](scsmart.md) for what maps and what does not.
 
 ## Files and texture sets
 

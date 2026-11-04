@@ -1084,4 +1084,18 @@ pub const TABLE: &[(&str, &str)] = &[
         "In MaterialCraft geöffnet: Dort mit Datei > An TextureCraft senden die Änderungen zurückholen",
     ),
     ("Parameters change in the desktop app, with MaterialCraft installed", "Parameter lassen sich in der Desktop-App mit installiertem MaterialCraft ändern"),
+    ("Import SubCraft smart material...", "SubCraft-Smart-Material importieren..."),
+    ("SubCraft smart materials", "SubCraft-Smart-Materialien"),
+    ("SubCraft import", "SubCraft-Import"),
+    (
+        "{layers} layers, {masks} masks, {effects} effects and {images} images imported",
+        "{layers} Ebenen, {masks} Masken, {effects} Effekte und {images} Bilder importiert",
+    ),
+    ("Not imported", "Nicht importiert"),
+    ("Approximated", "Angenähert"),
+    ("Notes", "Hinweise"),
+    ("on {layer}", "auf {layer}"),
+    ("Imported {name}: {count} differences (see the import summary)", "{name} importiert: {count} Abweichungen (siehe Importübersicht)"),
+    ("Import SubCraft smart materials (.scsmart) into the library", "SubCraft-Smart-Materialien (.scsmart) in die Bibliothek importieren"),
+    ("Added to the library: {count}", "Zur Bibliothek hinzugefügt: {count}"),
 ];

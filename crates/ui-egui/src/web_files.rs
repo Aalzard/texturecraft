@@ -25,9 +25,12 @@ pub const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "tga", "tif", "tiff", "b
 /// Equirect HDR images Display settings › Import HDR accepts.
 pub const ENV_EXTS: &[&str] = &["hdr", "exr"];
 
-/// Materials File › Import material adds as layers: smart materials, MaterialCraft portable
-/// materials and MaterialCraft packages.
-pub const MATERIAL_EXTS: &[&str] = &["tcmat", "mcmat", "mcraft"];
+/// Materials File › Import material adds as layers: smart materials, SubCraft smart materials,
+/// MaterialCraft portable materials and MaterialCraft packages.
+pub const MATERIAL_EXTS: &[&str] = &["tcmat", "scsmart", "mcmat", "mcraft"];
+
+/// SubCraft smart materials File › Import SubCraft smart material accepts.
+pub const SCSMART_EXTS: &[&str] = &["scsmart"];
 
 /// Texture size of a project made from an opened mesh (smaller on the single-threaded web).
 const MESH_RESOLUTION: u32 = if cfg!(target_arch = "wasm32") { 1024 } else { 2048 };
@@ -125,7 +128,12 @@ pub fn load(app: &mut TextureCraftApp, name: &str, bytes: Vec<u8>) {
         return;
     }
     if MATERIAL_EXTS.contains(&ext.as_str()) {
-        if let Err(e) = app.session.add_smart_material_bytes(&bytes) {
+        let added = if texturecraft_engine::formats::scsmart::is_scsmart(&bytes) {
+            app.session.import_scsmart_bytes(&bytes).map(|(_, report)| app.note_import(serde_json::to_value(report).unwrap_or_default()))
+        } else {
+            app.session.add_smart_material_bytes(&bytes).map(|_| ())
+        };
+        if let Err(e) = added {
             app.toast(trf("Couldn't import {name}: {error}", &[("name", &name), ("error", &e)]), true);
         }
         return;
@@ -200,8 +208,8 @@ fn zip_files(files: &[ExportedFile]) -> Result<Vec<u8>, String> {
 
 #[cfg(target_arch = "wasm32")]
 pub use web::{
-    download, export_mesh, export_textures, import_bake_mesh, import_environment, import_images, import_material, import_preset, open, save_project,
-    sync_unsaved, unsaved,
+    download, export_mesh, export_textures, import_bake_mesh, import_environment, import_images, import_material, import_preset, import_scsmart, open,
+    save_project, sync_unsaved, unsaved,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -231,6 +239,11 @@ mod web {
     /// File › Import material: pick materials; they add as layers on a later frame.
     pub fn import_material(ctx: &egui::Context) {
         pick(ctx, tr("Materials"), MATERIAL_EXTS, true, Pick::Open);
+    }
+
+    /// File › Import SubCraft smart material: pick `.scsmart` files; they add as layers on a later frame.
+    pub fn import_scsmart(ctx: &egui::Context) {
+        pick(ctx, tr("SubCraft smart materials"), SCSMART_EXTS, true, Pick::Open);
     }
 
     /// File › Import resources: pick images; they import on a later frame.

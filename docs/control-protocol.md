@@ -139,7 +139,7 @@ takes a font family, not a path: it reads only the system's font folders.
 | `bake_mesh_add` | `{path, cage?}` | Add a high-definition mesh for baking, or set the cage → `{name, meshes}` |
 | `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil`, or as a mesh map instead of baking it: `textureSet.meshMap.set {ts?, map, image}` (`textureSet.meshMap.clear {ts?, map}` empties the slot) |
 | `material_save` | `{path, layer?, name?}` | A layer or folder as a `.tcmat` smart material below the write root |
-| `material_load` | `{path}` | Add a `.tcmat` smart material, a MaterialCraft `.mcmat` material or a `.mcraft` package above the selection |
+| `material_load` | `{path}` | Add a `.tcmat` smart material, a SubCraft `.scsmart` smart material, a MaterialCraft `.mcmat` material or a `.mcraft` package above the selection → `{layer}`; a `.scsmart` also returns `import`, the report of what could not be mapped (see `material.importScsmart`) |
 | `textures_export` | `{dir, preset?, ts?, format?, padding?, size?}` | Writes files below the write root |
 | `bake` | `{ts?, resolution?, maps?, cpu?}` | Mesh maps for generators and smart materials; rays on the GPU when there is one (`cpu: true`: on the CPU). Per-map ray settings (`ao`, `thickness`, `bentNormal`: rays, maxDistance, spread, distribution; AO ignoreBackface, selfOcclusion) are `bake.settings` parameters |
 | `paint_stroke` | `{points, viewport?, color?, roughness?, metallic?, height?, size?, hardness?}` | Paint tool + brush material + `tool.stroke`; points in viewport pixels |
@@ -233,7 +233,8 @@ not code.
 
 | Command | Params |
 |---|---|
-| `material.load` | `{path, above?, inside?, index?}`: `.tcmat`, `.mcmat` or `.mcraft` (cooked first) |
+| `material.load` | `{path, above?, inside?, index?}`: `.tcmat`, `.scsmart`, `.mcmat` or `.mcraft` (cooked first) |
+| `material.importScsmart` | `{path, above?, inside?, index?}`: a SubCraft `.scsmart` smart material (see below) |
 | `material.link.set` | `{layer?, id, value, cook?: true}`: a number, `[..]`, a bool, `"#rrggbb"` or a typed `{"t", "v"}`; re-cooks unless `cook: false` |
 | `material.link.preset` | `{layer?, name, cook?: true}` |
 | `material.link.cook` | `{layer?}`: re-cook at the texture set's resolution with its baked mesh maps (after a bake or a resize) |
@@ -247,6 +248,29 @@ matches the map's shared id (`ambientOcclusion`, `curvature`, `thickness`, `posi
 case and underscores ignored). Usages map to channels of the same id (`baseColor`, `normal` in
 OpenGL convention, `roughness`, `metallic`, `height`, `ambientOcclusion`, `emissive`, `opacity`,
 `specular`); missing channels join the texture set.
+
+### SubCraft smart materials
+
+`material.importScsmart {path, above?, inside?, index?}` (and `material.load` / the `material_load`
+tool on a `.scsmart`) maps a SubCraft smart material to layers in one undo step; the placement
+parameters are those of `material.load`. It returns the new folder and a report of what mapped:
+
+```json
+{"layer": 12, "name": "Painted Metal",
+ "import": {"name": "Painted Metal", "writer": "SubCraft 0.4.0", "schema_version": 16, "resolution": 2048,
+            "layers": 4, "folders": 1, "masks": 1, "effects": 5, "images": 2, "more_issues": 0,
+            "issues": [{"severity": "dropped", "layer": "Painted Metal / Steel", "what": "mesh-map fill \"curvature\"",
+                        "message": "TextureCraft fills cannot read baked maps; the channel is not written …", "count": 1}]}}
+```
+
+`severity` is `note` (imported, worth knowing), `approximated` (the closest TextureCraft
+equivalent) or `dropped` (left out); equal problems are merged into one issue with a `count`, and
+`more_issues` counts those beyond the report's cap. A file that is not a smart material (a smart
+mask, a damaged container or raster, a schema newer than 16, sizes beyond the limits) is an
+error, and the project is left untouched; everything else is a report entry, never an error.
+The report is also written to the session log (`SubCraft: …`). With `command_run` the usual rule
+applies (no host paths); use `material_load`. The format, the mapping tables and the limits are in
+[scsmart.md](scsmart.md).
 
 ## CLI
 

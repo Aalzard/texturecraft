@@ -30,6 +30,59 @@ pub fn show(app: &mut TextureCraftApp, ctx: &egui::Context) {
         bake_bar(app, ctx);
     }
     unsaved(app, ctx);
+    import_summary(app, ctx);
+}
+
+/// The report of a SubCraft smart material import that did not map exactly: what was left out,
+/// what was approximated, and notes. The texts of the issues come from the engine in English
+/// (they quote SubCraft's own names).
+fn import_summary(app: &mut TextureCraftApp, ctx: &egui::Context) {
+    let Some(report) = app.ui.windows.import_summary.clone() else { return };
+    let tk = Tokens::get(ctx);
+    let count = |key: &str| report.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+    let mut open = true;
+    let mut close = false;
+    dialog("import_summary", tr("SubCraft import"), &mut open).resizable(true).default_width(480.0).show(ctx, |ui| {
+        ui.label(RichText::new(report.get("name").and_then(|n| n.as_str()).unwrap_or_default()).size(15.0).strong().color(tk.text_strong));
+        ui.label(trf(
+            "{layers} layers, {masks} masks, {effects} effects and {images} images imported",
+            &[("layers", &count("layers")), ("masks", &count("masks")), ("effects", &count("effects")), ("images", &count("images"))],
+        ));
+        ui.add_space(6.0);
+        let issues = report.get("issues").and_then(|i| i.as_array()).cloned().unwrap_or_default();
+        egui::ScrollArea::vertical().max_height(320.0).auto_shrink([false, true]).show(ui, |ui| {
+            for (severity, title, color) in
+                [("dropped", tr("Not imported"), tk.danger), ("approximated", tr("Approximated"), tk.warning), ("note", tr("Notes"), tk.text_dim)]
+            {
+                let rows: Vec<&serde_json::Value> = issues.iter().filter(|i| i.get("severity").and_then(|s| s.as_str()) == Some(severity)).collect();
+                if rows.is_empty() {
+                    continue;
+                }
+                ui.label(RichText::new(title).strong().color(color));
+                for i in rows {
+                    let text = |k: &str| i.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                    let times = i.get("count").and_then(|c| c.as_u64()).filter(|c| *c > 1).map(|c| format!("  ×{c}")).unwrap_or_default();
+                    ui.label(format!("{}: {}{times}", text("what"), text("message")));
+                    let layer = text("layer");
+                    if !layer.is_empty() {
+                        ui.label(RichText::new(trf("on {layer}", &[("layer", &layer)])).size(11.0).color(tk.text_dim));
+                    }
+                }
+                ui.add_space(6.0);
+            }
+            let more = count("more_issues");
+            if more > 0 {
+                ui.label(RichText::new(format!("… +{more}")).color(tk.text_dim));
+            }
+        });
+        ui.add_space(4.0);
+        if primary_button(ui, tr("Close")).clicked() {
+            close = true;
+        }
+    });
+    if close || !open {
+        app.ui.windows.import_summary = None;
+    }
 }
 
 /// Hold `then` (quitting, opening or closing a project) behind the unsaved-changes dialog when
@@ -1085,6 +1138,12 @@ pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) ->
             }
             true
         }
+        "material.importScsmart" => {
+            for p in rfd::FileDialog::new().add_filter(tr("SubCraft smart materials"), crate::web_files::SCSMART_EXTS).pick_files().unwrap_or_default() {
+                app.run("material.importScsmart", json!({"path": p.display().to_string()}));
+            }
+            true
+        }
         "file.importResources" | "resource.import" => {
             let picks = rfd::FileDialog::new().add_filter(tr("Images"), crate::web_files::IMAGE_EXTS).pick_files();
             for p in picks.unwrap_or_default() {
@@ -1162,6 +1221,7 @@ pub fn file_action(app: &mut TextureCraftApp, ctx: &egui::Context, id: &str) -> 
         "file.open" => crate::web_files::open(ctx),
         "file.importResources" | "resource.import" => crate::web_files::import_images(ctx),
         "material.load" => crate::web_files::import_material(ctx),
+        "material.importScsmart" => crate::web_files::import_scsmart(ctx),
         "file.save" | "file.saveAs" | "file.saveCopy" => crate::web_files::save_project(app),
         "file.exportMesh" => app.ui.windows.export_mesh = true,
         _ => return false,

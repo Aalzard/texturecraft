@@ -973,4 +973,18 @@ pub const TABLE: &[(&str, &str)] = &[
         "已在 MaterialCraft 中打开：在其中使用“文件 > 发送到 TextureCraft”即可带回更改",
     ),
     ("Parameters change in the desktop app, with MaterialCraft installed", "参数可在安装了 MaterialCraft 的桌面版中修改"),
+    ("Import SubCraft smart material...", "导入 SubCraft 智能材质..."),
+    ("SubCraft smart materials", "SubCraft 智能材质"),
+    ("SubCraft import", "SubCraft 导入"),
+    (
+        "{layers} layers, {masks} masks, {effects} effects and {images} images imported",
+        "已导入 {layers} 个图层、{masks} 个蒙版、{effects} 个效果和 {images} 张图像",
+    ),
+    ("Not imported", "未导入"),
+    ("Approximated", "近似"),
+    ("Notes", "备注"),
+    ("on {layer}", "位于 {layer}"),
+    ("Imported {name}: {count} differences (see the import summary)", "已导入 {name}:有 {count} 处差异(见导入摘要)"),
+    ("Import SubCraft smart materials (.scsmart) into the library", "将 SubCraft 智能材质(.scsmart)导入库"),
+    ("Added to the library: {count}", "已添加到库:{count}"),
 ];

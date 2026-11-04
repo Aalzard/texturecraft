@@ -1026,4 +1026,18 @@ pub const TABLE: &[(&str, &str)] = &[
         "فُتحت في MaterialCraft: استخدم هناك ملف > إرسال إلى TextureCraft لإعادة تغييراتك",
     ),
     ("Parameters change in the desktop app, with MaterialCraft installed", "تتغير المعلمات في تطبيق سطح المكتب مع تثبيت MaterialCraft"),
+    ("Import SubCraft smart material...", "استيراد خامة ذكية من SubCraft..."),
+    ("SubCraft smart materials", "الخامات الذكية من SubCraft"),
+    ("SubCraft import", "استيراد SubCraft"),
+    (
+        "{layers} layers, {masks} masks, {effects} effects and {images} images imported",
+        "تم استيراد {layers} طبقات و{masks} أقنعة و{effects} تأثيرات و{images} صور",
+    ),
+    ("Not imported", "لم يتم استيراده"),
+    ("Approximated", "تقريبي"),
+    ("Notes", "ملاحظات"),
+    ("on {layer}", "على {layer}"),
+    ("Imported {name}: {count} differences (see the import summary)", "تم استيراد {name}: {count} اختلافات (راجع ملخص الاستيراد)"),
+    ("Import SubCraft smart materials (.scsmart) into the library", "استيراد خامات SubCraft الذكية (.scsmart) إلى المكتبة"),
+    ("Added to the library: {count}", "أُضيف إلى المكتبة: {count}"),
 ];
