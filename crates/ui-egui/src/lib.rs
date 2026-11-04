@@ -90,8 +90,8 @@ pub struct TextureCraftApp {
     pub fps: f32,
     /// User smart materials found in the library folder (refreshed on demand).
     pub library: Option<Vec<std::path::PathBuf>>,
-    /// User brush presets found in the brushes folder (refreshed on demand).
-    pub brushes: Option<Vec<std::path::PathBuf>>,
+    /// The user's brush presets were read from the brushes folder.
+    pub brushes: bool,
     /// Rendering mode's path tracer.
     pub render: render_mode::RenderView,
     /// Smoothed CPU time spent building the UI per frame (ms).
@@ -150,7 +150,7 @@ impl TextureCraftApp {
             ui_ms: 0.0,
             profiler: profile::Profiler::default(),
             library: None,
-            brushes: None,
+            brushes: false,
             render: render_mode::RenderView::default(),
             last_paint_point: None,
             placing_decal: None,
