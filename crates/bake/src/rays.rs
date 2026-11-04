@@ -131,7 +131,8 @@ impl Hemisphere {
             };
             match self.kind {
                 RayKind::Occlusion => {
-                    let v = hit.map_or(0.0, |h| 1.0 - (h.t / self.dmax).powi(2));
+                    // Linear falloff: a hit at the max distance no longer occludes.
+                    let v = hit.map_or(0.0, |h| 1.0 - h.t / self.dmax);
                     sum += v;
                     bent += d * (1.0 - v);
                 }

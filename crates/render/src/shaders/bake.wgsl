@@ -113,8 +113,7 @@ fn hemisphere_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocati
         let h = traverse_from(root, o, d, P.dmax, false);
         let hit = h.idx != NONE;
         if (occlusion) {
-            let f = h.t / P.dmax;
-            let v = select(0.0, 1.0 - f * f, hit);
+            let v = select(0.0, 1.0 - h.t / P.dmax, hit);
             sum += v;
             bent += d * (1.0 - v);
         } else {

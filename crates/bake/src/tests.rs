@@ -539,6 +539,32 @@ fn ambient_occlusion_settings_shape_the_occlusion() {
 }
 
 #[test]
+fn occlusion_falls_off_linearly_to_the_max_distance() {
+    // A floor under a ceiling at height 0.5; the ceiling has no UV area, so only the floor bakes.
+    let h = 0.5;
+    let corners = |y: f32| [Vec3::new(-1.0, y, -1.0), Vec3::new(1.0, y, -1.0), Vec3::new(1.0, y, 1.0), Vec3::new(-1.0, y, 1.0)];
+    let mut uvs = vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0)];
+    uvs.extend([Vec2::ZERO; 4]);
+    let normals = [[Vec3::Y; 4], [Vec3::NEG_Y; 4]].concat();
+    let m =
+        Mesh::from_parts(corners(0.0).into_iter().chain(corners(h)).collect(), Some(normals), uvs, vec![0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7], "Room").unwrap();
+    let diag = (8.0 + h * h).sqrt();
+    // Nearly vertical rays meet the ceiling at half the max distance.
+    let mut s = settings(16, &[BakedMap::AmbientOcclusion]);
+    s.ao = RaySettings { max_distance: 2.0 * h / diag, spread: 2.0, ..s.ao };
+    let ao = mean(covered_values(&m, &run(&m, &s).unwrap(), BakedMap::AmbientOcclusion).into_iter().map(|v| v.1));
+    assert!((ao - 0.5).abs() < 0.01, "{ao}");
+}
+
+#[test]
+fn ambient_occlusion_defaults_follow_the_common_convention() {
+    // 64 rays, a tenth of the bounding-box diagonal, the whole hemisphere, cosine-weighted.
+    let d = BakeSettings::default();
+    assert_eq!(d.ao, RaySettings { rays: 64, max_distance: 0.1, spread: 180.0, distribution: RayDistribution::Cosine });
+    assert_eq!((d.thickness, d.bent_normal), (d.ao, d.ao), "thickness and bent normals start from the same rays");
+}
+
+#[test]
 fn bent_normals_and_thickness_have_their_own_rays() {
     let m = floor_and_wall(false);
     let s = with_rays(settings(32, &[BakedMap::BentNormal, BakedMap::AmbientOcclusion]), 64, 2.0);
