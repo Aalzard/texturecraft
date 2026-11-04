@@ -477,7 +477,8 @@ impl TexturecraftMcp {
         to_result(self.call("material.save", params(&p)).await)
     }
 
-    #[tool(description = "Add a smart material from a .tcmat file (relative to the read root) above the selection. Returns its layer.")]
+    #[tool(description = "Add a smart material from a .tcmat, .mcmat, .mcraft or SubCraft .scsmart file (relative to the read root) above the \
+        selection. Returns its layer; a .scsmart also returns `import`, the report of what could not be mapped.")]
     async fn material_load(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
         to_result(self.call("material.load", params(&p)).await)
     }

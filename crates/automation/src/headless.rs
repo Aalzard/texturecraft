@@ -241,9 +241,14 @@ impl Headless {
         Ok(json!({ "path": path }))
     }
 
-    /// Add a smart material from a `.tcmat` file above the selection.
+    /// Add a smart material from a `.tcmat`, `.mcmat`, `.mcraft` or SubCraft `.scsmart` file above the
+    /// selection. A `.scsmart` also returns its import `report` (what could not be mapped).
     pub fn material_load(&mut self, path: &str) -> Result<Value, AutomationError> {
         let bytes = self.read(path)?;
+        if texturecraft_engine::formats::scsmart::is_scsmart(&bytes) {
+            let (id, report) = self.session.import_scsmart_bytes(&bytes)?;
+            return Ok(json!({ "layer": id.0, "import": report }));
+        }
         Ok(json!({ "layer": self.session.add_smart_material_bytes(&bytes)?.0 }))
     }
 

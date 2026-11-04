@@ -25,9 +25,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add smart material from file",
             [],
             None,
-            "{path: .tcmat smart material, .mcmat MaterialCraft material or .mcraft package, above?: layer id, inside?: bool, index?: n} — above the selection by default, or placed like material.apply",
+            "{path: .tcmat smart material, .scsmart SubCraft smart material, .mcmat MaterialCraft material or .mcraft package, above?: layer id, inside?: bool, index?: n} — above the selection by default, or placed like material.apply; a .scsmart also returns its `import` report",
             always,
             load
+        ),
+        cmd!(
+            "material.importScsmart",
+            "Import SubCraft smart material",
+            [],
+            None,
+            "{path: .scsmart file, above?: layer id, inside?: bool, index?: n} — maps the SubCraft smart material (folder, fills, masks, generators, images) to layers; returns {layer, name, import: {name, schema_version, layers, masks, effects, images, issues: [{severity: note|approximated|dropped, layer, what, message, count}]}}. What cannot be mapped is reported, never an error",
+            always,
+            import_scsmart
         ),
     ]
 }
@@ -99,12 +108,38 @@ impl Session {
     }
 
     /// [`Session::add_smart_material_bytes`] at `place` (shelf drag and drop). MaterialCraft
-    /// portable materials and packages become linked fill layers.
+    /// portable materials and packages become linked fill layers, SubCraft smart materials
+    /// (`.scsmart`) are mapped to layers (their report goes to the log).
     pub fn add_smart_material_bytes_at(&mut self, bytes: &[u8], place: Place) -> Result<LayerId> {
         if texturecraft_formats::mcmat::is_mcmat(bytes) || texturecraft_formats::mcmat::is_mcraft(bytes) {
             return self.add_linked_material_bytes_at(bytes, place);
         }
+        if texturecraft_formats::scsmart::is_scsmart(bytes) {
+            return self.import_scsmart_bytes_at(bytes, place).map(|(id, _)| id);
+        }
         let pf = texturecraft_formats::load_project_bytes(bytes).map_err(fe)?;
+        self.place_smart_material(pf, place, "Add smart material")
+    }
+
+    /// [`Session::import_scsmart_bytes_at`] above the selection.
+    pub fn import_scsmart_bytes(&mut self, bytes: &[u8]) -> Result<(LayerId, texturecraft_formats::scsmart::ImportReport)> {
+        self.import_scsmart_bytes_at(bytes, Place::Selection)
+    }
+
+    /// Map a SubCraft smart material (`.scsmart`) to layers and add it above the selection (or at
+    /// `place`) in one undo step. Returns the new layer and the import report: what could not be
+    /// mapped is in the report, never an error. The report is also written to the log.
+    pub fn import_scsmart_bytes_at(&mut self, bytes: &[u8], place: Place) -> Result<(LayerId, texturecraft_formats::scsmart::ImportReport)> {
+        let imported = texturecraft_formats::scsmart::read_scsmart(bytes).map_err(fe)?;
+        let id = self.place_smart_material(imported.file, place, "Import SubCraft smart material")?;
+        for line in imported.report.lines() {
+            self.log.push(format!("SubCraft: {line}"));
+        }
+        Ok((id, imported.report))
+    }
+
+    /// Add the smart material held by a one-texture-set project file (its last root layer).
+    fn place_smart_material(&mut self, pf: texturecraft_formats::ProjectFile, place: Place, label: &str) -> Result<LayerId> {
         let root = pf
             .project
             .texture_sets
@@ -113,7 +148,7 @@ impl Session {
             .ok_or_else(|| EngineError::Other("the smart material file has no layer".into()))?;
         let resources: BTreeMap<String, Arc<Vec<u8>>> = pf.resources.into_iter().map(|(k, v)| (k, Arc::new(v))).collect();
         let src = Document { project: pf.project, pixels: pf.pixels, baked: BTreeMap::new(), resources: resources.clone() };
-        let id = self.edit("Add smart material", |s| {
+        let id = self.edit(label, |s| {
             for (k, v) in &resources {
                 s.doc.resources.entry(k.clone()).or_insert_with(|| v.clone());
             }
@@ -155,8 +190,36 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
 fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let path = strp(p, "path").ok_or_else(|| bad("material.load", "`path` is required"))?;
     let bytes = std::fs::read(path).map_err(|e| bad("material.load", format!("cannot read {path}: {e}")))?;
+    if texturecraft_formats::scsmart::is_scsmart(&bytes) {
+        return scsmart_result(s, &bytes, p);
+    }
     let id = s.add_smart_material_bytes_at(&bytes, Place::from_params(p))?;
     Ok(json!({ "layer": id.0 }))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn import_scsmart(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = strp(p, "path").ok_or_else(|| bad("material.importScsmart", "`path` is required"))?;
+    let bytes = read_scsmart_file(path)?;
+    scsmart_result(s, &bytes, p)
+}
+
+/// A `.scsmart` file's bytes, refusing files over the importer's size limit before reading them.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_scsmart_file(path: &str) -> Result<Vec<u8>> {
+    let meta = std::fs::metadata(path).map_err(|e| bad("material.importScsmart", format!("cannot read {path}: {e}")))?;
+    if !meta.is_file() || meta.len() > texturecraft_formats::scsmart::MAX_FILE_BYTES {
+        return Err(bad("material.importScsmart", format!("{path} is not a regular file under {} MB", texturecraft_formats::scsmart::MAX_FILE_BYTES >> 20)));
+    }
+    std::fs::read(path).map_err(|e| bad("material.importScsmart", format!("cannot read {path}: {e}")))
+}
+
+/// Import `bytes` as a SubCraft smart material and describe the result.
+#[cfg(not(target_arch = "wasm32"))]
+fn scsmart_result(s: &mut Session, bytes: &[u8], p: &Value) -> Result<Value> {
+    let (id, report) = s.import_scsmart_bytes_at(bytes, Place::from_params(p))?;
+    let name = s.doc.project.layer(id).map(|l| l.name.clone()).unwrap_or_default();
+    Ok(json!({ "layer": id.0, "name": name, "import": report }))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -166,5 +229,10 @@ fn save(_: &mut Session, _: &Value) -> Result<Value> {
 
 #[cfg(target_arch = "wasm32")]
 fn load(_: &mut Session, _: &Value) -> Result<Value> {
+    Err(EngineError::Other("file paths are not available in the browser".into()))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn import_scsmart(_: &mut Session, _: &Value) -> Result<Value> {
     Err(EngineError::Other("file paths are not available in the browser".into()))
 }
