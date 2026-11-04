@@ -14,14 +14,22 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("layer.add.paint", "Add paint layer", ["Layers"], None, "{name?}", always, add_paint),
         cmd!("layer.add.fill", "Add fill layer", ["Layers"], None, "{name?, color?, roughness?, metallic?}", always, add_fill),
         cmd!("layer.add.group", "Add folder", ["Layers"], None, "{name?}", always, add_group),
-        cmd!("layer.remove", "Remove layer(s)", ["Layers"], Some("Delete"), "{layer?}", has_layer, remove),
-        cmd!("layer.duplicate", "Duplicate layer(s)", ["Layers"], Some("Ctrl+D"), "{layer?}", has_layer, duplicate),
-        cmd!("layer.group", "Group layer(s)", ["Layers"], Some("Ctrl+G"), "{layer?}", has_layer, group),
-        cmd!("layer.select", "Select layer", [], None, "{layer, target?: content|mask|<effect id>}", always, select),
+        cmd!("layer.remove", "Remove layer(s)", ["Layers"], Some("Delete"), "{layer? | layers?: [ids] (default: the whole selection)}", has_layer, remove),
+        cmd!("layer.duplicate", "Duplicate layer(s)", ["Layers"], Some("Ctrl+D"), "{layer? | layers?: [ids]} → {layer, layers}", has_layer, duplicate),
+        cmd!("layer.group", "Group layer(s)", ["Layers"], Some("Ctrl+G"), "{layer? | layers?: [ids]} → {layer: the new folder}", has_layer, group),
+        cmd!(
+            "layer.select",
+            "Select layer",
+            [],
+            None,
+            "{layer, target?: content|mask|<effect id>, mode?: replace|toggle|range|add} | {layers: [ids]} → {layer, selection}",
+            always,
+            select
+        ),
         cmd!("layer.rename", "Rename layer", [], None, "{layer?, name}", has_layer, rename),
-        cmd!("layer.visible", "Toggle layer visibility", [], None, "{layer?, visible?}", has_layer, visible),
+        cmd!("layer.visible", "Toggle layer visibility", [], None, "{layer? | layers?: [ids], visible?}", has_layer, visible),
         cmd!("layer.move", "Move layer", [], None, "{layer?, index?} | {layer?, above?: id|null, inside?: bool} | {layer?, delta: ±n}", has_layer, move_layer),
-        cmd!("layer.blend", "Set channel blending", [], None, "{layer?, channel?: id|all, mode?, opacity?: 0..1, enabled?}", has_layer, blend),
+        cmd!("layer.blend", "Set channel blending", [], None, "{layer? | layers?: [ids], channel?: id|all, mode?, opacity?: 0..1, enabled?}", has_layer, blend),
         cmd!(
             "layer.fill.set",
             "Set fill source",
@@ -54,6 +62,58 @@ pub(crate) fn insert_selected(s: &mut Session, layer: Layer) -> Result<LayerId> 
     s.selected.insert(ts, id);
     s.target = StackTarget::Content;
     Ok(id)
+}
+
+/// The layers a command acts on: `layers: [ids]`, else `layer`, else the whole selection.
+/// Layers inside another target are dropped when `top_only` (the group carries them along).
+fn targets(s: &Session, cmd: &str, p: &Value, top_only: bool) -> Result<Vec<LayerId>> {
+    let mut ids: Vec<LayerId> = match p.get("layers") {
+        Some(Value::Array(a)) => {
+            let mut ids = Vec::new();
+            for v in a {
+                let id = LayerId(v.as_u64().ok_or_else(|| bad(cmd, "`layers` must be layer ids"))?);
+                s.doc.project.layer(id).map_err(|_| bad(cmd, format!("no layer {}", id.0)))?;
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            ids
+        }
+        Some(_) => return Err(bad(cmd, "`layers` must be an array of layer ids")),
+        None if p.get("layer").is_some() => vec![layer_param(s, cmd, p)?],
+        None => s.selection(),
+    };
+    if ids.is_empty() {
+        return Err(bad(cmd, "no layer selected and no `layer` given"));
+    }
+    if top_only {
+        let all = ids.clone();
+        ids.retain(|id| !all.iter().any(|o| o != id && s.doc.project.render_tree(&[*o]).contains(id)));
+    }
+    // Stack order, so copies and groups keep the order the layers have.
+    let order: Vec<LayerId> = s.doc.project.texture_sets.iter().enumerate().flat_map(|(t, _)| s.doc.project.walk(t)).map(|(l, _)| l).collect();
+    ids.sort_by_key(|id| order.iter().position(|o| o == id));
+    Ok(ids)
+}
+
+/// The layers as shown in the panel, top to bottom (what a shift-click range runs over).
+fn panel_order(s: &Session, ts: usize) -> Vec<LayerId> {
+    fn go(s: &Session, list: &[LayerId], out: &mut Vec<LayerId>, depth: usize) {
+        if depth > texturecraft_core::project::MAX_DEPTH {
+            return;
+        }
+        for id in list.iter().rev() {
+            out.push(*id);
+            if let Some(Layer { kind: LayerKind::Group { children, collapsed: false }, .. }) = s.doc.project.layers.get(id) {
+                go(s, children, out, depth + 1);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(t) = s.doc.project.texture_sets.get(ts) {
+        go(s, &t.stack, &mut out, 0);
+    }
+    out
 }
 
 fn channels_of(s: &Session) -> Vec<Channel> {
@@ -110,46 +170,76 @@ fn add_group(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn remove(s: &mut Session, p: &Value) -> Result<Value> {
-    let id = layer_param(s, "layer.remove", p)?;
+    let ids = targets(s, "layer.remove", p, true)?;
     let before = s.doc.clone();
     let removed = s.edit("Remove layer", |s| {
-        let (ts, parent, i) = s.doc.project.locate(id).ok_or(EngineError::Other("layer not in a stack".into()))?;
-        let removed = s.doc.project.remove_layer(id)?;
+        let mut removed = Vec::new();
+        let mut next = None;
+        let mut set = 0;
+        for id in ids {
+            let (ts, parent, i) = s.doc.project.locate(id).ok_or(EngineError::Other("layer not in a stack".into()))?;
+            removed.extend(s.doc.project.remove_layer(id)?);
+            set = ts;
+            // Select the layer below (or above) the removed one.
+            let list = match parent {
+                Some(g) => s.doc.project.layer(g).map(|l| l.children().to_vec()).unwrap_or_default(),
+                None => s.doc.project.texture_set(ts).map(|t| t.stack.clone()).unwrap_or_default(),
+            };
+            next = list.get(i.saturating_sub(1)).or(list.first()).copied().or(parent);
+        }
         // Instances of what was removed keep their look as independent layers.
         crate::instance_cmds::detach_orphans(s, &before)?;
-        // Select the layer below (or above) the removed one.
-        let list = match parent {
-            Some(g) => s.doc.project.layer(g).map(|l| l.children().to_vec()).unwrap_or_default(),
-            None => s.doc.project.texture_set(ts).map(|t| t.stack.clone()).unwrap_or_default(),
-        };
-        let next = list.get(i.saturating_sub(1)).or(list.first()).copied().or(parent);
+        let next = next.filter(|n| s.doc.project.layers.contains_key(n)).or_else(|| s.doc.project.texture_set(set).ok().and_then(|t| t.stack.last().copied()));
         match next {
-            Some(n) => s.selected.insert(ts, n),
-            None => s.selected.remove(&ts),
+            Some(n) => s.selected.insert(set, n),
+            None => s.selected.remove(&set),
         };
+        s.multi = Default::default();
         Ok(removed)
     })?;
     Ok(json!({ "removed": removed.iter().map(|l| l.0).collect::<Vec<_>>() }))
 }
 
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
-    let id = layer_param(s, "layer.duplicate", p)?;
-    let (ts, _, _) = s.doc.project.locate(id).ok_or(EngineError::Other("layer not in a stack".into()))?;
+    let ids = targets(s, "layer.duplicate", p, true)?;
+    let primary = s.selected_layer();
     let src = s.doc.clone();
     let new = s.edit("Duplicate layer", |s| {
-        let new = crate::layer_ops::copy_tree(&src, id, &mut s.doc, ts, Some(id), false, 0)?;
-        let name = format!("{} copy", src.project.layer(id)?.name);
-        s.doc.project.layer_mut(new)?.name = name;
-        Ok(new)
+        let mut out = Vec::new();
+        let mut ts_of = None;
+        for id in ids {
+            let (ts, _, _) = src.project.locate(id).ok_or(EngineError::Other("layer not in a stack".into()))?;
+            if ts_of.is_some_and(|t| t != ts) {
+                return Err(EngineError::Other("the layers are in different texture sets".into()));
+            }
+            ts_of = Some(ts);
+            let new = crate::layer_ops::copy_tree(&src, id, &mut s.doc, ts, Some(id), false, 0)?;
+            let name = format!("{} copy", src.project.layer(id)?.name);
+            s.doc.project.layer_mut(new)?.name = name;
+            out.push((id, new, ts));
+        }
+        Ok(out)
     })?;
-    s.selected.insert(ts, new);
-    Ok(json!({ "layer": new.0 }))
+    if let Some(&(_, _, ts)) = new.first() {
+        // The copy of the primary layer (else the last copy) is selected, with the other copies.
+        let main = new.iter().find(|(o, _, _)| Some(*o) == primary).or(new.last()).map(|(_, n, _)| *n);
+        if let Some(main) = main {
+            s.selected.insert(ts, main);
+            s.multi = crate::MultiSelect { primary: Some(main), extra: new.iter().map(|(_, n, _)| *n).filter(|n| *n != main).collect() };
+        }
+    }
+    let ids: Vec<u64> = new.iter().map(|(_, n, _)| n.0).collect();
+    Ok(json!({ "layer": ids.last(), "layers": ids }))
 }
 
 fn group(s: &mut Session, p: &Value) -> Result<Value> {
-    let id = layer_param(s, "layer.group", p)?;
+    let ids = targets(s, "layer.group", p, true)?;
     let g = s.edit("Group layers", |s| {
-        let (ts, _, _) = s.doc.project.locate(id).ok_or(EngineError::Other("layer not in a stack".into()))?;
+        let (ts, _, _) = s.doc.project.locate(ids[0]).ok_or(EngineError::Other("layer not in a stack".into()))?;
+        if ids.iter().any(|id| s.doc.project.locate(*id).map(|l| l.0) != Some(ts)) {
+            return Err(EngineError::Other("the layers are in different texture sets".into()));
+        }
+        let anchor = ids[ids.len() - 1];
         let gid = s.doc.project.alloc_id();
         let name = s.doc.project.next_layer_name(ts, "Folder");
         let channels = s.doc.project.texture_set(ts)?.channel_list();
@@ -157,19 +247,82 @@ fn group(s: &mut Session, p: &Value) -> Result<Value> {
         for b in gl.channels.values_mut() {
             b.mode = BlendMode::Passthrough;
         }
-        s.doc.project.insert_layer(ts, gl, Some(id), false)?;
-        s.doc.project.move_above(id, Some(gid), true)?;
+        s.doc.project.insert_layer(ts, gl, Some(anchor), false)?;
+        // Each layer goes on top of the group, so bottom to top keeps their order.
+        for id in &ids {
+            s.doc.project.move_above(*id, Some(gid), true)?;
+        }
         s.selected.insert(ts, gid);
+        s.multi = Default::default();
         Ok(gid)
     })?;
     Ok(json!({ "layer": g.0 }))
 }
 
+/// `layer.select` with `mode`: `replace` (default) selects only `layer` (or `layers`, the last one
+/// primary); `toggle` adds or removes `layer` (an added layer becomes the primary one); `range`
+/// adds everything between the primary layer and `layer` as the panel shows it (the primary layer
+/// stays the anchor); `add` adds `layer`/`layers`.
 fn select(s: &mut Session, p: &Value) -> Result<Value> {
+    let mode = strp(p, "mode").unwrap_or("replace");
+    if !["replace", "toggle", "range", "add"].contains(&mode) {
+        return Err(bad("layer.select", "mode must be replace, toggle, range or add"));
+    }
+    if mode == "replace" && p.get("layers").is_none() {
+        return select_one(s, p);
+    }
+    let ids = targets(s, "layer.select", p, false)?;
+    let (ts, _, _) = s.doc.project.locate(ids[0]).ok_or_else(|| bad("layer.select", "layer not in a stack"))?;
+    if ids.iter().any(|id| s.doc.project.locate(*id).map(|l| l.0) != Some(ts)) {
+        return Err(bad("layer.select", "the layers are in different texture sets"));
+    }
+    let current = if s.active_set == ts { s.selection() } else { Vec::new() };
+    let primary = s.selected_layer().filter(|_| s.active_set == ts);
+    let (new_primary, set): (LayerId, Vec<LayerId>) = match mode {
+        "toggle" => {
+            let id = ids[0];
+            if current.contains(&id) {
+                let rest: Vec<LayerId> = current.iter().copied().filter(|l| *l != id).collect();
+                match (primary == Some(id), rest.last()) {
+                    (_, None) => (id, vec![id]),
+                    (true, Some(last)) => (*last, rest),
+                    (false, Some(_)) => (primary.unwrap_or(id), rest),
+                }
+            } else {
+                let mut all = current;
+                all.push(id);
+                (id, all)
+            }
+        }
+        "range" => {
+            let order = panel_order(s, ts);
+            let at = |l: LayerId| order.iter().position(|o| *o == l);
+            match (primary.and_then(at), at(ids[0])) {
+                (Some(a), Some(b)) => (primary.unwrap_or(ids[0]), order[a.min(b)..=a.max(b)].to_vec()),
+                _ => (ids[0], vec![ids[0]]),
+            }
+        }
+        "add" => {
+            let mut all = current;
+            all.extend(ids.iter().copied());
+            (ids[ids.len() - 1], all)
+        }
+        _ => (ids[ids.len() - 1], ids.clone()),
+    };
+    s.active_set = ts;
+    s.selected.insert(ts, new_primary);
+    s.target = StackTarget::Content;
+    s.multi = crate::MultiSelect { primary: Some(new_primary), extra: set.into_iter().filter(|l| *l != new_primary).collect() };
+    s.revision = s.revision.wrapping_add(1);
+    Ok(json!({ "layer": new_primary.0, "textureSet": ts, "selection": s.selection().iter().map(|l| l.0).collect::<Vec<_>>() }))
+}
+
+fn select_one(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, "layer.select", p)?;
     let (ts, _, _) = s.doc.project.locate(id).ok_or_else(|| bad("layer.select", "layer not in a stack"))?;
     s.active_set = ts;
     s.selected.insert(ts, id);
+    s.multi = Default::default();
     s.target = match p.get("target") {
         Some(Value::String(t)) if t == "mask" => {
             if s.doc.project.layer(s.doc.project.mask_owner(id))?.mask.is_none() {
@@ -202,11 +355,17 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn visible(s: &mut Session, p: &Value) -> Result<Value> {
-    let id = layer_param(s, "layer.visible", p)?;
+    let ids = targets(s, "layer.visible", p, false)?;
+    // Without `visible`, a layer flips; several layers all show unless they all are shown already.
+    let want = boolp(p, "visible").or_else(|| (ids.len() > 1).then(|| ids.iter().any(|id| s.doc.project.layer(*id).is_ok_and(|l| !l.visible))));
     let v = s.edit("Layer visibility", |s| {
-        let l = s.doc.project.layer_mut(id)?;
-        l.visible = boolp(p, "visible").unwrap_or(!l.visible);
-        Ok(l.visible)
+        let mut last = true;
+        for id in ids {
+            let l = s.doc.project.layer_mut(id)?;
+            l.visible = want.unwrap_or(!l.visible);
+            last = l.visible;
+        }
+        Ok(last)
     })?;
     Ok(json!({ "visible": v }))
 }
@@ -232,7 +391,7 @@ fn move_layer(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn blend(s: &mut Session, p: &Value) -> Result<Value> {
-    let id = content_param(s, "layer.blend", p)?;
+    let ids: Vec<LayerId> = targets(s, "layer.blend", p, false)?.into_iter().map(|id| s.doc.project.content_layer(id).map_or(id, |l| l.id)).collect();
     let all = strp(p, "channel") == Some("all");
     let ch = if all { None } else { channel_param("layer.blend", p, "channel")? };
     let mode = blend_param("layer.blend", p, "mode")?;
@@ -240,29 +399,31 @@ fn blend(s: &mut Session, p: &Value) -> Result<Value> {
     let enabled = boolp(p, "enabled");
     let ts_channels = channels_of(s);
     s.edit("Layer blending", |s| {
-        let l = s.doc.project.layer_mut(id)?;
-        let targets: Vec<Channel> = match ch {
-            Some(c) => vec![c],
-            None => ts_channels.clone(),
-        };
-        for c in targets {
-            match enabled {
-                Some(false) => {
-                    l.channels.remove(&c);
-                    continue;
+        for id in ids {
+            let l = s.doc.project.layer_mut(id)?;
+            let targets: Vec<Channel> = match ch {
+                Some(c) => vec![c],
+                None => ts_channels.clone(),
+            };
+            for c in targets {
+                match enabled {
+                    Some(false) => {
+                        l.channels.remove(&c);
+                        continue;
+                    }
+                    Some(true) => {
+                        let mode = if l.is_group() { BlendMode::Passthrough } else { BlendMode::Normal };
+                        l.channels.entry(c).or_insert(ChannelBlend { mode, opacity: 1.0 });
+                    }
+                    None => {}
                 }
-                Some(true) => {
-                    let mode = if l.is_group() { BlendMode::Passthrough } else { BlendMode::Normal };
-                    l.channels.entry(c).or_insert(ChannelBlend { mode, opacity: 1.0 });
-                }
-                None => {}
-            }
-            if let Some(b) = l.channels.get_mut(&c) {
-                if let Some(m) = mode {
-                    b.mode = m;
-                }
-                if let Some(o) = opacity {
-                    b.opacity = o;
+                if let Some(b) = l.channels.get_mut(&c) {
+                    if let Some(m) = mode {
+                        b.mode = m;
+                    }
+                    if let Some(o) = opacity {
+                        b.opacity = o;
+                    }
                 }
             }
         }

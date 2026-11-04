@@ -283,6 +283,15 @@ pub enum StackTarget {
     Effect(LayerId),
 }
 
+/// Layers selected together with the primary one (Ctrl/Shift-click in the layer panel). It is
+/// only valid while `primary` is still the selected layer, so any command that selects another
+/// layer ends the multi-selection without knowing about it. Not saved, not in the history.
+#[derive(Clone, Debug, Default)]
+pub struct MultiSelect {
+    pub primary: Option<LayerId>,
+    pub extra: BTreeSet<LayerId>,
+}
+
 pub(crate) struct ActiveStroke {
     pub ts: usize,
     /// None: the stroke edits the quick mask.
@@ -331,6 +340,8 @@ pub struct Session {
     pub active_set: usize,
     /// Selected layer per texture set.
     pub selected: BTreeMap<usize, LayerId>,
+    /// The layers selected beside the primary one (see [`Session::selection`]).
+    pub multi: MultiSelect,
     pub target: StackTarget,
     pub camera: OrbitCamera,
     pub view: ViewMode,
@@ -390,6 +401,7 @@ impl Session {
             tool: ToolState::default(),
             active_set: 0,
             selected,
+            multi: MultiSelect::default(),
             target: StackTarget::Content,
             camera,
             view: ViewMode::Material,
@@ -479,6 +491,15 @@ impl Session {
     pub fn selected_layer(&self) -> Option<LayerId> {
         let ts = self.ts();
         self.selected.get(&ts).copied().filter(|id| self.doc.project.locate(*id).is_some_and(|(t, _, _)| t == ts))
+    }
+
+    /// Every selected layer of the active set (the primary one included), in stack order. One
+    /// layer unless the user multi-selected; the painting target is always [`Self::selected_layer`].
+    pub fn selection(&self) -> Vec<LayerId> {
+        let Some(primary) = self.selected_layer() else { return Vec::new() };
+        let ts = self.ts();
+        let extra = if self.multi.primary == Some(primary) { &self.multi.extra } else { return vec![primary] };
+        self.doc.project.walk(ts).into_iter().map(|(id, _)| id).filter(|id| *id == primary || extra.contains(id)).collect()
     }
 
     // -----------------------------------------------------------------------------------------

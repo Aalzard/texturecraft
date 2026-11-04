@@ -280,7 +280,8 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click_and_drag());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::ListItem, true, selected, &layer.name));
     let p = ui.painter().clone();
-    let bg = if selected && app.session.target == StackTarget::Content {
+    let also_selected = !selected && app.session.selection().contains(&layer.id);
+    let bg = if also_selected || (selected && app.session.target == StackTarget::Content) {
         tk.row_selected
     } else if resp.hovered() {
         tk.row_hover
@@ -475,7 +476,10 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     }
     // Interaction: select, rename, drag & drop, context menu.
     if resp.clicked() && !eye_resp.clicked() && !renaming {
-        app.run("layer.select", json!({"layer": layer.id.0}));
+        // Ctrl/Cmd-click toggles a layer in the selection, Shift-click selects a range.
+        let (command, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+        let mode = if shift { "range" } else if command { "toggle" } else { "replace" };
+        app.run("layer.select", json!({"layer": layer.id.0, "mode": mode}));
     }
     if resp.double_clicked() && !eye_resp.clicked() && !renaming {
         app.ui.rename = Some((layer.id.0, layer.name.clone()));

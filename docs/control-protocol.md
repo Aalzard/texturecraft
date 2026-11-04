@@ -19,6 +19,14 @@ index}` reorders an effect within its stack (0 = bottom) and `effect.duplicate {
 one just above itself. `effect.copy {effect?}` and `effect.cut {effect?}` put an effect on the
 layer clipboard, and `effect.paste {layer?, target?}` adds it to another layer's content or mask.
 
+Several layers can be selected at once. `layer.select {layer, mode}` takes `mode: "toggle"` (Ctrl/Cmd-click:
+adds or removes the layer; an added layer becomes the primary one) or `"range"` (Shift-click: everything between
+the primary layer and `layer` as the panel shows it, collapsed folders skipped), and `layer.select {layers: [ids]}`
+replaces the selection. A plain `layer.select {layer}` ends it. The primary layer stays the painting target.
+`session.inspect` lists `selectedLayers`. `layer.remove`, `layer.duplicate`, `layer.group`, `layer.visible` and
+`layer.blend` act on `layers: [ids]` when given, else on `layer`, else on the whole selection, as one undo step
+(`layer.group` puts them in one new folder, `layer.visible` without `visible` shows all unless all are shown).
+
 `edit.undo {steps?}` and `edit.redo {steps?}` go back or forward several steps at once (as far
 as the history reaches); `edit.history` lists the steps done and the undone ones, next first.
 Any command takes `merge: true` to fold its edit into the previous undo step when that step has
