@@ -1,4 +1,4 @@
-// GPU mesh-map baking: the ray casts of `texturecraft_bake::rays` (the CPU oracle) as compute
+// GPU mesh-map baking: the ray casts of `texturecraft_bake::tracing` (the CPU oracle) as compute
 // shaders, concatenated after rays.wgsl. `transfer_main` finds the closest high-poly hit of each
 // transfer ray; `hemisphere_main` casts a query's secondary rays (ambient occlusion and bent
 // normal, or thickness) in the same directions as `Hemisphere::direction`, spread over `lanes`

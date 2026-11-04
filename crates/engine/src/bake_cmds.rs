@@ -6,9 +6,11 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};
 
 use serde_json::{Value, json};
-use texturecraft_bake::rays::Tracer;
+use texturecraft_bake::tracing::Tracer;
 use texturecraft_bake::{BakeOutput, BakeRequest, HighPoly, MAX_RAYS, Progress, SkewMap, bake, bake_on};
-use texturecraft_core::{BakeMatch, BakeSettings, BakedMap, DirectionMode, PositionMode, RayDistribution, RaySettings, SelfOcclusion};
+use texturecraft_core::{
+    BackfaceMode, BakeAntialiasing, BakeResolution, BakeSettings, BakedMap, CurvatureMethod, PositionMode, RayDistribution, RaySettings, SelfOcclusion,
+};
 use texturecraft_geom::{BaseColor, Bvh, Mesh};
 
 use crate::commands::{CommandSpec, always, bad, boolp, f32p, strp, u64p};
@@ -30,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Bake settings",
             [],
             None,
-            "{ts?: index|[indices]|\"all\"|\"selected\" (default: the active set), resolution?, antialiasing?: 1|2|4|8, dilation?, ao?: {rays?, maxDistance?, spread?: degrees (180 = hemisphere), distribution?: cosine|uniform, ignoreBackface?, selfOcclusion?: always|sameMeshName}, thickness?: {rays?, maxDistance?, spread?, distribution?}, bentNormal?: {rays?, maxDistance?, spread?, distribution?}, rays?, maxDistance? (all three ray maps), curvatureStrength?, curvatureFromNormal?, curvatureRadius?: texels (0 = auto), positionMode?: boundingBox|boundingSphere, direction?: [x,y,z], directionMode?: signed|positive, maps?: [ids], enabled?, useLowAsHigh?, maxFrontal?, maxRear?, averageNormals?, matching?: always|byMeshName, lowSuffix?, highSuffix?}",
+            "{ts?: index|[indices]|\"all\"|\"selected\" (default: the active set), model?: complete nested BakeSettings (named enum values), preserveEnabled?: keep each texture set enabled flag when replacing the model, resolution?, antialiasing?: 1|2|4|8, dilation?, ao?: {rays?, maxDistance?, spread?: degrees (180 = hemisphere), distribution?: cosine|uniform, ignoreBackface?: never|always|byMeshName, selfOcclusion?: always|sameMeshName}, thickness?: {rays?, maxDistance?, spread?, distribution?}, bentNormal?: {rays?, maxDistance?, spread?, distribution?}, rays?, maxDistance? (all three ray maps), curvatureMethod?: normalMap|mesh, positionMode?: boundingBox|boundingSphere|none, maps?: [ids], enabled?, useLowAsHigh?, maxFrontal?, maxRear?, averageNormals?, lowSuffix?, highSuffix?}",
             always,
             settings
         ),
@@ -39,7 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add high definition mesh",
             [],
             None,
-            "{path} — a mesh file (glb, gltf, fbx, dae, usd, usda, usdc, usdz, abc, obj, ply, stl; base color textures from glTF, embedded FBX media, usdz packages and image files next to a .gltf or USD layer feed the color map)",
+            "{path} — a mesh file (glb, gltf, fbx, dae, usd, usda, usdc, usdz, abc, obj, ply, stl; base color textures from glTF, embedded FBX media, usdz packages and image files next to a .gltf or USD layer supply opacity)",
             always,
             high_add
         ),
@@ -56,7 +58,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set skew correction",
             [],
             None,
-            "{value?: 0..1 (a constant map, default 1) | path: a greyscale image over the UV atlas (white turns the rays onto the base normal, black keeps the cage's averaged direction), edgeDistance?: fraction of the mesh diagonal over which hard edges hold the correction back (default 0), edgeContrast?: falloff exponent (default 1), base?: mesh|triangle (default mesh)} → {skew}. Applies to the transfer rays of a bake from the built-in distance cage; a cage mesh ignores it",
+            "{value?: 0..1 (a constant map, default 1) | path: a greyscale image over the UV atlas (white turns the rays onto the base normal, black keeps the cage's averaged direction), edgeDistance?: fraction of the mesh diagonal over which hard edges hold the correction back (default 0), edgeContrast?: falloff exponent (default 1)} → {skew}. Applies to the transfer rays of a bake from the built-in distance cage; a cage mesh ignores it",
             always,
             skew_set
         ),
@@ -197,7 +199,7 @@ fn parse_mesh(file_name: &str, bytes: Vec<u8>) -> Result<BakeMesh> {
 impl Session {
     pub fn bake_task(&self, ts: usize) -> Result<BakeTask> {
         let set = self.doc.project.texture_set(ts)?;
-        let high = if set.bake.use_low_as_high { None } else { self.bake_meshes.merged.clone() };
+        let high = if set.bake.high_poly.use_low_as_high { None } else { self.bake_meshes.merged.clone() };
         let cage = high.as_ref().and(self.bake_meshes.cage.as_ref()).map(|c| c.mesh.clone());
         let skew = high.as_ref().and(self.bake_meshes.skew.clone());
         let tiles = set.tile_grid().map_or((1, 1), |g| (g.cols, g.rows));
@@ -208,7 +210,6 @@ impl Session {
     /// Store a finished bake (one undo step).
     pub fn apply_bake(&mut self, ts: usize, out: BakeOutput) -> Result<()> {
         self.log.push(format!("Baked texture set {ts} ({})", out.tracer));
-        let made: Vec<BakedMap> = out.maps.keys().copied().collect();
         self.edit("Bake mesh maps", |s| {
             let maps: BTreeSet<BakedMap> = out.maps.keys().copied().collect();
             let entry = s.doc.baked.entry(ts).or_default();
@@ -219,13 +220,11 @@ impl Session {
             s.doc.project.texture_set_mut(ts)?.baked.extend(maps);
             Ok(())
         })?;
-        self.note_baked(ts, made.into_iter());
         Ok(())
     }
 
     /// Bake texture set `ts` now (blocking), on the CPU when `cpu`; returns where the rays ran.
     pub fn bake_now(&mut self, ts: usize, cpu: bool) -> Result<String> {
-        self.begin_bake(ts);
         let mut task = self.bake_task(ts)?;
         if cpu {
             task.tracer = None;
@@ -248,7 +247,7 @@ impl Session {
         self.bake_meshes.high.push(m);
         self.bake_meshes.rebuild();
         for set in &mut self.doc.project.texture_sets {
-            set.bake.use_low_as_high = false;
+            set.bake.high_poly.use_low_as_high = false;
         }
         self.modified = true;
         Ok(name)
@@ -310,14 +309,7 @@ impl Session {
     /// The skew map of a project file, if it passes the baker's checks.
     pub(crate) fn load_skew(&mut self, skew: Option<texturecraft_formats::SkewData>) {
         let Some(k) = skew else { return };
-        let map = SkewMap {
-            width: k.width,
-            height: k.height,
-            values: k.values,
-            edge_distance: k.edge_distance,
-            edge_contrast: k.edge_contrast,
-            per_triangle: k.per_triangle,
-        };
+        let map = SkewMap { width: k.width, height: k.height, values: k.values, edge_distance: k.edge_distance, edge_contrast: k.edge_contrast };
         match map.validate() {
             Ok(()) => {
                 self.bake_meshes.skew = Some(Arc::new(map));
@@ -336,7 +328,6 @@ impl Session {
             values: k.values.clone(),
             edge_distance: k.edge_distance,
             edge_contrast: k.edge_contrast,
-            per_triangle: k.per_triangle,
         })
     }
 
@@ -350,9 +341,8 @@ impl Session {
 /// `bake.highPoly.list`: the high polys and the cage (also part of `project.inspect`).
 pub fn meshes_json(s: &Session) -> Value {
     let one = |m: &BakeMesh| json!({ "name": m.name, "triangles": m.mesh.triangle_count(), "parts": m.mesh.submeshes.iter().map(|p| p.name.as_str()).collect::<Vec<_>>() });
-    let skew = s.bake_meshes.skew.as_ref().map(|k| {
-        json!({ "width": k.width, "height": k.height, "edgeDistance": k.edge_distance, "edgeContrast": k.edge_contrast, "base": if k.per_triangle { "triangle" } else { "mesh" } })
-    });
+    let skew =
+        s.bake_meshes.skew.as_ref().map(|k| json!({ "width": k.width, "height": k.height, "edgeDistance": k.edge_distance, "edgeContrast": k.edge_contrast }));
     json!({ "highPoly": s.bake_meshes.high.iter().map(one).collect::<Vec<_>>(), "cage": s.bake_meshes.cage.as_ref().map(one), "skew": skew })
 }
 
@@ -418,11 +408,6 @@ fn skew_set(s: &mut Session, p: &Value) -> Result<Value> {
     };
     map.edge_distance = f32p(p, "edgeDistance").unwrap_or(0.0);
     map.edge_contrast = f32p(p, "edgeContrast").unwrap_or(1.0);
-    map.per_triangle = match strp(p, "base") {
-        None | Some("mesh") => false,
-        Some("triangle") => true,
-        Some(other) => return Err(bad(cmd, format!("unknown base `{other}`"))),
-    };
     map.validate().map_err(|e| bad(cmd, e.to_string()))?;
     s.bake_meshes.skew = Some(Arc::new(map));
     s.bake_meshes.skew_rev += 1;
@@ -440,189 +425,279 @@ fn sets_param(s: &Session, cmd: &str, p: &Value) -> Result<Vec<usize>> {
     let one = |v: &Value| v.as_u64().map(|t| t as usize).filter(|t| *t < n).ok_or_else(|| bad(cmd, format!("invalid texture set {v}")));
     match p.get("ts") {
         Some(Value::String(a)) if a == "all" => Ok((0..n).collect()),
-        Some(Value::String(a)) if a == "selected" => Ok((0..n).filter(|t| s.doc.project.texture_sets.get(*t).is_some_and(|set| set.bake.enabled)).collect()),
+        Some(Value::String(a)) if a == "selected" => {
+            Ok((0..n).filter(|t| s.doc.project.texture_sets.get(*t).is_some_and(|set| set.bake.common.is_enabled)).collect())
+        }
         Some(Value::Array(a)) => a.iter().map(one).collect(),
         Some(v) => Ok(vec![one(v)?]),
         None => Ok(vec![s.ts()]),
     }
 }
 
-/// `b` as `bake.settings` parameters (what the command returns and the UI sends back).
-pub fn settings_params(b: &BakeSettings) -> Value {
-    let mut ao = rays_params(&b.ao);
-    ao["ignoreBackface"] = b.ao_ignore_backface.into();
-    ao["selfOcclusion"] = SELF_OCCLUSION.name(b.ao_self_occlusion).into();
+/// Parameters shared by the current bake command and UI
+pub fn settings_params(settings: &BakeSettings) -> Value {
+    let mut ao = rays_params(&settings.maps.ao.parameters.rays);
+    ao["ignoreBackface"] = match settings.maps.ao.parameters.ignore_backface {
+        BackfaceMode::Never => "never",
+        BackfaceMode::Always => "always",
+        BackfaceMode::ByMeshName => "byMeshName",
+    }
+    .into();
+    ao["selfOcclusion"] = match settings.maps.ao.parameters.self_occlusion {
+        SelfOcclusion::Always => "always",
+        SelfOcclusion::SameMeshName => "sameMeshName",
+    }
+    .into();
+
     json!({
-        "resolution": b.resolution,
-        "antialiasing": b.antialiasing,
-        "dilation": b.dilation,
+        "resolution": settings.common.resolution.pixels(),
+        "antialiasing": settings.common.antialiasing.samples_per_axis(),
+        "dilation": settings.common.dilation,
         "ao": ao,
-        "thickness": rays_params(&b.thickness),
-        "bentNormal": rays_params(&b.bent_normal),
-        "curvatureStrength": b.curvature_strength,
-        "curvatureFromNormal": b.curvature_from_normal,
-        "curvatureRadius": b.curvature_radius,
-        "positionMode": POSITION_MODE.name(b.position_mode),
-        "direction": b.direction,
-        "directionMode": DIRECTION_MODE.name(b.direction_mode),
-        "maps": b.maps.iter().map(|m| m.id()).collect::<Vec<_>>(),
-        "enabled": b.enabled,
-        "useLowAsHigh": b.use_low_as_high,
-        "maxFrontal": b.max_frontal,
-        "maxRear": b.max_rear,
-        "averageNormals": b.average_normals,
-        "matching": match b.matching { BakeMatch::Always => "always", BakeMatch::ByMeshName => "byMeshName" },
-        "lowSuffix": b.low_suffix,
-        "highSuffix": b.high_suffix,
+        "thickness": rays_params(&settings.maps.thickness.parameters.rays),
+        "bentNormal": rays_params(&settings.maps.bent_normal.parameters.rays),
+        "curvatureMethod": match settings.maps.curvature.parameters.method { CurvatureMethod::NormalMap => "normalMap", CurvatureMethod::Mesh => "mesh" },
+        "positionMode": match settings.maps.position.parameters.normalization { PositionMode::BoundingBox => "boundingBox", PositionMode::BoundingSphere => "boundingSphere", PositionMode::None => "none" },
+        "maps": settings.maps.enabled().map(|m| m.id()).collect::<Vec<_>>(),
+        "enabled": settings.common.is_enabled,
+        "useLowAsHigh": settings.high_poly.use_low_as_high,
+        "maxFrontal": settings.cage.max_frontal,
+        "maxRear": settings.cage.max_rear,
+        "averageNormals": settings.cage.average_normals,
+        "lowSuffix": settings.high_poly.low_suffix,
+        "highSuffix": settings.high_poly.high_suffix,
     })
 }
 
-/// Apply the `bake.settings` parameters present in `p` to `b`.
-fn apply_settings(b: &mut BakeSettings, p: &Value, cmd: &str) -> Result<()> {
-    if let Some(r) = u64p(p, "resolution") {
-        b.resolution = crate::session::check_resolution(u32::try_from(r).unwrap_or(0))?;
-    }
-    if let Some(a) = u64p(p, "antialiasing") {
-        if ![1, 2, 4, 8].contains(&a) {
-            return Err(bad(cmd, "antialiasing must be 1, 2, 4 or 8"));
-        }
-        b.antialiasing = a as u32;
-    }
-    if let Some(d) = u64p(p, "dilation") {
-        b.dilation = d.min(256) as u32;
-    }
-    // `rays` / `maxDistance` set every ray map; the per-map objects override.
-    for r in [&mut b.ao, &mut b.thickness, &mut b.bent_normal] {
-        apply_rays(r, p, cmd)?;
-    }
-    for (k, r) in [("ao", &mut b.ao), ("thickness", &mut b.thickness), ("bentNormal", &mut b.bent_normal)] {
-        if let Some(o) = p.get(k) {
-            apply_rays(r, o, cmd)?;
+/// Apply only the bake parameters supplied by the caller
+fn apply_settings(settings: &mut BakeSettings, params: &Value, command: &str) -> Result<()> {
+    // Keep the current command limits until the reference controls are integrated
+    const MAX_DILATION_PIXELS: u32 = 256;
+    const MAX_SUFFIX_CHARS: usize = 64;
+
+    if let Some(model) = params.get("model") {
+        let replacement: BakeSettings = serde_json::from_value(model.clone()).map_err(|error| bad(command, error.to_string()))?;
+        validate_model_settings(&replacement, command)?;
+        let is_enabled = settings.common.is_enabled;
+        *settings = replacement;
+        if boolp(params, "preserveEnabled") == Some(true) {
+            settings.common.is_enabled = is_enabled;
         }
     }
-    if let Some(ao) = p.get("ao") {
-        if let Some(v) = boolp(ao, "ignoreBackface") {
-            b.ao_ignore_backface = v;
-        }
-        if let Some(v) = strp(ao, "selfOcclusion") {
-            b.ao_self_occlusion = SELF_OCCLUSION.parse(cmd, "selfOcclusion", v)?;
-        }
+
+    if let Some(resolution) = u64p(params, "resolution") {
+        settings.common.resolution = u32::try_from(resolution)
+            .ok()
+            .and_then(BakeResolution::from_pixels)
+            .ok_or_else(|| bad(command, "resolution must be a power of two from 16 to 8192"))?;
     }
-    if let Some(v) = strp(p, "positionMode") {
-        b.position_mode = POSITION_MODE.parse(cmd, "positionMode", v)?;
+
+    if let Some(antialiasing) = u64p(params, "antialiasing") {
+        settings.common.antialiasing = u32::try_from(antialiasing)
+            .ok()
+            .and_then(BakeAntialiasing::from_samples_per_axis)
+            .ok_or_else(|| bad(command, "antialiasing must be 1, 2, 4 or 8"))?;
     }
-    if let Some(v) = strp(p, "directionMode") {
-        b.direction_mode = DIRECTION_MODE.parse(cmd, "directionMode", v)?;
+
+    if let Some(dilation) = u64p(params, "dilation") {
+        settings.common.dilation = dilation.min(u64::from(MAX_DILATION_PIXELS)) as u32;
     }
-    if let Some(r) = u64p(p, "curvatureRadius") {
-        b.curvature_radius = r.min(64) as u32;
+
+    // Per-map values override the shared ray settings
+    for ray_settings in [&mut settings.maps.ao.parameters.rays, &mut settings.maps.thickness.parameters.rays, &mut settings.maps.bent_normal.parameters.rays] {
+        apply_rays(ray_settings, params, command)?;
     }
-    for (k, slot, lo, hi) in
-        [("curvatureStrength", &mut b.curvature_strength, 0.0, 16.0), ("maxFrontal", &mut b.max_frontal, 0.0, 1.0), ("maxRear", &mut b.max_rear, 0.0, 1.0)]
-    {
-        if let Some(v) = f32p(p, k).filter(|v| v.is_finite()) {
-            *slot = v.clamp(lo, hi);
-        }
-    }
-    for (k, slot) in [
-        ("curvatureFromNormal", &mut b.curvature_from_normal),
-        ("enabled", &mut b.enabled),
-        ("useLowAsHigh", &mut b.use_low_as_high),
-        ("averageNormals", &mut b.average_normals),
+
+    for (key, ray_settings) in [
+        ("ao", &mut settings.maps.ao.parameters.rays),
+        ("thickness", &mut settings.maps.thickness.parameters.rays),
+        ("bentNormal", &mut settings.maps.bent_normal.parameters.rays),
     ] {
-        if let Some(v) = boolp(p, k) {
-            *slot = v;
+        if let Some(map_params) = params.get(key) {
+            apply_rays(ray_settings, map_params, command)?;
         }
     }
-    if let Some(d) = p.get("direction") {
-        let v: Vec<f32> = d.as_array().into_iter().flatten().filter_map(Value::as_f64).map(|x| x as f32).collect();
-        match v[..] {
-            [x, y, z] if [x, y, z].iter().all(|c| c.is_finite()) && [x, y, z] != [0.0; 3] => b.direction = [x, y, z],
-            _ => return Err(bad(cmd, "`direction` must be three finite numbers, not all zero")),
+
+    if let Some(ao) = params.get("ao") {
+        if let Some(value) = ao.get("ignoreBackface") {
+            let mode = value.as_str().ok_or_else(|| bad(command, "ignoreBackface must be never, always or byMeshName"))?;
+            settings.maps.ao.parameters.ignore_backface = match mode {
+                "never" => BackfaceMode::Never,
+                "always" => BackfaceMode::Always,
+                "byMeshName" => BackfaceMode::ByMeshName,
+                _ => return Err(bad(command, "ignoreBackface must be never, always or byMeshName")),
+            };
+        }
+
+        if let Some(self_occlusion) = strp(ao, "selfOcclusion") {
+            settings.maps.ao.parameters.self_occlusion = match self_occlusion {
+                "always" => SelfOcclusion::Always,
+                "sameMeshName" => SelfOcclusion::SameMeshName,
+                _ => return Err(bad(command, "selfOcclusion must be always or sameMeshName")),
+            };
         }
     }
-    if let Some(a) = p.get("maps").and_then(Value::as_array) {
-        b.maps = a.iter().map(|v| v.as_str().and_then(BakedMap::parse).ok_or_else(|| bad(cmd, format!("unknown mesh map {v}")))).collect::<Result<_>>()?;
+
+    if let Some(position_mode) = strp(params, "positionMode") {
+        settings.maps.position.parameters.normalization = match position_mode {
+            "boundingBox" => PositionMode::BoundingBox,
+            "boundingSphere" => PositionMode::BoundingSphere,
+            "none" => PositionMode::None,
+            _ => return Err(bad(command, "positionMode must be boundingBox, boundingSphere or none")),
+        };
     }
-    match strp(p, "matching") {
-        Some("always") => b.matching = BakeMatch::Always,
-        Some("byMeshName") | Some("byName") => b.matching = BakeMatch::ByMeshName,
-        Some(o) => return Err(bad(cmd, format!("unknown matching `{o}` (always|byMeshName)"))),
-        None => {}
+
+    if let Some(value) = params.get("curvatureMethod") {
+        let method = value.as_str().ok_or_else(|| bad(command, "curvatureMethod must be normalMap or mesh"))?;
+        settings.maps.curvature.parameters.method = match method {
+            "normalMap" => CurvatureMethod::NormalMap,
+            "mesh" => CurvatureMethod::Mesh,
+            _ => return Err(bad(command, "curvatureMethod must be normalMap or mesh")),
+        };
     }
-    for (k, slot) in [("lowSuffix", &mut b.low_suffix), ("highSuffix", &mut b.high_suffix)] {
-        if let Some(v) = strp(p, k) {
-            *slot = v.chars().take(64).collect();
+
+    for (key, setting, minimum, maximum) in [("maxFrontal", &mut settings.cage.max_frontal, 0.0, 1.0), ("maxRear", &mut settings.cage.max_rear, 0.0, 1.0)] {
+        if let Some(value) = f32p(params, key).filter(|value| value.is_finite()) {
+            *setting = value.clamp(minimum, maximum);
         }
+    }
+
+    for (key, setting) in [
+        ("enabled", &mut settings.common.is_enabled),
+        ("useLowAsHigh", &mut settings.high_poly.use_low_as_high),
+        ("averageNormals", &mut settings.cage.average_normals),
+    ] {
+        if let Some(value) = boolp(params, key) {
+            *setting = value;
+        }
+    }
+
+    if let Some(maps) = params.get("maps").and_then(Value::as_array) {
+        let selected = maps
+            .iter()
+            .map(|map| map.as_str().and_then(BakedMap::parse).ok_or_else(|| bad(command, format!("unknown mesh map {map}"))))
+            .collect::<Result<Vec<_>>>()?;
+        settings.maps.select(selected);
+    }
+
+    for (key, setting) in [("lowSuffix", &mut settings.high_poly.low_suffix), ("highSuffix", &mut settings.high_poly.high_suffix)] {
+        if let Some(suffix) = strp(params, key) {
+            *setting = suffix.chars().take(MAX_SUFFIX_CHARS).collect();
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_model_settings(settings: &BakeSettings, command: &str) -> Result<()> {
+    let range = |name: &str, value: f32, minimum: f32, maximum: f32| {
+        if value.is_finite() && (minimum..=maximum).contains(&value) { Ok(()) } else { Err(bad(command, format!("{name} must be in {minimum}..={maximum}"))) }
+    };
+    if settings.common.dilation > 128 {
+        return Err(bad(command, "dilation must be at most 128"));
+    }
+    for rays in [&settings.maps.ao.parameters.rays, &settings.maps.thickness.parameters.rays, &settings.maps.bent_normal.parameters.rays] {
+        if !(1..=256).contains(&rays.rays) {
+            return Err(bad(command, "secondary rays must be in 1..=256"));
+        }
+        range("minimum occluder distance", rays.min_distance, 0.00001, 1.0)?;
+        range("maximum occluder distance", rays.max_distance, 0.00001, if rays.relative_to_bounding_box { 1.0 } else { 10.0 })?;
+        range("spread angle", rays.spread, 0.0, 180.0)?;
+    }
+    let curvature = &settings.maps.curvature.parameters;
+    if !(1..=256).contains(&curvature.mesh.rays) {
+        return Err(bad(command, "curvature rays must be in 1..=256"));
+    }
+    range("sampling radius", curvature.mesh.sampling_radius, 0.00001, if curvature.mesh.relative_to_bounding_box { 10.0 } else { 1.0 })?;
+    for (name, value, minimum, maximum) in [
+        ("frontal distance", settings.cage.max_frontal, 0.0, 0.05),
+        ("rear distance", settings.cage.max_rear, 0.0, 0.05),
+        ("edge distance", settings.skew.edge_distance, 0.0, 1.0),
+        ("edge contrast", settings.skew.edge_contrast, 0.0, 1.0),
+        ("ground plane offset", settings.maps.ao.parameters.ground_plane.offset, 0.0, 100.0),
+        ("curvature details", curvature.normal_map.details, 0.0, 1.0),
+        ("seams intensity", curvature.normal_map.seams_intensity, 0.0, 1.0),
+        ("value bounds minimum", curvature.mesh.value_min, -10.0, 10.0),
+        ("value bounds maximum", curvature.mesh.value_max, -10.0, 10.0),
+        ("height scaling divisor", settings.maps.height.parameters.scaling_divisor, 0.00001, 100.0),
+    ] {
+        range(name, value, minimum, maximum)?;
     }
     Ok(())
 }
 
-/// Parameter names of a settings enum.
-struct Names<T: 'static>(&'static [(&'static str, T)]);
-
-impl<T: Copy + PartialEq> Names<T> {
-    fn name(&self, v: T) -> &'static str {
-        self.0.iter().find(|(_, x)| *x == v).map_or("", |(n, _)| n)
-    }
-
-    fn parse(&self, cmd: &str, key: &str, s: &str) -> Result<T> {
-        let all = || self.0.iter().map(|(n, _)| *n).collect::<Vec<_>>().join("|");
-        self.0.iter().find(|(n, _)| *n == s).map(|(_, v)| *v).ok_or_else(|| bad(cmd, format!("unknown {key} `{s}` ({})", all())))
-    }
+/// Ray settings supported by the current bake command
+fn rays_params(settings: &RaySettings) -> Value {
+    json!({
+        "rays": settings.rays,
+        "maxDistance": settings.max_distance,
+        "spread": settings.spread,
+        "distribution": match settings.distribution {
+            RayDistribution::Cosine => "cosine",
+            RayDistribution::Uniform => "uniform",
+        },
+    })
 }
 
-const SELF_OCCLUSION: Names<SelfOcclusion> = Names(&[("always", SelfOcclusion::Always), ("sameMeshName", SelfOcclusion::SameMeshName)]);
-const DISTRIBUTION: Names<RayDistribution> = Names(&[("cosine", RayDistribution::Cosine), ("uniform", RayDistribution::Uniform)]);
-const POSITION_MODE: Names<PositionMode> = Names(&[("boundingBox", PositionMode::BoundingBox), ("boundingSphere", PositionMode::BoundingSphere)]);
-const DIRECTION_MODE: Names<DirectionMode> = Names(&[("signed", DirectionMode::Signed), ("positive", DirectionMode::Positive)]);
-
-/// `r` as `bake.settings` parameters.
-fn rays_params(r: &RaySettings) -> Value {
-    json!({ "rays": r.rays, "maxDistance": r.max_distance, "spread": r.spread, "distribution": DISTRIBUTION.name(r.distribution) })
-}
-
-/// Apply the ray parameters present in `p` (`rays`, `maxDistance`, `spread`, `distribution`).
-fn apply_rays(r: &mut RaySettings, p: &Value, cmd: &str) -> Result<()> {
-    if let Some(n) = u64p(p, "rays") {
-        r.rays = n.clamp(1, u64::from(MAX_RAYS)) as u32;
+/// Apply only the ray parameters supplied by the caller
+fn apply_rays(settings: &mut RaySettings, params: &Value, command: &str) -> Result<()> {
+    if let Some(count) = u64p(params, "rays") {
+        settings.rays = count.clamp(1, u64::from(MAX_RAYS)) as u32;
     }
-    for (k, slot, lo, hi) in [("maxDistance", &mut r.max_distance, 0.001, 10.0), ("spread", &mut r.spread, 0.0, 180.0)] {
-        if let Some(v) = f32p(p, k).filter(|v| v.is_finite()) {
-            *slot = v.clamp(lo, hi);
+
+    for (key, setting, minimum, maximum) in [("maxDistance", &mut settings.max_distance, 0.001, 10.0), ("spread", &mut settings.spread, 0.0, 180.0)] {
+        if let Some(value) = f32p(params, key).filter(|value| value.is_finite()) {
+            *setting = value.clamp(minimum, maximum);
         }
     }
-    if let Some(v) = strp(p, "distribution") {
-        r.distribution = DISTRIBUTION.parse(cmd, "distribution", v)?;
+
+    if let Some(distribution) = strp(params, "distribution") {
+        settings.distribution = match distribution {
+            "cosine" => RayDistribution::Cosine,
+            "uniform" => RayDistribution::Uniform,
+            _ => return Err(bad(command, "distribution must be cosine or uniform")),
+        };
     }
+
     Ok(())
 }
 
-/// Validate and apply the settings parameters to every set first, so a bad parameter changes
-/// nothing.
-fn set_settings(s: &mut Session, p: &Value, cmd: &str) -> Result<Vec<usize>> {
-    let sets = sets_param(s, cmd, p)?;
+/// Validate every target before applying settings
+fn set_settings(session: &mut Session, params: &Value, command: &str) -> Result<Vec<usize>> {
+    let sets = sets_param(session, command, params)?;
     let mut next = Vec::with_capacity(sets.len());
-    for &ts in &sets {
-        let mut b = s.doc.project.texture_set(ts)?.bake.clone();
-        apply_settings(&mut b, p, cmd)?;
-        next.push((ts, b));
+    for &set_index in &sets {
+        let mut settings = session.doc.project.texture_set(set_index)?.bake.clone();
+        apply_settings(&mut settings, params, command)?;
+        next.push((set_index, settings));
     }
-    for (ts, b) in next {
-        let set = s.doc.project.texture_set_mut(ts)?;
-        if set.bake != b {
-            set.bake = b;
-            s.modified = true;
+
+    for (set_index, settings) in next {
+        let texture_set = session.doc.project.texture_set_mut(set_index)?;
+        if texture_set.bake != settings {
+            texture_set.bake = settings;
+            session.modified = true;
         }
     }
+
     Ok(sets)
 }
 
-fn settings(s: &mut Session, p: &Value) -> Result<Value> {
-    let sets = set_settings(s, p, "bake.settings")?;
-    let out: Vec<Value> =
-        sets.iter().filter_map(|t| s.doc.project.texture_sets.get(*t).map(|set| json!({ "ts": t, "settings": settings_params(&set.bake) }))).collect();
-    Ok(json!(out))
+fn settings(session: &mut Session, params: &Value) -> Result<Value> {
+    let sets = set_settings(session, params, "bake.settings")?;
+    let result: Vec<Value> = sets
+        .iter()
+        .filter_map(|set_index| {
+            session
+                .doc
+                .project
+                .texture_sets
+                .get(*set_index)
+                .map(|texture_set| json!({ "ts": set_index, "settings": settings_params(&texture_set.bake), "model": &texture_set.bake }))
+        })
+        .collect();
+
+    Ok(json!(result))
 }
 
 fn bake_run(s: &mut Session, p: &Value) -> Result<Value> {

@@ -34,14 +34,7 @@ fn sample() -> Sample {
         mesh: Some(("glb".into(), vec![1, 2, 3, 4, 5])),
         high_poly: vec![("b_high.obj".into(), vec![7; 9]), ("a_high.ply".into(), vec![6])],
         cage: Some(("cage.obj".into(), vec![5, 5])),
-        skew: Some(SkewData {
-            width: 3,
-            height: 2,
-            values: vec![0.0, 0.25, 0.5, 0.75, 1.0, 0.125],
-            edge_distance: 0.05,
-            edge_contrast: 2.0,
-            per_triangle: true,
-        }),
+        skew: Some(SkewData { width: 3, height: 2, values: vec![0.0, 0.25, 0.5, 0.75, 1.0, 0.125], edge_distance: 0.05, edge_contrast: 2.0 }),
         thumbnail: Some(vec![137, 80, 78, 71]),
         resources: [("bricks.png".to_string(), vec![9, 8, 7])].into(),
     };
@@ -172,8 +165,8 @@ fn tiles_are_validated_against_the_texture_set() {
     let orphan = load_project_bytes(&zip_with(&[("pixels/layer_999_baseColor.bin", tile_bin(128, 4, &[(0, 0)]))])).unwrap();
     assert!(orphan.pixels.layers.is_empty());
     assert!(load_project_bytes(&zip_with(&[("pixels/layer_x_baseColor.bin", vec![])])).is_err());
-    assert!(load_project_bytes(&zip_with(&[("baked/0_ambient_occlusion.bin", header(16, 16, 1, 0))])).is_err());
-    assert!(load_project_bytes(&zip_with(&[("baked/0_ambient_occlusion.bin", header(100_000, 100_000, 1, 0))])).is_err());
+    assert!(load_project_bytes(&zip_with(&[("baked/0_ambientOcclusion.bin", header(16, 16, 1, 0))])).is_err());
+    assert!(load_project_bytes(&zip_with(&[("baked/0_ambientOcclusion.bin", header(100_000, 100_000, 1, 0))])).is_err());
 }
 
 #[test]
@@ -210,4 +203,25 @@ fn duplicate_entry_names_are_made_unique_on_save() {
     let mut res: Vec<_> = back.resources.values().cloned().collect();
     res.sort();
     assert_eq!(res, vec![vec![3], vec![4]]);
+}
+
+#[test]
+fn bake_model_options_survive_the_project_archive() {
+    use texturecraft_core::{BackfaceMode, CageType, HeightNormalization};
+
+    let mut project_file = sample().pf;
+    let settings = &mut project_file.project.texture_sets[0].bake;
+    settings.common.resolution_height = Some(texturecraft_core::BakeResolution::R256);
+    settings.cage.kind = CageType::CustomFile;
+    settings.maps.ao.parameters.ignore_backface = BackfaceMode::ByMeshName;
+    settings.maps.ao.parameters.rays.min_distance = 0.02;
+    settings.maps.ao.parameters.ground_plane.enabled = true;
+    settings.maps.curvature.parameters.mesh.sampling_radius = 0.002;
+    settings.maps.height.parameters.normalization = HeightNormalization::Manual;
+    settings.maps.height.parameters.scaling_divisor = 4.0;
+    settings.skew.edge_protection = true;
+    settings.skew.edge_distance = 0.3;
+
+    let bytes = save_project_bytes(&project_file).unwrap();
+    assert_same(&project_file, &load_project_bytes(&bytes).unwrap());
 }

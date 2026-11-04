@@ -6,7 +6,7 @@
 //! | `mesh.<ext>` | the original imported mesh file (absent for built-in meshes, `Project.mesh = "builtin:<id>"`) |
 //! | `highpoly/<name>` | a high-definition mesh file for baking, in list order |
 //! | `cage/<name>` | the baking cage mesh file |
-//! | `skew.bin` | the skew correction map of the bake (magic `TCSK`, version, width, height, edge distance, edge contrast, per-triangle flag; then `width × height` f32 LE) |
+//! | `skew.bin` | the skew correction map of the bake (magic `TCSK`, version, width, height, edge distance, edge contrast, method byte (0 mesh normals, 1 triangle normals); then `width × height` f32 LE) |
 //! | `pixels/layer_<id>_<channelId>.bin` | painted pixels of a paint layer (or content paint effect) channel |
 //! | `pixels/mask_<id>.bin` | painted pixels of a mask paint effect |
 //! | `baked/<ts>_<mapId>.bin` | a baked mesh map of texture set `<ts>` |
@@ -53,7 +53,6 @@ pub struct SkewData {
     pub values: Vec<f32>,
     pub edge_distance: f32,
     pub edge_contrast: f32,
-    pub per_triangle: bool,
 }
 
 /// Everything a project file holds.
@@ -190,7 +189,6 @@ fn write_project<W: Write + Seek>(out: W, pf: &ProjectFile) -> Result<()> {
         for v in [k.edge_distance, k.edge_contrast] {
             b.extend_from_slice(&v.to_le_bytes());
         }
-        b.push(u8::from(k.per_triangle));
         b.extend(k.values.iter().flat_map(|v| v.to_le_bytes()));
         zip.write_all(&b)?;
     }
@@ -341,31 +339,34 @@ fn read_baked(r: &mut impl Read, comps: usize, budget: &mut Budget, what: &str) 
     Ok((w, h, bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()))
 }
 
-/// The skew map entry: header, then the values.
-fn read_skew(r: &mut impl Read, budget: &mut Budget, what: &str) -> Result<SkewData> {
-    let mut h = [0u8; 25];
-    read_exact(r, &mut h, what)?;
-    if h.get(..4) != Some(SKEW_MAGIC.as_slice()) {
-        return Err(malformed(KIND, format!("{what}: bad magic")));
+/// Decode the skew header and pixel values
+fn read_skew(reader: &mut impl Read, budget: &mut Budget, entry: &str) -> Result<SkewData> {
+    let mut header = [0u8; 24];
+    read_exact(reader, &mut header, entry)?;
+    if header.get(..4) != Some(SKEW_MAGIC.as_slice()) {
+        return Err(malformed(KIND, format!("{entry}: bad magic")));
     }
-    let v = u32_at(&h, 1);
-    if v > BIN_VERSION {
-        return Err(FormatError::NewerVersion { found: v, supported: BIN_VERSION });
+
+    let version = u32_at(&header, 1);
+    if version > BIN_VERSION {
+        return Err(FormatError::NewerVersion { found: version, supported: BIN_VERSION });
     }
-    let (w, ht) = (u32_at(&h, 2), u32_at(&h, 3));
-    let (edge_distance, edge_contrast) = (f32::from_bits(u32_at(&h, 4)), f32::from_bits(u32_at(&h, 5)));
-    let per_triangle = h.get(24).is_some_and(|b| *b != 0);
-    if w == 0 || ht == 0 || u64::from(w) * u64::from(ht) > MAX_TEXELS {
-        return Err(malformed(KIND, format!("{what}: bad size {w}×{ht}")));
+
+    let (width, height) = (u32_at(&header, 2), u32_at(&header, 3));
+    let (edge_distance, edge_contrast) = (f32::from_bits(u32_at(&header, 4)), f32::from_bits(u32_at(&header, 5)));
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_TEXELS {
+        return Err(malformed(KIND, format!("{entry}: bad size {width}×{height}")));
     }
-    let len = (w as usize) * (ht as usize);
-    budget.take(len as u64 * 4)?;
-    let mut bytes = vec![0u8; len * 4];
-    read_exact(r, &mut bytes, what)?;
-    expect_end(r, what)?;
-    let values: Vec<f32> = bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
-    // A map with a stray number is dropped by the caller's validation; here only the shape is checked.
-    Ok(SkewData { width: w, height: ht, values, edge_distance, edge_contrast, per_triangle })
+
+    let pixel_count = (width as usize) * (height as usize);
+    budget.take(pixel_count as u64 * 4)?;
+    let mut bytes = vec![0u8; pixel_count * 4];
+    read_exact(reader, &mut bytes, entry)?;
+    expect_end(reader, entry)?;
+
+    // The caller validates pixel values after decoding
+    let values = bytes.chunks_exact(4).map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])).collect();
+    Ok(SkewData { width, height, values, edge_distance, edge_contrast })
 }
 
 /// Texture set holding a paint layer, a content effect or a mask effect id.
@@ -449,7 +450,7 @@ fn load<R: Read + Seek>(reader: R) -> Result<ProjectFile> {
         } else if let Some(rest) = name.strip_prefix("baked/").and_then(|r| r.strip_suffix(".bin")) {
             let (ts, map) = rest.split_once('_').ok_or_else(|| malformed(KIND, format!("bad entry name {name}")))?;
             let ts: usize = ts.parse().map_err(|_| malformed(KIND, format!("bad entry name {name}")))?;
-            let m = BakedMap::ALL.into_iter().find(|m| m.id() == map).ok_or_else(|| malformed(KIND, format!("unknown baked map in {name}")))?;
+            let m = BakedMap::parse(map).ok_or_else(|| malformed(KIND, format!("unknown baked map in {name}")))?;
             if ts >= pf.project.texture_sets.len() {
                 continue;
             }
