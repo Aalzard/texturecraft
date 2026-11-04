@@ -145,6 +145,30 @@ pub fn builtin_presets() -> Vec<ExportPreset> {
                 map("Specular", 8, gray(ch(Channel::SpecularLevel, 0))),
             ],
         ),
+        // Roblox SurfaceAppearance: ColorMap (opacity in alpha), NormalMap, MetalnessMap, RoughnessMap.
+        // See `docs/export-roblox-sketchfab.md` for sources and the items still to verify.
+        preset(
+            "Roblox (SurfaceAppearance)",
+            vec![
+                map("ColorMap", 8, base_with_alpha()),
+                map("NormalMap", 8, normal(VirtualMap::NormalOpenGl)),
+                map("MetalnessMap", 8, gray(ch(Channel::Metallic, 0))),
+                map("RoughnessMap", 8, gray(ch(Channel::Roughness, 0))),
+            ],
+        ),
+        // Sketchfab PBR metal-roughness: separate maps whose suffixes Sketchfab's importer
+        // recognises (base color, normal, metallic, roughness, AO, emissive).
+        preset(
+            "Sketchfab (PBR Metal Roughness)",
+            vec![
+                map("BaseColor", 8, base_with_alpha()),
+                map("Normal", 8, normal(VirtualMap::NormalOpenGl)),
+                map("Metallic", 8, gray(ch(Channel::Metallic, 0))),
+                map("Roughness", 8, gray(ch(Channel::Roughness, 0))),
+                map("AmbientOcclusion", 8, gray(virt(VirtualMap::AoMixed, 0))),
+                map("Emissive", 8, rgb(|k| ch(Channel::Emissive, k))),
+            ],
+        ),
         preset(
             "Godot 4 (ORM)",
             vec![
@@ -188,6 +212,13 @@ pub fn builtin_presets() -> Vec<ExportPreset> {
                 .collect(),
         ),
     ]
+}
+
+/// Largest output edge (pixels) a built-in preset is meant for, if its target caps it.
+/// Roblox: 1024 is the figure community reports cite; the official limit is not confirmed
+/// (see `docs/export-roblox-sketchfab.md`). Pass it as `ExportOptions::size`.
+pub fn preset_max_size(name: &str) -> Option<u32> {
+    name.trim().eq_ignore_ascii_case("Roblox (SurfaceAppearance)").then_some(1024)
 }
 
 /// A built-in preset by name (case-insensitive).
