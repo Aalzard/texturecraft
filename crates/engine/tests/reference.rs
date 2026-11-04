@@ -57,6 +57,7 @@ fn embedded_references_round_trip_with_the_project() {
     execute(&mut back, "file.removeUnused", &Value::Null).unwrap();
     assert!(back.reference_image(id).is_some());
     assert_eq!(back.doc.resources.keys().filter(|k| k.starts_with("reference.")).count(), 1);
+    assert!(execute(&mut back, "resource.list", &Value::Null).unwrap().as_array().unwrap().is_empty(), "not listed as an imported resource");
 }
 
 #[test]

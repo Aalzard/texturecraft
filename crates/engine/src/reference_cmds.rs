@@ -65,6 +65,11 @@ pub const MAX_TEXELS: u64 = 1 << 25;
 pub const MAX_BYTES: usize = 256 << 20;
 /// Resource name prefix of embedded copies (kept out of the Assets list and the unused-resource sweep).
 pub const RESOURCE_PREFIX: &str = "reference.";
+/// Is resource `name` the embedded copy of a reference image (not an asset to list or use)?
+pub fn is_embedded_copy(name: &str) -> bool {
+    name.starts_with(RESOURCE_PREFIX)
+}
+
 /// Largest side of a display copy (what a GPU texture holds everywhere).
 pub const DISPLAY_SIDE: u32 = 2048;
 /// Largest averaging radius of a pick, in source pixels.
@@ -744,7 +749,9 @@ mod tests {
         assert_eq!(normalize(Path::new("/a/b/../c/./d")), Path::new("/a/c/d"));
         assert_eq!(resolve_path("../photos/a.png", Some(Path::new("/work/proj"))), Some("/work/photos/a.png".into()));
         assert_eq!(resolve_path("a.png", None), None);
-        assert_eq!(resolve_path("/abs/a.png", None), Some("/abs/a.png".into()));
+        // An absolute path needs a drive on Windows
+        let absolute = if cfg!(windows) { "C:/abs/a.png" } else { "/abs/a.png" };
+        assert_eq!(resolve_path(absolute, None), Some(absolute.into()));
         // Saving elsewhere rewrites the path so it still finds the file.
         assert_eq!(rebase_path("refs/a.png", Some(Path::new("/work/proj")), Path::new("/work/other")), "../proj/refs/a.png");
     }

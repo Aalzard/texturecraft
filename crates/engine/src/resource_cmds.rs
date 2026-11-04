@@ -93,6 +93,7 @@ fn list(s: &Session) -> Value {
         s.doc
             .resources
             .iter()
+            .filter(|(k, _)| !crate::reference_cmds::is_embedded_copy(k))
             .map(|(k, v)| {
                 let (w, h) = s.images.get(k).map(|i| (i.width, i.height)).unwrap_or((0, 0));
                 json!({"name": k, "bytes": v.len(), "width": w, "height": h})
@@ -142,7 +143,7 @@ fn remove_unused(s: &mut Session, _: &Value) -> Result<Value> {
     }
     used.extend(s.tool.stencil.as_ref().map(|st| st.image.clone()));
     used.extend(s.doc.project.display.environment_resource().map(str::to_string));
-    used.extend(s.doc.resources.keys().filter(|k| k.starts_with(crate::reference_cmds::RESOURCE_PREFIX)).cloned());
+    used.extend(s.doc.resources.keys().filter(|k| crate::reference_cmds::is_embedded_copy(k)).cloned());
     let unused: Vec<String> = s.doc.resources.keys().filter(|k| !used.contains(k)).cloned().collect();
     if !unused.is_empty() {
         s.edit("Remove unused resources", |s| {
