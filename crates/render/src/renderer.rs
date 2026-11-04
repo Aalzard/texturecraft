@@ -926,7 +926,7 @@ impl Renderer {
         let bloom_pipelines = [("fs_bloom_pre", None), ("fs_bloom_down", None), ("fs_bloom_up", Some(ADDITIVE))]
             .map(|(fs, blend)| pipeline(device, "tc_bloom", &fx_layout, &post_module, "vs_full", &[], hdr(fs, blend), 1, None));
         let gbuf_pipeline =
-            pipeline(device, "tc_gbuf", &mesh_layout, &module, "vs_mesh", &vb, hdr("fs_gbuf", None), 1, Some(depth_state(true, wgpu::CompareFunction::Less)));
+            pipeline(device, "tc_gbuf", mesh_layout, module, "vs_mesh", &vb, hdr("fs_gbuf", None), 1, Some(depth_state(true, wgpu::CompareFunction::Less)));
         let sss_pipelines = ["fs_sss_h", "fs_sss_v"].map(|fs| pipeline(device, "tc_sss", &fx_layout, &post_module, "vs_full", &[], hdr(fs, None), 1, None));
         let dof_pipeline = pipeline(device, "tc_dof", &fx_layout, &post_module, "vs_full", &[], hdr("fs_dof", None), 1, None);
         let dof_target = Some(wgpu::ColorTargetState { format: hdr_format, blend: None, write_mask: wgpu::ColorWrites::ALL });
