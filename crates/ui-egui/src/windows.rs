@@ -170,9 +170,11 @@ pub(crate) fn display(app: &mut TextureCraftApp, ui: &mut Ui) {
     slider(ui, tr("Ambient occlusion intensity"), &mut d.ao_intensity, 0.0..=1.0, 2);
     ui.checkbox(&mut app.ui.wireframe_3d, tr("Show wireframe in the 3D view"));
     ui.checkbox(&mut app.ui.uv_wireframe, tr("Show UV wireframe in the 2D view"));
+    ui.checkbox(&mut d.msaa, tr("Multisample anti-aliasing (4×; off: one sample per pixel)"));
     ui.checkbox(&mut d.taa, tr("Temporal anti-aliasing (refines the 3D view while it is still)"));
-    if d.taa != before.taa {
-        app.ui.prefs.viewport_aa = d.taa;
+    // The top-bar AA toggle (and its preference) follows the multisampling.
+    if d.msaa != before.msaa {
+        app.ui.prefs.viewport_aa = d.msaa;
     }
     if d != before {
         if d.fov != before.fov {

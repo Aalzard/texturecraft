@@ -128,16 +128,28 @@ impl TextureCraftApp {
     pub fn apply_viewport_aa(&mut self) {
         if self.aa_mesh_id != self.session.mesh_id {
             self.aa_mesh_id = self.session.mesh_id;
-            self.session.doc.project.display.taa = self.ui.prefs.viewport_aa;
+            self.set_viewport_aa(self.ui.prefs.viewport_aa);
         }
     }
 
-    /// The top-bar AA toggle (`ui.viewportAa`, Alt+A): switch the 3D view's temporal
-    /// anti-aliasing and remember the choice in the preferences.
+    /// Whether the viewport anti-aliases its edges (4× MSAA, what the top-bar AA toggle shows).
+    pub fn viewport_aa(&self) -> bool {
+        self.session.doc.project.display.msaa
+    }
+
+    /// The top-bar AA toggle (`ui.viewportAa`, Alt+A): switch the views' anti-aliasing (4× MSAA
+    /// and the idle temporal refinement together) and remember the choice in the preferences.
+    /// Off renders one sample per pixel: hard edges and crisp texels.
     pub fn toggle_viewport_aa(&mut self) {
-        let on = !self.session.doc.project.display.taa;
-        self.session.doc.project.display.taa = on;
+        let on = !self.viewport_aa();
+        self.set_viewport_aa(on);
         self.ui.prefs.viewport_aa = on;
+    }
+
+    fn set_viewport_aa(&mut self, on: bool) {
+        let d = &mut self.session.doc.project.display;
+        d.msaa = on;
+        d.taa = on;
     }
 
     pub fn new(cc: &eframe::CreationContext<'_>, session: Session) -> TextureCraftApp {

@@ -1066,7 +1066,8 @@ pub const TABLE: &[(&str, &str)] = &[
         "تنعيم الحواف مفعّل: حواف ناعمة تتحسن أثناء ثبات العرض. انقر لنقاط نسيج حادة (أسرع).",
     ),
     (
-        "Anti-aliasing off: crisp texels, no refinement while still. Click to smooth edges.",
-        "تنعيم الحواف معطّل: نقاط نسيج حادة دون تحسين أثناء الثبات. انقر لتنعيم الحواف.",
+        "Anti-aliasing off: one sample per pixel, hard edges and crisp texels. Click to smooth edges.",
+        "تنعيم الحواف معطّل: عيّنة واحدة لكل بكسل، حواف حادة ونقاط نسيج واضحة. انقر لتنعيم الحواف.",
     ),
+    ("Multisample anti-aliasing (4×; off: one sample per pixel)", "تنعيم الحواف بالعينات المتعددة (4×؛ عند التعطيل: عيّنة واحدة لكل بكسل)"),
 ];

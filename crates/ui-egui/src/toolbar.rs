@@ -256,20 +256,19 @@ fn mode_buttons(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Path tool options and actions (top bar and properties)
-
 /// The viewport anti-aliasing switch: a labelled toggle ("AA") on the top bar, lit while on.
-/// It switches `display.taa` (idle temporal refinement on top of the always-on 4× MSAA) and
-/// remembers the choice in the preferences; Alt+A (`ui.viewportAa`) does the same from the
-/// keyboard, and the button takes keyboard focus like any other.
+/// It switches 4× MSAA and the idle temporal refinement together (`display.msaa` and
+/// `display.taa`; off is one sample per pixel) and remembers the choice in the preferences;
+/// Alt+A (`ui.viewportAa`) does the same from the keyboard, and the button takes keyboard focus
+/// like any other.
 fn aa_toggle(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
-    let on = app.session.doc.project.display.taa;
+    let on = app.viewport_aa();
     let hint = tip(
         &app.ui.keymap,
         if on {
             tr("Anti-aliasing on: smooth edges, refined while the view is still. Click for crisp texels (faster).")
         } else {
-            tr("Anti-aliasing off: crisp texels, no refinement while still. Click to smooth edges.")
+            tr("Anti-aliasing off: one sample per pixel, hard edges and crisp texels. Click to smooth edges.")
         },
         "ui.viewportAa",
     );

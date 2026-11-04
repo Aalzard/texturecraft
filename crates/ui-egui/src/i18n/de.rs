@@ -1121,7 +1121,8 @@ pub const TABLE: &[(&str, &str)] = &[
         "Kantenglättung an: glatte Kanten, verfeinert, solange die Ansicht ruht. Klicken für scharfe Texel (schneller).",
     ),
     (
-        "Anti-aliasing off: crisp texels, no refinement while still. Click to smooth edges.",
-        "Kantenglättung aus: scharfe Texel, keine Verfeinerung im Ruhezustand. Klicken für glatte Kanten.",
+        "Anti-aliasing off: one sample per pixel, hard edges and crisp texels. Click to smooth edges.",
+        "Kantenglättung aus: ein Sample pro Pixel, harte Kanten und scharfe Texel. Klicken für glatte Kanten.",
     ),
+    ("Multisample anti-aliasing (4×; off: one sample per pixel)", "Multisample-Kantenglättung (4×; aus: ein Sample pro Pixel)"),
 ];

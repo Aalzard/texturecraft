@@ -1127,7 +1127,8 @@ pub const TABLE: &[(&str, &str)] = &[
         "Anticrénelage activé : bords lisses, affinés tant que la vue est immobile. Cliquez pour des texels nets (plus rapide).",
     ),
     (
-        "Anti-aliasing off: crisp texels, no refinement while still. Click to smooth edges.",
-        "Anticrénelage désactivé : texels nets, pas d'affinage à l'arrêt. Cliquez pour lisser les bords.",
+        "Anti-aliasing off: one sample per pixel, hard edges and crisp texels. Click to smooth edges.",
+        "Anticrénelage désactivé : un échantillon par pixel, bords durs et texels nets. Cliquez pour lisser les bords.",
     ),
+    ("Multisample anti-aliasing (4×; off: one sample per pixel)", "Anticrénelage multiéchantillon (4× ; désactivé : un échantillon par pixel)"),
 ];

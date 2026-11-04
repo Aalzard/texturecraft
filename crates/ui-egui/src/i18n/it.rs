@@ -1112,7 +1112,8 @@ pub const TABLE: &[(&str, &str)] = &[
         "Anti-aliasing attivo: bordi morbidi, rifiniti mentre la vista è ferma. Clicca per texel nitidi (più veloce).",
     ),
     (
-        "Anti-aliasing off: crisp texels, no refinement while still. Click to smooth edges.",
-        "Anti-aliasing disattivo: texel nitidi, nessuna rifinitura da fermo. Clicca per ammorbidire i bordi.",
+        "Anti-aliasing off: one sample per pixel, hard edges and crisp texels. Click to smooth edges.",
+        "Anti-aliasing disattivo: un campione per pixel, bordi netti e texel nitidi. Clicca per ammorbidire i bordi.",
     ),
+    ("Multisample anti-aliasing (4×; off: one sample per pixel)", "Anti-aliasing multicampione (4×; disattivo: un campione per pixel)"),
 ];

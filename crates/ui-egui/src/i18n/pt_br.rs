@@ -1100,7 +1100,8 @@ pub const TABLE: &[(&str, &str)] = &[
         "Antisserrilhamento ligado: bordas suaves, refinadas enquanto a vista está parada. Clique para texels nítidos (mais rápido).",
     ),
     (
-        "Anti-aliasing off: crisp texels, no refinement while still. Click to smooth edges.",
-        "Antisserrilhamento desligado: texels nítidos, sem refinamento parado. Clique para suavizar as bordas.",
+        "Anti-aliasing off: one sample per pixel, hard edges and crisp texels. Click to smooth edges.",
+        "Antisserrilhamento desligado: uma amostra por pixel, bordas duras e texels nítidos. Clique para suavizar as bordas.",
     ),
+    ("Multisample anti-aliasing (4×; off: one sample per pixel)", "Antisserrilhamento multiamostra (4×; desligado: uma amostra por pixel)"),
 ];

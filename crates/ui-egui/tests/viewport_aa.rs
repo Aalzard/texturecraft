@@ -1,4 +1,4 @@
-//! The top bar's AA toggle switches the 3D view's anti-aliasing, remembers it in the
+//! The top bar's AA toggle switches the 3D view's anti-aliasing (4× MSAA and TAA together), remembers it in the
 //! preferences for the next project, answers Alt+A, and leaves painting and Rendering mode
 //! working; the camera button opens Export image.
 
@@ -13,20 +13,25 @@ fn aa_toggle_switches_taa_persists_and_keeps_painting_working() {
     let session = texturecraft_engine::sample_session(256, 64).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1600.0, 960.0)).build_eframe(|cc| TextureCraftApp::new(cc, session));
     h.run_steps(4);
-    assert!(h.state().session.doc.project.display.taa, "on by default");
+    let aa = |h: &Harness<'_, TextureCraftApp>| {
+        let d = &h.state().session.doc.project.display;
+        assert_eq!(d.msaa, d.taa, "the toggle switches multisampling and the temporal refinement together");
+        d.msaa
+    };
+    assert!(aa(&h), "on by default");
 
     h.get_by_label("Anti-aliasing").click();
     h.run_steps(3);
-    assert!(!h.state().session.doc.project.display.taa);
+    assert!(!aa(&h), "off: one sample per pixel, no refinement");
     assert!(!h.state().ui.prefs.viewport_aa, "the choice is a preference");
 
     // Keyboard: Alt+A (the Viewport › Anti-aliasing shortcut) turns it back on, and off again.
     h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::A);
     h.run_steps(3);
-    assert!(h.state().session.doc.project.display.taa);
+    assert!(aa(&h));
     h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::A);
     h.run_steps(3);
-    assert!(!h.state().session.doc.project.display.taa);
+    assert!(!aa(&h));
 
     // Painting still works with anti-aliasing off.
     let s = &mut h.state_mut().session;
@@ -40,14 +45,14 @@ fn aa_toggle_switches_taa_persists_and_keeps_painting_working() {
     // A new project takes the preference (off), not the default (on).
     texturecraft_engine::execute(&mut h.state_mut().session, "project.new", &json!({"mesh": "sphere", "resolution": 128})).unwrap();
     h.run_steps(3);
-    assert!(!h.state().session.doc.project.display.taa, "the new project follows the preference");
+    assert!(!aa(&h), "the new project follows the preference");
 
     // Rendering mode (path traced) runs with the toggle in either state.
     h.state_mut().ui.mode = Mode::Rendering;
     h.run_steps(4);
     h.state_mut().toggle_viewport_aa();
     h.run_steps(4);
-    assert!(h.state().session.doc.project.display.taa && h.state().ui.prefs.viewport_aa);
+    assert!(aa(&h) && h.state().ui.prefs.viewport_aa);
     h.state_mut().ui.mode = Mode::Painting;
     h.run_steps(3);
 }

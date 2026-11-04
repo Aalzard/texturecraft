@@ -256,12 +256,20 @@ texturecraft-cli render ball.tcraft cutout.png --size 1024x1024 --samples 256 --
 
 ## Viewport anti-aliasing
 
-The 3D view always renders with 4× MSAA. `display.taa` (the top-bar **AA** toggle, `display.set
-{"taa": bool}`, shown by `session.inspect` under `display.taa`) switches the idle temporal
-refinement on top of it: while the view is still, jittered frames are averaged (up to 16) for
-smoother edges and texture detail; off, every frame is a single MSAA frame (crisper texels, no
-repaint while idle). Renders and screenshots taken through automation are single frames either way.
-Path-traced Rendering mode antialiases by its own sample jitter and ignores the toggle.
+Two display settings, both shown by `session.inspect` under `display` and set with `display.set`:
+
+| Setting | On (default) | Off |
+|---|---|---|
+| `msaa` | The scene pass renders 4× multisampled and resolves: smooth mesh edges and wireframe | One sample per pixel, straight into the view's target: hard, aliased edges and crisp texels; less GPU memory and fill |
+| `taa` | While the view is still, jittered frames are averaged (up to 16) for smoother edges and texture detail | Every frame is a single frame; no repaint while idle |
+
+The top-bar **AA** toggle (Viewport › Anti-aliasing, Alt+A) switches both together and is
+remembered as a preference: new and opened projects take it. The Display panel has a checkbox for
+each. `display.set {"msaa": false, "taa": false}` gives the same pixel-exact view to agents.
+
+Renders and screenshots taken through automation and Export image are single frames (no `taa`
+accumulation) and follow `msaa`. Path-traced Rendering mode antialiases by its own sample jitter
+and ignores both settings.
 
 ## MaterialCraft materials
 

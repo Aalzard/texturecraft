@@ -1079,7 +1079,8 @@ pub const TABLE: &[(&str, &str)] = &[
         "안티앨리어싱 켜짐: 부드러운 가장자리, 뷰가 멈춰 있는 동안 다듬습니다. 클릭하면 선명한 텍셀(더 빠름).",
     ),
     (
-        "Anti-aliasing off: crisp texels, no refinement while still. Click to smooth edges.",
-        "안티앨리어싱 꺼짐: 선명한 텍셀, 멈춰 있을 때 다듬지 않음. 클릭하면 가장자리를 부드럽게 합니다.",
+        "Anti-aliasing off: one sample per pixel, hard edges and crisp texels. Click to smooth edges.",
+        "안티앨리어싱 꺼짐: 픽셀당 샘플 1개, 딱딱한 가장자리와 선명한 텍셀. 클릭하면 가장자리를 부드럽게 합니다.",
     ),
+    ("Multisample anti-aliasing (4×; off: one sample per pixel)", "멀티샘플 안티앨리어싱(4×, 끄면 픽셀당 샘플 1개)"),
 ];

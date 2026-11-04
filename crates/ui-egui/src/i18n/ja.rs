@@ -1097,7 +1097,8 @@ pub const TABLE: &[(&str, &str)] = &[
         "アンチエイリアス オン: 滑らかなエッジ、ビューが静止中に精細化。クリックでくっきりしたテクセル(高速)。",
     ),
     (
-        "Anti-aliasing off: crisp texels, no refinement while still. Click to smooth edges.",
-        "アンチエイリアス オフ: くっきりしたテクセル、静止中の精細化なし。クリックでエッジを滑らかに。",
+        "Anti-aliasing off: one sample per pixel, hard edges and crisp texels. Click to smooth edges.",
+        "アンチエイリアス オフ: 1 ピクセル 1 サンプル、硬いエッジとくっきりしたテクセル。クリックでエッジを滑らかに。",
     ),
+    ("Multisample anti-aliasing (4×; off: one sample per pixel)", "マルチサンプル アンチエイリアス(4×、オフ: 1 ピクセル 1 サンプル)"),
 ];

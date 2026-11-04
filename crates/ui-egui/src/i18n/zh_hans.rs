@@ -1024,5 +1024,9 @@ pub const TABLE: &[(&str, &str)] = &[
         "Anti-aliasing on: smooth edges, refined while the view is still. Click for crisp texels (faster).",
         "抗锯齿开:边缘平滑,视图静止时逐步细化。点击以获得清晰的纹素(更快)。",
     ),
-    ("Anti-aliasing off: crisp texels, no refinement while still. Click to smooth edges.", "抗锯齿关:清晰的纹素,静止时不细化。点击以平滑边缘。"),
+    (
+        "Anti-aliasing off: one sample per pixel, hard edges and crisp texels. Click to smooth edges.",
+        "抗锯齿关:每像素一个采样,硬边缘和清晰的纹素。点击以平滑边缘。",
+    ),
+    ("Multisample anti-aliasing (4×; off: one sample per pixel)", "多重采样抗锯齿(4×;关闭:每像素一个采样)"),
 ];

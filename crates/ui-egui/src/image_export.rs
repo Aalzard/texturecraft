@@ -40,7 +40,8 @@ fn gpu_limit(app: &TextureCraftApp) -> (u32, &'static str) {
 }
 
 /// Render the view `view` (3D or 2D) again at the size `req` asks for: the same camera, shading
-/// and content as on screen, one frame (4× MSAA, no temporal accumulation). RGBA8, opaque.
+/// and content as on screen, one frame (with the view's anti-aliasing setting: 4× MSAA or one
+/// sample per pixel; no temporal accumulation). RGBA8, opaque.
 pub fn render_view(app: &TextureCraftApp, view: u64, req: &SizeRequest) -> Result<(u32, u32, Vec<u8>), String> {
     let rs = app.render_state.as_ref().ok_or_else(|| tr("no GPU").to_string())?;
     let (max, limit) = gpu_limit(app);

@@ -124,7 +124,7 @@ pub struct Prefs {
     /// Scene image export and Rendering mode resolution (the Export image window).
     pub image_export: ImageExport,
     /// Viewport anti-aliasing (the top-bar AA toggle): new and opened projects take it as their
-    /// `display.taa`, so the choice carries across projects and restarts.
+    /// `display.msaa` and `display.taa`, so the choice carries across projects and restarts.
     pub viewport_aa: bool,
 }
 

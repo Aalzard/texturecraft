@@ -212,6 +212,39 @@ mod tests {
     }
 
     #[test]
+    fn msaa_off_renders_one_sample_per_pixel() {
+        let mesh = texturecraft_engine::geom::primitives::material_ball();
+        let mut s = Session::new_project("t", mesh, "builtin:material_ball", None, 256).unwrap();
+        let Ok(mut gpu) = Gpu::new() else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let cam = s.camera;
+        let (_, _, smooth) = gpu.render(&mut s, ViewKind::Scene, [160, 120], cam).unwrap();
+        execute(&mut s, "display.set", &json!({"msaa": false})).unwrap();
+        let (_, _, hard) = gpu.render(&mut s, ViewKind::Scene, [160, 120], cam).unwrap();
+        assert_eq!(hard.len(), smooth.len());
+        assert_ne!(hard, smooth, "one sample per pixel changes the edges");
+        // Along the silhouette, multisampling blends the ball into the backdrop; one sample
+        // keeps hard steps, so fewer pixels sit between their neighbours' values.
+        let blended = |img: &[u8]| {
+            (1..159usize)
+                .flat_map(|x| (0..120usize).map(move |y| (x, y)))
+                .filter(|&(x, y)| {
+                    let l = |x: usize| img[(y * 160 + x) * 4] as i32;
+                    let (a, b, c) = (l(x - 1), l(x), l(x + 1));
+                    (a - c).abs() > 40 && (b - a).abs() > 8 && (b - c).abs() > 8
+                })
+                .count()
+        };
+        assert!(blended(&hard) < blended(&smooth), "hard {} smooth {}", blended(&hard), blended(&smooth));
+        // And back on: the same image as before.
+        execute(&mut s, "display.set", &json!({"msaa": true})).unwrap();
+        let (_, _, again) = gpu.render(&mut s, ViewKind::Scene, [160, 120], cam).unwrap();
+        assert_eq!(again, smooth, "switching back restores 4× MSAA");
+    }
+
+    #[test]
     fn gpu_path_trace_matches_the_cpu_on_the_material_ball() {
         let mesh = texturecraft_engine::geom::primitives::material_ball();
         let mut s = Session::new_project("t", mesh, "builtin:material_ball", None, 256).unwrap();
