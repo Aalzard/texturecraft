@@ -389,7 +389,7 @@ fn vertex_curvature(mesh: &Mesh, diag: f32, strength: f32) -> Vec<f32> {
     let (weld, pos, nrm) = welded(mesh, diag);
     let (mut ksum, mut kcnt) = (vec![0.0f32; pos.len()], vec![0u32; pos.len()]);
     let (mut edge_sum, mut edge_cnt) = (0.0f64, 0u64);
-    for t in mesh.indices.chunks_exact(3) {
+    for t in mesh.indices.as_chunks::<3>().0 {
         for (a, b) in [(0, 1), (1, 2), (2, 0), (1, 0), (2, 1), (0, 2)] {
             let (Some(&wa), Some(&wb)) = (t.get(a).and_then(|v| weld.get(*v as usize)), t.get(b).and_then(|v| weld.get(*v as usize))) else { continue };
             let (Some(pa), Some(pb), Some(na)) = (pos.get(wa as usize), pos.get(wb as usize), nrm.get(wa as usize)) else { continue };

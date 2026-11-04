@@ -320,7 +320,7 @@ fn read_tiles(r: &mut impl Read, size: (u32, u32), comps: usize, budget: &mut Bu
         }
         read_exact(r, &mut buf, what)?;
         budget.take(buf.len() as u64)?;
-        let data: Vec<u16> = buf.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+        let data: Vec<u16> = buf.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
         img.set_tile(tx, ty, Some(Arc::new(data)));
     }
     expect_end(r, what)?;
@@ -338,7 +338,7 @@ fn read_baked(r: &mut impl Read, comps: usize, budget: &mut Budget, what: &str) 
     let mut bytes = vec![0u8; len * 4];
     read_exact(r, &mut bytes, what)?;
     expect_end(r, what)?;
-    Ok((w, h, bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()))
+    Ok((w, h, bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()))
 }
 
 /// The skew map entry: header, then the values.
@@ -363,7 +363,7 @@ fn read_skew(r: &mut impl Read, budget: &mut Budget, what: &str) -> Result<SkewD
     let mut bytes = vec![0u8; len * 4];
     read_exact(r, &mut bytes, what)?;
     expect_end(r, what)?;
-    let values: Vec<f32> = bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let values: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
     // A map with a stray number is dropped by the caller's validation; here only the shape is checked.
     Ok(SkewData { width: w, height: ht, values, edge_distance, edge_contrast, per_triangle })
 }

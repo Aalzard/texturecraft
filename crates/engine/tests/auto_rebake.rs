@@ -14,7 +14,7 @@ fn baked_session(tag: &str) -> (Session, std::path::PathBuf) {
     for p in &mesh.positions {
         obj += &format!("v {} {} {}\n", p.x, p.y + 0.002, p.z);
     }
-    for t in mesh.indices.chunks_exact(3) {
+    for t in mesh.indices.as_chunks::<3>().0 {
         obj += &format!("f {} {} {}\n", t[0] + 1, t[1] + 1, t[2] + 1);
     }
     let dir = std::env::temp_dir().join(format!("tc_auto_rebake_{tag}_{}", std::process::id()));
