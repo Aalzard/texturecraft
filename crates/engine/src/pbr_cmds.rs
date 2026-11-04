@@ -59,7 +59,7 @@ pub type FileList = Vec<(String, u64)>;
 pub type Loader<'a> = &'a dyn Fn(&str) -> std::result::Result<Vec<u8>, String>;
 
 /// How to import.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct PbrOptions {
     pub name: Option<String>,
     /// Forces every normal map's convention; `None` reads it from the file name (default OpenGL).
@@ -69,24 +69,19 @@ pub struct PbrOptions {
     pub choose: BTreeMap<MapKind, String>,
 }
 
-impl Default for PbrOptions {
-    fn default() -> Self {
-        PbrOptions { name: None, normal_format: None, projection: Projection::default(), choose: BTreeMap::new() }
-    }
-}
-
 /// The detection for a file list with the caller's choices applied.
 fn detect_with(files: &FileList, choose: &BTreeMap<MapKind, String>) -> Result<PbrSet> {
     let mut set = pbr_maps::detect(files.iter().map(|(n, s)| (n.as_str(), *s)));
     for (kind, file) in choose {
         let list = set.candidates.get(kind).ok_or_else(|| EngineError::Other(format!("choose: no file names the map {}", kind.id())))?;
-        let pick = list.iter().find(|c| c.name == *file).ok_or_else(|| EngineError::Other(format!("choose: {file} is not a candidate for {}", kind.id())))?.clone();
+        let pick =
+            list.iter().find(|c| c.name == *file).ok_or_else(|| EngineError::Other(format!("choose: {file} is not a candidate for {}", kind.id())))?.clone();
         // The previously chosen file becomes an ignored one, the picked one stops being ignored.
-        if let Some(old) = set.chosen.insert(*kind, pick.clone()) {
-            if old.name != pick.name {
-                set.ignored.retain(|(n, _)| *n != pick.name);
-                set.ignored.push((old.name, format!("another file is used for {}", kind.id())));
-            }
+        if let Some(old) = set.chosen.insert(*kind, pick.clone())
+            && old.name != pick.name
+        {
+            set.ignored.retain(|(n, _)| *n != pick.name);
+            set.ignored.push((old.name, format!("another file is used for {}", kind.id())));
         }
     }
     Ok(set)
@@ -115,6 +110,9 @@ fn report(set: &PbrSet, forced: Option<NormalFormat>) -> Value {
         "ignored": set.ignored.iter().map(|(n, why)| json!([n, why])).collect::<Vec<_>>(),
     })
 }
+
+/// A file's bytes and its decoded image.
+type Loaded = (Arc<Vec<u8>>, texturecraft_formats::DecodedImage);
 
 /// How a channel's image is made from the file chosen for a map.
 #[derive(Clone, Copy, PartialEq)]
@@ -160,7 +158,9 @@ impl Session {
         }
         // Separate files win; a packed image fills what they leave open (R = occlusion, G = roughness, B = metallic).
         let orm = has(MapKind::PackedOrm);
-        for (channel, kind, index) in [(Channel::AmbientOcclusion, MapKind::AmbientOcclusion, 0), (Channel::Roughness, MapKind::Roughness, 1), (Channel::Metallic, MapKind::Metallic, 2)] {
+        for (channel, kind, index) in
+            [(Channel::AmbientOcclusion, MapKind::AmbientOcclusion, 0), (Channel::Roughness, MapKind::Roughness, 1), (Channel::Metallic, MapKind::Metallic, 2)]
+        {
             if has(kind) {
                 plan.push((channel, kind, Take::Whole));
             } else if channel == Channel::Roughness && has(MapKind::Glossiness) {
@@ -182,7 +182,7 @@ impl Session {
         let mut channels: Vec<Channel> = Vec::new();
         let mut total_texels = 0u64;
         // Decoded source files by name (a packed image feeds three channels).
-        let mut sources: BTreeMap<String, Option<(Arc<Vec<u8>>, texturecraft_formats::DecodedImage)>> = BTreeMap::new();
+        let mut sources: BTreeMap<String, Option<Loaded>> = BTreeMap::new();
         // Resource per (file, how) so a file used twice is stored once.
         let mut made: BTreeMap<(String, usize), String> = BTreeMap::new();
 
@@ -334,12 +334,7 @@ fn options(cmd: &str, p: &Value) -> Result<PbrOptions> {
             choose.insert(kind, file.to_string());
         }
     }
-    Ok(PbrOptions {
-        name: strp(p, "name").map(str::to_string),
-        normal_format,
-        projection: crate::layer_cmds::projection_from(p, cmd, None)?,
-        choose,
-    })
+    Ok(PbrOptions { name: strp(p, "name").map(str::to_string), normal_format, projection: crate::layer_cmds::projection_from(p, cmd, None)?, choose })
 }
 
 /// Pick the one group of files that holds a material: the files at the root if they hold maps,
@@ -359,7 +354,10 @@ fn pick_group(cmd: &str, files: &FileList) -> Result<String> {
         [one] => Ok(format!("{one}/")),
         many => {
             let shown: Vec<&str> = many.iter().take(8).map(|d| d.as_str()).collect();
-            Err(bad(cmd, format!("{} folders hold PBR maps ({}{}): import one of them", many.len(), shown.join(", "), if many.len() > 8 { ", ..." } else { "" })))
+            Err(bad(
+                cmd,
+                format!("{} folders hold PBR maps ({}{}): import one of them", many.len(), shown.join(", "), if many.len() > 8 { ", ..." } else { "" }),
+            ))
         }
     }
 }
@@ -440,7 +438,8 @@ mod native {
             walk(&root, &root, 0, &mut files);
             let group = pick_group(cmd, &files)?;
             let files: FileList = files.into_iter().filter(|(n, _)| n.strip_prefix(group.as_str()).is_some_and(|rest| !rest.contains('/'))).collect();
-            let name = if group.is_empty() { stem(path) } else { stem(group.trim_end_matches('/')) }.or_else(|| root.file_name().map(|n| n.to_string_lossy().into_owned()));
+            let name = if group.is_empty() { stem(path) } else { stem(group.trim_end_matches('/')) }
+                .or_else(|| root.file_name().map(|n| n.to_string_lossy().into_owned()));
             let root = if group.is_empty() { root } else { root.join(group.trim_end_matches('/')) };
             let files = files.into_iter().map(|(n, s)| (n.rsplit('/').next().unwrap_or(&n).to_string(), s)).collect();
             return Ok(Found { source: Origin::Folder { root }, files, name });
@@ -508,7 +507,10 @@ fn scan(s: &mut Session, p: &Value) -> Result<Value> {
     let mut reply = report(&set, opts.normal_format);
     if let Some(o) = reply.as_object_mut() {
         o.insert("name".into(), json!(opts.name.or(found.name)));
-        o.insert("channelsAvailable".into(), json!(s.doc.project.texture_set(s.ts()).map(|t| t.channel_list()).unwrap_or_default().iter().map(|c| c.id()).collect::<Vec<_>>()));
+        o.insert(
+            "channelsAvailable".into(),
+            json!(s.doc.project.texture_set(s.ts()).map(|t| t.channel_list()).unwrap_or_default().iter().map(|c| c.id()).collect::<Vec<_>>()),
+        );
     }
     Ok(reply)
 }

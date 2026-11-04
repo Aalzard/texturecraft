@@ -28,10 +28,10 @@ pub mod mask_cmds;
 pub mod material_lib;
 pub mod materials;
 pub mod materialx_cmds;
-pub mod pbr_cmds;
 pub mod meshmap_cmds;
 pub mod painting;
 pub mod path_tool;
+pub mod pbr_cmds;
 // Mesh reimport reads files: native only.
 #[cfg(not(target_arch = "wasm32"))]
 mod preserve;

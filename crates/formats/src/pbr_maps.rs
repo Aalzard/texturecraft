@@ -154,7 +154,8 @@ fn tokens(stem: &str) -> Vec<String> {
         if let Some(p) = prev {
             let next_lower = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
             // aB -> a|B; ABc -> A|Bc; a1 -> a|1; 1a -> 1|a.
-            let split = (p.is_lowercase() && c.is_uppercase()) || (p.is_uppercase() && c.is_uppercase() && next_lower) || (p.is_alphabetic() != c.is_alphabetic());
+            let split =
+                (p.is_lowercase() && c.is_uppercase()) || (p.is_uppercase() && c.is_uppercase() && next_lower) || (p.is_alphabetic() != c.is_alphabetic());
             if split && !cur.is_empty() {
                 out.push(std::mem::take(&mut cur));
             }
@@ -204,7 +205,9 @@ fn normal_format_of(t: &str) -> Option<NormalFormat> {
 fn word(t: &str) -> Option<(MapKind, u8)> {
     use MapKind::*;
     Some(match t {
-        "basecolor" | "basecolour" | "albedo" | "diffuse" | "diff" | "dif" | "col" | "color" | "colour" | "bc" | "basemap" | "maintex" | "alb" => (BaseColor, 3),
+        "basecolor" | "basecolour" | "albedo" | "diffuse" | "diff" | "dif" | "col" | "color" | "colour" | "bc" | "basemap" | "maintex" | "alb" => {
+            (BaseColor, 3)
+        }
         "roughness" | "rough" | "rgh" | "rou" => (Roughness, 3),
         "gloss" | "glossiness" | "glossy" | "smoothness" | "smooth" => (Glossiness, 3),
         "metallic" | "metalness" | "metal" | "mtl" | "met" => (Metallic, 3),
@@ -215,9 +218,8 @@ fn word(t: &str) -> Option<(MapKind, u8)> {
         "emissive" | "emission" | "emit" | "emis" | "glow" | "emissivecolor" | "emissionmap" | "illum" => (Emissive, 3),
         "opacity" | "alpha" | "opac" | "transparency" | "cutout" | "coverage" => (Opacity, 3),
         "orm" | "arm" | "aorm" => (PackedOrm, 4),
-        "cavity" | "curvature" | "specular" | "spec" | "translucency" | "thickness" | "scatter" | "sss" | "fuzz" | "sheen" | "ior" | "mask" | "flow" | "reflection" => {
-            (Unused, 1)
-        }
+        "cavity" | "curvature" | "specular" | "spec" | "translucency" | "thickness" | "scatter" | "sss" | "fuzz" | "sheen" | "ior" | "mask" | "flow"
+        | "reflection" => (Unused, 1),
         _ => return None,
     })
 }
@@ -278,7 +280,8 @@ pub fn classify(name: &str) -> std::result::Result<Detected, &'static str> {
     let single = words.iter().rev().find(|(i, kind, _)| {
         // A lone `n` only names a normal map as the final meaningful token.
         let lone_n = toks.get(*i).is_some_and(|t| t == "n");
-        !lone_n || (*kind == MapKind::Normal && toks.iter().skip(i + 1).all(|t| resolution_of(t).is_some() || normal_format_of(t).is_some() || t.ends_with("bit")))
+        !lone_n
+            || (*kind == MapKind::Normal && toks.iter().skip(i + 1).all(|t| resolution_of(t).is_some() || normal_format_of(t).is_some() || t.ends_with("bit")))
     });
     match (pair, single) {
         (Some((pi, kind)), Some((si, _, _))) if pi >= *si => done(kind, 3),
@@ -488,7 +491,18 @@ mod tests {
     fn empty_and_hostile_names_do_not_panic() {
         assert!(detect([]).is_empty());
         let long = "a".repeat(100_000);
-        let weird = ["\u{0}.png", "....png", "ÄÖÜ_Ålbedo.png", "🙂.png", "_.png", "-.exr", long.as_str(), "x/../../y_albedo.png", "C:\\a\\b_albedo.png", "99999999999999_albedo.png"];
+        let weird = [
+            "\u{0}.png",
+            "....png",
+            "ÄÖÜ_Ålbedo.png",
+            "🙂.png",
+            "_.png",
+            "-.exr",
+            long.as_str(),
+            "x/../../y_albedo.png",
+            "C:\\a\\b_albedo.png",
+            "99999999999999_albedo.png",
+        ];
         let set = detect(weird.iter().map(|n| (*n, 0)));
         assert!(set.chosen.contains_key(&BaseColor));
     }
