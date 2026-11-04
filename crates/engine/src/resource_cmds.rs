@@ -68,7 +68,12 @@ impl Session {
             .doc
             .resources
             .iter()
-            .filter(|(k, _)| !self.images.contains_key(*k) && !k.ends_with(&format!(".{}", texturecraft_formats::mcmat::MCRAFT_EXT)))
+            .filter(|(k, _)| {
+                !self.images.contains_key(*k)
+                    && !k.ends_with(&format!(".{}", texturecraft_formats::mcmat::MCRAFT_EXT))
+                    // Reference images are decoded on their own (8-bit, `sync_references`).
+                    && !k.starts_with(crate::reference_cmds::RESOURCE_PREFIX)
+            })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         for (k, bytes) in missing {
@@ -79,6 +84,7 @@ impl Session {
                 Err(e) => self.log.push(format!("resource {k}: {e}")),
             }
         }
+        self.sync_references();
     }
 }
 
@@ -136,6 +142,7 @@ fn remove_unused(s: &mut Session, _: &Value) -> Result<Value> {
     }
     used.extend(s.tool.stencil.as_ref().map(|st| st.image.clone()));
     used.extend(s.doc.project.display.environment_resource().map(str::to_string));
+    used.extend(s.doc.resources.keys().filter(|k| k.starts_with(crate::reference_cmds::RESOURCE_PREFIX)).cloned());
     let unused: Vec<String> = s.doc.resources.keys().filter(|k| !used.contains(k)).cloned().collect();
     if !unused.is_empty() {
         s.edit("Remove unused resources", |s| {
