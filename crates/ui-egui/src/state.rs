@@ -118,6 +118,43 @@ pub struct Prefs {
     /// Where autosaves, smart materials, presets, templates and layouts go (desktop; read at
     /// startup). Empty or relative: `Documents/TextureCraft`.
     pub data_folder: String,
+    /// Assets panel: tile width in px ([`SHELF_TILE`]; the grid reflows to the panel width).
+    pub shelf_tile_size: f32,
+    /// Layers panel: thumbnail size in px ([`LAYER_PREVIEW`]); the row height follows it.
+    pub layer_preview_size: f32,
+}
+
+/// Assets tile width range (px) and the default (the size before the slider existed).
+pub const SHELF_TILE: std::ops::RangeInclusive<f32> = 48.0..=160.0;
+pub const SHELF_TILE_DEFAULT: f32 = 72.0;
+/// Layer thumbnail size range (px) and the default.
+pub const LAYER_PREVIEW: std::ops::RangeInclusive<f32> = 24.0..=64.0;
+pub const LAYER_PREVIEW_DEFAULT: f32 = 28.0;
+
+/// `v` limited to `range`; NaN, infinite or missing values become `default`.
+fn clamp_size(v: f32, range: &std::ops::RangeInclusive<f32>, default: f32) -> f32 {
+    if v.is_finite() { v.clamp(*range.start(), *range.end()) } else { default }
+}
+
+impl Prefs {
+    /// The Assets tile width, always inside [`SHELF_TILE`] (saved prefs are hostile input).
+    pub fn shelf_tile(&self) -> f32 {
+        clamp_size(self.shelf_tile_size, &SHELF_TILE, SHELF_TILE_DEFAULT)
+    }
+
+    /// The layer thumbnail size, always inside [`LAYER_PREVIEW`]. Read this where a row's
+    /// thumbnail and height are decided.
+    pub fn layer_preview(&self) -> f32 {
+        clamp_size(self.layer_preview_size, &LAYER_PREVIEW, LAYER_PREVIEW_DEFAULT)
+    }
+}
+
+/// How many tiles of `tile` px with `gap` px between them fit in `width` px (at least one).
+pub fn tiles_per_row(width: f32, tile: f32, gap: f32) -> usize {
+    if !(width.is_finite() && tile > 0.0) {
+        return 1;
+    }
+    (((width + gap) / (tile + gap)).floor() as usize).max(1)
 }
 
 impl Default for Prefs {
@@ -132,6 +169,8 @@ impl Default for Prefs {
             system_title_bar: false,
             start_window: true,
             data_folder: String::new(),
+            shelf_tile_size: SHELF_TILE_DEFAULT,
+            layer_preview_size: LAYER_PREVIEW_DEFAULT,
         }
     }
 }
@@ -352,6 +391,29 @@ mod tests {
         assert_eq!(ui.recent, vec!["a.tcraft".to_string()]);
         assert_eq!(ui.export.preset, "Mine");
         assert_eq!(ui.keymap.get("file.save").map(String::as_str), Some("F5"));
+    }
+
+    #[test]
+    fn preview_sizes_round_trip_and_clamp() {
+        let d = Prefs::default();
+        assert_eq!((d.shelf_tile(), d.layer_preview()), (72.0, 28.0), "defaults are the old sizes");
+        let p = Prefs { shelf_tile_size: 120.0, layer_preview_size: 40.0, ..Prefs::default() };
+        let back: Prefs = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back, p);
+        let old: Prefs = serde_json::from_str("{\"ui_scale\": 1.5}").unwrap();
+        assert_eq!((old.shelf_tile(), old.layer_preview()), (72.0, 28.0), "older prefs get the defaults");
+        let wild = Prefs { shelf_tile_size: 9999.0, layer_preview_size: -3.0, ..Prefs::default() };
+        assert_eq!((wild.shelf_tile(), wild.layer_preview()), (160.0, 24.0));
+        let nan = Prefs { shelf_tile_size: f32::NAN, layer_preview_size: f32::INFINITY, ..Prefs::default() };
+        assert_eq!((nan.shelf_tile(), nan.layer_preview()), (72.0, 28.0));
+    }
+
+    #[test]
+    fn smaller_tiles_fit_more_per_row() {
+        let (small, default, big) = (tiles_per_row(300.0, 48.0, 4.0), tiles_per_row(300.0, 72.0, 4.0), tiles_per_row(300.0, 160.0, 4.0));
+        assert!(small > default && default > big, "{small} {default} {big}");
+        assert_eq!(tiles_per_row(10.0, 160.0, 4.0), 1, "never fewer than one");
+        assert_eq!(tiles_per_row(f32::NAN, 72.0, 4.0), 1);
     }
 
     #[test]

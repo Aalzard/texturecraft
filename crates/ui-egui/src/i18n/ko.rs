@@ -1054,4 +1054,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Value Bounds Max", "값 상한"),
     ("Value Bounds Min", "값 하한"),
     ("Vertex Color", "정점 색상"),
+    ("Preview size", "미리보기 크기"),
+    ("Smaller or bigger asset tiles (Ctrl+mouse wheel over the grid does the same)", "에셋 타일을 작게 또는 크게 (그리드 위에서 Ctrl+마우스 휠로도 변경)"),
+    ("Smaller or bigger layer thumbnails and rows", "레이어 썸네일과 행을 작게 또는 크게"),
 ];

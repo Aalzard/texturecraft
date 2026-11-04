@@ -1075,4 +1075,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Value Bounds Max", "Límite máximo"),
     ("Value Bounds Min", "Límite mínimo"),
     ("Vertex Color", "Color de vértice"),
+    ("Preview size", "Tamaño de vista previa"),
+    (
+        "Smaller or bigger asset tiles (Ctrl+mouse wheel over the grid does the same)",
+        "Mosaicos más pequeños o más grandes (Ctrl+rueda del ratón sobre la cuadrícula hace lo mismo)",
+    ),
+    ("Smaller or bigger layer thumbnails and rows", "Miniaturas y filas de capas más pequeñas o más grandes"),
 ];

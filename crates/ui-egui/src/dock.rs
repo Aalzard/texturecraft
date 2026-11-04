@@ -166,6 +166,19 @@ pub(crate) fn layers(app: &mut TextureCraftApp, ui: &mut Ui) {
         }
     });
     ui.add_space(2.0);
+    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+        let mut size = app.ui.prefs.layer_preview();
+        if crate::widgets::preview_size_slider(ui, &mut size, crate::state::LAYER_PREVIEW, tr("Smaller or bigger layer thumbnails and rows")) {
+            app.ui.prefs.layer_preview_size = size;
+        }
+        ui.separator();
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| layer_stack(app, ui));
+    });
+}
+
+/// The scrolling layer rows.
+fn layer_stack(app: &mut TextureCraftApp, ui: &mut Ui) {
+    let tk = Tokens::get(ui.ctx());
     let ts = app.session.ts();
     let stack: Vec<LayerId> = app.session.doc.project.texture_sets.get(ts).map(|t| t.stack.iter().rev().copied().collect()).unwrap_or_default();
     egui::ScrollArea::vertical().id_salt("layers_scroll").auto_shrink([false, false]).show(ui, |ui| {
@@ -276,7 +289,9 @@ fn layer_tree(app: &mut TextureCraftApp, ui: &mut Ui, id: LayerId, depth: usize)
 fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize) {
     let tk = Tokens::get(ui.ctx());
     let selected = app.session.selected_layer() == Some(layer.id);
-    let h = 38.0;
+    // `Prefs::layer_preview`: the thumbnail size; the row is 10 px taller (38 px at the default 28).
+    let preview = app.ui.prefs.layer_preview();
+    let h = (preview + 10.0).max(34.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click_and_drag());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::ListItem, true, selected, &layer.name));
     let p = ui.painter().clone();
@@ -328,7 +343,8 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
         x += 14.0;
     }
     // Thumbnail.
-    let thumb = Rect::from_min_size(pos2(x, rect.top() + 5.0), vec2(28.0, 28.0));
+    let thumb = Rect::from_min_size(pos2(x, rect.center().y - preview * 0.5), vec2(preview, preview));
+    let k = preview / 28.0; // glyphs and the sphere scale with the thumbnail
     p.rect_filled(thumb, 2.0, tk.field);
     match &layer.kind {
         LayerKind::Fill(f) => {
@@ -337,16 +353,16 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
                 Source::Procedural { low, high, .. } => [(low[0] + high[0]) * 0.5, (low[1] + high[1]) * 0.5, (low[2] + high[2]) * 0.5],
                 Source::Image { .. } | Source::Anchor { .. } => [0.5; 3],
             };
-            crate::thumbs::paint_sphere(&p, thumb.center(), 12.0, c);
+            crate::thumbs::paint_sphere(&p, thumb.center(), 12.0 * k, c);
         }
         LayerKind::Paint => {
-            p.text(thumb.center(), egui::Align2::CENTER_CENTER, ic::PAINT_BRUSH, egui::FontId::proportional(15.0), tk.text);
+            p.text(thumb.center(), egui::Align2::CENTER_CENTER, ic::PAINT_BRUSH, egui::FontId::proportional(15.0 * k), tk.text);
         }
         LayerKind::Group { .. } => {
-            p.text(thumb.center(), egui::Align2::CENTER_CENTER, ic::FOLDER_SIMPLE, egui::FontId::proportional(16.0), tk.text);
+            p.text(thumb.center(), egui::Align2::CENTER_CENTER, ic::FOLDER_SIMPLE, egui::FontId::proportional(16.0 * k), tk.text);
         }
         LayerKind::Instance { .. } => {
-            p.text(thumb.center(), egui::Align2::CENTER_CENTER, ic::LINK, egui::FontId::proportional(16.0), tk.accent);
+            p.text(thumb.center(), egui::Align2::CENTER_CENTER, ic::LINK, egui::FontId::proportional(16.0 * k), tk.accent);
         }
     }
     x = thumb.right() + 8.0;
@@ -360,7 +376,7 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     let blend = project.content_layer(layer.id).and_then(|l| l.blend(app.ui.layer_channel));
     // Mask thumbnail.
     let right_w = 46.0;
-    let mask_rect = Rect::from_min_size(pos2(rect.right() - right_w - 30.0, rect.top() + 7.0), vec2(24.0, 24.0));
+    let mask_rect = Rect::from_min_size(pos2(rect.right() - right_w - 30.0, rect.center().y - 12.0), vec2(24.0, 24.0));
     if let Some(m) = &mask {
         let mask_sel = selected && !targets_content(app);
         p.rect_filled(
@@ -438,8 +454,8 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     }
     // Blend mode and opacity of the displayed channel.
     let ch = app.ui.layer_channel;
-    let blend_rect = Rect::from_min_size(pos2(rect.right() - right_w - 2.0, rect.top() + 3.0), vec2(right_w, 16.0));
-    let op_rect = Rect::from_min_size(pos2(rect.right() - right_w - 2.0, rect.top() + 19.0), vec2(right_w, 16.0));
+    let blend_rect = Rect::from_min_size(pos2(rect.right() - right_w - 2.0, rect.center().y - 16.0), vec2(right_w, 16.0));
+    let op_rect = Rect::from_min_size(pos2(rect.right() - right_w - 2.0, rect.center().y), vec2(right_w, 16.0));
     if let Some(b) = blend {
         let br = ui.interact(blend_rect, ui.scope_id().with(("blend", layer.id.0)), Sense::click()).on_hover_text(tr("Blending mode of the displayed channel"));
         p.text(blend_rect.right_center() - vec2(10.0, 0.0), egui::Align2::RIGHT_CENTER, b.mode.short(), egui::FontId::proportional(11.0), tk.text);

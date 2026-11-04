@@ -1069,4 +1069,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Value Bounds Max", "値の上限"),
     ("Value Bounds Min", "値の下限"),
     ("Vertex Color", "頂点カラー"),
+    ("Preview size", "プレビューサイズ"),
+    (
+        "Smaller or bigger asset tiles (Ctrl+mouse wheel over the grid does the same)",
+        "アセットのタイルを小さく、または大きくします (グリッド上で Ctrl+マウスホイールでも変更できます)",
+    ),
+    ("Smaller or bigger layer thumbnails and rows", "レイヤーのサムネイルと行を小さく、または大きくします"),
 ];

@@ -19,8 +19,9 @@ use texturecraft_render::ibl::ENVIRONMENTS;
 
 use crate::TextureCraftApp;
 use crate::i18n::{tr, trf};
+use crate::state::SHELF_TILE;
 use crate::theme::Tokens;
-use crate::widgets::{dnd_release, icon_button};
+use crate::widgets::{ctrl_wheel_size, dnd_release, icon_button, preview_size_slider};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
@@ -178,7 +179,23 @@ pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
     });
     ui.add_space(4.0);
     let filter = app.ui.shelf_filter.to_lowercase();
-    egui::ScrollArea::vertical().id_salt("shelf_scroll").auto_shrink([false, false]).show(ui, |ui| {
+    // Footer: the preview size slider, then the grid fills the rest.
+    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+        let mut size = app.ui.prefs.shelf_tile();
+        if preview_size_slider(ui, &mut size, SHELF_TILE, tr("Smaller or bigger asset tiles (Ctrl+mouse wheel over the grid does the same)")) {
+            app.ui.prefs.shelf_tile_size = size;
+        }
+        ui.separator();
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| grid(app, ui, &ctx, &filter, tab));
+    });
+    drag_preview(&ctx);
+}
+
+/// The scrolling tile grid. Ctrl+wheel over it changes the tile size.
+fn grid(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter: &str, tab: usize) {
+    let tile_size = app.ui.prefs.shelf_tile();
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("shelf_tile_size"), tile_size));
+    let out = egui::ScrollArea::vertical().id_salt("shelf_scroll").auto_shrink([false, false]).show(ui, |ui| {
         // Searching shows matches from every tab, each under its tab's name.
         for (i, (t, _, title)) in TABS.iter().enumerate() {
             if filter.is_empty() && i != tab {
@@ -186,22 +203,24 @@ pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
             }
             let title = tr(title);
             match t {
-                Tab::Materials => materials(app, ui, &ctx, &filter, false, title),
+                Tab::Materials => materials(app, ui, ctx, filter, false, title),
                 Tab::Smart => {
-                    materials(app, ui, &ctx, &filter, true, title);
-                    library(app, ui, &filter);
+                    materials(app, ui, ctx, filter, true, title);
+                    library(app, ui, filter);
                 }
-                Tab::Masks => smart_masks(app, ui, &ctx, &filter, title),
-                Tab::Filters => filters(app, ui, &ctx, &filter, title),
-                Tab::Brushes => brushes(app, ui, &ctx, &filter, title),
-                Tab::Alphas => alpha_library(app, ui, &ctx, &filter, title),
-                Tab::Procedurals => procedurals(app, ui, &ctx, &filter, title),
-                Tab::Environments => environments(app, ui, &filter, title),
-                Tab::Textures => textures(app, ui, &ctx, &filter, title),
+                Tab::Masks => smart_masks(app, ui, ctx, filter, title),
+                Tab::Filters => filters(app, ui, ctx, filter, title),
+                Tab::Brushes => brushes(app, ui, ctx, filter, title),
+                Tab::Alphas => alpha_library(app, ui, ctx, filter, title),
+                Tab::Procedurals => procedurals(app, ui, ctx, filter, title),
+                Tab::Environments => environments(app, ui, filter, title),
+                Tab::Textures => textures(app, ui, ctx, filter, title),
             }
         }
     });
-    drag_preview(&ctx);
+    if let Some(size) = ctrl_wheel_size(ui, out.inner_rect, tile_size, &SHELF_TILE) {
+        app.ui.prefs.shelf_tile_size = size;
+    }
 }
 
 /// The dragged asset's name next to the pointer.
@@ -544,22 +563,32 @@ fn textures(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter:
     });
 }
 
-/// A shelf tile: thumbnail (a placeholder disc while it renders) and a wrapped label; tiles with
-/// a `drag` asset can be dragged.
+/// The Assets tile width in effect this frame (set by [`grid`]).
+fn tile_width(ui: &Ui) -> f32 {
+    ui.ctx().data(|d| d.get_temp::<f32>(egui::Id::unique("shelf_tile_size"))).unwrap_or(crate::state::SHELF_TILE_DEFAULT)
+}
+
+/// A shelf tile: thumbnail (a placeholder disc while it renders) and a label of at most two
+/// lines, ellipsized; tiles with a `drag` asset can be dragged. The tile is `tile_width` wide, the
+/// thumbnail 16 px less, and the label font scales a little with it (never below 8.5 px).
 fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, hint: &str, drag: Option<&Asset>) -> egui::Response {
     let tk = Tokens::get(ui.ctx());
+    let width = tile_width(ui);
+    let thumb = width - 16.0;
+    let font = (9.5 * width / crate::state::SHELF_TILE_DEFAULT).clamp(8.5, 12.0);
     let sense = if drag.is_some() { Sense::click_and_drag() } else { Sense::click() };
-    let (rect, resp) = ui.allocate_exact_size(vec2(72.0, 86.0), sense);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, (thumb + 9.0 + font * 2.2).round()), sense);
     if let Some(asset) = drag
         && resp.drag_started()
     {
         resp.dnd_set_drag_payload(ShelfDrag { asset: asset.clone(), label: label.to_string() });
     }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let p = ui.painter();
     if resp.hovered() || resp.dragged() {
         p.rect_filled(rect, 3.0, tk.row_hover);
     }
-    let img = egui::Rect::from_center_size(rect.center_top() + vec2(0.0, 32.0), vec2(56.0, 56.0));
+    let img = egui::Rect::from_center_size(rect.center_top() + vec2(0.0, thumb * 0.5 + 4.0), vec2(thumb, thumb));
     match tex {
         Some(t) => {
             p.image(t.id(), img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
@@ -568,7 +597,11 @@ fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, hint: &str,
             p.circle_filled(img.center(), img.width() * 0.45, tk.row_hover);
         }
     }
-    let galley = p.layout(label.to_string(), egui::FontId::proportional(9.5), tk.text, rect.width() - 4.0);
+    let mut job = egui::text::LayoutJob::simple(label.to_string(), egui::FontId::proportional(font), tk.text, rect.width() - 4.0);
+    job.wrap.max_rows = 2;
+    job.wrap.overflow_character = Some('\u{2026}');
+    job.halign = egui::Align::Center;
+    let galley = p.layout_job(job);
     p.galley(egui::pos2(rect.center().x - galley.size().x * 0.5, img.bottom() + 3.0), galley, tk.text);
     resp.on_hover_ui(|ui| {
         ui.label(format!("{label}: {hint}"));

@@ -1000,4 +1000,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Value Bounds Max", "值上限"),
     ("Value Bounds Min", "值下限"),
     ("Vertex Color", "顶点颜色"),
+    ("Preview size", "预览大小"),
+    ("Smaller or bigger asset tiles (Ctrl+mouse wheel over the grid does the same)", "缩小或放大资源图块（在网格上按 Ctrl+鼠标滚轮同样有效）"),
+    ("Smaller or bigger layer thumbnails and rows", "缩小或放大图层缩略图和行"),
 ];

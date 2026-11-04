@@ -375,3 +375,30 @@ pub fn panel_header(ui: &mut Ui, title: &str, trailing: impl FnOnce(&mut Ui)) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), trailing);
     });
 }
+
+/// A compact "Preview size" slider for a panel footer (px, no value text; the tooltip says what
+/// it does). Returns true when `size` changed.
+pub fn preview_size_slider(ui: &mut Ui, size: &mut f32, range: std::ops::RangeInclusive<f32>, tip: &str) -> bool {
+    let tk = Tokens::get(ui.ctx());
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(crate::i18n::tr("Preview size")).size(10.0).color(tk.text_dim));
+        ui.spacing_mut().slider_width = (ui.available_width() - 8.0).clamp(40.0, 140.0);
+        let r = ui.add(egui::Slider::new(size, range).show_value(false).step_by(1.0)).on_hover_text(tip);
+        changed = r.changed();
+    });
+    changed
+}
+
+/// The new size when Ctrl+mouse wheel turns over `area` (egui reports it as a zoom), else None.
+/// Zooming in grows the previews; the result stays inside `range`.
+pub fn ctrl_wheel_size(ui: &Ui, area: egui::Rect, size: f32, range: &std::ops::RangeInclusive<f32>) -> Option<f32> {
+    if !ui.rect_contains_pointer(area) {
+        return None;
+    }
+    let zoom = ui.input(|i| i.zoom_delta());
+    if !zoom.is_finite() || zoom <= 0.0 || (zoom - 1.0).abs() < 1e-4 {
+        return None;
+    }
+    Some((size * zoom).round().clamp(*range.start(), *range.end()))
+}
