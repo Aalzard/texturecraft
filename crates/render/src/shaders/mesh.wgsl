@@ -21,9 +21,12 @@ struct Globals {
     shadow: vec4<f32>,   // x shadows on (1), y shadow map texel (uv), z normal offset (world units), w -
     material: vec4<f32>, // x specular/glossiness shading (1), y parallax occlusion (1), z accumulation sample index, w IOR of transmission
     scatter: vec4<f32>,  // xyz per-channel diffuse wrap at scattering weight 1 (0 = Lambert), w G-buffer holds the scattering light (1)
-    fwd: vec4<f32>,      // xyz camera view direction (unit), w -
+    fwd: vec4<f32>,      // xyz camera view direction (unit), w orthographic camera (1)
     disp: vec4<f32>,     // x displacement on (1), y world units per unit of height at strength 1, z vertex spacing in UV units, w -
     refr: vec4<f32>,     // x screen-space refraction on (1), y lods of the scene behind, z refraction depth (world units), w -
+    grid: vec4<f32>,     // ground grid (grid.wgsl): x finest spacing, y blend toward the next decade, z fade start, w fade end (distance from the eye)
+    grid2: vec4<f32>,    // x opacity, y plane height, z half side of the quad, w light gain (undoes the exposure)
+    grid3: vec4<f32>,    // x view depth where the grid is gone (camera near plane), y where it is fully in, zw -
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;

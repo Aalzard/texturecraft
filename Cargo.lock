@@ -3972,6 +3972,7 @@ dependencies = [
  "half",
  "image",
  "log",
+ "naga",
  "pollster 0.4.0",
  "rayon",
  "texturecraft-bake",

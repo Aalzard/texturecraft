@@ -169,6 +169,14 @@ pub(crate) fn display(app: &mut TextureCraftApp, ui: &mut Ui) {
     slider(ui, tr("Ambient occlusion intensity"), &mut d.ao_intensity, 0.0..=1.0, 2);
     ui.checkbox(&mut app.ui.wireframe_3d, tr("Show wireframe in the 3D view"));
     ui.checkbox(&mut app.ui.uv_wireframe, tr("Show UV wireframe in the 2D view"));
+    let grid = &mut app.ui.prefs.grid;
+    ui.checkbox(&mut grid.show, tr("Show the ground grid in the 3D view"))
+        .on_hover_text(tr("A grid under the model that fades with distance (not in renders or exports)"));
+    ui.add_enabled_ui(grid.show, |ui| {
+        slider(ui, tr("Grid opacity"), &mut grid.opacity, 0.0..=1.0, 2);
+        ui.checkbox(&mut grid.on_model_floor, tr("Grid at the model's floor"))
+            .on_hover_text(tr("Put the grid at the lowest point of the model instead of at height 0"));
+    });
     ui.checkbox(&mut d.taa, tr("Temporal anti-aliasing (refines the 3D view while it is still)"));
     if d != before {
         if d.fov != before.fov {

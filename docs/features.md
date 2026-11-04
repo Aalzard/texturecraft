@@ -130,6 +130,12 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   wheel to zoom, F to frame, M / C / B to cycle views.
 - **3D and UV wireframes** that show the mesh's own polygons: quads and n-gons from OBJ, FBX,
   COLLADA, USD, Alembic and PLY files keep their edges, without the triangulation's diagonals.
+- **A fading ground grid** in the 3D view: minor lines, stronger major lines every 10, red X and
+  blue Z axis lines, anti-aliased per pixel, fading with distance and at grazing angles (no hard
+  edge, no moire) and re-scaling by decades as you zoom. Display settings › Viewer settings: show
+  or hide, opacity, and "Grid at the model's floor" (the model's lowest point instead of height
+  0); the choice is saved with the preferences. It is a viewport overlay only: renders, the path
+  tracer, bakes and exports never contain it.
 
 ## Interface
 

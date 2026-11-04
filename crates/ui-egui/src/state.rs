@@ -118,6 +118,32 @@ pub struct Prefs {
     /// Where autosaves, smart materials, presets, templates and layouts go (desktop; read at
     /// startup). Empty or relative: `Documents/TextureCraft`.
     pub data_folder: String,
+    /// The fading ground grid in the 3D view (a viewport overlay: never in renders or exports).
+    pub grid: GridPrefs,
+}
+
+/// The 3D view's ground grid (Display settings › Viewer settings).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GridPrefs {
+    pub show: bool,
+    /// 0..1.
+    pub opacity: f32,
+    /// Draw it at the model's lowest point instead of at height 0.
+    pub on_model_floor: bool,
+}
+
+impl Default for GridPrefs {
+    fn default() -> Self {
+        GridPrefs { show: true, opacity: 0.6, on_model_floor: false }
+    }
+}
+
+impl GridPrefs {
+    /// What the 3D view draws (None: no grid).
+    pub fn shade(&self) -> Option<texturecraft_render::GridShade> {
+        self.show.then(|| texturecraft_render::GridShade { opacity: self.opacity.clamp(0.0, 1.0), on_model_floor: self.on_model_floor })
+    }
 }
 
 impl Default for Prefs {
@@ -132,6 +158,7 @@ impl Default for Prefs {
             system_title_bar: false,
             start_window: true,
             data_folder: String::new(),
+            grid: GridPrefs::default(),
         }
     }
 }
@@ -362,6 +389,37 @@ mod tests {
         let chosen = std::env::temp_dir().join("tc-data");
         assert_eq!(crate::data_folder(&format!(" {} ", chosen.display())), chosen);
         assert_eq!(Prefs::default().data_folder, "", "the default is no choice");
+    }
+
+    #[test]
+    fn the_grid_prefs_round_trip_and_older_prefs_get_the_defaults() {
+        let mut ui = UiState::default();
+        assert_eq!(ui.prefs.grid, GridPrefs { show: true, opacity: 0.6, on_model_floor: false });
+        ui.prefs.grid = GridPrefs { show: false, opacity: 0.25, on_model_floor: true };
+        let back: UiState = serde_json::from_value(serde_json::to_value(&ui).unwrap()).unwrap();
+        assert_eq!(back.prefs.grid, ui.prefs.grid, "show, opacity and the floor survive a restart");
+        // Prefs saved before the grid existed load with the default grid.
+        let mut v = serde_json::to_value(UiState::default()).unwrap();
+        if let Some(prefs) = v.get_mut("prefs").and_then(|p| p.as_object_mut()) {
+            prefs.remove("grid");
+        }
+        let old: UiState = serde_json::from_value(v).unwrap();
+        assert_eq!(old.prefs.grid, GridPrefs::default());
+        // A grid pref file with a missing field keeps the other fields.
+        let partial: GridPrefs = serde_json::from_value(serde_json::json!({"show": false})).unwrap();
+        assert_eq!(partial, GridPrefs { show: false, ..GridPrefs::default() });
+    }
+
+    #[test]
+    fn the_grid_shade_follows_the_prefs() {
+        let mut g = GridPrefs::default();
+        assert!(g.shade().is_some_and(|s| s.visible()));
+        g.show = false;
+        assert_eq!(g.shade(), None, "hidden: the view gets no grid at all");
+        g = GridPrefs { show: true, opacity: 7.0, on_model_floor: true };
+        assert_eq!(g.shade().map(|s| (s.opacity, s.on_model_floor)), Some((1.0, true)), "opacity is clamped");
+        g.opacity = 0.0;
+        assert!(g.shade().is_some_and(|s| !s.visible()), "opacity 0 draws nothing");
     }
 
     #[test]

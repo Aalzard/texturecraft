@@ -185,6 +185,14 @@ mod tests {
     }
 
     #[test]
+    fn headless_renders_have_no_ground_grid() {
+        // The grid is a viewport overlay: renders, screenshots and the CLI never draw it.
+        let mesh = texturecraft_engine::geom::primitives::material_ball();
+        let s = Session::new_project("t", mesh, "builtin:material_ball", None, 256).unwrap();
+        assert_eq!(shade(&s).grid, None);
+    }
+
+    #[test]
     fn renders_with_an_imported_hdr_environment() {
         let mesh = texturecraft_engine::geom::primitives::material_ball();
         let mut s = Session::new_project("t", mesh, "builtin:material_ball", None, 256).unwrap();

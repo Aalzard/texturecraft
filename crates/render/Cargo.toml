@@ -29,3 +29,5 @@ wasm-bindgen-futures = "0.4"
 
 [dev-dependencies]
 image = { workspace = true }
+# Shader validation tests (the same version wgpu compiles with).
+naga = { version = "30", features = ["wgsl-in"] }

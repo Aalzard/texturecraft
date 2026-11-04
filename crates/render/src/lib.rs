@@ -5,7 +5,7 @@
 //! height-to-normal, optional parallax occlusion, 4× MSAA plus idle temporal accumulation, channel / mesh-map / UV
 //! checker debug views, the 2D UV view, a linear HDR scene with a post pass (exposure, Linear /
 //! ACES tone mapping, bloom, sharpen, vignette, grain), key-light shadow maps, a 3D wireframe
-//! overlay, and a [`headless`] device for renders
+//! overlay, a fading [`grid`] on the ground, and a [`headless`] device for renders
 //! without a window. No UI toolkit dependency; the egui shell drives it through
 //! [`Renderer::prepare`] and [`Renderer::blit`]. Fragment passes only, so it runs on WebGPU and
 //! WebGL2 too. Rendering mode's path tracer runs on the CPU ([`trace`]) or, where compute shaders
@@ -17,6 +17,7 @@ pub mod displace;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gpu_bake;
 pub mod gpu_trace;
+pub mod grid;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod headless;
 pub mod ibl;
@@ -26,5 +27,6 @@ pub mod renderer;
 mod subdivide;
 pub mod trace;
 
+pub use grid::GridShade;
 pub use renderer::{COLOR_FORMAT, Frame, MSAA, Renderer, Shade, ViewKind, aux_size, uv_view_scale};
 pub use wgpu;

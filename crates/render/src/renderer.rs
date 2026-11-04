@@ -31,6 +31,7 @@ use texturecraft_geom::{Mesh, OrbitCamera};
 use texturecraft_texel::TILE;
 
 use crate::gpu_trace::{Checked, checked};
+use crate::grid::{self, GridParams, GridShade};
 use crate::ibl;
 use crate::subdivide::{self, Vertex};
 
@@ -76,6 +77,9 @@ struct GlobalsRaw {
     fwd: [f32; 4],
     disp: [f32; 4],
     refr: [f32; 4],
+    grid: [f32; 4],
+    grid2: [f32; 4],
+    grid3: [f32; 4],
 }
 
 /// The post pass uniform (see `Post` in post.wgsl).
@@ -159,6 +163,9 @@ pub struct Shade {
     /// Move the surface by the height channel (3D view): a dense copy of the mesh, displaced in
     /// the vertex shader at the height-to-normal strength.
     pub displacement: bool,
+    /// Draw the fading ground grid under the model (3D view only; a viewport overlay: leave it
+    /// `None` for anything that is not the live viewport).
+    pub grid: Option<GridShade>,
 }
 
 /// The viewport's subsurface scattering approximation: the diffuse lighting wraps around the
@@ -244,6 +251,7 @@ impl Default for Shade {
             sss_blur: None,
             refraction: false,
             displacement: false,
+            grid: None,
         }
     }
 }
@@ -267,6 +275,13 @@ pub struct Frame {
     pub shade: Shade,
     /// Visibility per texture set.
     pub visible: Vec<bool>,
+}
+
+impl Frame {
+    /// Whether this frame draws the ground grid: the 3D view with a visible [`GridShade`].
+    pub fn grid_on(&self) -> bool {
+        self.kind == ViewKind::Scene && self.shade.grid.is_some_and(|g| g.visible())
+    }
 }
 
 struct Tex {
@@ -415,6 +430,8 @@ struct MeshGpu {
     /// Bounding sphere (center, radius) for fitting the shadow map.
     center: Vec3,
     radius: f32,
+    /// Lowest point of the bounds (the grid's "model floor").
+    floor: f32,
 }
 
 /// The scene effect targets of a view (full resolution unless noted), created the first time
@@ -514,6 +531,8 @@ pub struct Renderer {
     wire_pipeline: wgpu::RenderPipeline,
     wire3d_pipeline: wgpu::RenderPipeline,
     bg_pipeline: wgpu::RenderPipeline,
+    /// The ground grid (grid.wgsl): alpha over the scene, depth tested, no depth writes.
+    grid_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
     post_pipeline: wgpu::RenderPipeline,
     /// Bright pass + first downsample, downsample, additive upsample.
@@ -779,6 +798,10 @@ fn fullscreen_blend(
 }
 
 /// Halton low-discrepancy value of `i` in `base` (0..1).
+fn flag01(b: bool) -> f32 {
+    if b { 1.0 } else { 0.0 }
+}
+
 fn halton(mut i: u32, base: u32) -> f32 {
     let (mut f, mut r) = (1.0, 0.0);
     while i > 0 {
@@ -789,6 +812,12 @@ fn halton(mut i: u32, base: u32) -> f32 {
     r
 }
 
+/// The viewport shader modules as compiled (the tests validate the same sources).
+pub(crate) const MESH_WGSL: &str = concat!(include_str!("shaders/displace.wgsl"), include_str!("shaders/mesh.wgsl"), include_str!("shaders/grid.wgsl"));
+pub(crate) const UTIL_WGSL: &str = include_str!("shaders/util.wgsl");
+pub(crate) const POST_WGSL: &str = concat!(include_str!("shaders/util.wgsl"), include_str!("shaders/post.wgsl"), include_str!("shaders/fx.wgsl"));
+pub(crate) const SHADOW_WGSL: &str = concat!(include_str!("shaders/displace.wgsl"), include_str!("shaders/shadow.wgsl"));
+
 const CLEAR: wgpu::LoadOp<wgpu::Color> = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
 
 impl Renderer {
@@ -797,10 +826,10 @@ impl Renderer {
         let shader = |label: &str, source: &str| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) })
         };
-        let module = shader("tc_mesh", concat!(include_str!("shaders/displace.wgsl"), include_str!("shaders/mesh.wgsl")));
-        let util_module = shader("tc_util", include_str!("shaders/util.wgsl"));
-        let post_module = shader("tc_post", concat!(include_str!("shaders/util.wgsl"), include_str!("shaders/post.wgsl"), include_str!("shaders/fx.wgsl")));
-        let shadow_module = shader("tc_shadow", concat!(include_str!("shaders/displace.wgsl"), include_str!("shaders/shadow.wgsl")));
+        let module = shader("tc_mesh", MESH_WGSL);
+        let util_module = shader("tc_util", UTIL_WGSL);
+        let post_module = shader("tc_post", POST_WGSL);
+        let shadow_module = shader("tc_shadow", SHADOW_WGSL);
         let bgl = |label: &str, entries: &[wgpu::BindGroupLayoutEntry]| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some(label), entries })
         };
@@ -888,6 +917,9 @@ impl Renderer {
         let wire3d_depth = Some(depth_state(false, wgpu::CompareFunction::LessEqual));
         let wire3d_pipeline = pipeline(device, "tc_wire3d", &layout, &module, "vs_wire3d", &vb, hdr("fs_wire3d", blend), MSAA, wire3d_depth);
         let bg_pipeline = pipeline(device, "tc_bg", &bg_layout, &module, "vs_bg", &[], hdr("fs_bg", None), MSAA, always());
+        let grid_blend = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+        let grid_depth = Some(depth_state(false, wgpu::CompareFunction::LessEqual));
+        let grid_pipeline = pipeline(device, "tc_grid", &bg_layout, &module, "vs_grid", &[], hdr("fs_grid", grid_blend), MSAA, grid_depth);
         let blit_pipeline = pipeline(device, "tc_blit", &blit_layout, &util_module, "vs_blit", &[], Some(("fs_blit", target_format, None)), 1, None);
         let post_pipeline = pipeline(device, "tc_post", &fx_layout, &post_module, "vs_full", &[], Some(("fs_post", COLOR_FORMAT, None)), 1, None);
         let bloom_pipelines = [("fs_bloom_pre", None), ("fs_bloom_down", None), ("fs_bloom_up", Some(ADDITIVE))]
@@ -995,6 +1027,7 @@ impl Renderer {
             wire_pipeline,
             wire3d_pipeline,
             bg_pipeline,
+            grid_pipeline,
             blit_pipeline,
             post_pipeline,
             bloom_pipelines,
@@ -1100,7 +1133,7 @@ impl Renderer {
         let world_per_uv = subdivide::world_per_uv(&verts, &mesh.indices).unwrap_or(radius);
         let coarse = (subdivide::level_for(triangles) > 0).then(|| (verts, mesh.indices.clone()));
         let geo = Geometry { vb, ib, draws, triangles };
-        self.mesh = Some(MeshGpu { id, geo, coarse, dense: None, world_per_uv, lines, line_draws, center, radius });
+        self.mesh = Some(MeshGpu { id, geo, coarse, dense: None, world_per_uv, lines, line_draws, center, radius, floor: lo.y });
         self.content_rev += 1;
     }
 
@@ -1689,6 +1722,16 @@ impl Renderer {
         });
         let sss_d = sss.map_or([0.0; 4], |m| [m[0] * radius, m[1] * radius, m[2] * radius, k]);
         let fwd = cam.forward();
+        // The ground grid: only the live 3D view asks for it (`Frame::grid_on`).
+        let grid_on = frame.grid_on();
+        let gp = GridParams::new(cam);
+        let floor = match s.grid {
+            Some(gs) if gs.on_model_floor => self.mesh.as_ref().map_or(0.0, |m| m.floor),
+            _ => 0.0,
+        };
+        let grid_opacity = s.grid.filter(|_| grid_on).map_or(0.0, |gs| gs.opacity.clamp(0.0, 1.0));
+        // The post pass applies the exposure to the scene; the grid undoes it to keep its look.
+        let grid_gain = if data { 1.0 } else { 2f32.powf(-s.exposure_ev.clamp(-16.0, 16.0)) };
         let raw = GlobalsRaw {
             view_proj: vp.to_cols_array_2d(),
             inv_view_proj: bg_vp.inverse().to_cols_array_2d(),
@@ -1704,11 +1747,14 @@ impl Renderer {
             shadow: [if shadow_vp.is_some() { 1.0 } else { 0.0 }, 1.0 / SHADOW_SIZE as f32, radius * 3.0 / SHADOW_SIZE as f32, 0.0],
             material: [if s.spec_gloss { 1.0 } else { 0.0 }, if s.parallax { 1.0 } else { 0.0 }, sample as f32, s.ior],
             scatter: [s.scatter[0], s.scatter[1], s.scatter[2], if sss.is_some() { 1.0 } else { 0.0 }],
-            fwd: [fwd.x, fwd.y, fwd.z, 0.0],
+            fwd: [fwd.x, fwd.y, fwd.z, flag01(cam.ortho)],
             disp,
             refr: [if refraction { 1.0 } else { 0.0 }, (BEHIND_LEVELS - 1) as f32, REFRACTION_DEPTH * radius, 0.0],
+            grid: [gp.spacing, gp.blend, gp.fade[0], gp.fade[1]],
+            grid2: [grid_opacity, grid::plane_height(floor, radius), gp.half, grid_gain],
+            grid3: [gp.near[0], gp.near[1], 0.0, 0.0],
         };
-        let flag = |b: bool| if b { 1.0 } else { 0.0 };
+        let flag = flag01;
         let post = PostRaw {
             a: [2f32.powf(s.exposure_ev), flag(s.aces), flag(data), fx(s.bloom) * BLOOM_GAIN],
             b: [fx(s.vignette), fx(s.sharpen), fx(s.grain), BLOOM_THRESHOLD],
@@ -1805,7 +1851,7 @@ impl Renderer {
 
     /// The scene without transmissive surfaces into `b` (MSAA resolved into mip 0), then its mips.
     fn behind_pass(&self, encoder: &mut wgpu::CommandEncoder, v: &ViewTargets, b: &Behind, globals_bg: &wgpu::BindGroup, frame: &Frame) {
-        self.draw_scene(encoder, v, &b.level0, globals_bg, frame, &self.opaque_pipeline, None, &self.refr_black);
+        self.draw_scene(encoder, v, &b.level0, globals_bg, frame, &self.opaque_pipeline, None, &self.refr_black, false);
         let Some(pipe) = self.mip_pipelines.get(&self.hdr_format) else { return };
         for (dst, bg) in &b.mips {
             fullscreen(encoder, "tc_behind_mip", dst, CLEAR, pipe, bg);
@@ -1869,7 +1915,7 @@ impl Renderer {
         };
         // Transmissive surfaces refract what the behind pass rendered this frame.
         let refr = v.behind.as_ref().filter(|_| frame.shade.refraction).map_or(&self.refr_black, |b| &b.bg);
-        self.draw_scene(encoder, v, resolve, globals_bg, frame, pipe, wire, refr);
+        self.draw_scene(encoder, v, resolve, globals_bg, frame, pipe, wire, refr, frame.grid_on());
     }
 
     /// One scene pass: background, then the mesh with `pipe` and the wireframe with `wire`.
@@ -1884,6 +1930,7 @@ impl Renderer {
         pipe: &wgpu::RenderPipeline,
         wire: Option<&wgpu::RenderPipeline>,
         refr: &wgpu::BindGroup,
+        grid: bool,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("tc_view"),
@@ -1905,23 +1952,30 @@ impl Renderer {
         pass.set_bind_group(0, globals_bg, &[]);
         pass.set_pipeline(&self.bg_pipeline);
         pass.draw(0..3, 0..1);
-        let Some(m) = &self.mesh else { return };
-        let uv_ts = match frame.kind {
-            ViewKind::Scene => None,
-            ViewKind::Uv { ts, .. } => Some(ts),
-        };
-        pass.set_bind_group(2, refr, &[]);
-        let geo = self.geometry(m, frame);
-        // The wireframe draws the mesh's own edges (displaced in the vertex shader too).
-        for (pipe, vb, ib, ranges) in [(Some(pipe), &geo.vb, &geo.ib, &geo.draws), (wire, &m.geo.vb, &m.lines, &m.line_draws)] {
-            let Some(pipe) = pipe else { continue };
-            pass.set_pipeline(pipe);
-            pass.set_vertex_buffer(0, vb.slice(..));
-            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-            for (range, set) in self.drawable(ranges, &frame.visible, uv_ts) {
-                pass.set_bind_group(1, &set.bind_group, &[]);
-                pass.draw_indexed(range, 0, 0..1);
+        if let Some(m) = &self.mesh {
+            let uv_ts = match frame.kind {
+                ViewKind::Scene => None,
+                ViewKind::Uv { ts, .. } => Some(ts),
+            };
+            pass.set_bind_group(2, refr, &[]);
+            let geo = self.geometry(m, frame);
+            // The wireframe draws the mesh's own edges (displaced in the vertex shader too).
+            for (pipe, vb, ib, ranges) in [(Some(pipe), &geo.vb, &geo.ib, &geo.draws), (wire, &m.geo.vb, &m.lines, &m.line_draws)] {
+                let Some(pipe) = pipe else { continue };
+                pass.set_pipeline(pipe);
+                pass.set_vertex_buffer(0, vb.slice(..));
+                pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                for (range, set) in self.drawable(ranges, &frame.visible, uv_ts) {
+                    pass.set_bind_group(1, &set.bind_group, &[]);
+                    pass.draw_indexed(range, 0, 0..1);
+                }
             }
+        }
+        // The ground grid goes last: it is depth tested against the mesh, blended over the rest.
+        if grid {
+            pass.set_pipeline(&self.grid_pipeline);
+            pass.set_bind_group(0, globals_bg, &[]);
+            pass.draw(0..6, 0..1);
         }
     }
 

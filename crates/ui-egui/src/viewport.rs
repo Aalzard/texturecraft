@@ -106,6 +106,8 @@ fn shade(app: &TextureCraftApp) -> Shade {
         channel,
         wireframe: app.ui.uv_wireframe,
         wireframe_3d: app.ui.wireframe_3d,
+        // The live viewport only: renders, bakes and exports never get a grid.
+        grid: app.ui.prefs.grid.shade(),
         ..Shade::from_project(&app.session.doc.project)
     }
 }

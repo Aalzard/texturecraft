@@ -778,3 +778,54 @@ fn painted_placeholders_render_like_full_textures() {
     let [r1, g1, _] = red.at(w / 2, hgt / 2);
     assert!(r1 > r0 && g1 < g0, "the painted base color shows: {:?} → {:?}", before.at(w / 2, hgt / 2), red.at(w / 2, hgt / 2));
 }
+
+/// The strongest per-channel difference of two renders over the rows `y0..y1` (how bright the
+/// brightest grid line there is).
+fn peak_diff(a: &Img, b: &Img, y0: u32, y1: u32) -> u8 {
+    let w = a.w as usize;
+    let rows = a.px.chunks(w * 4).zip(b.px.chunks(w * 4)).skip(y0 as usize).take((y1 - y0) as usize);
+    rows.flat_map(|(ra, rb)| ra.iter().zip(rb)).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0)
+}
+
+#[test]
+fn ground_grid_draws_and_fades_with_distance() {
+    let Some((mut h, frame)) = setup() else { return };
+    // Looking over the ground at a shallow angle: the horizon sits in the upper part of the view.
+    let mut frame = frame;
+    frame.camera.pitch = 0.25;
+    let off = render(&mut h, &frame, "grid_off");
+    let on = render(&mut h, &shaded(&frame, |s| s.grid = Some(texturecraft_render::GridShade::default())), "grid_on");
+    assert_ne!(on.px, off.px, "the grid draws");
+    let near = peak_diff(&on, &off, 300, 360);
+    let far = peak_diff(&on, &off, 56, 90);
+    println!("brightest grid line: near rows {near}, rows toward the horizon {far}");
+    assert!(near >= 20, "clear lines near the camera ({near})");
+    assert!(u32::from(far) * 2 <= u32::from(near), "the far ground is much fainter than the near ground ({far} vs {near})");
+    // Nothing above the horizon (the top rows are backdrop only).
+    assert_eq!(peak_diff(&on, &off, 0, 20), 0, "no grid in the sky");
+}
+
+#[test]
+fn ground_grid_is_off_unless_asked() {
+    let Some((mut h, frame)) = setup() else { return };
+    let a = render(&mut h, &frame, "grid_default");
+    let b = render(&mut h, &shaded(&frame, |s| s.grid = Some(texturecraft_render::GridShade { opacity: 0.0, on_model_floor: false })), "grid_zero");
+    assert_same(&a, &b, "a grid at opacity 0 draws nothing");
+    // The 2D UV view never shows it.
+    let uv = Frame { kind: ViewKind::Uv { ts: 0, zoom: 1.0, pan: [0.0, 0.0] }, ..frame.clone() };
+    let uv_off = render(&mut h, &uv, "grid_uv_off");
+    let uv_on = render(&mut h, &shaded(&uv, |s| s.grid = Some(texturecraft_render::GridShade::default())), "grid_uv_on");
+    assert_same(&uv_off, &uv_on, "the UV view has no grid");
+}
+
+#[test]
+fn ground_grid_follows_the_model_floor() {
+    let Some((mut h, frame)) = setup() else { return };
+    let ground = render(&mut h, &shaded(&frame, |s| s.grid = Some(texturecraft_render::GridShade { opacity: 1.0, on_model_floor: false })), "grid_ground");
+    let floor = render(&mut h, &shaded(&frame, |s| s.grid = Some(texturecraft_render::GridShade { opacity: 1.0, on_model_floor: true })), "grid_floor");
+    // The ball is framed around its own bounds, so its floor is at a different height than 0.
+    let (lo, _) = primitives::material_ball().bounds();
+    if lo.y.abs() > 1e-3 {
+        assert_ne!(ground.px, floor.px, "the plane moves to the model's lowest point");
+    }
+}

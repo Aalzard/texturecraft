@@ -83,7 +83,9 @@ Smith visibility, Lambert diffuse, image-based lighting from procedural studio e
 (prefiltered on the CPU into a mip chain for specular, nine spherical-harmonic coefficients for
 diffuse), the analytic split-sum environment BRDF, horizon fading, baked AO, height-to-normal and
 the painted normal channel. Debug views show any channel, any baked mesh map or a UV checker.
-The 2D view draws the UV layout with the material and a wireframe. Everything is fragment passes,
+The 2D view draws the UV layout with the material and a wireframe. The 3D view can draw a ground
+grid (`render::grid`, `shaders/grid.wgsl`): a procedural quad, depth tested, set only by the live
+viewport's `Shade::grid` (never by renders, exports or the path tracers). Everything is fragment passes,
 so it runs on Vulkan, Metal, DX12, WebGPU and WebGL2. `render::headless` renders without a window
 (CLI, MCP, tests).
 
