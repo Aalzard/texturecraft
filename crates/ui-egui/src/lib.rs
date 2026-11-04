@@ -22,6 +22,7 @@ pub mod profile;
 pub mod render_mode;
 pub mod shelf;
 pub mod state;
+pub mod symmetry_ui;
 pub mod theme;
 pub mod thumbs;
 pub mod titlebar;

@@ -134,6 +134,9 @@ pub struct Shade {
     pub grain: f32,
     /// Draw the mesh edges over the shaded 3D view (depth tested).
     pub wireframe_3d: bool,
+    /// Draw the symmetry guide lines set with [`Renderer::set_guides`] over the shaded 3D view
+    /// (a viewport overlay: renders and exports leave it off).
+    pub symmetry_guides: bool,
     /// Specular/glossiness shading: base color is the diffuse color and the Specular channel the
     /// F0 color (roughness arrives as 1 - glossiness from the display conversion).
     pub spec_gloss: bool,
@@ -235,6 +238,7 @@ impl Default for Shade {
             sharpen: 0.0,
             grain: 0.0,
             wireframe_3d: false,
+            symmetry_guides: false,
             spec_gloss: false,
             parallax: false,
             taa: false,
@@ -513,6 +517,9 @@ pub struct Renderer {
     uv_pipeline: wgpu::RenderPipeline,
     wire_pipeline: wgpu::RenderPipeline,
     wire3d_pipeline: wgpu::RenderPipeline,
+    guide_pipeline: wgpu::RenderPipeline,
+    /// Symmetry guide line list (vertex buffer and vertex count), if any.
+    guides: Option<(wgpu::Buffer, u32)>,
     bg_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
     post_pipeline: wgpu::RenderPipeline,
@@ -674,6 +681,22 @@ fn pipeline(
         cache: None,
     })
 }
+
+/// Overlay lines: depth tested against the shaded mesh, never written.
+fn wire3d_depth_state() -> Option<wgpu::DepthStencilState> {
+    Some(depth_state(false, wgpu::CompareFunction::LessEqual))
+}
+
+/// One end of a symmetry guide line: position (mesh space) and linear RGB color.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GuideVertex {
+    pub pos: [f32; 3],
+    pub color: [f32; 3],
+}
+
+/// Most guide vertices the GPU keeps (a hostile mesh cannot make the buffer huge).
+pub const MAX_GUIDE_VERTICES: usize = 1_600_000;
 
 fn depth_state(write: bool, compare: wgpu::CompareFunction) -> wgpu::DepthStencilState {
     wgpu::DepthStencilState {
@@ -885,8 +908,14 @@ impl Renderer {
         let uv_pipeline = pipeline(device, "tc_uv", &layout, &module, "vs_uv", &vb, hdr("fs_uv", None), MSAA, always());
         let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
         let wire_pipeline = pipeline(device, "tc_wire", &layout, &module, "vs_uv", &vb, hdr("fs_wire", blend), MSAA, always());
-        let wire3d_depth = Some(depth_state(false, wgpu::CompareFunction::LessEqual));
+        let wire3d_depth = wire3d_depth_state();
         let wire3d_pipeline = pipeline(device, "tc_wire3d", &layout, &module, "vs_wire3d", &vb, hdr("fs_wire3d", blend), MSAA, wire3d_depth);
+        let guide_vb = [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<GuideVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+        })];
+        let guide_pipeline = pipeline(device, "tc_guides", &bg_layout, &module, "vs_guide", &guide_vb, hdr("fs_wire_guide", blend), MSAA, wire3d_depth_state());
         let bg_pipeline = pipeline(device, "tc_bg", &bg_layout, &module, "vs_bg", &[], hdr("fs_bg", None), MSAA, always());
         let blit_pipeline = pipeline(device, "tc_blit", &blit_layout, &util_module, "vs_blit", &[], Some(("fs_blit", target_format, None)), 1, None);
         let post_pipeline = pipeline(device, "tc_post", &fx_layout, &post_module, "vs_full", &[], Some(("fs_post", COLOR_FORMAT, None)), 1, None);
@@ -994,6 +1023,8 @@ impl Renderer {
             uv_pipeline,
             wire_pipeline,
             wire3d_pipeline,
+            guide_pipeline,
+            guides: None,
             bg_pipeline,
             blit_pipeline,
             post_pipeline,
@@ -1102,6 +1133,18 @@ impl Renderer {
         let geo = Geometry { vb, ib, draws, triangles };
         self.mesh = Some(MeshGpu { id, geo, coarse, dense: None, world_per_uv, lines, line_draws, center, radius });
         self.content_rev += 1;
+    }
+
+    /// Replace the symmetry guide lines: pairs of vertices, one line per pair. Empty clears them.
+    /// They draw only in the 3D view of frames whose [`Shade::symmetry_guides`] is on.
+    pub fn set_guides(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vertices: &[GuideVertex]) {
+        let n = vertices.len().min(MAX_GUIDE_VERTICES) & !1;
+        let Some(v) = vertices.get(..n).filter(|v| !v.is_empty()) else {
+            self.guides = None;
+            return;
+        };
+        let buf = upload_buffer(device, queue, "tc_guides", bytemuck::cast_slice(v), wgpu::BufferUsages::VERTEX);
+        self.guides = Some((buf, n as u32));
     }
 
     /// Build the mesh's dense copy for displacement (once per mesh).
@@ -1805,7 +1848,7 @@ impl Renderer {
 
     /// The scene without transmissive surfaces into `b` (MSAA resolved into mip 0), then its mips.
     fn behind_pass(&self, encoder: &mut wgpu::CommandEncoder, v: &ViewTargets, b: &Behind, globals_bg: &wgpu::BindGroup, frame: &Frame) {
-        self.draw_scene(encoder, v, &b.level0, globals_bg, frame, &self.opaque_pipeline, None, &self.refr_black);
+        self.draw_scene(encoder, v, &b.level0, globals_bg, frame, &self.opaque_pipeline, None, None, &self.refr_black);
         let Some(pipe) = self.mip_pipelines.get(&self.hdr_format) else { return };
         for (dst, bg) in &b.mips {
             fullscreen(encoder, "tc_behind_mip", dst, CLEAR, pipe, bg);
@@ -1863,13 +1906,14 @@ impl Renderer {
             ViewKind::Scene => None,
             ViewKind::Uv { ts, .. } => Some(ts),
         };
+        let guides = (uv_ts.is_none() && frame.shade.symmetry_guides).then_some(()).and(self.guides.as_ref());
         let (pipe, wire) = match uv_ts {
             None => (&self.mesh_pipeline, frame.shade.wireframe_3d.then_some(&self.wire3d_pipeline)),
             Some(_) => (&self.uv_pipeline, frame.shade.wireframe.then_some(&self.wire_pipeline)),
         };
         // Transmissive surfaces refract what the behind pass rendered this frame.
         let refr = v.behind.as_ref().filter(|_| frame.shade.refraction).map_or(&self.refr_black, |b| &b.bg);
-        self.draw_scene(encoder, v, resolve, globals_bg, frame, pipe, wire, refr);
+        self.draw_scene(encoder, v, resolve, globals_bg, frame, pipe, wire, guides, refr);
     }
 
     /// One scene pass: background, then the mesh with `pipe` and the wireframe with `wire`.
@@ -1883,6 +1927,7 @@ impl Renderer {
         frame: &Frame,
         pipe: &wgpu::RenderPipeline,
         wire: Option<&wgpu::RenderPipeline>,
+        guides: Option<&(wgpu::Buffer, u32)>,
         refr: &wgpu::BindGroup,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1922,6 +1967,12 @@ impl Renderer {
                 pass.set_bind_group(1, &set.bind_group, &[]);
                 pass.draw_indexed(range, 0, 0..1);
             }
+        }
+        if let Some((buf, count)) = guides {
+            pass.set_pipeline(&self.guide_pipeline);
+            pass.set_bind_group(0, globals_bg, &[]);
+            pass.set_vertex_buffer(0, buf.slice(..));
+            pass.draw(0..*count, 0..1);
         }
     }
 

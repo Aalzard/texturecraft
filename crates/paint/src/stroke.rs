@@ -80,7 +80,17 @@ impl Stroke {
         let s = settings.sanitized();
         let (lo, hi) = mesh.bounds();
         let diag = (hi - lo).length().max(1e-4);
-        Stroke { radius: s.size * diag, settings: s, center: (lo + hi) * 0.5, last: None, dist: 0.0, lazy: None, count: 0, last_dir: None, stamps: Vec::new() }
+        Stroke {
+            radius: s.size * diag,
+            settings: s,
+            center: crate::guides::symmetry_center(mesh),
+            last: None,
+            dist: 0.0,
+            lazy: None,
+            count: 0,
+            last_dir: None,
+            stamps: Vec::new(),
+        }
     }
 
     /// Feed a pointer position (pixels) with pen pressure (1 for a mouse). Returns new stamps.
@@ -230,6 +240,11 @@ impl Stroke {
         out
     }
 
+    /// The point mirror and radial symmetry work about (the guides draw their planes through it).
+    pub fn mirror_center(&self) -> Vec3 {
+        self.center
+    }
+
     pub fn last_hit(&self) -> Option<SurfaceHit> {
         self.last
     }
@@ -294,6 +309,60 @@ mod tests {
         st.symmetry.z = true;
         let mut s = Stroke::new(&st, &m);
         assert_eq!(s.add(&ctx, Vec2::new(250.0, 180.0), 1.0).len(), 8);
+    }
+
+    #[test]
+    fn mirror_axes_combine_to_two_four_and_eight_dabs() {
+        let (m, b, c) = ctx_parts();
+        let ctx = PickCtx { mesh: &m, bvh: &b, camera: &c, viewport: Vec2::new(400.0, 400.0) };
+        // Off the center line in every axis so each reflection is a distinct dab.
+        let at = Vec2::new(250.0, 150.0);
+        let count = |x: bool, y: bool, z: bool| {
+            let mut st = BrushSettings::default();
+            st.symmetry = crate::brush::Symmetry { x, y, z, ..st.symmetry };
+            let mut s = Stroke::new(&st, &m);
+            let out = s.add(&ctx, at, 1.0);
+            let center = s.mirror_center();
+            // Each copy is the original reflected through the planes of its own axis subset.
+            let first = out[0].center - center;
+            let mut seen: Vec<[bool; 3]> = out
+                .iter()
+                .map(|o| {
+                    let d = o.center - center;
+                    [d.x * first.x < 0.0, d.y * first.y < 0.0, d.z * first.z < 0.0]
+                })
+                .collect();
+            seen.sort();
+            seen.dedup();
+            assert_eq!(seen.len(), out.len(), "every dab sits in its own octant");
+            out.len()
+        };
+        assert_eq!(count(false, false, false), 1);
+        assert_eq!(count(true, false, false), 2);
+        assert_eq!(count(false, true, false), 2);
+        assert_eq!(count(true, true, false), 4);
+        assert_eq!(count(true, false, true), 4);
+        assert_eq!(count(true, true, true), 8);
+    }
+
+    #[test]
+    fn mirror_is_about_the_bounds_center_of_an_offset_mesh() {
+        let (mut m, _, _) = ctx_parts();
+        for p in &mut m.positions {
+            *p += Vec3::new(0.5, 0.0, 0.0);
+        }
+        let b = Bvh::new(&m);
+        let mut cam = OrbitCamera::default();
+        cam.pitch = 0.0;
+        cam.frame(Vec3::new(-0.5, -1.0, -1.0), Vec3::new(1.5, 1.0, 1.0));
+        let ctx = PickCtx { mesh: &m, bvh: &b, camera: &cam, viewport: Vec2::new(400.0, 400.0) };
+        let mut st = BrushSettings::default();
+        st.symmetry.x = true;
+        let mut s = Stroke::new(&st, &m);
+        let out = s.add(&ctx, Vec2::new(250.0, 200.0), 1.0);
+        assert_eq!(out.len(), 2);
+        // The two dabs mirror about x = 0.5 (the bounds center), not about the origin.
+        assert!((out[0].center.x + out[1].center.x - 1.0).abs() < 1e-4, "{:?}", out.iter().map(|o| o.center).collect::<Vec<_>>());
     }
 
     #[test]

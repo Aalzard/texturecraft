@@ -225,6 +225,14 @@ pub struct ToolState {
     /// The Path tool's curve being edited.
     #[serde(default)]
     pub path: crate::path_tool::PathState,
+    /// Draw the symmetry planes on the model in the 3D view (viewport overlay only; exports and
+    /// renders never include it).
+    #[serde(default = "default_true")]
+    pub show_symmetry_guides: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_smudge_strength() -> f32 {
@@ -265,6 +273,7 @@ impl Default for ToolState {
             clone_source: None,
             clone_from: CloneFrom::Composite,
             path: Default::default(),
+            show_symmetry_guides: true,
         };
         t.values.insert(Channel::BaseColor, [0.8, 0.8, 0.8]);
         t.values.insert(Channel::Roughness, [0.3; 3]);

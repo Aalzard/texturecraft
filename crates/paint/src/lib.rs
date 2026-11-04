@@ -14,6 +14,7 @@
 pub mod alphas;
 pub mod brush;
 pub mod commit;
+pub mod guides;
 pub mod particles;
 pub mod path;
 pub mod pickup;
@@ -25,6 +26,7 @@ pub mod visibility;
 
 pub use brush::{Alignment, BrushAlpha, BrushSettings, Particles, Shape, Symmetry, image_alpha};
 pub use commit::{CommitSource, Staging, TexelFn, commit_coverage, commit_layer, commit_mask};
+pub use guides::{GuideKind, GuideSegment, symmetry_center, symmetry_guides};
 pub use path::{Lasso, spline};
 pub use pickup::{Pickup, PickupMode};
 pub use raster::{RasterCtx, StrokeCanvas, UvStamp, fill_coverage, fill_triangles, rasterize, rasterize_uv};

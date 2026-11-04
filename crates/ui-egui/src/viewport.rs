@@ -106,6 +106,7 @@ fn shade(app: &TextureCraftApp) -> Shade {
         channel,
         wireframe: app.ui.uv_wireframe,
         wireframe_3d: app.ui.wireframe_3d,
+        symmetry_guides: app.session.tool.show_symmetry_guides,
         ..Shade::from_project(&app.session.doc.project)
     }
 }

@@ -778,3 +778,27 @@ fn painted_placeholders_render_like_full_textures() {
     let [r1, g1, _] = red.at(w / 2, hgt / 2);
     assert!(r1 > r0 && g1 < g0, "the painted base color shows: {:?} → {:?}", before.at(w / 2, hgt / 2), red.at(w / 2, hgt / 2));
 }
+
+#[test]
+fn symmetry_guides_draw_only_when_asked() {
+    use texturecraft_render::GuideVertex;
+    let Some((mut h, frame)) = setup() else { return };
+    // A red vertical line in front of the ball, between it and the camera.
+    let (lo, hi) = primitives::material_ball().bounds();
+    let c = (lo + hi) * 0.5;
+    let p = c + (frame.camera.eye() - c).normalize() * (hi - lo).length() * 0.6;
+    let red = [1.0, 0.05, 0.05];
+    let line = [GuideVertex { pos: (p - glam_y() * 0.4).to_array(), color: red }, GuideVertex { pos: (p + glam_y() * 0.4).to_array(), color: red }];
+    h.renderer.set_guides(&h.device, &h.queue, &line);
+    let base = render(&mut h, &frame, "guides_flag_off");
+    let on = render(&mut h, &shaded(&frame, |s| s.symmetry_guides = true), "guides_flag_on");
+    assert_ne!(base.px, on.px, "the guide line is drawn when the overlay is on");
+    // Without the flag the lines stay out of the picture (renders and exports never set it).
+    h.renderer.set_guides(&h.device, &h.queue, &[]);
+    let cleared = render(&mut h, &shaded(&frame, |s| s.symmetry_guides = true), "guides_cleared");
+    assert_eq!(base.px, cleared.px, "no guides, no overlay");
+}
+
+fn glam_y() -> texturecraft_geom::glam::Vec3 {
+    texturecraft_geom::glam::Vec3::Y
+}

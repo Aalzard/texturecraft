@@ -67,12 +67,8 @@ pub fn paint_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
                             }
                         }
                         ui.separator();
-                        if icon_button(ui, ic::FLIP_HORIZONTAL, tr("Symmetry (X)"), brush.symmetry.x, 24.0).clicked() {
-                            brush.symmetry.x = !brush.symmetry.x;
-                        }
-                        if icon_button(ui, ic::FLIP_VERTICAL, tr("Symmetry (Y)"), brush.symmetry.y, 24.0).clicked() {
-                            brush.symmetry.y = !brush.symmetry.y;
-                        }
+                        crate::symmetry_ui::button(app, ui);
+                        let brush = &mut app.session.tool.brush;
                         if icon_button(ui, ic::CLOUD_RAIN, tr("Particle brush: particles slide down the surface"), brush.particles.enabled, 24.0).clicked() {
                             brush.particles.enabled = !brush.particles.enabled;
                         }

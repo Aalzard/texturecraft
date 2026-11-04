@@ -1041,4 +1041,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Value Bounds Max", "الحد الأقصى للقيمة"),
     ("Value Bounds Min", "الحد الأدنى للقيمة"),
     ("Vertex Color", "لون الرأس"),
+    ("Symmetry and lazy mouse", "التناظر والفأرة الكسولة"),
+    ("Mirror symmetry", "تناظر المرآة"),
+    ("Mirror across {axis} through the model center", "انعكاس حول المحور {axis} عبر مركز النموذج"),
+    ("Show symmetry guides", "إظهار أدلة التناظر"),
+    ("Press {key} to toggle mirror X", "اضغط {key} لتبديل المرآة X"),
 ];

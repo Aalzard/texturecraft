@@ -166,7 +166,7 @@ pub fn session(s: &Session) -> Value {
         "selectedLayer": s.selected_layer().map(|l| l.0),
         "target": match s.target { StackTarget::Content => json!("content"), StackTarget::Mask => json!("mask"), StackTarget::Effect(e) => json!(e.0) },
         "layers": stack(s, ts),
-        "tool": { "tool": s.tool.tool.id(), "brush": crate::tool_cmds::brush_json(s) },
+        "tool": { "tool": s.tool.tool.id(), "brush": crate::tool_cmds::brush_json(s), "symmetryGuides": s.tool.show_symmetry_guides },
         "view": s.view.label(),
         "camera": crate::view_cmds::camera_json(s),
         "display": s.doc.project.display,

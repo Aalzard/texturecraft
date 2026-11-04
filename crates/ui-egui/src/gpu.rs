@@ -11,7 +11,8 @@ use texturecraft_engine::Session;
 use texturecraft_engine::compose::{DisplayKind, ImageRes, tile_bytes};
 use texturecraft_engine::core::BakedMap;
 use texturecraft_engine::geom::Mesh;
-use texturecraft_render::{Frame, Renderer, wgpu};
+use texturecraft_engine::paint::{GuideKind, Symmetry};
+use texturecraft_render::{Frame, GuideVertex, Renderer, wgpu};
 
 /// Content shown through the aux texture.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -36,6 +37,8 @@ pub struct SceneSync {
     pub env: Option<(String, Option<Arc<ImageRes>>)>,
     pub tiles: Vec<(usize, DisplayKind, u32, u32, Vec<u8>)>,
     pub aux: Vec<(usize, u32, Vec<u8>)>,
+    /// New symmetry guide lines (empty: none), when they changed.
+    pub guides: Option<Vec<GuideVertex>>,
 }
 
 /// Lives in egui's callback resources.
@@ -60,6 +63,24 @@ pub struct GpuReports {
 /// Most distinct uncaptured GPU errors kept until the UI shows them.
 const MAX_GPU_ERRORS: usize = 8;
 
+/// The mesh and symmetry a set of guide lines was computed for.
+type GuideKey = (u64, Symmetry);
+
+/// Mirror guides are red; the planes between radial copies are orange (linear RGB).
+const MIRROR_COLOR: [f32; 3] = [1.0, 0.08, 0.06];
+const RADIAL_COLOR: [f32; 3] = [1.0, 0.35, 0.02];
+
+/// The symmetry guide lines of `mesh` as renderer line vertices (two per segment).
+pub fn guide_vertices(mesh: &Mesh, sym: &Symmetry) -> Vec<GuideVertex> {
+    texturecraft_engine::paint::symmetry_guides(mesh, sym)
+        .into_iter()
+        .flat_map(|g| {
+            let color = if g.kind == GuideKind::Radial { RADIAL_COLOR } else { MIRROR_COLOR };
+            [GuideVertex { pos: g.a.to_array(), color }, GuideVertex { pos: g.b.to_array(), color }]
+        })
+        .collect()
+}
+
 /// UI-side bookkeeping of what the GPU already has.
 pub struct GpuLink {
     pub reset: Arc<AtomicBool>,
@@ -68,6 +89,8 @@ pub struct GpuLink {
     /// frame was never painted, e.g. a WebGPU surface not ready yet): send everything again.
     pub lost: Arc<AtomicBool>,
     mesh_id: u64,
+    /// What the symmetry guides on the GPU were made for (None: nothing sent yet).
+    guides: Option<Option<GuideKey>>,
     sets: Vec<SetLayout>,
     /// The display shift the GPU has (`Prefs::viewport_texture`).
     shift: u32,
@@ -118,6 +141,7 @@ pub fn init(rs: &egui_wgpu::RenderState, ctx: &egui::Context) -> GpuLink {
         reports,
         lost: Arc::new(AtomicBool::new(false)),
         mesh_id: 0,
+        guides: None,
         sets: Vec::new(),
         shift: 0,
         env: Default::default(),
@@ -151,6 +175,7 @@ impl GpuLink {
         let mut out = SceneSync::default();
         if self.lost.swap(false, Ordering::AcqRel) {
             self.mesh_id = 0;
+            self.guides = None;
             self.sets.clear();
             self.env = Default::default();
             self.reset.store(true, Ordering::Release);
@@ -159,6 +184,19 @@ impl GpuLink {
             out.mesh = Some((s.mesh.clone(), s.mesh_id));
             self.mesh_id = s.mesh_id;
             self.aux.clear();
+        }
+        // Guides are CPU section lines of the mesh: redone only when the mesh or the symmetry changes.
+        let want = if s.tool.show_symmetry_guides && s.tool.tool != texturecraft_engine::Tool::Smudge {
+            Some((s.mesh_id, s.tool.brush.symmetry)).filter(|(_, sym)| sym.any())
+        } else {
+            None
+        };
+        if self.guides != Some(want) {
+            out.guides = Some(match want {
+                Some((_, sym)) => guide_vertices(&s.mesh, &sym),
+                None => Vec::new(),
+            });
+            self.guides = Some(want);
         }
         let sets: Vec<SetLayout> = s.doc.project.texture_sets.iter().map(|t| (t.size(), t.material)).collect();
         if sets != self.sets || shift != self.shift || out.mesh.is_some() {
@@ -295,6 +333,9 @@ impl CallbackTrait for ViewCallback {
                 if !reset.is_empty() {
                     gpu.reset.store(true, Ordering::Release);
                 }
+            }
+            if let Some(g) = &sync.guides {
+                gpu.renderer.set_guides(device, queue, g);
             }
             for (ts, k, tx, ty, bytes) in &sync.tiles {
                 gpu.renderer.upload_tile(device, queue, *ts, *k, *tx, *ty, bytes);

@@ -1054,4 +1054,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Value Bounds Max", "값 상한"),
     ("Value Bounds Min", "값 하한"),
     ("Vertex Color", "정점 색상"),
+    ("Symmetry and lazy mouse", "대칭 및 레이지 마우스"),
+    ("Mirror symmetry", "미러 대칭"),
+    ("Mirror across {axis} through the model center", "모델 중심을 지나는 {axis} 기준 미러"),
+    ("Show symmetry guides", "대칭 가이드 표시"),
+    ("Press {key} to toggle mirror X", "{key} 키로 미러 X 전환"),
 ];

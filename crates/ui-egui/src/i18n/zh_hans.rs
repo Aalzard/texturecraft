@@ -1000,4 +1000,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Value Bounds Max", "值上限"),
     ("Value Bounds Min", "值下限"),
     ("Vertex Color", "顶点颜色"),
+    ("Symmetry and lazy mouse", "对称与懒鼠标"),
+    ("Mirror symmetry", "镜像对称"),
+    ("Mirror across {axis} through the model center", "沿模型中心的 {axis} 轴镜像"),
+    ("Show symmetry guides", "显示对称参考线"),
+    ("Press {key} to toggle mirror X", "按 {key} 切换 X 镜像"),
 ];

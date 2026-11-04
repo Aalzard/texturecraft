@@ -1084,4 +1084,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Value Bounds Max", "Limite massimo"),
     ("Value Bounds Min", "Limite minimo"),
     ("Vertex Color", "Colore dei vertici"),
+    ("Symmetry and lazy mouse", "Simmetria e lazy mouse"),
+    ("Mirror symmetry", "Simmetria speculare"),
+    ("Mirror across {axis} through the model center", "Specchia su {axis} attraverso il centro del modello"),
+    ("Show symmetry guides", "Mostra le guide di simmetria"),
+    ("Press {key} to toggle mirror X", "Premi {key} per attivare lo specchio X"),
 ];

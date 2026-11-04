@@ -675,3 +675,28 @@ fn vs_wire3d(v: VIn) -> VOut {
 fn fs_wire3d(i: VOut) -> @location(0) vec4<f32> {
     return vec4<f32>(0.35, 0.35, 0.35, 0.45);
 }
+
+// Symmetry guides: lines hugging the surface. Same depth pull toward the eye as the 3D
+// wireframe, a bit stronger so a line lying on a curved surface still wins against it.
+struct GuideIn {
+    @location(0) pos: vec3<f32>,
+    @location(1) color: vec3<f32>,
+};
+
+struct GuideOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color: vec3<f32>,
+};
+
+@vertex
+fn vs_guide(v: GuideIn) -> GuideOut {
+    var o: GuideOut;
+    o.clip = g.view_proj * vec4<f32>(v.pos + (g.eye.xyz - v.pos) * 0.004, 1.0);
+    o.color = v.color;
+    return o;
+}
+
+@fragment
+fn fs_wire_guide(i: GuideOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(i.color, 0.95);
+}

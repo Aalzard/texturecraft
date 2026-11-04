@@ -26,5 +26,5 @@ pub mod renderer;
 mod subdivide;
 pub mod trace;
 
-pub use renderer::{COLOR_FORMAT, Frame, MSAA, Renderer, Shade, ViewKind, aux_size, uv_view_scale};
+pub use renderer::{COLOR_FORMAT, Frame, GuideVertex, MAX_GUIDE_VERTICES, MSAA, Renderer, Shade, ViewKind, aux_size, uv_view_scale};
 pub use wgpu;
