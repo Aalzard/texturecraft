@@ -172,8 +172,9 @@ impl Session {
                 continue;
             }
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("brush");
-            let parsed = serde_json::from_slice::<UserBrush>(&bytes)
-                .or_else(|_| serde_json::from_slice::<BrushSettings>(&bytes).map(|brush| UserBrush { name: stem.to_string(), brush, channels: None, file: None }));
+            let parsed = serde_json::from_slice::<UserBrush>(&bytes).or_else(|_| {
+                serde_json::from_slice::<BrushSettings>(&bytes).map(|brush| UserBrush { name: stem.to_string(), brush, channels: None, file: None })
+            });
             match parsed {
                 Ok(mut b) => {
                     b.name = b.name.trim().chars().take(MAX_NAME).collect();
