@@ -14,6 +14,8 @@ use crate::{EngineError, Result, Session};
 const TEXTURE_PX: u32 = 512;
 /// Camera rays per thumbnail pixel along each axis (anti-aliased outline).
 const SUPERSAMPLE: usize = 2;
+/// Bound camera samples and output allocations for this thumbnail-only renderer
+const MAX_PREVIEW_SIZE_PX: usize = 512;
 /// AO and thickness rays per texel (the default is 64; fewer look the same at thumbnail size).
 const OCCLUSION_RAYS: u32 = 12;
 /// Mesh curvature rays per texel (the default is 32; fewer look the same at thumbnail size).
@@ -43,21 +45,27 @@ pub struct MaskPreview {
 }
 
 impl MaskPreview {
-    /// Bake the preview shape once and aim the camera for `size²` thumbnails.
+    /// Bake the preview shape for square thumbnails with sides of 1..=512 pixels
     pub fn new(size: usize) -> Result<MaskPreview> {
-        let mut session = Session::new_project("Mask preview", primitives::preview_orb(), "builtin:preview_orb", None, TEXTURE_PX)?;
-        let set = session.doc.project.texture_set_mut(0)?;
-        set.bake.common.resolution = BakeResolution::from_pixels(TEXTURE_PX).ok_or_else(|| EngineError::Other("invalid bake resolution".into()))?;
-        set.bake.high_poly.use_low_as_high = true;
-        set.bake.maps.curvature.parameters.method = CurvatureMethod::Mesh;
-        set.bake.maps.curvature.parameters.mesh.sampling_radius = CURVATURE_RADIUS;
-        set.bake.maps.curvature.parameters.mesh.rays = CURVATURE_RAYS;
-        set.bake.maps.ao.parameters.rays.rays = OCCLUSION_RAYS;
-        set.bake.maps.thickness.parameters.rays.rays = OCCLUSION_RAYS;
-        for map in BakedMap::ALL {
-            set.bake.maps.set_enabled(map, MAPS.contains(&map));
+        if !(1..=MAX_PREVIEW_SIZE_PX).contains(&size) {
+            return Err(EngineError::Other(format!("mask preview size must be between 1 and {MAX_PREVIEW_SIZE_PX} pixels")));
         }
-        let layer = *set.stack.first().ok_or_else(|| EngineError::Other("the preview has no layer".into()))?;
+
+        let mut session = Session::new_project("Mask preview", primitives::preview_orb(), "builtin:preview_orb", None, TEXTURE_PX)?;
+        let settings = &mut session.doc.project.texture_set_mut(0)?.bake;
+        settings.common.resolution = BakeResolution::from_pixels(TEXTURE_PX).ok_or_else(|| EngineError::Other("invalid bake resolution".into()))?;
+        settings.high_poly.use_low_as_high = true;
+        settings.maps.curvature.parameters.method = CurvatureMethod::Mesh;
+        settings.maps.curvature.parameters.mesh.sampling_radius = CURVATURE_RADIUS;
+        settings.maps.curvature.parameters.mesh.rays = CURVATURE_RAYS;
+        settings.maps.ao.parameters.rays.rays = OCCLUSION_RAYS;
+        settings.maps.thickness.parameters.rays.rays = OCCLUSION_RAYS;
+
+        for map in BakedMap::ALL {
+            settings.maps.set_enabled(map, MAPS.contains(&map));
+        }
+
+        let layer = *session.doc.project.texture_set(0)?.stack.first().ok_or_else(|| EngineError::Other("the preview has no layer".into()))?;
         session.bake_now(0, false)?;
 
         let (texels, samples) = camera_samples(&session, size * SUPERSAMPLE);
@@ -136,6 +144,13 @@ mod tests {
     fn difference(a: &[Option<MaskPreviewPixel>], b: &[Option<MaskPreviewPixel>]) -> f32 {
         let pairs: Vec<(f32, f32)> = a.iter().zip(b).filter_map(|(a, b)| Some((a.as_ref()?.mask, b.as_ref()?.mask))).collect();
         pairs.iter().map(|(a, b)| (a - b).abs()).sum::<f32>() / pairs.len().max(1) as f32
+    }
+
+    #[test]
+    fn invalid_preview_sizes_return_errors() {
+        for size in [usize::MAX / 2 + 1, 0, MAX_PREVIEW_SIZE_PX + 1, usize::MAX] {
+            assert!(MaskPreview::new(size).is_err(), "size {size} should be rejected before baking");
+        }
     }
 
     #[test]

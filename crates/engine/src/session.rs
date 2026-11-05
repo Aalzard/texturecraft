@@ -829,11 +829,11 @@ impl Session {
         Some(gray.iter().flat_map(|g| [*g, *g, *g, 255]).collect())
     }
 
-    /// Layer `id`'s mask (0..=1) at `texels` (x, y) of its texture set, in order (None without a
-    /// mask); evaluates only those texels.
+    /// Mask values at texture-set coordinates in request order; None without an enabled mask
+    /// Uncovered and out-of-range texels read zero; neighbourhood filters also read surrounding texels
     pub fn mask_at(&self, id: LayerId, texels: &[(u32, u32)]) -> Option<Vec<f32>> {
-        let (ts, _, _) = self.doc.project.locate(id)?;
-        self.with_inputs(ts, |inp| texturecraft_compose::mask_at(inp, id, texels))
+        let (texture_set, _, _) = self.doc.project.locate(id)?;
+        self.with_inputs(texture_set, |inputs| texturecraft_compose::mask_at(inputs, id, texels))
     }
 
     /// Histogram (`bins` buckets over 0..1) of the values entering effect `effect`: its layer's
