@@ -106,14 +106,24 @@ fn cage_and_skew_controls_require_a_high_poly_and_follow_cage_type() {
     harness.run_steps(3);
     assert!(harness.query_by_label("Cage Type").is_none());
     assert!(harness.query_by_label("Skew Correction").is_none());
+
     harness.state_mut().session.add_high_poly_bytes("High.obj", b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n".to_vec()).unwrap();
     harness.run_steps(3);
     harness.get_by_label("Max Frontal Distance");
     harness.get_by_label("Skew Correction");
+
     click(&mut harness, "Cage Type");
     click(&mut harness, "Custom File");
     assert_eq!(harness.state().session.doc.project.texture_sets[0].bake.cage.kind, CageType::CustomFile);
     harness.get_by_label("Cage Scene");
     assert!(harness.query_by_label("Max Frontal Distance").is_none());
     assert!(harness.query_by_label("Skew Correction").is_none());
+
+    for button_size in [20.0, 28.0] {
+        harness.ctx.all_styles_mut(|style| style.spacing.interact_size = egui::Vec2::splat(button_size));
+        harness.run_steps(3);
+        for label in ["Remove", "Load Cage"] {
+            assert_eq!(harness.get_by_label(label).rect().size(), egui::Vec2::splat(button_size));
+        }
+    }
 }

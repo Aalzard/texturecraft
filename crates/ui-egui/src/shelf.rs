@@ -156,34 +156,39 @@ pub fn drop_target(app: &mut TextureCraftApp, ui: &Ui, response: &egui::Response
     }
 }
 
-/// The Assets panel body (a dock tab).
+/// The Assets panel body (a dock tab)
 pub fn body(app: &mut TextureCraftApp, ui: &mut Ui) {
-    let tk = Tokens::get(ui.ctx());
+    let tokens = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
     let mut tab = app.ui.shelf_tab.min(TABS.len() - 1);
     let searching = !app.ui.shelf_filter.is_empty();
+
     ui.horizontal_wrapped(|ui| {
+        let button_size = ui.spacing().interact_size.y;
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
         for (i, (_, icon, label)) in TABS.iter().enumerate() {
-            if icon_button(ui, icon, tr(label), i == tab && !searching, 24.0).clicked() {
+            if icon_button(ui, icon, tr(label), i == tab && !searching, button_size).clicked() {
                 tab = i;
                 app.ui.shelf_filter.clear();
             }
         }
     });
     app.ui.shelf_tab = tab;
+
     ui.horizontal(|ui| {
-        ui.label(RichText::new(ic::MAGNIFYING_GLASS).color(tk.text_dim));
+        ui.label(RichText::new(ic::MAGNIFYING_GLASS).color(tokens.text_dim));
         ui.add(egui::TextEdit::singleline(&mut app.ui.shelf_filter).hint_text(tr("Search all assets")).desired_width(f32::INFINITY));
     });
     ui.add_space(4.0);
+
     let filter = app.ui.shelf_filter.to_lowercase();
     egui::ScrollArea::vertical().id_salt("shelf_scroll").auto_shrink([false, false]).show(ui, |ui| {
-        // Searching shows matches from every tab, each under its tab's name.
+        // Searching shows matches from every tab, each under its tab's name
         for (i, (t, _, title)) in TABS.iter().enumerate() {
             if filter.is_empty() && i != tab {
                 continue;
             }
+
             let title = tr(title);
             match t {
                 Tab::Materials => materials(app, ui, &ctx, &filter, false, title),
