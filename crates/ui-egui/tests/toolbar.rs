@@ -12,8 +12,13 @@ fn toolbar_harness(width: f32, tool: Tool) -> Harness<'static, TextureCraftApp> 
     let mut app = TextureCraftApp::new(&context, session);
     app.session.tool.tool = tool;
     app.session.tool.brush.lazy = 20.0;
-    let mut harness =
-        Harness::builder().with_size(egui::vec2(width, 200.0)).with_context_setup(theme::install).build_ui_state(|ui, app| toolbar::paint_bar(app, ui), app);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(width, 200.0))
+        .with_context_setup(|context| {
+            theme::install(context);
+            theme::apply(context, theme::Brightness::default(), theme::Accent::default());
+        })
+        .build_ui_state(|ui, app| toolbar::paint_bar(app, ui), app);
     harness.run_steps(4);
     harness
 }
@@ -33,17 +38,25 @@ fn size_label(harness: &Harness<'_, TextureCraftApp>) -> (egui::Pos2, egui::Rect
 #[test]
 fn narrow_toolbars_keep_scroll_arrows_and_mode_buttons_separate() {
     let mut harness = toolbar_harness(700.0, Tool::Path);
-    for width in [500.0, 450.0, 400.0, 350.0, 240.0, 200.0] {
-        harness.set_size(egui::vec2(width, 200.0));
-        harness.run_steps(4);
-        let left = harness.get_by_label("Scroll left").rect();
-        let right = harness.get_by_label("Scroll right").rect();
-        let bake = harness.get_by_label("Bake Mesh Maps (F8)").rect();
-        let (_, clip) = size_label(&harness);
-        assert!(left.right() <= right.left(), "arrows overlap at width {width}: {left:?}, {right:?}");
-        assert!(right.right() < bake.left(), "scrolling overlaps the mode buttons at width {width}");
-        assert!(clip.left() >= left.right() && clip.right() <= right.left(), "content covers an arrow at width {width}: {clip:?}");
-        assert!(harness.ctx.content_rect().contains_rect(left) && harness.ctx.content_rect().contains_rect(bake));
+    for button_size in [20.0, 24.0, 28.0] {
+        harness.ctx.all_styles_mut(|style| style.spacing.interact_size = egui::Vec2::splat(button_size));
+        for width in [500.0, 450.0, 400.0, 350.0, 240.0, 200.0] {
+            let width = width * button_size / 24.0;
+            harness.set_size(egui::vec2(width, 200.0));
+            harness.run_steps(4);
+            let left = harness.get_by_label("Scroll left").rect();
+            let right = harness.get_by_label("Scroll right").rect();
+            let bake = harness.get_by_label("Bake Mesh Maps (F8)").rect();
+            let (_, clip) = size_label(&harness);
+            for button in [left, right, bake] {
+                assert_eq!(button.size(), egui::Vec2::splat(button_size));
+            }
+
+            assert!(left.right() <= right.left(), "arrows overlap at width {width}: {left:?}, {right:?}");
+            assert!(right.right() < bake.left(), "scrolling overlaps the mode buttons at width {width}");
+            assert!(clip.left() >= left.right() && clip.right() <= right.left(), "content covers an arrow at width {width}: {clip:?}");
+            assert!(harness.ctx.content_rect().contains_rect(left) && harness.ctx.content_rect().contains_rect(bake));
+        }
     }
 }
 

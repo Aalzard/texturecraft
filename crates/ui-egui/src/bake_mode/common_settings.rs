@@ -9,6 +9,8 @@ use texturecraft_engine::core::{
     BakeAntialiasing, BakePaintTarget, BakeResolution, BakeSettings, CageType, CommonBakeSettings, MeshMatchMode, SkewCorrectionMethod,
 };
 
+const FILE_BUTTON_SIZE: f32 = 20.0;
+
 pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSettings) {
     ui.push_id("common", |ui| {
         let is_enabled = settings.common.is_enabled;
@@ -104,7 +106,8 @@ pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSe
 fn output_size(ui: &mut Ui, settings: &mut CommonBakeSettings) {
     ui.label(tr("Output Size"));
     ui.horizontal(|ui| {
-        let dropdown_width = ((ui.available_width() - 24.0 - ui.spacing().item_spacing.x * 2.0) / 2.0).max(40.0);
+        let button_size = ui.spacing().interact_size.y;
+        let dropdown_width = ((ui.available_width() - button_size - ui.spacing().item_spacing.x * 2.0) / 2.0).max(40.0);
         let resolution = |ui: &mut Ui, id: &str, value: &mut BakeResolution| {
             egui::ComboBox::from_id_salt(id).width(dropdown_width).selected_text(value.pixels().to_string()).show_ui(ui, |ui| {
                 for resolution in BakeResolution::ALL {
@@ -112,6 +115,7 @@ fn output_size(ui: &mut Ui, settings: &mut CommonBakeSettings) {
                 }
             });
         };
+
         resolution(ui, "output_width", &mut settings.resolution);
         let locked = settings.resolution_height.is_none();
         let mut height = settings.resolution_height.unwrap_or(settings.resolution);
@@ -119,7 +123,8 @@ fn output_size(ui: &mut Ui, settings: &mut CommonBakeSettings) {
         if !locked {
             settings.resolution_height = Some(height);
         }
-        if icon_button(ui, if locked { icon::LOCK_SIMPLE } else { icon::LOCK_SIMPLE_OPEN }, tr("Lock Output Size"), locked, 24.0).clicked() {
+
+        if icon_button(ui, if locked { icon::LOCK_SIMPLE } else { icon::LOCK_SIMPLE_OPEN }, tr("Lock Output Size"), locked, button_size).clicked() {
             settings.resolution_height = if locked { Some(settings.resolution) } else { None };
         }
     });
@@ -131,12 +136,14 @@ fn high_poly_files(app: &mut TextureCraftApp, ui: &mut Ui) {
     let mut remove = None;
     for (index, name) in meshes.iter().enumerate() {
         ui.horizontal(|ui| {
-            ui.add_sized([ui.available_width() - 24.0, 24.0], egui::Label::new(name).truncate()).on_hover_text(name);
-            if icon_button(ui, icon::TRASH, tr("Remove"), false, 20.0).clicked() {
+            let label_width = (ui.available_width() - FILE_BUTTON_SIZE - ui.spacing().item_spacing.x).max(0.0);
+            ui.add_sized([label_width, ui.spacing().interact_size.y], egui::Label::new(name).truncate()).on_hover_text(name);
+            if icon_button(ui, icon::TRASH, tr("Remove"), false, FILE_BUTTON_SIZE).clicked() {
                 remove = Some(index);
             }
         });
     }
+
     if meshes.is_empty() {
         hint(ui, tr("No High-Poly Meshes"));
     }
@@ -152,11 +159,12 @@ fn cage_file(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.label(tr("Cage Scene"));
     let cage = app.session.bake_meshes.cage.as_ref().map(|mesh| mesh.name.clone());
     ui.horizontal(|ui| {
-        ui.add_sized([ui.available_width() - 52.0, 24.0], egui::Label::new(cage.as_deref().unwrap_or("")).truncate());
-        if icon_button(ui, icon::FOLDER_OPEN, tr("Load Cage"), false, 20.0).clicked() {
+        let label_width = (ui.available_width() - 2.0 * (FILE_BUTTON_SIZE + ui.spacing().item_spacing.x)).max(0.0);
+        ui.add_sized([label_width, ui.spacing().interact_size.y], egui::Label::new(cage.as_deref().unwrap_or("")).truncate());
+        if icon_button(ui, icon::FOLDER_OPEN, tr("Load Cage"), false, FILE_BUTTON_SIZE).clicked() {
             crate::web_files::import_bake_mesh(app, &ui.ctx().clone(), true);
         }
-        if cage.is_some() && icon_button(ui, icon::TRASH, tr("Remove Cage"), false, 20.0).clicked() {
+        if cage.is_some() && icon_button(ui, icon::TRASH, tr("Remove Cage"), false, FILE_BUTTON_SIZE).clicked() {
             app.run("bake.cage.clear", json!({}));
         }
     });

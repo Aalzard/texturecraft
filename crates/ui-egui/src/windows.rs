@@ -615,8 +615,7 @@ fn settings(app: &mut TextureCraftApp, ctx: &egui::Context) {
     app.ui.windows.settings = open;
 }
 
-/// Browser File › Export Mesh: pick the download format (the desktop picks it in the save
-/// dialog).
+/// Browser File › Export Mesh: pick the download format
 #[cfg(target_arch = "wasm32")]
 fn export_mesh(app: &mut TextureCraftApp, ctx: &egui::Context) {
     let formats = [
@@ -627,18 +626,20 @@ fn export_mesh(app: &mut TextureCraftApp, ctx: &egui::Context) {
     if !app.ui.windows.export_mesh {
         return;
     }
+
     let mut open = true;
     let mut picked = None;
     dialog("export_mesh", tr("Export mesh"), &mut open).show(ctx, |ui| {
         ui.label(caption(tr("Download as")));
-        for (ext, label, hint) in formats {
-            if ui.add_sized(vec2(220.0, 24.0), egui::Button::new(label)).on_hover_text(hint).clicked() {
-                picked = Some(ext);
+        for (extension, label, hint) in formats {
+            if ui.add_sized(vec2(220.0, ui.spacing().interact_size.y), egui::Button::new(label)).on_hover_text(hint).clicked() {
+                picked = Some(extension);
             }
         }
     });
-    if let Some(ext) = picked {
-        crate::web_files::export_mesh(app, ext);
+
+    if let Some(extension) = picked {
+        crate::web_files::export_mesh(app, extension);
         open = false;
     }
     app.ui.windows.export_mesh = open;
