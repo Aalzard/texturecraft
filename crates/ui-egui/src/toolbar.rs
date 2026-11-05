@@ -1,5 +1,4 @@
-//! The context tool bar (brush size, flow, stroke opacity, spacing, lazy mouse, symmetry, view
-//! toggles, mode buttons), the vertical tool shelf, the right icon rail and the status bar.
+//! Context controls, view and mode buttons, tool shelf, icon rail and status bar
 
 use egui::{RichText, vec2};
 use egui_phosphor::regular as ic;
@@ -13,6 +12,11 @@ use crate::keymap::tip;
 use crate::state::{Mode, ViewLayout};
 use crate::theme::{GUTTER, Tokens, card};
 use crate::widgets::{bar_slider, icon_button, icon_button_without_tooltip};
+
+const BAR_BUTTON_SIZE: f32 = 24.0;
+const BAR_SPACING: f32 = 10.0;
+const COMPACT_BAR_SPACING: f32 = 4.0;
+const BAR_SEPARATOR_WIDTH: f32 = 6.0;
 
 pub fn tool_icon(t: Tool) -> &'static str {
     match t {
@@ -28,51 +32,70 @@ pub fn tool_icon(t: Tool) -> &'static str {
     }
 }
 
-/// The top bar: the tool's controls, the view buttons and the mode buttons (only the mode buttons outside Painting)
+/// Keep mode buttons visible, with painting controls scrolling as space runs out
 pub fn paint_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     let tokens = Tokens::get(ui.ctx());
     egui::Panel::top("paint_bar").exact_size(40.0).show_separator_line(false).frame(egui::Frame::NONE).show(ui, |ui| {
         card(ui, &tokens, egui::Margin { bottom: GUTTER, ..Default::default() }, egui::Margin::symmetric(8, 0), |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    mode_buttons(app, ui);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mode_width = 3.0 * BAR_BUTTON_SIZE + 2.0 * BAR_SPACING;
+                let separator_width = BAR_SEPARATOR_WIDTH + 2.0 * BAR_SPACING;
+                // Leave room for both scroll arrows and at least one button of content
+                let minimum_strip_width = 3.0 * BAR_BUTTON_SIZE + 2.0 * BAR_SPACING;
+                let scroll_views = ui.available_width() < mode_width + view_buttons_width(BAR_SPACING) + 2.0 * separator_width + minimum_strip_width;
+                ui.spacing_mut().item_spacing.x = if scroll_views { COMPACT_BAR_SPACING } else { BAR_SPACING };
+                mode_buttons(app, ui);
 
-                    // Bake and Render modes have no brush, so their bar holds only the mode buttons
-                    if app.ui.mode != Mode::Painting {
-                        return;
-                    }
+                if app.ui.mode != Mode::Painting {
+                    return;
+                }
 
-                    ui.separator();
-                    if icon_button(ui, ic::CAMERA, tr("Screenshot of the viewport"), false, 24.0).clicked() {
-                        app.toast(tr("Use the control channel or `texturecraft-cli render` for screenshots"), false);
-                    }
-                    ui.separator();
-                    for (layout, icon, label, id) in [
-                        (ViewLayout::Only2D, ic::SQUARE, "2D view only", "ui.layout.2d"),
-                        (ViewLayout::Only3D, ic::CUBE, "3D view only", "ui.layout.3d"),
-                        (ViewLayout::Split, ic::COLUMNS, "3D/2D views", "ui.layout.split"),
-                    ] {
-                        if icon_button(ui, icon, &tip(&app.ui.keymap, label, id), app.ui.layout == layout, 24.0).clicked() {
-                            app.ui.layout = layout;
-                        }
-                    }
-                    ui.separator();
-                    let checker = app.session.view == texturecraft_engine::ViewMode::UvChecker;
-                    if icon_button(ui, ic::CHECKERBOARD, &tip(&app.ui.keymap, tr("UV checker"), "ui.uvChecker"), checker, 24.0).clicked() {
-                        let mode = if checker { "material" } else { "uvChecker" };
-                        app.run("viewport.view", json!({"mode": mode}));
-                    }
-                    ui.separator();
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| scrolling_tool_controls(app, ui, &tokens));
+                ui.add(egui::Separator::default().spacing(BAR_SEPARATOR_WIDTH));
+                if !scroll_views {
+                    view_buttons(app, ui);
+                    ui.add(egui::Separator::default().spacing(BAR_SEPARATOR_WIDTH));
+                }
+
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    scrolling_tool_controls(app, ui, &tokens, scroll_views);
                 });
             });
         });
     });
 }
 
-/// The tool's controls, in a strip with scroll arrows when they don't fit
-fn scrolling_tool_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui, tokens: &Tokens) {
+fn view_buttons_width(spacing: f32) -> f32 {
+    // Five icons, two separators and the six gaps between them
+    5.0 * BAR_BUTTON_SIZE + 2.0 * BAR_SEPARATOR_WIDTH + 6.0 * spacing
+}
+
+/// View buttons in a right-to-left layout, with the screenshot button at the end
+fn view_buttons(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
+    if icon_button(ui, ic::CAMERA, tr("Screenshot of the viewport"), false, BAR_BUTTON_SIZE).clicked() {
+        app.toast(tr("Use the control channel or `texturecraft-cli render` for screenshots"), false);
+    }
+
+    ui.add(egui::Separator::default().spacing(BAR_SEPARATOR_WIDTH));
+    for (layout, icon, label, command) in [
+        (ViewLayout::Only2D, ic::SQUARE, "2D view only", "ui.layout.2d"),
+        (ViewLayout::Only3D, ic::CUBE, "3D view only", "ui.layout.3d"),
+        (ViewLayout::Split, ic::COLUMNS, "3D/2D views", "ui.layout.split"),
+    ] {
+        if icon_button(ui, icon, &tip(&app.ui.keymap, tr(label), command), app.ui.layout == layout, BAR_BUTTON_SIZE).clicked() {
+            crate::menus::invoke(app, &ui.ctx().clone(), command);
+        }
+    }
+
+    ui.add(egui::Separator::default().spacing(BAR_SEPARATOR_WIDTH));
+    let checker = app.session.view == texturecraft_engine::ViewMode::UvChecker;
+    if icon_button(ui, ic::CHECKERBOARD, &tip(&app.ui.keymap, tr("UV checker"), "ui.uvChecker"), checker, BAR_BUTTON_SIZE).clicked() {
+        let mode = if checker { "material" } else { "uvChecker" };
+        app.run("viewport.view", json!({"mode": mode}));
+    }
+}
+
+/// Scroll tool controls and, in narrow viewports, the view buttons
+fn scrolling_tool_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui, tokens: &Tokens, scroll_views: bool) {
     let strip_width = ui.available_width();
     let overflow_id = egui::Id::unique("tool_controls_overflow");
     let overflowing = ui.data(|data| data.get_temp::<bool>(overflow_id)).unwrap_or(false);
@@ -80,20 +103,30 @@ fn scrolling_tool_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui, tokens:
     // A positive delta moves the content right, revealing its start
     let arrow_scroll_step = strip_width / 2.0;
     let mut scroll_delta = 0.0;
-    if overflowing && icon_button_without_tooltip(ui, ic::CARET_DOUBLE_LEFT, "Scroll left", false, 24.0).clicked() {
+    if overflowing && icon_button_without_tooltip(ui, ic::CARET_DOUBLE_LEFT, "Scroll left", false, BAR_BUTTON_SIZE).clicked() {
         scroll_delta = arrow_scroll_step;
     }
 
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if overflowing && icon_button_without_tooltip(ui, ic::CARET_DOUBLE_RIGHT, "Scroll right", false, 24.0).clicked() {
+        if overflowing && icon_button_without_tooltip(ui, ic::CARET_DOUBLE_RIGHT, "Scroll right", false, BAR_BUTTON_SIZE).clicked() {
             scroll_delta = -arrow_scroll_step;
         }
 
-        let scroll_area = egui::ScrollArea::horizontal().id_salt("tool_controls").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+        let scroll_area = egui::ScrollArea::horizontal()
+            .id_salt("tool_controls")
+            .min_scrolled_width(0.0)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
         let output = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             scroll_area.show(ui, |ui| {
                 ui.scroll_with_delta(vec2(scroll_delta, 0.0));
-                ui.horizontal_centered(|ui| tool_controls(app, ui, tokens));
+                ui.horizontal_centered(|ui| {
+                    tool_controls(app, ui, tokens);
+                    if scroll_views {
+                        ui.add(egui::Separator::default().spacing(BAR_SEPARATOR_WIDTH));
+                        let size = vec2(view_buttons_width(ui.spacing().item_spacing.x), ui.available_height());
+                        ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| view_buttons(app, ui));
+                    }
+                });
             })
         });
 
@@ -111,7 +144,7 @@ fn tool_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui, tokens: &Tokens) 
     // Brush radius limits as a fraction of the mesh diagonal; the slider shows the maximum as 100
     const MAX_BRUSH_SIZE: f32 = 0.25;
     const MIN_BRUSH_SIZE: f32 = 0.0005;
-    const DEFAULT_LAZY_DISTANCE: f32 = 20.0;
+    const DEFAULT_LAZY_DISTANCE_PX: f32 = 20.0;
     const TOOL_ICON_SIZE: f32 = 15.0;
 
     let tool = app.session.tool.tool;
@@ -124,14 +157,17 @@ fn tool_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui, tokens: &Tokens) 
             if bar_slider(ui, tr("Size"), &mut size, 0.05..=100.0, 110.0).changed() {
                 brush.size = (size / 100.0 * MAX_BRUSH_SIZE).clamp(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE);
             }
+
             let mut flow = brush.flow * 100.0;
             if bar_slider(ui, tr("Flow"), &mut flow, 0.0..=100.0, 100.0).changed() {
                 brush.flow = flow / 100.0;
             }
+
             let mut opacity = brush.opacity * 100.0;
             if bar_slider(ui, tr("Stroke opacity"), &mut opacity, 0.0..=100.0, 110.0).changed() {
                 brush.opacity = opacity / 100.0;
             }
+
             let mut spacing = brush.spacing * 100.0;
             if bar_slider(ui, tr("Spacing"), &mut spacing, 1.0..=200.0, 100.0).changed() {
                 brush.spacing = spacing / 100.0;
@@ -140,7 +176,7 @@ fn tool_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui, tokens: &Tokens) 
             ui.separator();
             let lazy_on = brush.lazy > 0.0;
             if icon_button(ui, ic::SCRIBBLE, tr("Lazy mouse"), lazy_on, 24.0).clicked() {
-                brush.lazy = if lazy_on { 0.0 } else { DEFAULT_LAZY_DISTANCE };
+                brush.lazy = if lazy_on { 0.0 } else { DEFAULT_LAZY_DISTANCE_PX };
             }
             if lazy_on {
                 let mut distance = brush.lazy;
@@ -167,10 +203,12 @@ fn tool_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui, tokens: &Tokens) 
                     app.session.tool.smudge_strength = (strength / 100.0).clamp(0.0, 1.0);
                 }
             }
+
             if tool == Tool::Clone && app.session.tool.clone_source.is_none() {
                 ui.separator();
                 ui.label(RichText::new(tr("Hold V and click the mesh to set the clone source")).color(tokens.text_dim));
             }
+
             if tool == Tool::Path {
                 ui.separator();
                 path_controls(app, ui);
@@ -178,6 +216,7 @@ fn tool_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui, tokens: &Tokens) 
         }
         Tool::PolygonFill => {
             use texturecraft_engine::FillMode;
+
             for (fill_mode, icon, tooltip) in [
                 (FillMode::Triangle, ic::POLYGON, tr("Triangle fill")),
                 (FillMode::UvIsland, ic::SHAPES, tr("UV island fill")),
@@ -204,7 +243,7 @@ fn mode_buttons(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
         (Mode::Painting, ic::PALETTE, tr("Painting"), "ui.mode.paint"),
         (Mode::Baking, ic::ATOM, tr("Bake Mesh Maps"), "ui.mode.bake"),
     ] {
-        if icon_button(ui, icon, &tip(&app.ui.keymap, label, command), app.ui.mode == mode, 24.0).clicked() {
+        if icon_button(ui, icon, &tip(&app.ui.keymap, label, command), app.ui.mode == mode, BAR_BUTTON_SIZE).clicked() {
             crate::menus::invoke(app, &ui.ctx().clone(), command);
         }
     }

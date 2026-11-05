@@ -174,24 +174,24 @@ pub fn elided(painter: &egui::Painter, text: impl Into<String>, size: f32, color
     painter.layout_job(job)
 }
 
-/// A square icon button (Phosphor glyph) in a rounded tool well: `selected` sits in the accent
-/// tinted well (the shared Craft icon button, `craft_ui::buttons`).
+/// A square Phosphor icon button with a tooltip and an accent well when selected
 pub fn icon_button(ui: &mut Ui, icon: &str, tooltip: &str, selected: bool, size: f32) -> Response {
     icon_button_without_tooltip(ui, icon, tooltip, selected, size).on_hover_text(tooltip)
 }
 
 /// An `icon_button` with no tooltip, whose `label` still names it for screen readers
 pub fn icon_button_without_tooltip(ui: &mut Ui, icon: &str, label: &str, selected: bool, size: f32) -> Response {
-    let tk = Tokens::get(ui.ctx());
+    let tokens = Tokens::get(ui.ctx());
     let well = |fill, icon| ButtonVisuals { fill, stroke: Stroke::NONE, icon };
     let style = IconButtonStyle {
-        normal: well(Color32::TRANSPARENT, tk.text),
-        hovered: well(tk.row_hover, tk.text_strong),
-        pressed: Some(well(tk.tool_active, tk.text_strong)),
-        selected: well(tk.tool_active, tk.text_strong),
+        normal: well(Color32::TRANSPARENT, tokens.text),
+        hovered: well(tokens.row_hover, tokens.text_strong),
+        pressed: Some(well(tokens.tool_active, tokens.text_strong)),
+        selected: well(tokens.tool_active, tokens.text_strong),
         corner_radius: CornerRadius::same(6),
-        focus_stroke: Stroke::new(1.0, tk.accent),
+        focus_stroke: Stroke::new(1.0, tokens.accent),
     };
+
     IconButton::new(label, vec2(size, size), &style).selected(selected).show(ui, |ui, rect, color| {
         ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(size * 0.62), color);
     })
