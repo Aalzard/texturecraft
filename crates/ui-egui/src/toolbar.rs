@@ -28,6 +28,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
     }
 }
 
+/// The top bar: the tool's controls, the view buttons and the mode buttons (only the mode buttons outside Painting)
 pub fn paint_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     let tokens = Tokens::get(ui.ctx());
     egui::Panel::top("paint_bar").exact_size(40.0).show_separator_line(false).frame(egui::Frame::NONE).show(ui, |ui| {
