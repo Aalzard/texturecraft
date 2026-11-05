@@ -1,10 +1,12 @@
 //! Bake Mode presentation; persisted settings live in core and edits use engine commands
 
 mod bake_paint_brush;
+mod breadcrumb;
 mod common_settings;
 pub use bake_paint_brush::BakePaintBrush;
 mod controls;
 mod map_settings;
+mod mesh_map_bakers;
 
 use egui::{Ui, vec2};
 use serde_json::json;
@@ -37,19 +39,32 @@ pub fn texture_sets(app: &mut TextureCraftApp, ui: &mut Ui) {
     });
 }
 
-pub fn bake_body(app: &mut TextureCraftApp, ui: &mut Ui) {
-    edit_settings(app, ui, "bake_maps", |_, ui, settings| {
-        for map in BakedMap::ALL {
-            ui.push_id(map, |ui| map_settings::show(ui, map, &mut settings.maps));
-            ui.add_space(6.0);
-        }
-    });
+/// The Mesh Map Bakers panel: which maps bake and which one Mesh Map Settings shows
+pub fn mesh_map_bakers_panel(app: &mut TextureCraftApp, ui: &mut Ui) {
+    edit_settings(app, ui, "mesh_map_bakers", mesh_map_bakers::show);
 }
 
-pub fn settings_body(app: &mut TextureCraftApp, ui: &mut Ui) {
+/// The Mesh Map Settings panel: the breadcrumb, then the selected map's parameters
+pub fn mesh_map_settings_panel(app: &mut TextureCraftApp, ui: &mut Ui) {
+    let Some(texture_set) = app.session.doc.project.texture_sets.get(app.session.ts()) else { return };
+
+    let selected = selected_map(app.ui.selected_baked_map, &texture_set.bake);
+    breadcrumb::show(app, ui, selected);
+    ui.separator();
+    edit_settings(app, ui, "mesh_map_settings", |_, ui, settings| ui.push_id(selected, |ui| map_settings::show(ui, selected, &mut settings.maps)).inner);
+}
+
+/// The Common Settings panel: output, high poly, cage and skew settings
+pub fn common_settings_panel(app: &mut TextureCraftApp, ui: &mut Ui) {
     edit_settings(app, ui, "bake_common_settings", common_settings::show);
 }
 
+/// The map whose settings show: the chosen one, else the first enabled map, else Normal
+fn selected_map(selection: Option<BakedMap>, settings: &BakeSettings) -> BakedMap {
+    selection.or_else(|| settings.maps.enabled().next()).unwrap_or(BakedMap::Normal)
+}
+
+/// Draw `contents` over a copy of the active set's bake settings and run `bake.settings` on change
 fn edit_settings(app: &mut TextureCraftApp, ui: &mut Ui, scroll_id: &str, contents: impl FnOnce(&mut TextureCraftApp, &mut Ui, &mut BakeSettings)) {
     let set_index = app.session.ts();
     let Some(before) = app.session.doc.project.texture_sets.get(set_index).map(|texture_set| texture_set.bake.clone()) else { return };
