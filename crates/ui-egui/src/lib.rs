@@ -75,6 +75,8 @@ pub struct Toast {
 
 pub struct TextureCraftApp {
     pub session: Session,
+    /// A smooth move to a saved camera in progress.
+    camera_glide: Option<CameraGlide>,
     pub ui: UiState,
     pub gpu: Option<gpu::GpuLink>,
     pub control: Option<std::sync::mpsc::Receiver<ControlRequest>>,
@@ -135,6 +137,7 @@ impl TextureCraftApp {
         });
         let next_autosave = ui.prefs.autosave_minutes as f64 * 60.0;
         let mut app = TextureCraftApp {
+            camera_glide: None,
             session,
             ui,
             gpu,
@@ -183,8 +186,16 @@ impl TextureCraftApp {
 
     /// Run an engine command, reporting errors as toasts. Returns the result on success.
     pub fn run(&mut self, id: &str, params: Value) -> Option<Value> {
+        // Going to a saved camera glides there; the control channel and CLI jump straight away.
+        let glide_from = (id.starts_with("camera.select") || id.starts_with("camera.bookmark")).then_some(self.session.camera);
         match texturecraft_engine::execute(&mut self.session, id, &params) {
-            Ok(v) => Some(v),
+            Ok(v) => {
+                if let Some(from) = glide_from.filter(|f| *f != self.session.camera) {
+                    self.camera_glide = Some(CameraGlide { from, to: self.session.camera, start: self.last_time });
+                    self.session.camera = from;
+                }
+                Some(v)
+            }
             Err(e) => {
                 self.toast(e.to_string(), true);
                 None
@@ -418,6 +429,40 @@ impl TextureCraftApp {
     }
 }
 
+/// A smooth move of the viewport camera (see [`TextureCraftApp::run`]).
+struct CameraGlide {
+    from: texturecraft_engine::geom::OrbitCamera,
+    to: texturecraft_engine::geom::OrbitCamera,
+    start: f64,
+}
+
+const GLIDE_SECONDS: f64 = 0.35;
+
+impl TextureCraftApp {
+    /// Advance the camera glide by one frame.
+    fn step_camera_glide(&mut self, ctx: &egui::Context) {
+        let Some(g) = &self.camera_glide else { return };
+        let t = ((self.last_time - g.start) / GLIDE_SECONDS).clamp(0.0, 1.0) as f32;
+        let e = t * t * (3.0 - 2.0 * t);
+        let (a, b) = (g.from, g.to);
+        let mix = |x: f32, y: f32| x + (y - x) * e;
+        let mut c = b;
+        c.target = a.target.lerp(b.target, e);
+        c.yaw = mix(a.yaw, b.yaw);
+        c.pitch = mix(a.pitch, b.pitch);
+        c.distance = mix(a.distance, b.distance);
+        c.fov = mix(a.fov, b.fov);
+        // Orthographic switches at the end (the projections cannot be blended).
+        c.ortho = if t >= 1.0 { b.ortho } else { a.ortho };
+        self.session.camera = c;
+        self.session.revision = self.session.revision.wrapping_add(1);
+        if t >= 1.0 {
+            self.camera_glide = None;
+        }
+        ctx.request_repaint();
+    }
+}
+
 impl eframe::App for TextureCraftApp {
     /// The browser never tells eframe the page is closing, so save often there.
     fn auto_save_interval(&self) -> std::time::Duration {
@@ -442,6 +487,7 @@ impl eframe::App for TextureCraftApp {
             theme::apply(ctx, style.0, style.1);
             self.styled = Some(style);
         }
+        self.step_camera_glide(ctx);
         control::poll(self, ctx);
         web_files::poll(self);
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
