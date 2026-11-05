@@ -1,6 +1,7 @@
-//! Thumbnails: shaded material spheres, smart mask spheres, procedural swatches and brush alpha
-//! previews, rendered on the CPU into cached egui textures (no image assets). New shelf
-//! thumbnails are rendered lazily, a few per frame, so opening the shelf never stalls a frame.
+//! Thumbnails: shaded material spheres, smart masks on a baked preview shape, procedural swatches
+//! and brush alpha previews, rendered on the CPU into cached egui textures (no image assets). New
+//! shelf thumbnails are rendered lazily, a few per frame, so opening the shelf never stalls a
+//! frame; the smart mask previews render together on a worker.
 
 use std::collections::HashMap;
 
@@ -10,6 +11,8 @@ use texturecraft_engine::paint::presets::BrushPreset;
 use texturecraft_engine::paint::{BrushAlpha, BrushSettings, Shape, alphas};
 use texturecraft_engine::preview::{self, Sample};
 use texturecraft_engine::texel::linear_to_srgb;
+
+use crate::mask_previews::MaskPreviews;
 
 /// Shelf thumbnails rendered per frame at most (the rest follow on the next frames).
 const PER_FRAME: usize = 2;
@@ -24,6 +27,7 @@ pub struct Thumbs {
     images: HashMap<String, TextureHandle>,
     /// (frame, thumbnails rendered in it).
     budget: (u64, usize),
+    mask_previews: MaskPreviews,
 }
 
 fn shade(n: [f32; 3], base: [f32; 3], metal: f32, rough: f32) -> [f32; 3] {
@@ -161,14 +165,20 @@ impl Thumbs {
         self.shelf(ctx, format!("mat:{id}"), || sphere_image(SPHERE_PX, &preview::material(id, SPHERE_PX).unwrap_or_default()))
     }
 
-    /// Sphere thumbnail of smart mask `id`: white where the mask applies, over dark gray.
+    /// Thumbnail of smart mask `id` on the baked preview shape (None while the thumbnails
+    /// render; they all arrive together).
     pub fn smart_mask(&mut self, ctx: &egui::Context, id: &str) -> Option<TextureHandle> {
-        self.shelf(ctx, format!("mask:{id}"), || {
-            let px = preview::smart_mask(id, SPHERE_PX).unwrap_or_default();
-            let samples: Vec<Option<Sample>> =
-                px.iter().map(|m| m.map(|m| Sample { base: [0.04 + 0.76 * m; 3], metallic: 0.0, roughness: 0.6, height: 0.0 })).collect();
-            sphere_image(SPHERE_PX, &samples)
-        })
+        let key = format!("mask:{id}");
+        if let Some(t) = self.shelf.get(&key) {
+            return Some(t.clone());
+        }
+
+        for (mask_id, image) in self.mask_previews.poll(ctx, SPHERE_PX).unwrap_or_default() {
+            let mask_key = format!("mask:{mask_id}");
+            let t = ctx.load_texture(format!("thumb_{mask_key}"), image, TextureOptions::LINEAR);
+            self.shelf.insert(mask_key, t);
+        }
+        self.shelf.get(&key).cloned()
     }
 
     /// Sphere thumbnail of library filter `id` applied to a sample material.

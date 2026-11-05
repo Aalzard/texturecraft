@@ -1843,31 +1843,25 @@ pub fn mask_image(inp: &Inputs, id: LayerId, size: u32) -> Option<Vec<u8>> {
     let (w, h) = (inp.gbuf.width, inp.gbuf.height);
     let all = all_tiles(w, h);
     let fields = neighbourhood_fields(inp, &channels, &all);
-    let tiles: Vec<(u32, u32, Vec<u8>)> = all
+    let tiles: HashMap<(u32, u32), Vec<u8>> = all
         .par_iter()
-        .filter_map(|&(tx, ty)| {
-            let mp = mask_plan(inp, id, mask, tx, ty, Some(&fields))?;
-            let full = anchor_plan(inp, id, &channels, tx, ty, Some(&fields));
+        .map(|&tile| {
             let mut buf = vec![0u8; TILE_AREA];
-            for (x, y, o) in tile_texels(inp.gbuf, tx, ty) {
-                let mut tex = Texel::new(inp, x, y, o, 0.0);
-                if !full.is_empty() {
-                    tex.anchors_below(&full, id);
-                }
+            for (o, v) in mask_tile(inp, id, mask, &channels, &fields, tile, |_| true) {
                 if let Some(b) = buf.get_mut(o) {
-                    *b = (tex.mask(&mp) * 255.0 + 0.5) as u8;
+                    *b = (v * 255.0 + 0.5) as u8;
                 }
             }
-            Some((tx, ty, buf))
+            (tile, buf)
         })
         .collect();
+
     let size = size.max(1);
     let mut out = vec![0u8; (size * size) as usize];
-    let lookup: std::collections::HashMap<(u32, u32), &Vec<u8>> = tiles.iter().map(|(x, y, b)| ((*x, *y), b)).collect();
     for y in 0..size {
         for x in 0..size {
             let (sx, sy) = ((x as u64 * w as u64 / size as u64) as u32, (y as u64 * h as u64 / size as u64) as u32);
-            if let Some(t) = lookup.get(&(sx / TILE, sy / TILE))
+            if let Some(t) = tiles.get(&(sx / TILE, sy / TILE))
                 && let Some(v) = t.get(((sy % TILE) * TILE + sx % TILE) as usize)
                 && let Some(d) = out.get_mut((y * size + x) as usize)
             {
@@ -1876,6 +1870,68 @@ pub fn mask_image(inp: &Inputs, id: LayerId, size: u32) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+/// The mask of layer `id` (0..=1) at `texels` (x, y) of the texture set, in order; 0 where the
+/// mesh does not cover a texel. Only the requested texels are evaluated, so a sparse read (a
+/// preview's visible texels) costs a fraction of [`mask_image`]. None when the layer has no
+/// enabled mask.
+pub fn mask_at(inp: &Inputs, id: LayerId, texels: &[(u32, u32)]) -> Option<Vec<f32>> {
+    let mask = layer_mask(inp.project, id).filter(|m| m.enabled)?;
+    let channels = inp.project.texture_set(inp.ts).map(|t| t.channel_list()).unwrap_or_default();
+    // Neighbourhood effects (blur, warp) read past the requested texels, so their fields cover
+    // every tile, as in `mask_image`
+    let fields = neighbourhood_fields(inp, &channels, &all_tiles(inp.gbuf.width, inp.gbuf.height));
+
+    // Per tile: offset in the tile -> indices in `texels` asking for it
+    let mut wanted: HashMap<(u32, u32), HashMap<usize, Vec<usize>>> = HashMap::new();
+    for (i, &(x, y)) in texels.iter().enumerate() {
+        let offset = ((y % TILE) * TILE + x % TILE) as usize;
+        wanted.entry((x / TILE, y / TILE)).or_default().entry(offset).or_default().push(i);
+    }
+    let values: Vec<(usize, f32)> = wanted
+        .par_iter()
+        .flat_map_iter(|(&tile, offsets)| {
+            mask_tile(inp, id, mask, &channels, &fields, tile, |o| offsets.contains_key(&o))
+                .into_iter()
+                .flat_map(move |(o, v)| offsets.get(&o).into_iter().flatten().map(move |&i| (i, v)))
+        })
+        .collect();
+
+    let mut out = vec![0.0; texels.len()];
+    for (i, v) in values {
+        if let Some(d) = out.get_mut(i) {
+            *d = v;
+        }
+    }
+    Some(out)
+}
+
+/// Layer `id`'s enabled `mask` at the covered texels of `tile` whose offset in the tile passes
+/// `wanted`, as (offset, value 0..=1); empty for a tile the mask has no plan for.
+fn mask_tile(
+    inp: &Inputs,
+    id: LayerId,
+    mask: &Mask,
+    channels: &[Channel],
+    fields: &Fields,
+    (tx, ty): (u32, u32),
+    wanted: impl Fn(usize) -> bool,
+) -> Vec<(usize, f32)> {
+    let Some(plan) = mask_plan(inp, id, mask, tx, ty, Some(fields)) else { return Vec::new() };
+
+    // Masks that read anchor points need the stack below the layer
+    let full = anchor_plan(inp, id, channels, tx, ty, Some(fields));
+    tile_texels(inp.gbuf, tx, ty)
+        .filter(|&(_, _, o)| wanted(o))
+        .map(|(x, y, o)| {
+            let mut texel = Texel::new(inp, x, y, o, 0.0);
+            if !full.is_empty() {
+                texel.anchors_below(&full, id);
+            }
+            (o, texel.mask(&plan))
+        })
+        .collect()
 }
 
 /// Tiles [`effect_histogram`] samples at most (a million texels).
@@ -2173,6 +2229,45 @@ mod tests {
         let out = run(&f, None);
         let vals: Vec<f32> = (0..64).map(|x| out.value(Channel::BaseColor, x, 20)[0]).collect();
         assert!(vals.iter().any(|v| *v > 0.99) && vals.iter().any(|v| *v < 0.51), "{vals:?}");
+    }
+
+    #[test]
+    fn mask_at_reads_the_same_values_as_the_mask_image() {
+        let mut f = fixture();
+        let id = fill_layer(&mut f.project, [1.0, 1.0, 1.0], 1.0);
+        let eid = f.project.alloc_id();
+        let mut mask = Mask::new(MaskBackground::Black);
+        let pattern = Procedural::new(ProceduralKind::Checker);
+        mask.effects.push(Effect::new(
+            eid,
+            EffectKind::Fill { source: Source::Procedural { pattern, low: [0.0; 3], high: [1.0; 3] }, projection: Projection::default() },
+        ));
+        f.project.layer_mut(id).unwrap().mask = Some(mask);
+        let maskless = f.project.alloc_id();
+        let images = Default::default();
+        let inp = Inputs {
+            project: &f.project,
+            ts: 0,
+            mesh: &f.mesh,
+            gbuf: &f.gbuf,
+            pixels: &f.pixels,
+            baked: &f.baked,
+            preview: None,
+            images: &images,
+            bounds: f.mesh.bounds(),
+        };
+
+        // Scattered texels, one twice, one outside the texture
+        let texels = [(0, 0), (13, 20), (63, 63), (40, 7), (13, 20), (64, 64)];
+        let sparse = mask_at(&inp, id, &texels).unwrap();
+        let image = mask_image(&inp, id, 64).unwrap();
+        for (&(x, y), v) in texels.iter().zip(&sparse).take(5) {
+            let expected = f32::from(image[(y * 64 + x) as usize]) / 255.0;
+            assert!((v - expected).abs() <= 0.5 / 255.0 + 1e-6, "({x}, {y}): {v} vs {expected}");
+        }
+        assert_eq!(sparse[5], 0.0, "uncovered texels read 0");
+        assert!(sparse.iter().any(|v| *v > 0.99) && sparse.iter().take(5).any(|v| *v < 0.01), "{sparse:?}");
+        assert!(mask_at(&inp, maskless, &texels).is_none(), "no mask, no values");
     }
 
     #[test]
