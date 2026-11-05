@@ -565,6 +565,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Orbit", "궤도 회전"),
     ("Orthographic", "직교"),
+    ("Perspective", "원근"),
     ("Output directory", "출력 디렉터리"),
     ("Output high", "출력 상한"),
     ("Output low", "출력 하한"),

@@ -520,6 +520,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Orbit", "环绕"),
     ("Orthographic", "正交"),
+    ("Perspective", "透视"),
     ("Output directory", "输出目录"),
     ("Output high", "输出高"),
     ("Output low", "输出低"),

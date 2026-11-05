@@ -3,7 +3,7 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use texturecraft_engine::{Session, Tool};
-use texturecraft_ui_egui::state::Mode;
+use texturecraft_ui_egui::state::{Mode, ViewLayout};
 use texturecraft_ui_egui::{TextureCraftApp, theme, toolbar};
 
 fn toolbar_harness(width: f32, tool: Tool) -> Harness<'static, TextureCraftApp> {
@@ -144,6 +144,31 @@ fn mode_buttons_keep_their_order_and_dispatch_commands() {
         harness.run_steps(3);
         assert_eq!(harness.state().ui.mode, mode);
     }
+}
+
+#[test]
+fn view_dropdowns_set_the_layout_and_projection() {
+    let mut harness = toolbar_harness(1600.0, Tool::Paint);
+    harness.get_by_label("3D/2D views (F1)").click();
+    harness.run_steps(3);
+    harness.get_by_label_contains("3D view only").click();
+    harness.run_steps(3);
+    assert_eq!(harness.state().ui.layout, ViewLayout::Only3D);
+    assert!(harness.query_by_label_contains("2D view only").is_none(), "the layout menu stays open");
+    assert!(harness.query_by_label("3D view only (F2)").is_some());
+
+    harness.get_by_label("Perspective").click();
+    harness.run_steps(3);
+    harness.get_by_label("Perspective").click();
+    harness.run_steps(3);
+    assert!(harness.query_by_label_contains("Orthographic").is_none(), "a second click keeps the projection menu open");
+
+    harness.get_by_label("Perspective").click();
+    harness.run_steps(3);
+    harness.get_by_label_contains("Orthographic").click();
+    harness.run_steps(3);
+    assert!(harness.state().session.camera.ortho);
+    assert!(harness.query_by_label("Orthographic").is_some());
 }
 
 #[test]
