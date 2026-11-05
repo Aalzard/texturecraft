@@ -711,14 +711,14 @@ fn roblox_and_sketchfab_presets() {
         assert_eq!(got, want);
     };
     let roblox = fx.render_preset("Roblox (SurfaceAppearance)");
-    ends(&roblox, &["ColorMap.png", "NormalMap.png", "MetalnessMap.png", "RoughnessMap.png"]);
-    assert!(decode(find(&roblox, "ColorMap.")).color().has_alpha());
-    for (suffix, v) in [("MetalnessMap.", 255), ("RoughnessMap.", 64)] {
+    ends(&roblox, &["Color.png", "Normal.png", "Metalness.png", "Roughness.png"]);
+    assert!(decode(find(&roblox, "Color.")).color().has_alpha());
+    for (suffix, v) in [("Metalness.", 255), ("Roughness.", 64)] {
         let img = decode(find(&roblox, suffix));
         assert_eq!(img.color().channel_count(), 1, "{suffix} is grayscale");
         assert!((img.to_luma8().get_pixel(1, 1)[0] as i32 - v).abs() <= 1, "{suffix}");
     }
-    assert_eq!(decode(find(&roblox, "NormalMap.")).color().channel_count(), 3);
+    assert_eq!(decode(find(&roblox, "Normal.")).color().channel_count(), 3);
     assert!(roblox.iter().all(|f| f.width == RES && f.height == RES));
     assert_eq!(preset_max_size("roblox (surfaceappearance)"), Some(1024));
     assert_eq!(preset_max_size("Sketchfab (PBR Metal Roughness)"), None);
@@ -728,7 +728,7 @@ fn roblox_and_sketchfab_presets() {
     assert!(fx.render(&opts).iter().all(|f| (f.width, f.height) == (32, 32)));
     // Roblox and Sketchfab normals are both OpenGL (Y+): identical to the glTF preset's.
     let gl = decode(find(&fx.render_preset("glTF PBR Metal Roughness"), "_Normal.png")).to_rgb8();
-    assert_eq!(decode(find(&roblox, "NormalMap.")).to_rgb8(), gl);
+    assert_eq!(decode(find(&roblox, "Normal.")).to_rgb8(), gl);
 
     let sk = fx.render_preset("Sketchfab (PBR Metal Roughness)");
     ends(&sk, &["BaseColor.png", "Normal.png", "Metallic.png", "Roughness.png", "AmbientOcclusion.png", "Emissive.png"]);

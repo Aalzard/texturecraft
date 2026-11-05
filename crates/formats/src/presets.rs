@@ -145,15 +145,16 @@ pub fn builtin_presets() -> Vec<ExportPreset> {
                 map("Specular", 8, gray(ch(Channel::SpecularLevel, 0))),
             ],
         ),
-        // Roblox SurfaceAppearance: ColorMap (opacity in alpha), NormalMap, MetalnessMap, RoughnessMap.
+        // Roblox SurfaceAppearance: Color (opacity in alpha), Normal, Metalness, Roughness: suffixes
+        // Roblox's importer recognises, so it assigns each map to its slot on reimport.
         // See `docs/export-roblox-sketchfab.md` for sources and the items still to verify.
         preset(
             "Roblox (SurfaceAppearance)",
             vec![
-                map("ColorMap", 8, base_with_alpha()),
-                map("NormalMap", 8, normal(VirtualMap::NormalOpenGl)),
-                map("MetalnessMap", 8, gray(ch(Channel::Metallic, 0))),
-                map("RoughnessMap", 8, gray(ch(Channel::Roughness, 0))),
+                map("Color", 8, base_with_alpha()),
+                map("Normal", 8, normal(VirtualMap::NormalOpenGl)),
+                map("Metalness", 8, gray(ch(Channel::Metallic, 0))),
+                map("Roughness", 8, gray(ch(Channel::Roughness, 0))),
             ],
         ),
         // Sketchfab PBR metal-roughness: separate maps whose suffixes Sketchfab's importer
@@ -214,9 +215,10 @@ pub fn builtin_presets() -> Vec<ExportPreset> {
     ]
 }
 
-/// Largest output edge (pixels) a built-in preset is meant for, if its target caps it.
+/// Largest texture edge (pixels) a built-in preset is meant for, if its target caps it.
 /// Roblox: 1024 is the figure community reports cite; the official limit is not confirmed
-/// (see `docs/export-roblox-sketchfab.md`). Pass it as `ExportOptions::size`.
+/// (see `docs/export-roblox-sketchfab.md`). `ExportOptions::size` is per UV tile, so for a
+/// UV-tiled set divide this by the larger of the tile grid's columns and rows before passing it.
 pub fn preset_max_size(name: &str) -> Option<u32> {
     name.trim().eq_ignore_ascii_case("Roblox (SurfaceAppearance)").then_some(1024)
 }

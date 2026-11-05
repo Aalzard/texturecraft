@@ -8,12 +8,16 @@ Built-in presets in `crates/formats/src/presets.rs`: **Roblox (SurfaceAppearance
 
 | File (`$mesh_$textureSet_…`) | Content |
 |---|---|
-| `ColorMap.png` | base color RGB, opacity in alpha |
-| `NormalMap.png` | tangent-space normal, OpenGL (Y+) |
-| `MetalnessMap.png` | grayscale metallic |
-| `RoughnessMap.png` | grayscale roughness |
+| `Color.png` | base color RGB, opacity in alpha |
+| `Normal.png` | tangent-space normal, OpenGL (Y+) |
+| `Metalness.png` | grayscale metallic |
+| `Roughness.png` | grayscale roughness |
+
+The file name endings are suffixes Roblox's importer recognises (color, normal, metalness, roughness),
+so reimport assigns each map to its slot.
 
 Sources:
+- Reimport and texture suffixes: <https://create.roblox.com/docs/art/modeling/reimport>
 - SurfaceAppearance guide: <https://create.roblox.com/docs/art/modeling/surface-appearance>
 - SurfaceAppearance API: <https://create.roblox.com/docs/reference/engine/classes/SurfaceAppearance>
 
