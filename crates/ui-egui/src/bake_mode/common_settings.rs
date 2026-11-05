@@ -9,8 +9,6 @@ use texturecraft_engine::core::{
     BakeAntialiasing, BakePaintTarget, BakeResolution, BakeSettings, CageType, CommonBakeSettings, MeshMatchMode, SkewCorrectionMethod,
 };
 
-const FILE_BUTTON_SIZE: f32 = 20.0;
-
 pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSettings) {
     ui.push_id("common", |ui| {
         let is_enabled = settings.common.is_enabled;
@@ -136,9 +134,10 @@ fn high_poly_files(app: &mut TextureCraftApp, ui: &mut Ui) {
     let mut remove = None;
     for (index, name) in meshes.iter().enumerate() {
         ui.horizontal(|ui| {
-            let label_width = (ui.available_width() - FILE_BUTTON_SIZE - ui.spacing().item_spacing.x).max(0.0);
+            let button_size = ui.spacing().interact_size.y;
+            let label_width = (ui.available_width() - button_size - ui.spacing().item_spacing.x).max(0.0);
             ui.add_sized([label_width, ui.spacing().interact_size.y], egui::Label::new(name).truncate()).on_hover_text(name);
-            if icon_button(ui, icon::TRASH, tr("Remove"), false, FILE_BUTTON_SIZE).clicked() {
+            if icon_button(ui, icon::TRASH, tr("Remove"), false, button_size).clicked() {
                 remove = Some(index);
             }
         });
@@ -159,12 +158,13 @@ fn cage_file(app: &mut TextureCraftApp, ui: &mut Ui) {
     ui.label(tr("Cage Scene"));
     let cage = app.session.bake_meshes.cage.as_ref().map(|mesh| mesh.name.clone());
     ui.horizontal(|ui| {
-        let label_width = (ui.available_width() - 2.0 * (FILE_BUTTON_SIZE + ui.spacing().item_spacing.x)).max(0.0);
+        let button_size = ui.spacing().interact_size.y;
+        let label_width = (ui.available_width() - 2.0 * (button_size + ui.spacing().item_spacing.x)).max(0.0);
         ui.add_sized([label_width, ui.spacing().interact_size.y], egui::Label::new(cage.as_deref().unwrap_or("")).truncate());
-        if icon_button(ui, icon::FOLDER_OPEN, tr("Load Cage"), false, FILE_BUTTON_SIZE).clicked() {
+        if icon_button(ui, icon::FOLDER_OPEN, tr("Load Cage"), false, button_size).clicked() {
             crate::web_files::import_bake_mesh(app, &ui.ctx().clone(), true);
         }
-        if cage.is_some() && icon_button(ui, icon::TRASH, tr("Remove Cage"), false, FILE_BUTTON_SIZE).clicked() {
+        if cage.is_some() && icon_button(ui, icon::TRASH, tr("Remove Cage"), false, button_size).clicked() {
             app.run("bake.cage.clear", json!({}));
         }
     });
