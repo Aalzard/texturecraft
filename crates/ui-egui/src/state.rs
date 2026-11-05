@@ -232,6 +232,10 @@ fn default_export_dir() -> String {
     }
 }
 
+/// The split layout starts with the 3D and 2D views at equal width
+fn default_split_ratio() -> f32 {
+    0.5
+}
 /// The bake layout's version: saved bake docks from an older one load as `Dock::for_baking`
 const BAKE_LAYOUT_VERSION: u32 = 1;
 
@@ -239,6 +243,9 @@ const BAKE_LAYOUT_VERSION: u32 = 1;
 pub struct UiState {
     pub mode: Mode,
     pub layout: ViewLayout,
+    /// The 3D view's share of the viewport width in the split layout
+    #[serde(default = "default_split_ratio")]
+    pub split_ratio: f32,
     /// The docked, tabbed and floating panels around the viewport.
     #[serde(default)]
     pub dock: Dock,
@@ -333,6 +340,7 @@ impl Default for UiState {
         UiState {
             mode: Mode::Painting,
             layout: ViewLayout::Split,
+            split_ratio: default_split_ratio(),
             dock: Dock::default(),
             inactive_mode_dock: Dock::for_baking(),
             dock_is_baking: false,
