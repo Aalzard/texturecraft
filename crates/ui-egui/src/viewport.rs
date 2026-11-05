@@ -43,7 +43,7 @@ pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
             !texture_set.bake.high_poly.use_low_as_high && texture_set.bake.cage.kind == texturecraft_engine::core::CageType::DistanceBased
         });
     app.ui.bake_paint_brush.on = bake_painting;
-    if mode == crate::state::Mode::Painting && !app.ui.hide_ui {
+    if !app.ui.hide_ui {
         crate::toolbar::paint_bar(app, ui);
     }
 

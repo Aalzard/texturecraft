@@ -1,5 +1,5 @@
 //! The context tool bar (brush size, flow, stroke opacity, spacing, lazy mouse, symmetry, view
-//! toggles), the vertical tool shelf, the right icon rail and the status bar.
+//! toggles, mode buttons), the vertical tool shelf, the right icon rail and the status bar.
 
 use egui::{RichText, vec2};
 use egui_phosphor::regular as ic;
@@ -12,7 +12,7 @@ use crate::i18n::{tr, trf};
 use crate::keymap::tip;
 use crate::state::{Mode, ViewLayout};
 use crate::theme::{GUTTER, Tokens, card};
-use crate::widgets::{bar_slider, icon_button};
+use crate::widgets::{bar_slider, icon_button, icon_button_without_tooltip};
 
 pub fn tool_icon(t: Tool) -> &'static str {
     match t {
@@ -34,84 +34,15 @@ pub fn paint_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
         card(ui, &tokens, egui::Margin { bottom: GUTTER, ..Default::default() }, egui::Margin::symmetric(8, 0), |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
-                let tool = app.session.tool.tool;
-                ui.label(RichText::new(tool_icon(tool)).size(15.0).color(tokens.text_strong)).on_hover_text(tool.label());
-                let brush = &mut app.session.tool.brush;
-                match tool {
-                    Tool::Paint | Tool::Eraser | Tool::Projection | Tool::Smudge | Tool::Clone | Tool::Path => {
-                        let mut size = brush.size / 0.25 * 100.0;
-                        if bar_slider(ui, tr("Size"), &mut size, 0.05..=100.0, 110.0).changed() {
-                            brush.size = (size / 100.0 * 0.25).clamp(0.0005, 0.25);
-                        }
-                        let mut flow = brush.flow * 100.0;
-                        if bar_slider(ui, tr("Flow"), &mut flow, 0.0..=100.0, 100.0).changed() {
-                            brush.flow = flow / 100.0;
-                        }
-                        let mut opacity = brush.opacity * 100.0;
-                        if bar_slider(ui, tr("Stroke opacity"), &mut opacity, 0.0..=100.0, 110.0).changed() {
-                            brush.opacity = opacity / 100.0;
-                        }
-                        let mut spacing = brush.spacing * 100.0;
-                        if bar_slider(ui, tr("Spacing"), &mut spacing, 1.0..=200.0, 100.0).changed() {
-                            brush.spacing = spacing / 100.0;
-                        }
-                        ui.separator();
-                        let lazy_on = brush.lazy > 0.0;
-                        if icon_button(ui, ic::SCRIBBLE, tr("Lazy mouse"), lazy_on, 24.0).clicked() {
-                            brush.lazy = if lazy_on { 0.0 } else { 20.0 };
-                        }
-                        if lazy_on {
-                            let mut distance = brush.lazy;
-                            if bar_slider(ui, tr("Distance"), &mut distance, 1.0..=200.0, 90.0).changed() {
-                                brush.lazy = distance;
-                            }
-                        }
-                        ui.separator();
-                        if icon_button(ui, ic::FLIP_HORIZONTAL, tr("Symmetry (X)"), brush.symmetry.x, 24.0).clicked() {
-                            brush.symmetry.x = !brush.symmetry.x;
-                        }
-                        if icon_button(ui, ic::FLIP_VERTICAL, tr("Symmetry (Y)"), brush.symmetry.y, 24.0).clicked() {
-                            brush.symmetry.y = !brush.symmetry.y;
-                        }
-                        if icon_button(ui, ic::CLOUD_RAIN, tr("Particle brush: particles slide down the surface"), brush.particles.enabled, 24.0).clicked() {
-                            brush.particles.enabled = !brush.particles.enabled;
-                        }
-                        if tool == Tool::Smudge {
-                            ui.separator();
-                            let mut strength = app.session.tool.smudge_strength * 100.0;
-                            if bar_slider(ui, tr("Strength"), &mut strength, 0.0..=100.0, 100.0).changed() {
-                                app.session.tool.smudge_strength = (strength / 100.0).clamp(0.0, 1.0);
-                            }
-                        }
-                        if tool == Tool::Clone && app.session.tool.clone_source.is_none() {
-                            ui.separator();
-                            ui.label(RichText::new(tr("Hold V and click the mesh to set the clone source")).color(tokens.text_dim));
-                        }
-                        if tool == Tool::Path {
-                            ui.separator();
-                            path_controls(app, ui);
-                        }
-                    }
-                    Tool::PolygonFill => {
-                        use texturecraft_engine::FillMode;
-                        for (fill_mode, icon, tip) in [
-                            (FillMode::Triangle, ic::POLYGON, tr("Triangle fill")),
-                            (FillMode::UvIsland, ic::SHAPES, tr("UV island fill")),
-                            (FillMode::Mesh, ic::CUBE, tr("Mesh fill")),
-                        ] {
-                            if icon_button(ui, icon, tip, app.session.tool.fill_mode == fill_mode, 24.0).clicked() {
-                                app.session.tool.fill_mode = fill_mode;
-                            }
-                        }
-                    }
-                    Tool::ColorPicker => {
-                        ui.label(RichText::new(tr("Click the mesh to pick its material into the brush")).color(tokens.text_dim));
-                    }
-                    Tool::GeometryMask => {
-                        ui.label(RichText::new(tr("Click a mesh part to show or hide the selected layer on it.")).color(tokens.text_dim));
-                    }
-                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    mode_buttons(app, ui);
+
+                    // Bake and Render modes have no brush, so their bar holds only the mode buttons
+                    if app.ui.mode != Mode::Painting {
+                        return;
+                    }
+
+                    ui.separator();
                     if icon_button(ui, ic::CAMERA, tr("Screenshot of the viewport"), false, 24.0).clicked() {
                         app.toast(tr("Use the control channel or `texturecraft-cli render` for screenshots"), false);
                     }
@@ -131,10 +62,151 @@ pub fn paint_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
                         let mode = if checker { "material" } else { "uvChecker" };
                         app.run("viewport.view", json!({"mode": mode}));
                     }
+                    ui.separator();
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| scrolling_tool_controls(app, ui, &tokens));
                 });
             });
         });
     });
+}
+
+/// The tool's controls, in a strip with scroll arrows when they don't fit
+fn scrolling_tool_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui, tokens: &Tokens) {
+    let strip_width = ui.available_width();
+    let overflow_id = egui::Id::unique("tool_controls_overflow");
+    let overflowing = ui.data(|data| data.get_temp::<bool>(overflow_id)).unwrap_or(false);
+
+    // A positive delta moves the content right, revealing its start
+    let arrow_scroll_step = strip_width / 2.0;
+    let mut scroll_delta = 0.0;
+    if overflowing && icon_button_without_tooltip(ui, ic::CARET_DOUBLE_LEFT, "Scroll left", false, 24.0).clicked() {
+        scroll_delta = arrow_scroll_step;
+    }
+
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if overflowing && icon_button_without_tooltip(ui, ic::CARET_DOUBLE_RIGHT, "Scroll right", false, 24.0).clicked() {
+            scroll_delta = -arrow_scroll_step;
+        }
+
+        let scroll_area = egui::ScrollArea::horizontal().id_salt("tool_controls").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+        let output = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            scroll_area.show(ui, |ui| {
+                ui.scroll_with_delta(vec2(scroll_delta, 0.0));
+                ui.horizontal_centered(|ui| tool_controls(app, ui, tokens));
+            })
+        });
+
+        // The arrows take room from the strip, so measure the overflow against its full width
+        let overflows_now = output.inner.content_size.x > strip_width;
+        if overflows_now != overflowing {
+            ui.data_mut(|data| data.insert_temp(overflow_id, overflows_now));
+            ui.ctx().request_repaint();
+        }
+    });
+}
+
+/// The selected tool's icon and its settings
+fn tool_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui, tokens: &Tokens) {
+    // Brush radius limits as a fraction of the mesh diagonal; the slider shows the maximum as 100
+    const MAX_BRUSH_SIZE: f32 = 0.25;
+    const MIN_BRUSH_SIZE: f32 = 0.0005;
+    const DEFAULT_LAZY_DISTANCE: f32 = 20.0;
+    const TOOL_ICON_SIZE: f32 = 15.0;
+
+    let tool = app.session.tool.tool;
+    ui.label(RichText::new(tool_icon(tool)).size(TOOL_ICON_SIZE).color(tokens.text_strong)).on_hover_text(tr(tool.label()));
+
+    let brush = &mut app.session.tool.brush;
+    match tool {
+        Tool::Paint | Tool::Eraser | Tool::Projection | Tool::Smudge | Tool::Clone | Tool::Path => {
+            let mut size = brush.size / MAX_BRUSH_SIZE * 100.0;
+            if bar_slider(ui, tr("Size"), &mut size, 0.05..=100.0, 110.0).changed() {
+                brush.size = (size / 100.0 * MAX_BRUSH_SIZE).clamp(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE);
+            }
+            let mut flow = brush.flow * 100.0;
+            if bar_slider(ui, tr("Flow"), &mut flow, 0.0..=100.0, 100.0).changed() {
+                brush.flow = flow / 100.0;
+            }
+            let mut opacity = brush.opacity * 100.0;
+            if bar_slider(ui, tr("Stroke opacity"), &mut opacity, 0.0..=100.0, 110.0).changed() {
+                brush.opacity = opacity / 100.0;
+            }
+            let mut spacing = brush.spacing * 100.0;
+            if bar_slider(ui, tr("Spacing"), &mut spacing, 1.0..=200.0, 100.0).changed() {
+                brush.spacing = spacing / 100.0;
+            }
+
+            ui.separator();
+            let lazy_on = brush.lazy > 0.0;
+            if icon_button(ui, ic::SCRIBBLE, tr("Lazy mouse"), lazy_on, 24.0).clicked() {
+                brush.lazy = if lazy_on { 0.0 } else { DEFAULT_LAZY_DISTANCE };
+            }
+            if lazy_on {
+                let mut distance = brush.lazy;
+                if bar_slider(ui, tr("Distance"), &mut distance, 1.0..=200.0, 90.0).changed() {
+                    brush.lazy = distance;
+                }
+            }
+
+            ui.separator();
+            if icon_button(ui, ic::FLIP_HORIZONTAL, tr("Symmetry (X)"), brush.symmetry.x, 24.0).clicked() {
+                brush.symmetry.x = !brush.symmetry.x;
+            }
+            if icon_button(ui, ic::FLIP_VERTICAL, tr("Symmetry (Y)"), brush.symmetry.y, 24.0).clicked() {
+                brush.symmetry.y = !brush.symmetry.y;
+            }
+            if icon_button(ui, ic::CLOUD_RAIN, tr("Particle brush: particles slide down the surface"), brush.particles.enabled, 24.0).clicked() {
+                brush.particles.enabled = !brush.particles.enabled;
+            }
+
+            if tool == Tool::Smudge {
+                ui.separator();
+                let mut strength = app.session.tool.smudge_strength * 100.0;
+                if bar_slider(ui, tr("Strength"), &mut strength, 0.0..=100.0, 100.0).changed() {
+                    app.session.tool.smudge_strength = (strength / 100.0).clamp(0.0, 1.0);
+                }
+            }
+            if tool == Tool::Clone && app.session.tool.clone_source.is_none() {
+                ui.separator();
+                ui.label(RichText::new(tr("Hold V and click the mesh to set the clone source")).color(tokens.text_dim));
+            }
+            if tool == Tool::Path {
+                ui.separator();
+                path_controls(app, ui);
+            }
+        }
+        Tool::PolygonFill => {
+            use texturecraft_engine::FillMode;
+            for (fill_mode, icon, tooltip) in [
+                (FillMode::Triangle, ic::POLYGON, tr("Triangle fill")),
+                (FillMode::UvIsland, ic::SHAPES, tr("UV island fill")),
+                (FillMode::Mesh, ic::CUBE, tr("Mesh fill")),
+            ] {
+                if icon_button(ui, icon, tooltip, app.session.tool.fill_mode == fill_mode, 24.0).clicked() {
+                    app.session.tool.fill_mode = fill_mode;
+                }
+            }
+        }
+        Tool::ColorPicker => {
+            ui.label(RichText::new(tr("Click the mesh to pick its material into the brush")).color(tokens.text_dim));
+        }
+        Tool::GeometryMask => {
+            ui.label(RichText::new(tr("Click a mesh part to show or hide the selected layer on it.")).color(tokens.text_dim));
+        }
+    }
+}
+
+/// Bake, Painting and Rendering mode buttons for a right-to-left layout, so Rendering is added first
+fn mode_buttons(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
+    for (mode, icon, label, command) in [
+        (Mode::Rendering, ic::APERTURE, tr("Rendering (path traced)"), "ui.mode.render"),
+        (Mode::Painting, ic::PALETTE, tr("Painting"), "ui.mode.paint"),
+        (Mode::Baking, ic::ATOM, tr("Bake Mesh Maps"), "ui.mode.bake"),
+    ] {
+        if icon_button(ui, icon, &tip(&app.ui.keymap, label, command), app.ui.mode == mode, 24.0).clicked() {
+            crate::menus::invoke(app, &ui.ctx().clone(), command);
+        }
+    }
 }
 
 /// Path tool options and actions (top bar and properties).
@@ -165,19 +237,6 @@ pub fn tool_shelf(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     egui::Panel::left("tool_shelf").resizable(false).exact_size(40.0).show_separator_line(false).frame(egui::Frame::NONE).show(ui, |ui| {
         card(ui, &tokens, egui::Margin { left: GUTTER, right: 0, top: GUTTER, bottom: GUTTER }, egui::Margin::symmetric(3, 6), |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
-            for (mode, icon, label, command) in [
-                (Mode::Painting, ic::PALETTE, tr("Painting"), "ui.mode.paint"),
-                (Mode::Baking, ic::ATOM, tr("Bake Mesh Maps"), "ui.mode.bake"),
-                (Mode::Rendering, ic::APERTURE, tr("Rendering (path traced)"), "ui.mode.render"),
-            ] {
-                if icon_button(ui, icon, &tip(&app.ui.keymap, label, command), app.ui.mode == mode, 28.0).clicked() {
-                    crate::menus::invoke(app, &ui.ctx().clone(), command);
-                }
-            }
-
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(6.0);
             ui.add_enabled_ui(app.ui.mode == Mode::Painting, |ui| {
                 for tool in Tool::ALL {
                     let selected = app.ui.mode == Mode::Painting && app.session.tool.tool == tool;
