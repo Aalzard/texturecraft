@@ -1,32 +1,34 @@
-use super::controls::{choice, integer, number, section, section_header};
-use crate::i18n::{baked_map_label, tr};
+use super::controls::{choice, hint, integer, number};
+use crate::i18n::tr;
 use egui::Ui;
 use texturecraft_engine::core::{
     AmbientOcclusionAttenuation, AmbientOcclusionSettings, BackfaceMode, BakedMap, BentNormalSettings, CurvatureMethod, CurvatureSettings, HeightNormalization,
-    HeightSettings, IdColorGenerator, IdColorSource, IdSettings, MapSettings, MeshMapSettings, PositionAxis, PositionMode, PositionNormalizationScale,
-    PositionSettings, RayDistribution, RaySettings, SelfOcclusion, ThicknessNormalization, ThicknessSettings,
+    HeightSettings, IdColorGenerator, IdColorSource, IdSettings, MeshMapSettings, PositionAxis, PositionMode, PositionNormalizationScale, PositionSettings,
+    RayDistribution, RaySettings, SelfOcclusion, ThicknessNormalization, ThicknessSettings,
 };
 
+/// Draw `map`'s parameters with Restore Defaults; maps without parameters say so
 pub(super) fn show(ui: &mut Ui, map: BakedMap, settings: &mut MeshMapSettings) {
     match map {
-        BakedMap::Normal | BakedMap::WorldNormal | BakedMap::Opacity => {
-            let mut is_enabled = settings.is_enabled(map);
-            section_header(ui, tr(baked_map_label(map)), Some(&mut is_enabled), None);
-            settings.set_enabled(map, is_enabled);
-        }
-        BakedMap::Id => baker(ui, map, &mut settings.id, id),
-        BakedMap::AmbientOcclusion => baker(ui, map, &mut settings.ao, ambient_occlusion),
-        BakedMap::Curvature => baker(ui, map, &mut settings.curvature, curvature),
-        BakedMap::Position => baker(ui, map, &mut settings.position, position),
-        BakedMap::Thickness => baker(ui, map, &mut settings.thickness, thickness),
-        BakedMap::Height => baker(ui, map, &mut settings.height, height),
-        BakedMap::BentNormal => baker(ui, map, &mut settings.bent_normal, bent_normal),
+        BakedMap::Normal | BakedMap::WorldNormal | BakedMap::Opacity => hint(ui, tr("No Parameters")),
+        BakedMap::Id => parameters(ui, &mut settings.id.parameters, id),
+        BakedMap::AmbientOcclusion => parameters(ui, &mut settings.ao.parameters, ambient_occlusion),
+        BakedMap::Curvature => parameters(ui, &mut settings.curvature.parameters, curvature),
+        BakedMap::Position => parameters(ui, &mut settings.position.parameters, position),
+        BakedMap::Thickness => parameters(ui, &mut settings.thickness.parameters, thickness),
+        BakedMap::Height => parameters(ui, &mut settings.height.parameters, height),
+        BakedMap::BentNormal => parameters(ui, &mut settings.bent_normal.parameters, bent_normal),
     }
 }
 
-fn baker<T: Default>(ui: &mut Ui, map: BakedMap, settings: &mut MapSettings<T>, controls: impl FnOnce(&mut Ui, &mut T)) {
-    if section(ui, tr(baked_map_label(map)), Some(&mut settings.is_enabled), |ui| controls(ui, &mut settings.parameters)) {
-        settings.parameters = T::default();
+/// A map's controls, then a right-aligned Restore Defaults that resets only its parameters
+fn parameters<T: Default>(ui: &mut Ui, parameters: &mut T, controls: impl FnOnce(&mut Ui, &mut T)) {
+    controls(ui, parameters);
+    ui.add_space(6.0);
+
+    let restore = ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| ui.button(tr("Restore Defaults"))).inner;
+    if restore.clicked() {
+        *parameters = T::default();
     }
 }
 

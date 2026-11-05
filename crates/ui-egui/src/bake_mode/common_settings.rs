@@ -9,10 +9,12 @@ use texturecraft_engine::core::{
     BakeAntialiasing, BakePaintTarget, BakeResolution, BakeSettings, CageType, CommonBakeSettings, MeshMatchMode, SkewCorrectionMethod,
 };
 
+/// The output and high-poly sections, then cage (needs a high poly) and skew (needs a distance cage)
 pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSettings) {
     ui.push_id("common", |ui| {
+        // Restore Defaults keeps whether the texture set is included in the bake
         let is_enabled = settings.common.is_enabled;
-        if section(ui, tr("Common Parameters"), None, |ui| {
+        if section(ui, tr("Common Parameters"), |ui| {
             output_size(ui, &mut settings.common);
             choice(
                 ui,
@@ -31,9 +33,10 @@ pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSe
             settings.common = CommonBakeSettings { is_enabled, ..CommonBakeSettings::default() };
         }
     });
+
     ui.add_space(8.0);
     ui.push_id("high_poly", |ui| {
-        if section(ui, tr("High-Poly Parameters"), None, |ui| {
+        if section(ui, tr("High-Poly Parameters"), |ui| {
             ui.checkbox(&mut settings.high_poly.use_low_as_high, tr("Use Low Poly Mesh as High Poly Mesh"));
             high_poly_files(app, ui);
             if !app.session.bake_meshes.high.is_empty() {
@@ -52,10 +55,11 @@ pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSe
             settings.high_poly = Default::default();
         }
     });
+
     if !app.session.bake_meshes.high.is_empty() {
         ui.add_space(8.0);
         ui.push_id("cage", |ui| {
-            if section(ui, tr("Cage"), None, |ui| {
+            if section(ui, tr("Cage"), |ui| {
                 choice(
                     ui,
                     tr("Cage Type"),
@@ -76,10 +80,11 @@ pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSe
                 settings.cage = Default::default();
             }
         });
+
         if settings.cage.kind == CageType::DistanceBased {
             ui.add_space(8.0);
             ui.push_id("skew", |ui| {
-                if section(ui, tr("Skew Correction"), None, |ui| {
+                if section(ui, tr("Skew Correction"), |ui| {
                     choice(
                         ui,
                         tr("Skew Correction Method"),

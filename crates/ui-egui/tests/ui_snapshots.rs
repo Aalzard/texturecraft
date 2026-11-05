@@ -14,6 +14,12 @@ use texturecraft_ui_egui::state::Mode;
 use texturecraft_ui_egui::theme::Brightness;
 use texturecraft_ui_egui::titlebar::TitleBar;
 
+/// Click a map's row in Mesh Map Bakers, which shows its settings
+fn select_map(harness: &mut Harness<'_, TextureCraftApp>, name: &str) {
+    harness.get_by_role_and_label(egui::Role::Button, name).click();
+    harness.run_steps(3);
+}
+
 fn save(h: &mut Harness<'_, TextureCraftApp>, dir: &Path, name: &str) {
     h.run_steps(6);
     let img = h.render().unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -58,18 +64,16 @@ fn window_snapshots() {
     }
     harness.state_mut().ui.mode = Mode::Baking;
     save(&mut harness, &output_dir, "mode-bake");
-    harness.state_mut().ui.dock.focus(Panel::BakeMaps);
-    harness.run_steps(3);
-    harness.get_by_label("Ambient Occlusion").scroll_to_me();
+    select_map(&mut harness, "Ambient Occlusion");
     save(&mut harness, &output_dir, "mode-bake-maps");
     harness.state_mut().ui.prefs.brightness = Brightness::Light;
     save(&mut harness, &output_dir, "mode-bake-maps-light");
     harness.state_mut().ui.prefs.brightness = Brightness::MediumDark;
-    harness.get_by_label("Opacity").scroll_to_me();
+    select_map(&mut harness, "Opacity");
     save(&mut harness, &output_dir, "mode-bake-unchecked");
     harness.state_mut().ui.dock.focus(Panel::TextureSetList);
     save(&mut harness, &output_dir, "bake-texture-sets");
-    harness.state_mut().ui.dock.focus(Panel::BakeSettings);
+    harness.state_mut().ui.dock.focus(Panel::CommonSettings);
     save(&mut harness, &output_dir, "bake-settings");
     harness.state_mut().session.add_high_poly_bytes("High Poly.obj", b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n".to_vec()).unwrap();
     save(&mut harness, &output_dir, "bake-settings-high-poly");
@@ -90,11 +94,9 @@ fn window_snapshots() {
         settings.maps.height.parameters.normalization = HeightNormalization::Manual;
         settings.maps.height.parameters.scaling_divisor = 100.0;
     }
-    harness.state_mut().ui.dock.focus(Panel::BakeMaps);
-    harness.run_steps(3);
-    harness.get_by_label("Curvature").scroll_to_me();
+    select_map(&mut harness, "Curvature");
     save(&mut harness, &output_dir, "bake-curvature-mesh");
-    harness.get_by_label("Scaling Divisor").scroll_to_me();
+    select_map(&mut harness, "Height");
     save(&mut harness, &output_dir, "bake-height-manual");
     harness.state_mut().session.bake_meshes.high.clear();
     harness.state_mut().ui.mode = Mode::Painting;
