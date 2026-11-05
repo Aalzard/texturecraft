@@ -16,6 +16,7 @@ pub mod fonts;
 pub mod gpu;
 pub mod i18n;
 pub mod keymap;
+mod mask_previews;
 pub mod menus;
 pub mod parity;
 pub mod profile;
