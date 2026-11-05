@@ -8,10 +8,10 @@ use texturecraft_engine::Tool;
 use crate::TextureCraftApp;
 use crate::docking::Panel;
 use crate::i18n::{tr, trf};
-use crate::keymap::tip;
+use crate::keymap::{shortcut_of, tip};
 use crate::state::{Mode, ViewLayout};
 use crate::theme::{GUTTER, Tokens, card};
-use crate::widgets::{bar_slider, icon_button, icon_button_without_tooltip};
+use crate::widgets::{bar_slider, icon_button, icon_button_without_tooltip, icon_dropdown_button, icon_dropdown_button_width};
 
 const BAR_SPACING: f32 = 10.0;
 const COMPACT_BAR_SPACING: f32 = 4.0;
@@ -65,9 +65,10 @@ pub fn paint_bar(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// Width of `view_buttons`, so the bar knows when to move them into the scrolling strip
 fn view_buttons_width(button_size: f32, spacing: f32) -> f32 {
-    // Five icons, two separators and the six gaps between them
-    5.0 * button_size + 2.0 * BAR_SEPARATOR_WIDTH + 6.0 * spacing
+    // Two icons, two dropdowns, two separators and the five gaps between them
+    2.0 * button_size + 2.0 * icon_dropdown_button_width(button_size) + 2.0 * BAR_SEPARATOR_WIDTH + 5.0 * spacing
 }
 
 /// View buttons in a right-to-left layout, with the screenshot button at the end
@@ -78,15 +79,8 @@ fn view_buttons(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
     }
 
     ui.add(egui::Separator::default().spacing(BAR_SEPARATOR_WIDTH));
-    for (layout, icon, label, command) in [
-        (ViewLayout::Only2D, ic::SQUARE, "2D view only", "ui.layout.2d"),
-        (ViewLayout::Only3D, ic::CUBE, "3D view only", "ui.layout.3d"),
-        (ViewLayout::Split, ic::COLUMNS, "3D/2D views", "ui.layout.split"),
-    ] {
-        if icon_button(ui, icon, &tip(&app.ui.keymap, tr(label), command), app.ui.layout == layout, button_size).clicked() {
-            crate::menus::invoke(app, &ui.ctx().clone(), command);
-        }
-    }
+    projection_dropdown(app, ui);
+    layout_dropdown(app, ui);
 
     ui.add(egui::Separator::default().spacing(BAR_SEPARATOR_WIDTH));
     let checker = app.session.view == texturecraft_engine::ViewMode::UvChecker;
@@ -94,6 +88,72 @@ fn view_buttons(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
         let mode = if checker { "material" } else { "uvChecker" };
         app.run("viewport.view", json!({"mode": mode}));
     }
+}
+
+/// The 3D/2D, 3D-only and 2D-only layouts, showing the current one's icon
+fn layout_dropdown(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
+    const LAYOUTS: [(ViewLayout, &str, &str, &str); 3] = [
+        (ViewLayout::Split, ic::SQUARE_SPLIT_HORIZONTAL, "3D/2D views", "ui.layout.split"),
+        (ViewLayout::Only3D, ic::SPHERE, "3D view only", "ui.layout.3d"),
+        (ViewLayout::Only2D, ic::SQUARE, "2D view only", "ui.layout.2d"),
+    ];
+
+    let (_, icon, label, command) = LAYOUTS.iter().find(|(layout, ..)| *layout == app.ui.layout).unwrap_or(&LAYOUTS[0]);
+    let tooltip = tip(&app.ui.keymap, tr(label), command);
+    let mut chosen = None;
+    icon_dropdown(ui, "view_layout", icon, &tooltip, |ui| {
+        for (layout, icon, label, command) in LAYOUTS {
+            if dropdown_row(ui, icon, tr(label), shortcut_of(&app.ui.keymap, command), app.ui.layout == layout) {
+                chosen = Some(command);
+            }
+        }
+    });
+
+    if let Some(command) = chosen {
+        crate::menus::invoke(app, &ui.ctx().clone(), command);
+    }
+}
+
+/// Perspective or orthographic projection, the same setting as the Display Settings checkbox
+fn projection_dropdown(app: &mut TextureCraftApp, ui: &mut egui::Ui) {
+    let projections = [(false, ic::PERSPECTIVE, tr("Perspective")), (true, ic::CUBE, tr("Orthographic"))];
+    let ortho = app.session.camera.ortho;
+    let (_, icon, label) = projections.iter().find(|(choice, ..)| *choice == ortho).unwrap_or(&projections[0]);
+    let mut chosen = None;
+    icon_dropdown(ui, "view_projection", icon, label, |ui| {
+        for (choice, icon, label) in projections {
+            if dropdown_row(ui, icon, label, None, ortho == choice) {
+                chosen = Some(choice);
+            }
+        }
+    });
+
+    if let Some(choice) = chosen.filter(|choice| *choice != ortho) {
+        app.run("camera.set", json!({"ortho": choice}));
+    }
+}
+
+/// An icon button with a caret that opens `menu` below it, highlighted while open
+fn icon_dropdown(ui: &mut egui::Ui, id_salt: &str, icon: &str, tooltip: &str, menu: impl FnOnce(&mut egui::Ui)) {
+    let button_size = ui.spacing().interact_size.y;
+    let popup_id = ui.make_persistent_id(id_salt);
+    let open = egui::Popup::is_id_open(ui.ctx(), popup_id);
+    let mut response = icon_dropdown_button(ui, icon, tooltip, open, button_size);
+    if !open {
+        response = response.on_hover_text(tooltip);
+    }
+
+    egui::Popup::menu(&response).id(popup_id).show(menu);
+}
+
+/// One dropdown entry: icon, label and shortcut. Returns true when clicked
+fn dropdown_row(ui: &mut egui::Ui, icon: &str, label: &str, shortcut: Option<&str>, selected: bool) -> bool {
+    let mut button = egui::Button::new(format!("{icon}  {label}")).selected(selected);
+    if let Some(shortcut) = shortcut {
+        button = button.shortcut_text(shortcut);
+    }
+
+    ui.add(button).clicked()
 }
 
 /// Scroll tool controls and, in narrow viewports, the view buttons

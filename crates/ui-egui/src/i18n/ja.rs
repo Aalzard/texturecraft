@@ -574,6 +574,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Orbit", "オービット"),
     ("Orthographic", "平行投影"),
+    ("Perspective", "透視投影"),
     ("Output directory", "出力先フォルダー"),
     ("Output high", "出力の上限"),
     ("Output low", "出力の下限"),

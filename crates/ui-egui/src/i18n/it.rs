@@ -586,6 +586,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Orbit", "Orbita"),
     ("Orthographic", "Ortografica"),
+    ("Perspective", "Prospettica"),
     ("Output directory", "Cartella di output"),
     ("Output high", "Output alto"),
     ("Output low", "Output basso"),
