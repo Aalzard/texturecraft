@@ -90,8 +90,6 @@ pub struct TextureCraftApp {
     pub fps: f32,
     /// User smart materials found in the library folder (refreshed on demand).
     pub library: Option<Vec<std::path::PathBuf>>,
-    /// The user's brush presets were read from the brushes folder.
-    pub brushes: bool,
     /// Rendering mode's path tracer.
     pub render: render_mode::RenderView,
     /// Smoothed CPU time spent building the UI per frame (ms).
@@ -150,7 +148,6 @@ impl TextureCraftApp {
             ui_ms: 0.0,
             profiler: profile::Profiler::default(),
             library: None,
-            brushes: false,
             render: render_mode::RenderView::default(),
             last_paint_point: None,
             placing_decal: None,
@@ -177,6 +174,11 @@ impl TextureCraftApp {
             }
             let skipped = app.session.load_templates(user_dir("templates"));
             app.session.log.extend(skipped.into_iter().map(|w| format!("Project template skipped: {w}")));
+            // The user's brush presets are there from the start, so the control channel sees them
+            // and a preset stored before the panel opens is written to the folder
+            for warning in app.session.load_brush_presets(user_dir("brushes")) {
+                app.toast(warning, true);
+            }
         }
         app
     }

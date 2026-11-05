@@ -35,6 +35,10 @@ pub struct UserBrush {
     /// Channels painted when it was saved (None: leave the channels alone).
     #[serde(default)]
     pub channels: Option<BTreeSet<Channel>>,
+    /// The file it was read from or last written to (None: not on disk yet). Deleting and
+    /// renaming act on this file, which for an older bare `.tcbrush` is not the name's file.
+    #[serde(skip)]
+    pub file: Option<std::path::PathBuf>,
 }
 
 /// The user's brush presets, mirrored as `<name>.tcbrush` files in a folder on the desktop.
@@ -70,34 +74,65 @@ impl UserBrushes {
         self.dir.as_ref().map(|d| d.join(format!("{}.{BRUSH_EXT}", sanitize_file_stem(name.trim()))))
     }
 
-    /// Mirror `brush` to the folder; `replaced` is the name it had before (its file goes).
+    /// The file a preset named `name` that was never written would have.
     #[cfg(not(target_arch = "wasm32"))]
-    fn write(&self, brush: &UserBrush, replaced: Option<&str>) -> std::result::Result<(), String> {
-        let (Some(dir), Some(path)) = (&self.dir, self.file(&brush.name)) else { return Ok(()) };
+    fn file_of(&self, name: &str) -> Option<std::path::PathBuf> {
+        self.file(name)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn file_of(&self, _: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    /// Mirror `brush` to the folder under its name's file and return that file; `old_file` is
+    /// the file it had before (an overwrite or a rename), which goes once the new one is written.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn write(&self, brush: &UserBrush, old_file: Option<&std::path::Path>) -> std::result::Result<Option<std::path::PathBuf>, String> {
+        let (Some(dir), Some(path)) = (&self.dir, self.file(&brush.name)) else { return Ok(None) };
         let json = serde_json::to_vec_pretty(brush).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+        let old_file = old_file.filter(|old| *old != path);
+        // A change of case only: on a case-insensitive file system both paths are one file, so
+        // move the old file to the new spelling first instead of removing it after the write.
+        let case_only = old_file.is_some_and(|old| old.to_string_lossy().eq_ignore_ascii_case(&path.to_string_lossy()));
+        if let Some(old) = old_file.filter(|_| case_only) {
+            std::fs::rename(old, &path).map_err(|e| format!("cannot rename {}: {e}", old.display()))?;
+        }
         texturecraft_formats::write_atomic(&path, &json).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-        if let Some(old) = replaced.filter(|old| file_key(old) != file_key(&brush.name)) {
-            self.delete(old);
+        if let Some(old) = old_file.filter(|_| !case_only) {
+            remove_file(old)?;
         }
-        Ok(())
+        Ok(Some(path))
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn write(&self, _: &UserBrush, _: Option<&str>) -> std::result::Result<(), String> {
-        Ok(())
+    fn write(&self, _: &UserBrush, _: Option<&std::path::Path>) -> std::result::Result<Option<std::path::PathBuf>, String> {
+        Ok(None)
     }
 
+    /// Remove `brush`'s file (the one it was read from, else its name's file).
     #[cfg(not(target_arch = "wasm32"))]
-    fn delete(&self, name: &str) {
-        if let Some(path) = self.file(name) {
-            // A file that is already gone is fine.
-            let _ = std::fs::remove_file(path);
+    fn delete(&self, brush: &UserBrush) -> std::result::Result<(), String> {
+        match brush.file.clone().or_else(|| self.file(&brush.name)) {
+            Some(path) => remove_file(&path),
+            None => Ok(()),
         }
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn delete(&self, _: &str) {}
+    fn delete(&self, _: &UserBrush) -> std::result::Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Remove `path`; a file that is already gone is fine, any other error is reported.
+#[cfg(not(target_arch = "wasm32"))]
+fn remove_file(path: &std::path::Path) -> std::result::Result<(), String> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("cannot remove {}: {e}", path.display())),
+        _ => Ok(()),
+    }
 }
 
 impl Session {
@@ -108,9 +143,21 @@ impl Session {
     pub fn load_brush_presets(&mut self, dir: std::path::PathBuf) -> Vec<String> {
         use std::io::Read as _;
         let mut warnings = Vec::new();
-        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
-            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(BRUSH_EXT))).collect())
-            .unwrap_or_default();
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        match std::fs::read_dir(&dir) {
+            // No folder yet: no presets
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warnings.push(format!("{}: cannot read the brush folder: {e}", dir.display())),
+            Ok(entries) => {
+                for entry in entries {
+                    match entry {
+                        Ok(entry) => files.push(entry.path()),
+                        Err(e) => warnings.push(format!("{}: a file could not be read: {e}", dir.display())),
+                    }
+                }
+            }
+        }
+        files.retain(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(BRUSH_EXT)));
         files.sort();
         let mut lib = UserBrushes { list: Vec::new(), dir: Some(dir) };
         for path in files.into_iter().take(MAX_USER) {
@@ -126,11 +173,12 @@ impl Session {
             }
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("brush");
             let parsed = serde_json::from_slice::<UserBrush>(&bytes)
-                .or_else(|_| serde_json::from_slice::<BrushSettings>(&bytes).map(|brush| UserBrush { name: stem.to_string(), brush, channels: None }));
+                .or_else(|_| serde_json::from_slice::<BrushSettings>(&bytes).map(|brush| UserBrush { name: stem.to_string(), brush, channels: None, file: None }));
             match parsed {
                 Ok(mut b) => {
                     b.name = b.name.trim().chars().take(MAX_NAME).collect();
                     b.brush = b.brush.sanitized();
+                    b.file = Some(path.clone());
                     if b.name.is_empty() || lib.taken(&b.name, None) {
                         warnings.push(format!("{}: the name \"{}\" is empty or taken", path.display(), b.name));
                     } else {
@@ -240,9 +288,11 @@ fn store(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, format!("at most {MAX_USER} user brush presets")));
     }
     // Overwriting keeps the stored spelling of the name.
-    let name = target.and_then(|i| lib.list.get(i)).map_or(name, |old| old.name.clone());
-    let entry = UserBrush { name: name.clone(), brush: s.tool.brush.sanitized(), channels: Some(s.tool.enabled.clone()) };
-    lib.write(&entry, None).map_err(|e| bad(CMD, e))?;
+    let old = target.and_then(|i| lib.list.get(i));
+    let name = old.map_or(name, |old| old.name.clone());
+    let old_file = old.and_then(|old| old.file.clone());
+    let mut entry = UserBrush { name: name.clone(), brush: s.tool.brush.sanitized(), channels: Some(s.tool.enabled.clone()), file: None };
+    entry.file = lib.write(&entry, old_file.as_deref()).map_err(|e| bad(CMD, e))?;
     match target.and_then(|i| s.brush_presets.list.get_mut(i)) {
         Some(slot) => *slot = entry,
         None => s.brush_presets.list.push(entry),
@@ -263,9 +313,9 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, format!("a brush preset named \"{to}\" exists already")));
     }
     let Some(mut entry) = lib.list.get(i).cloned() else { return Err(bad(CMD, format!("no user brush preset `{old}`"))) };
-    let previous = entry.name.clone();
+    let old_file = entry.file.clone().or_else(|| lib.file_of(&entry.name));
     entry.name = to.clone();
-    lib.write(&entry, Some(&previous)).map_err(|e| bad(CMD, e))?;
+    entry.file = lib.write(&entry, old_file.as_deref()).map_err(|e| bad(CMD, e))?;
     if let Some(slot) = s.brush_presets.list.get_mut(i) {
         *slot = entry;
     }
@@ -279,8 +329,10 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, format!("\"{name}\" is a built-in preset and can't be deleted")));
     }
     let i = s.brush_presets.find(&name).ok_or_else(|| bad(CMD, format!("no user brush preset `{name}`")))?;
-    let removed = s.brush_presets.list.remove(i);
-    s.brush_presets.delete(&removed.name);
+    let Some(entry) = s.brush_presets.list.get(i) else { return Err(bad(CMD, format!("no user brush preset `{name}`"))) };
+    // The file goes first: a preset whose file stays would come back at the next start
+    s.brush_presets.delete(entry).map_err(|e| bad(CMD, e))?;
+    s.brush_presets.list.remove(i);
     Ok(Value::Null)
 }
 
@@ -433,5 +485,63 @@ mod tests {
         assert!((fresh.brush_presets.list[0].brush.size - s.tool.brush.size).abs() < 1e-6);
         assert!(fresh.brush_presets.list[0].channels.is_some() && fresh.brush_presets.list[1].channels.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The files in a brush folder, sorted.
+    fn files(dir: &std::path::Path) -> Vec<String> {
+        let mut out: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn older_bare_files_are_renamed_replaced_and_deleted_in_place() {
+        let dir = std::env::temp_dir().join(format!("tc-brush-legacy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = session();
+        // A bare brush whose file name is not what the name would give ("Old_style.tcbrush")
+        run(&mut s, "brush.preset.save", json!({"path": dir.join("Old style.tcbrush").to_str().unwrap()})).unwrap();
+        run(&mut s, "brush.preset.save", json!({"path": dir.join("Second one.tcbrush").to_str().unwrap()})).unwrap();
+        assert!(s.load_brush_presets(dir.clone()).is_empty());
+
+        run(&mut s, "brush.preset.delete", json!({"name": "Old style"})).unwrap();
+        assert_eq!(files(&dir), ["Second one.tcbrush"], "the file it was read from is deleted");
+        run(&mut s, "brush.preset.rename", json!({"name": "Second one", "to": "Renamed"})).unwrap();
+        assert_eq!(files(&dir), ["Renamed.tcbrush"], "a rename moves the file it was read from");
+        run(&mut s, "brush.preset.store", json!({"name": "Renamed", "overwrite": true})).unwrap();
+        assert_eq!(files(&dir), ["Renamed.tcbrush"]);
+
+        let mut fresh = session();
+        assert!(fresh.load_brush_presets(dir.clone()).is_empty(), "nothing comes back or clashes on the next start");
+        assert_eq!(names(&fresh), ["Renamed"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rename_that_only_changes_case_keeps_one_file() {
+        let dir = std::env::temp_dir().join(format!("tc-brush-case-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut s = session();
+        assert!(s.load_brush_presets(dir.clone()).is_empty());
+        run(&mut s, "brush.preset.store", json!({"name": "mine"})).unwrap();
+        run(&mut s, "brush.preset.rename", json!({"name": "mine", "to": "Mine"})).unwrap();
+        assert_eq!(files(&dir), ["Mine.tcbrush"]);
+        let mut fresh = session();
+        assert!(fresh.load_brush_presets(dir.clone()).is_empty());
+        assert_eq!(names(&fresh), ["Mine"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_brush_folder_that_cannot_be_read_is_reported() {
+        // A file where the folder should be: reading it as a folder fails with an error other than NotFound
+        let path = std::env::temp_dir().join(format!("tc-brush-not-a-dir-{}", std::process::id()));
+        std::fs::write(&path, b"not a folder").unwrap();
+        let mut s = session();
+        let warnings = s.load_brush_presets(path.clone());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(s.brush_presets.list.is_empty());
+        let _ = std::fs::remove_file(&path);
     }
 }

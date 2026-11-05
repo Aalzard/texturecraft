@@ -391,23 +391,9 @@ fn brushes(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter: 
     user_brushes(app, ui, filter);
 }
 
-/// Reads the user's brush presets from the data folder once (desktop; the web keeps them for
-/// the session).
-fn load_brushes(app: &mut TextureCraftApp) {
-    if app.brushes {
-        return;
-    }
-    app.brushes = true;
-    #[cfg(not(target_arch = "wasm32"))]
-    for w in app.session.load_brush_presets(crate::user_dir("brushes")) {
-        app.toast(w, true);
-    }
-}
-
 /// The user's brush presets: click to use one, and rename, replace it with the current brush or
 /// delete it; below, a field saves the current brush under a new name.
 pub(crate) fn user_brushes(app: &mut TextureCraftApp, ui: &mut Ui, filter: &str) {
-    load_brushes(app);
     let names: Vec<String> = app.session.brush_presets.list.iter().map(|p| p.name.clone()).filter(|n| matches(filter, &[n])).collect();
     if !filter.is_empty() && names.is_empty() {
         return;
