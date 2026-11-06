@@ -1,6 +1,5 @@
-//! Smart mask shelf previews: the real smart masks on a baked preview shape. The shape
-//! ([`primitives::preview_orb`]) is baked once; each preset is then applied with
-//! `mask.smart.apply`, read back from the compositor and seen from a fixed camera.
+//! Smart mask previews share one baked [`primitives::preview_orb`]
+//! Presets use `mask.smart.apply` and the compositor, matching document masks
 
 use serde_json::json;
 use texturecraft_core::{BakeResolution, BakedMap, CurvatureMethod, LayerId};
@@ -11,34 +10,33 @@ use crate::mask_preview_camera::MaskPreviewCamera;
 pub use crate::mask_preview_pixel::MaskPreviewPixel;
 use crate::{EngineError, Result, Session};
 
-/// Texture and bake size of the preview shape in texels (at 256 the edge lines break up).
+/// Bake resolution in texels; 256 loses the thin edge lines
 const TEXTURE_PX: u32 = 512;
-/// Camera rays per preview pixel along each axis (anti-aliased outline).
+/// Camera rays per preview pixel along each axis (anti-aliased outline)
 const SUPERSAMPLE: usize = 2;
-/// Bound camera samples and output allocations for shelf previews.
+/// Bound camera samples and output allocations for shelf previews
 pub const MAX_PREVIEW_SIZE_PX: usize = 512;
-/// AO and thickness rays per texel (the default is 64; fewer look the same at thumbnail size).
+/// AO and thickness rays per texel; thumbnail detail needs fewer than the default
 const OCCLUSION_RAYS: u32 = 12;
-/// Mesh curvature rays per texel (the default is 32; fewer look the same at thumbnail size).
+/// Curvature rays per texel; thumbnail detail needs fewer than the default
 const CURVATURE_RAYS: u32 = 12;
-/// Mesh curvature sampling radius relative to the bounding box: wide enough that edges read as
-/// lines at thumbnail size, narrow enough that the round body does not count as an edge.
+/// Radius relative to the bounding box; isolates panel edges from the round body
 const CURVATURE_RADIUS: f32 = 0.005;
-/// The mesh maps the smart mask generators read.
+/// The mesh maps the smart mask generators read
 const MAPS: [BakedMap; 3] = [BakedMap::Curvature, BakedMap::AmbientOcclusion, BakedMap::Thickness];
-/// Camera views kept at most (one per preview size: the shelf thumbnail and the hover preview).
+/// Keep camera views for the thumbnail and hover preview sizes
 const CAMERAS_KEPT: usize = 2;
 
-/// The baked preview shape and, per preview size, what its camera sees.
+/// The baked preview shape and, per preview size, what its camera sees
 pub struct MaskPreview {
     session: Session,
     layer: LayerId,
-    /// Camera views of the most recently used preview sizes, oldest first (traced on first use).
+    /// Cached camera views, least recently used first
     cameras: Vec<MaskPreviewCamera>,
 }
 
 impl MaskPreview {
-    /// Bake the preview shape once (previews of any size reuse it).
+    /// Bake the preview shape once (previews of any size reuse it)
     pub fn new() -> Result<MaskPreview> {
         let mut session = Session::new_project("Mask preview", primitives::preview_orb(), "builtin:preview_orb", None, TEXTURE_PX)?;
         let set = session.doc.project.texture_set_mut(0)?;
@@ -58,15 +56,15 @@ impl MaskPreview {
         Ok(MaskPreview { session, layer, cameras: Vec::new() })
     }
 
-    /// Smart mask `id` per preview pixel, row-major `size²`, None where the shape is not seen
-    /// Returns None for an unknown id or a size outside 1..=[`MAX_PREVIEW_SIZE_PX`].
+    /// Row-major `size²` pixels, with None outside the shape
+    /// Returns None for unknown masks or sizes outside 1..=[`MAX_PREVIEW_SIZE_PX`]
     pub fn render(&mut self, id: &str, size: usize) -> Option<Vec<Option<MaskPreviewPixel>>> {
         if !(1..=MAX_PREVIEW_SIZE_PX).contains(&size) {
             return None;
         }
 
         crate::execute(&mut self.session, "mask.smart.apply", &json!({ "name": id, "layer": self.layer.0 })).ok()?;
-        // Nothing is undone here; the snapshots would pile up over the presets
+        // Previews need no undo history; retaining snapshots grows memory across presets
         self.session.undo.clear();
 
         let camera = camera_for(&mut self.cameras, &self.session, size)?;
@@ -94,8 +92,7 @@ impl MaskPreview {
     }
 }
 
-/// The camera view for `size²` previews of `session`'s shape, traced on first use (moved to the end
-/// of `cameras`); past [`CAMERAS_KEPT`] the least recently used size goes.
+/// Cache one camera per preview size, evicting the least recently used view
 fn camera_for<'a>(cameras: &'a mut Vec<MaskPreviewCamera>, session: &Session, size: usize) -> Option<&'a MaskPreviewCamera> {
     let rays_per_side = size * SUPERSAMPLE;
     let camera = match cameras.iter().position(|c| c.rays_per_side == rays_per_side) {
@@ -114,7 +111,7 @@ fn camera_for<'a>(cameras: &'a mut Vec<MaskPreviewCamera>, session: &Session, si
 mod tests {
     use super::*;
 
-    /// Mean absolute difference of the masks of two previews over the pixels both see.
+    /// Mean absolute difference of the masks of two previews over the pixels both see
     fn difference(a: &[Option<MaskPreviewPixel>], b: &[Option<MaskPreviewPixel>]) -> f32 {
         let pairs: Vec<(f32, f32)> = a.iter().zip(b).filter_map(|(a, b)| Some((a.as_ref()?.mask, b.as_ref()?.mask))).collect();
         pairs.iter().map(|(a, b)| (a - b).abs()).sum::<f32>() / pairs.len().max(1) as f32
@@ -154,7 +151,6 @@ mod tests {
         assert!(difference(&edges, &cavities) > 0.05, "edges and cavities differ: {}", difference(&edges, &cavities));
         assert!(preview.render("nope", size).is_none());
 
-        // The same bake renders other sizes, showing the same mask
         let big = preview.render("edges_sharp", size * 3).unwrap();
         let mean = |px: &[Option<MaskPreviewPixel>]| px.iter().flatten().map(|p| p.mask).sum::<f32>() / px.iter().flatten().count().max(1) as f32;
         assert_eq!(big.len(), size * size * 9);

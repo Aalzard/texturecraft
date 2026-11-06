@@ -1,28 +1,24 @@
-//! Shading of the smart mask previews: the mask as white over a near-black surface.
+//! Smart masks appear white against a near-black surface
 
 use egui::{Color32, ColorImage};
 use texturecraft_engine::geom::glam::Vec3;
 use texturecraft_engine::mask_preview::MaskPreviewPixel;
 use texturecraft_engine::texel::linear_to_srgb;
 
-/// View-space directions of the key light (upper left) and a weaker fill (right), and how much
-/// each lights the surface.
+/// View-space lighting uses an upper-left key and a weaker right fill
 const KEY: [f32; 3] = [-0.72, 0.62, 0.3];
 const FILL: [f32; 3] = [0.7, -0.1, 0.7];
 const AMBIENT: f32 = 0.1;
 const KEY_STRENGTH: f32 = 0.8;
 const FILL_STRENGTH: f32 = 0.35;
-/// Where the mask is empty: a near-black albedo with a faint sheen of the key light, so the
-/// shape reads without looking glossy.
+/// A faint sheen reveals the unmasked shape without a glossy finish
 const UNMASKED_ALBEDO: f32 = 0.006;
 const SHEEN: f32 = 0.1;
 const SHEEN_EXPONENT: f32 = 40.0;
-/// Where the mask is full: white, darkened at most this much where unlit.
+/// Where the mask is full: white, darkened at most this much where unlit
 const WHITE_SHADING: f32 = 0.2;
 
-/// A smart mask preview (sRGB, transparent outside the shape) from preview pixels (row-major
-/// `size²`): the mask as white over a near-black surface lit softly from the upper left. No
-/// environment reflections.
+/// Shade row-major `size²` mask pixels in sRGB with a transparent background
 pub fn mask_preview_image(size: usize, pixels: &[Option<MaskPreviewPixel>]) -> ColorImage {
     let key = Vec3::from(KEY).normalize();
     let fill = Vec3::from(FILL).normalize();

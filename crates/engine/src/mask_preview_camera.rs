@@ -1,5 +1,4 @@
-//! The fixed camera of the smart mask previews (see [`crate::mask_preview::MaskPreview`]) at one
-//! image size.
+//! Cached camera rays for one smart mask preview size
 
 use std::collections::HashMap;
 
@@ -8,27 +7,25 @@ use texturecraft_geom::surface_at;
 
 use crate::Session;
 
-/// Camera: looking down by this angle, turned to show the front, left and top panels.
+/// Camera angles expose the front, left and top panels
 const CAMERA_PITCH_DEG: f32 = 35.0;
 const CAMERA_YAW_DEG: f32 = -34.4;
 
-/// What one camera ray sees: the index of its texel in [`MaskPreviewCamera::texels`] and the
-/// view-space normal there (None where the ray misses).
+/// Index into [`MaskPreviewCamera::texels`] and view-space normal; None on a miss
 pub(crate) type CameraSample = Option<(usize, Vec3)>;
 
-/// What each ray of a square orthographic view of the preview shape sees.
+/// What each ray of a square orthographic view of the preview shape sees
 pub(crate) struct MaskPreviewCamera {
-    /// Rays along each side of the view.
+    /// Rays along each side of the view
     pub rays_per_side: usize,
-    /// The texels (x, y) the camera sees, each once.
+    /// The texels (x, y) the camera sees, each once
     pub texels: Vec<(u32, u32)>,
-    /// Per ray, row-major `rays_per_side²`.
+    /// Per ray, row-major `rays_per_side²`
     pub samples: Vec<CameraSample>,
 }
 
 impl MaskPreviewCamera {
-    /// Trace `rays_per_side²` rays at the shape of `session`, whose textures are `texture_px`
-    /// square.
+    /// Trace a square orthographic view onto a `texture_px²` texture
     pub fn new(session: &Session, texture_px: u32, rays_per_side: usize) -> MaskPreviewCamera {
         let (lo, hi) = session.mesh.bounds();
         let center = (lo + hi) * 0.5;

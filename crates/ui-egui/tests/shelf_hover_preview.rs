@@ -1,5 +1,4 @@
-//! Hovering a shelf tile shows a big preview of the asset over its name, rendered once the pointer
-//! rests on the tile.
+//! Shelf hover previews render after a dwell and appear above the asset name
 
 use std::time::{Duration, Instant};
 
@@ -9,20 +8,19 @@ use texturecraft_engine::materials::{MATERIALS, SmartMaterial};
 use texturecraft_ui_egui::TextureCraftApp;
 use texturecraft_ui_egui::shelf_preview::ShelfPreview;
 
-/// The shelf's Materials tab.
+/// The shelf's Materials tab
 const MATERIALS_TAB: usize = 0;
-/// The hover preview's size in points (pixels at this scale).
+/// Popup image size in logical points, independent of display scale
 const BIG_PREVIEW_SIZE: f32 = 256.0;
-/// Simulated seconds per frame, fine enough to stop between the rest and the popup's delay.
+/// Small time steps distinguish preview scheduling from popup visibility
 const STEP_SECONDS: f32 = 0.001;
-/// The popup's delay (egui's tooltip delay) and the rest after which the big preview renders.
+/// Simulated delays in seconds for the popup and preview request
 const POPUP_DELAY: f32 = 0.5;
 const REST: f32 = 0.1;
-/// Real time the worker gets to render.
+/// Real time the worker gets to render
 const WORKER_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The app on the Materials tab, `step_seconds` per frame, and two materials whose names show
-/// nowhere else.
+/// Open the Materials tab and find two labels unique to shelf tiles
 fn materials_shelf(step_seconds: f32, pixels_per_point: f32) -> (Harness<'static, TextureCraftApp>, Vec<&'static SmartMaterial>) {
     let session = texturecraft_engine::sample_session(256, 64).unwrap();
     let mut h = Harness::builder()
@@ -38,8 +36,7 @@ fn materials_shelf(step_seconds: f32, pixels_per_point: f32) -> (Harness<'static
     (h, unique)
 }
 
-/// The pixel size of the largest texture (not the font atlas) the last frame drew at least
-/// `min_width` points wide.
+/// Largest drawn texture in pixels, excluding fonts and images below `min_width` points
 fn largest_drawn_texture(h: &Harness<'_, TextureCraftApp>, min_width: f32) -> Option<[usize; 2]> {
     let textures = h.ctx.tex_manager();
     let textures = textures.read();
@@ -51,7 +48,7 @@ fn largest_drawn_texture(h: &Harness<'_, TextureCraftApp>, min_width: f32) -> Op
         .max()
 }
 
-/// Whether `material`'s big preview has arrived from the worker (asks for nothing).
+/// Check the cache without submitting a preview request
 fn big_preview_ready(h: &mut Harness<'static, TextureCraftApp>, material: &SmartMaterial) -> bool {
     let ctx = h.ctx.clone();
     h.state_mut().thumbs.rendered_big(&ctx, &ShelfPreview::Material(material.id), BIG_PREVIEW_SIZE as usize).is_some()
@@ -65,7 +62,6 @@ fn hovering_a_shelf_tile_shows_its_big_preview() {
     assert!(largest_drawn_texture(&h, BIG_PREVIEW_SIZE).is_none(), "nothing big before the hover");
     h.get_by_label(material.label).hover();
 
-    // The popup's delay, then the worker
     let big_px = BIG_PREVIEW_SIZE as usize;
     let start = Instant::now();
     while largest_drawn_texture(&h, BIG_PREVIEW_SIZE) != Some([big_px, big_px]) && start.elapsed() < WORKER_TIMEOUT {
@@ -74,7 +70,6 @@ fn hovering_a_shelf_tile_shows_its_big_preview() {
     }
 
     assert_eq!(largest_drawn_texture(&h, BIG_PREVIEW_SIZE), Some([big_px, big_px]), "the popup draws the big preview");
-    // The popup's name sits under the big image, below the tile
     let popup_name = h.get_all_by_label(material.label).map(|n| n.rect()).find(|r| r.min.y > tile.max.y).expect("the popup shows the name");
     assert!(popup_name.min.y - tile.max.y >= BIG_PREVIEW_SIZE, "{popup_name:?} under {tile:?}");
 }
@@ -85,7 +80,7 @@ fn the_big_preview_renders_after_a_rest_but_not_during_a_sweep() {
     let (first, second) = (materials[0], materials[1]);
     let (from, to) = (h.get_by_label(first.label).rect().center(), h.get_by_label(second.label).rect().center());
 
-    // A sweep: the pointer moves every frame across both tiles, then leaves the shelf
+    // Moving every frame must never satisfy the dwell delay
     let sweep_frames = 40;
     for frame in 0..=sweep_frames {
         h.hover_at(from.lerp(to, frame as f32 / sweep_frames as f32));
@@ -97,7 +92,7 @@ fn the_big_preview_renders_after_a_rest_but_not_during_a_sweep() {
     h.run_steps(1);
     assert!(!big_preview_ready(&mut h, first) && !big_preview_ready(&mut h, second), "a sweep renders nothing");
 
-    // A rest: the preview renders before the popup opens
+    // A stationary pointer should start rendering before the popup opens
     h.hover_at(from);
     h.run_steps((REST * 1.2 / STEP_SECONDS) as usize);
     let start = Instant::now();
@@ -111,6 +106,41 @@ fn the_big_preview_renders_after_a_rest_but_not_during_a_sweep() {
     }
     assert!(big_preview_ready(&mut h, first), "the preview rendered during the popup's delay");
     assert_eq!(h.query_all_by_label(first.label).count(), 1, "the popup is not open yet");
+}
+
+#[test]
+fn scrolling_with_a_stationary_pointer_defers_the_big_preview() {
+    let (mut harness, materials) = materials_shelf(STEP_SECONDS, 1.0);
+    let material = materials[0];
+    harness.get_by_label(material.label).hover();
+
+    // Scroll toward the top boundary to keep the same tile beneath the pointer
+    for _ in 0..(REST * 2.0 / STEP_SECONDS) as usize {
+        harness.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, 10.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.run_steps(1);
+    }
+    assert!(harness.ctx.input(|input| input.pointer.time_since_last_movement()) >= REST, "the pointer stayed still beyond the dwell delay");
+    assert_eq!(harness.query_all_by_label(material.label).count(), 1, "scrolling suppresses the popup");
+
+    harness.hover_at(egui::pos2(900.0, 500.0));
+    harness.run_steps(1);
+    std::thread::sleep(Duration::from_secs(1));
+    harness.run_steps(1);
+    assert!(!big_preview_ready(&mut harness, material), "scrolling must not submit a hover preview");
+
+    harness.get_by_label(material.label).hover();
+    let started = Instant::now();
+    while !big_preview_ready(&mut harness, material) && started.elapsed() < WORKER_TIMEOUT {
+        harness.run_steps(1);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(big_preview_ready(&mut harness, material), "the preview renders after scrolling and pointer movement stop");
 }
 
 #[test]

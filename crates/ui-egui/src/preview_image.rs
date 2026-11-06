@@ -1,5 +1,4 @@
-//! The CPU renderers of the shelf previews at any size: shaded material spheres, procedural
-//! swatches, alpha swatches, brush strokes and letterboxed images (no image assets).
+//! CPU renderers for shelf spheres, swatches, strokes and imported images
 
 use egui::{Color32, ColorImage};
 use texturecraft_engine::compose::ImageRes;
@@ -9,27 +8,25 @@ use texturecraft_engine::paint::{BrushSettings, Shape};
 use texturecraft_engine::preview::{self, Sample};
 use texturecraft_engine::texel::linear_to_srgb;
 
-/// Pattern scale of the procedural swatches (repeats across the swatch).
+/// Pattern scale of the procedural swatches (repeats across the swatch)
 const PROCEDURAL_SCALE: f32 = 3.0;
-/// Samples per pixel along each axis of the alpha swatches.
+/// Samples per pixel along each axis of the alpha swatches
 const ALPHA_SUPERSAMPLE: usize = 2;
 
-/// Linear color of a surface with view-space normal `n` and these material values, lit by a key
-/// light and a studio environment, seen along +Z.
+/// Linear shading for view-space normal `n`, viewed along +Z
 pub fn shade(n: [f32; 3], base: [f32; 3], metal: f32, rough: f32) -> [f32; 3] {
     let l = [0.45f32, 0.7, 0.55];
     let len = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
     let l = l.map(|v| v / len);
     let ndl = (n[0] * l[0] + n[1] * l[1] + n[2] * l[2]).max(0.0);
     let ndv = n[2].max(0.0);
-    // View along +Z: half vector between light and view.
+    // The view direction is +Z
     let h = [l[0], l[1], l[2] + 1.0];
     let hl = (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt();
     let ndh = ((n[0] * h[0] + n[1] * h[1] + n[2] * h[2]) / hl).max(0.0);
     let shin = 2.0 / (rough * rough * rough * rough).max(1e-3) - 2.0;
     let spec_amt = ndh.powf(shin.clamp(1.0, 4096.0)) * (shin + 2.0) / 8.0;
-    // A studio environment seen in the mirror direction: dark floor, bright sky, a horizon that
-    // blurs (and the whole environment averages out) as roughness grows.
+    // Roughness blurs the reflected horizon toward the environment average
     let ry = 2.0 * ndv * n[1];
     let w = 0.06 + rough * 0.9;
     let t = ((ry + w) / (2.0 * w)).clamp(0.0, 1.0);
@@ -47,14 +44,13 @@ pub fn shade(n: [f32; 3], base: [f32; 3], metal: f32, rough: f32) -> [f32; 3] {
     out
 }
 
-/// ACES filmic tone mapping of linear `x` (exposure folded in) to 0..=1.
+/// ACES filmic tone mapping of linear `x` (exposure folded in) to 0..=1
 pub fn aces(x: f32) -> f32 {
     let v = x * 0.6;
     ((v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14)).clamp(0.0, 1.0)
 }
 
-/// A shaded sphere image (sRGB, transparent outside) from per-pixel preview samples (row-major
-/// `size²`, see [`preview::sphere_normals`]); height bumps the normals.
+/// Shade row-major `size²` samples with height bumps and a transparent background
 pub fn sphere_image(size: usize, samples: &[Option<Sample>]) -> ColorImage {
     let mut img = ColorImage::filled([size, size], Color32::TRANSPARENT);
     let r = (size as f32 * 0.5 - 1.0).max(0.5);
@@ -64,9 +60,10 @@ pub fn sphere_image(size: usize, samples: &[Option<Sample>]) -> ColorImage {
     };
     for (i, n) in preview::sphere_normals(size).enumerate() {
         let (Some(n), Some(Some(s))) = (n, samples.get(i)) else { continue };
+
         let (x, y) = (i % size, i / size);
         let c = s.height;
-        // Central differences (image y points down).
+        // Image Y points down; the shading normal uses Y up
         let dx = h(Some(x + 1), Some(y)).unwrap_or(c) - h(x.checked_sub(1), Some(y)).unwrap_or(c);
         let dy = h(Some(x), y.checked_sub(1)).unwrap_or(c) - h(Some(x), Some(y + 1)).unwrap_or(c);
         let k = r * 0.5 * 1.5;
@@ -79,7 +76,7 @@ pub fn sphere_image(size: usize, samples: &[Option<Sample>]) -> ColorImage {
     img
 }
 
-/// Grayscale `size²` swatch of procedural `kind`.
+/// Grayscale `size²` swatch of procedural `kind`
 pub fn procedural_image(kind: ProceduralKind, size: usize) -> ColorImage {
     use texturecraft_engine::compose::pattern::{Coords, procedural};
     use texturecraft_engine::core::{Procedural, Projection};
@@ -95,14 +92,13 @@ pub fn procedural_image(kind: ProceduralKind, size: usize) -> ColorImage {
     img
 }
 
-/// White-on-black `size²` swatch of library alpha `alpha`.
+/// White-on-black `size²` swatch of library alpha `alpha`
 pub fn alpha_image(alpha: &LibraryAlpha, size: usize) -> ColorImage {
     let pixels = alpha.render(size, ALPHA_SUPERSAMPLE).into_iter().map(|v| Color32::from_gray((v * 255.0 + 0.5) as u8)).collect();
     ColorImage::new([size, size], pixels)
 }
 
-/// Image resource `img` letterboxed into a `size²` square to keep its proportions, over black
-/// where it is transparent.
+/// Letterbox into a `size²` square, compositing transparency over black
 pub fn image_preview(img: &ImageRes, size: usize) -> ColorImage {
     let aspect = img.width as f32 / img.height.max(1) as f32;
     let (scale_u, scale_v) = if aspect >= 1.0 { (1.0, aspect) } else { (1.0 / aspect.max(1e-6), 1.0) };
@@ -124,15 +120,14 @@ pub fn image_preview(img: &ImageRes, size: usize) -> ColorImage {
     preview
 }
 
-/// `b`'s stamps (shape, spacing, flow, angle, path following, jitters) along an S curve across
-/// an `n`-pixel square, white on black.
+/// Preview the brush along an S curve in an `n`-pixel square
 pub fn stroke_preview(b: &BrushSettings, n: usize) -> ColorImage {
     let library = b.alpha_library.as_deref().and_then(alphas::find).map(alphas::LibraryAlpha::image);
     let radius = n as f32 * 0.11;
     let shape = Shape { alpha: b.alpha, image: None, library, level: 0 }.at_radius(radius);
     let curve = |t: f32| (n as f32 * (0.15 + 0.7 * t), n as f32 * (0.5 - 0.22 * (t * std::f32::consts::TAU).sin()));
     let mut cover = vec![0f32; n * n];
-    // Deterministic jitter per stamp.
+    // Stable jitter keeps the preview reproducible
     let rnd = |i: u32, k: u32| (i.wrapping_mul(0x9E37_79B9) ^ k.wrapping_mul(0x85EB_CA6B)).wrapping_mul(0xC2B2_AE35) as f32 / u32::MAX as f32;
     let step = (b.spacing * 2.0 * radius).max(0.5);
     let (mut t, mut travelled, mut i) = (0.0f32, step, 0u32);

@@ -1,35 +1,33 @@
-//! Renders shelf previews off the UI thread, on threads of its own (one core is left for the UI):
-//! big hover previews and the smart mask thumbnails, which share one baked preview shape. On the web there are no threads: each request renders
-//! inline on the UI thread (the window pauses for it).
+//! Native preview rendering uses a separate thread pool
+//! Web requests render synchronously on the UI thread
 
 #[cfg(target_arch = "wasm32")]
 use crate::mask_shape::MaskShape;
 use crate::preview_request::PreviewRequest;
 
-/// A rendered preview: the request's key and its image (None when it could not be rendered).
+/// Request key and rendered image; None on failure
 pub type PreviewResult = (String, Option<egui::ColorImage>);
 
-/// The preview worker, started by the first request.
+/// The preview worker, started by the first request
 #[derive(Default)]
 pub enum PreviewWorker {
     #[default]
     NotStarted,
-    /// The worker thread: requests go in, results come out (it ends when the requests sender is
-    /// dropped).
+    /// Native worker; dropping the request sender ends it after pending work
     #[cfg(not(target_arch = "wasm32"))]
     Running { requests: std::sync::mpsc::Sender<PreviewRequest>, results: std::sync::mpsc::Receiver<PreviewResult> },
-    /// The web: requests render as they are made.
+    /// The web: requests render as they are made
     #[cfg(target_arch = "wasm32")]
     Inline { shape: MaskShape, results: Vec<PreviewResult> },
-    /// The worker could not start or stopped; requests are refused.
+    /// The worker could not start or stopped; requests are refused
     // The web has no thread to stop
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Stopped,
 }
 
 impl PreviewWorker {
-    /// Queue `request`, starting the worker first if needed; false when the worker is stopped.
-    /// The worker repaints `ctx` when a result is ready.
+    /// Submit work, starting the worker on first use; false if it has stopped
+    /// Native results request a repaint
     pub fn request(&mut self, ctx: &egui::Context, request: PreviewRequest) -> bool {
         if matches!(self, PreviewWorker::NotStarted) {
             *self = PreviewWorker::start(ctx);
@@ -53,7 +51,7 @@ impl PreviewWorker {
         }
     }
 
-    /// The results ready since the last call.
+    /// The results ready since the last call
     pub fn poll(&mut self) -> Vec<PreviewResult> {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -80,12 +78,12 @@ impl PreviewWorker {
         }
     }
 
-    /// Whether the worker stopped: it refuses requests and answers none of the queued ones.
+    /// Whether the worker stopped: it refuses requests and answers none of the queued ones
     pub fn is_stopped(&self) -> bool {
         matches!(self, PreviewWorker::Stopped)
     }
 
-    /// Start the worker thread (Stopped when it cannot start).
+    /// Start the worker thread (Stopped when it cannot start)
     #[cfg(not(target_arch = "wasm32"))]
     fn start(ctx: &egui::Context) -> PreviewWorker {
         use std::collections::VecDeque;
@@ -97,7 +95,7 @@ impl PreviewWorker {
         let (result_tx, results) = channel();
         let ctx = ctx.clone();
         let spawned = std::thread::Builder::new().name("texturecraft-shelf-previews".into()).spawn(move || {
-            // Its own threads: on the global pool a big render would hold up the UI thread's work
+            // A separate pool keeps previews from queuing ahead of the UI's work
             let threads = std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1));
             let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|i| format!("texturecraft-preview-{i}")).build();
             if let Err(e) = &pool {
@@ -106,7 +104,6 @@ impl PreviewWorker {
             let mut shape = MaskShape::default();
             let mut queue = VecDeque::new();
             loop {
-                // Wait for work, then take in everything sent meanwhile
                 if queue.is_empty() {
                     let Ok(request) = request_rx.recv() else { break };
 
@@ -115,6 +112,7 @@ impl PreviewWorker {
                 queue.extend(request_rx.try_iter());
 
                 let Some(request) = next_request(&mut queue) else { continue };
+
                 let image = match &pool {
                     Ok(pool) => pool.install(|| request.render(&mut shape)),
                     Err(_) => request.render(&mut shape),
@@ -135,15 +133,14 @@ impl PreviewWorker {
         }
     }
 
-    /// Render inline (no threads on the web).
+    /// Render inline (no threads on the web)
     #[cfg(target_arch = "wasm32")]
     fn start(_ctx: &egui::Context) -> PreviewWorker {
         PreviewWorker::Inline { shape: MaskShape::default(), results: Vec::new() }
     }
 }
 
-/// The request to render next: the newest hover preview (the one under the pointer), else the
-/// oldest request.
+/// Prioritize the newest hover preview over older requests
 #[cfg(not(target_arch = "wasm32"))]
 fn next_request(queue: &mut std::collections::VecDeque<PreviewRequest>) -> Option<PreviewRequest> {
     match queue.iter().rposition(|request| request.hover) {

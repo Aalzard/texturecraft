@@ -1,7 +1,6 @@
-//! Thumbnails: shelf previews (see [`crate::preview_image`]) cached as egui textures, plus small
-//! shaded spheres and alpha previews drawn as shapes. New shelf thumbnails are rendered lazily, a
-//! few per frame, so opening the shelf never stalls a frame; the smart mask thumbnails and the big
-//! hover previews render on a worker.
+//! Shelf and brush preview caches
+//! Small synchronous renders are limited per frame
+//! Smart masks and hover previews use [`PreviewWorker`]
 
 use std::collections::{HashMap, VecDeque};
 
@@ -17,39 +16,39 @@ use crate::preview_worker::PreviewWorker;
 use crate::shelf_preview::ShelfPreview;
 use crate::worker_preview::WorkerPreview;
 
-/// Shelf thumbnails rendered per frame at most (the rest follow on the next frames).
+/// Shelf thumbnails rendered per frame at most (the rest follow on the next frames)
 const PER_FRAME: usize = 2;
-/// Shelf sphere and smart mask thumbnail size in pixels.
+/// Shelf sphere and smart mask thumbnail size in pixels
 const SPHERE_PX: usize = 72;
-/// Shelf procedural swatch size in pixels.
+/// Shelf procedural swatch size in pixels
 const PROCEDURAL_PX: usize = 56;
-/// Shelf alpha and brush stroke swatch size in pixels.
+/// Shelf alpha and brush stroke swatch size in pixels
 const SWATCH_PX: usize = 64;
-/// Image resource preview size in pixels.
+/// Image resource preview size in pixels
 const IMAGE_PX: usize = 64;
-/// Big hover previews kept at most (the least recently shown go first).
+/// Big hover previews kept at most (the least recently shown go first)
 const BIG_PREVIEWS_KEPT: usize = 32;
 
-/// The shelf's and the brush panel's preview textures.
+/// The shelf's and the brush panel's preview textures
 #[derive(Default)]
 pub struct Thumbs {
-    /// Shelf thumbnails by [`ShelfPreview::key`].
+    /// Shelf thumbnails by [`ShelfPreview::key`]
     shelf: HashMap<String, TextureHandle>,
     images: HashMap<String, TextureHandle>,
-    /// (frame, thumbnails rendered in it).
+    /// (frame, thumbnails rendered in it)
     budget: (u64, usize),
-    /// Renders the smart mask thumbnails and the big previews.
+    /// Renders the smart mask thumbnails and the big previews
     worker: PreviewWorker,
-    /// Worker-rendered previews by [`worker_key`].
+    /// Worker-rendered previews by [`worker_key`]
     rendered: HashMap<String, WorkerPreview>,
-    /// The keys of the big previews in `rendered`, least recently shown first.
+    /// The keys of the big previews in `rendered`, least recently shown first
     big_shown: VecDeque<String>,
-    /// The frame that last took in the worker's results.
+    /// The frame that last took in the worker's results
     received_in_pass: u64,
 }
 
 impl Thumbs {
-    /// A larger cached texture of an image resource for the stencil overlay (up to 1024 px).
+    /// A larger cached texture of an image resource for the stencil overlay (up to 1024 px)
     pub fn stencil(&mut self, ctx: &egui::Context, name: &str, img: &texturecraft_engine::compose::ImageRes) -> TextureHandle {
         let key = format!("stencil:{name}");
         if let Some(t) = self.images.get(&key) {
@@ -70,7 +69,7 @@ impl Thumbs {
         t
     }
 
-    /// Cached preview of an image resource (64 px, letterboxed).
+    /// Cached preview of an image resource (64 px, letterboxed)
     pub fn image(&mut self, ctx: &egui::Context, name: &str, img: &texturecraft_engine::compose::ImageRes) -> TextureHandle {
         if let Some(t) = self.images.get(name) {
             return t.clone();
@@ -80,8 +79,7 @@ impl Thumbs {
         t
     }
 
-    /// A cached shelf thumbnail of `preview` at `size_px²`, rendering it if this frame's budget
-    /// allows (None until then; a repaint is requested so it follows shortly).
+    /// Render within the frame budget; deferred thumbnails request a repaint
     fn shelf(&mut self, ctx: &egui::Context, preview: ShelfPreview, size_px: usize) -> Option<TextureHandle> {
         let key = preview.key();
         if let Some(t) = self.shelf.get(&key) {
@@ -105,8 +103,8 @@ impl Thumbs {
         Some(t)
     }
 
-    /// A worker-rendered `size_px²` image of `preview`, requested on the first call (None until it
-    /// arrives, and for good when it cannot be rendered); `hover` previews jump the worker's queue.
+    /// Request once per asset and size; return None while pending or after failure
+    /// Hover requests take priority in the native worker
     fn worker_rendered(&mut self, ctx: &egui::Context, preview: ShelfPreview, size_px: usize, hover: bool) -> Option<TextureHandle> {
         self.receive(ctx);
 
@@ -118,7 +116,7 @@ impl Thumbs {
         self.ready(&key)
     }
 
-    /// The worker-rendered preview under `key` if it arrived.
+    /// The worker-rendered preview under `key` if it arrived
     fn ready(&self, key: &str) -> Option<TextureHandle> {
         match self.rendered.get(key) {
             Some(WorkerPreview::Ready(t)) => Some(t.clone()),
@@ -126,8 +124,7 @@ impl Thumbs {
         }
     }
 
-    /// Take in the worker's finished previews, once per frame (dropping the ones no longer
-    /// wanted).
+    /// Poll once per pass and discard results evicted from the cache
     fn receive(&mut self, ctx: &egui::Context) {
         let pass = ctx.cumulative_pass_nr();
         if self.received_in_pass == pass {
@@ -152,8 +149,7 @@ impl Thumbs {
         }
     }
 
-    /// The big hover preview of `preview`, `size_px²` (None until the worker renders it; the
-    /// least recently shown are dropped past [`BIG_PREVIEWS_KEPT`]).
+    /// Request a hover preview and evict the least recently shown beyond the cache limit
     pub fn big(&mut self, ctx: &egui::Context, preview: ShelfPreview, size_px: usize) -> Option<TextureHandle> {
         let key = worker_key(&preview, size_px);
         self.big_shown.retain(|k| *k != key);
@@ -167,45 +163,44 @@ impl Thumbs {
         self.worker_rendered(ctx, preview, size_px, true)
     }
 
-    /// The big preview of `preview` if the worker already rendered it (requests nothing).
+    /// The big preview of `preview` if the worker already rendered it (requests nothing)
     pub fn rendered_big(&mut self, ctx: &egui::Context, preview: &ShelfPreview, size_px: usize) -> Option<TextureHandle> {
         self.receive(ctx);
         self.ready(&worker_key(preview, size_px))
     }
 
-    /// Sphere thumbnail of built-in material `id`.
+    /// Sphere thumbnail of built-in material `id`
     pub fn material(&mut self, ctx: &egui::Context, id: &'static str) -> Option<TextureHandle> {
         self.shelf(ctx, ShelfPreview::Material(id), SPHERE_PX)
     }
 
-    /// Thumbnail of smart mask `id` on the baked preview shape (None while the worker renders
-    /// it).
+    /// Smart mask thumbnail; None until the worker returns it
     pub fn smart_mask(&mut self, ctx: &egui::Context, id: &'static str) -> Option<TextureHandle> {
         self.worker_rendered(ctx, ShelfPreview::SmartMask(id), SPHERE_PX, false)
     }
 
-    /// Sphere thumbnail of library filter `id` applied to a sample material.
+    /// Sphere thumbnail of library filter `id` applied to a sample material
     pub fn filter(&mut self, ctx: &egui::Context, id: &'static str) -> Option<TextureHandle> {
         self.shelf(ctx, ShelfPreview::Filter(id), SPHERE_PX)
     }
 
-    /// Grayscale swatch of procedural `kind`.
+    /// Grayscale swatch of procedural `kind`
     pub fn procedural(&mut self, ctx: &egui::Context, kind: ProceduralKind) -> Option<TextureHandle> {
         self.shelf(ctx, ShelfPreview::Procedural(kind), PROCEDURAL_PX)
     }
 
-    /// White-on-black swatch of library alpha `alpha`.
+    /// White-on-black swatch of library alpha `alpha`
     pub fn alpha(&mut self, ctx: &egui::Context, alpha: &'static alphas::LibraryAlpha) -> Option<TextureHandle> {
         self.shelf(ctx, ShelfPreview::Alpha(alpha), SWATCH_PX)
     }
 
-    /// A brush preset's stroke along an S curve.
+    /// A brush preset's stroke along an S curve
     pub fn brush_preset(&mut self, ctx: &egui::Context, preset: &'static BrushPreset) -> Option<TextureHandle> {
         self.shelf(ctx, ShelfPreview::Brush(preset), SWATCH_PX)
     }
 }
 
-/// The key of a worker-rendered preview: one per asset and size.
+/// The key of a worker-rendered preview: one per asset and size
 fn worker_key(preview: &ShelfPreview, size_px: usize) -> String {
     format!("{}@{size_px}", preview.key())
 }

@@ -1,4 +1,4 @@
-//! What a shelf preview shows, and how to render it at any size.
+//! Shelf assets and their preview renderers
 
 use std::sync::Arc;
 
@@ -12,27 +12,26 @@ use texturecraft_engine::preview;
 
 use crate::preview_image::{alpha_image, image_preview, procedural_image, sphere_image, stroke_preview};
 
-/// The asset a shelf tile previews.
+/// The asset a shelf tile previews
 pub enum ShelfPreview {
-    /// A built-in material or smart material on a sphere.
+    /// A built-in material or smart material on a sphere
     Material(&'static str),
-    /// A smart mask on the baked preview shape (only the preview worker can render it: see
-    /// [`crate::preview_request::PreviewRequest::render`]).
+    /// Smart mask rendering requires the worker's baked shape
     SmartMask(&'static str),
-    /// A library filter on a sample material on a sphere.
+    /// A library filter on a sample material on a sphere
     Filter(&'static str),
-    /// A procedural pattern as a grayscale swatch.
+    /// A procedural pattern as a grayscale swatch
     Procedural(ProceduralKind),
-    /// A library brush alpha, white on black.
+    /// A library brush alpha, white on black
     Alpha(&'static LibraryAlpha),
-    /// A brush preset's stroke along an S curve.
+    /// A brush preset's stroke along an S curve
     Brush(&'static BrushPreset),
-    /// An image resource by name.
+    /// An image resource by name
     Image(String, Arc<ImageRes>),
 }
 
 impl ShelfPreview {
-    /// The cache key of the preview (one per asset).
+    /// The cache key of the preview (one per asset)
     pub fn key(&self) -> String {
         match self {
             ShelfPreview::Material(id) => format!("mat:{id}"),
@@ -45,9 +44,8 @@ impl ShelfPreview {
         }
     }
 
-    /// The preview as a `size²` image (None for an unknown material or filter id). Smart masks are
-    /// None here: they need the baked preview shape, which only the preview worker holds, so the
-    /// UI thread never bakes.
+    /// Render a `size²` image; unknown assets return None
+    /// Smart masks return None here because their bake belongs to the worker
     pub fn image(&self, size: usize) -> Option<ColorImage> {
         match self {
             ShelfPreview::Material(id) => Some(sphere_image(size, &preview::material(id, size)?)),
@@ -70,7 +68,7 @@ mod tests {
 
     use super::*;
 
-    /// The hover preview's size at 100 % scale.
+    /// The hover preview's size at 100 % scale
     const BIG_PX: usize = 256;
 
     #[test]
@@ -91,7 +89,6 @@ mod tests {
             assert!(image.pixels.iter().any(|c| c.a() > 0 && c.r().max(c.g()).max(c.b()) > 0), "{key}: something shows");
         }
 
-        // The shaded spheres come from finite material values
         let finite = |samples: Vec<Option<preview::Sample>>| {
             samples.iter().flatten().all(|s| s.base.iter().chain([&s.metallic, &s.roughness, &s.height]).all(|v| v.is_finite()))
         };

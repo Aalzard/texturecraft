@@ -1,20 +1,20 @@
-//! The smart mask preview shape, baked on first use.
+//! The smart mask preview shape, baked on first use
 
 use texturecraft_engine::mask_preview::MaskPreview;
 
-/// Whether the smart mask preview shape is baked.
+/// Whether the smart mask preview shape is baked
 #[derive(Default)]
 pub enum MaskShape {
     #[default]
     NotBaked,
-    /// Boxed: the baked session is large and the enum sits in the worker for its whole life.
+    /// Box the large session to keep the unbaked worker small
     Baked(Box<MaskPreview>),
-    /// The bake failed; smart mask previews stay empty.
+    /// The bake failed; smart mask previews stay empty
     Failed,
 }
 
 impl MaskShape {
-    /// The baked shape, baking it on the first call (about two seconds; None when it fails).
+    /// Bake on first use; retain failure to avoid retrying every frame
     pub fn get(&mut self) -> Option<&mut MaskPreview> {
         if matches!(self, MaskShape::NotBaked) {
             *self = match MaskPreview::new() {

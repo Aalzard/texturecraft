@@ -26,25 +26,24 @@ use crate::theme::Tokens;
 use crate::thumbs::Thumbs;
 use crate::widgets::{dnd_release, icon_button};
 
-/// A shelf tile's size in points.
+/// A shelf tile's size in points
 const TILE_WIDTH: f32 = 72.0;
 const TILE_HEIGHT: f32 = 86.0;
-/// Corner radius of a tile's hover and selection highlights, in points.
+/// Corner radius of a tile's hover and selection highlights, in points
 const TILE_ROUNDING: f32 = 3.0;
-/// The thumbnail's size in a tile and its center below the tile's top, in points.
+/// The thumbnail's size in a tile and its center below the tile's top, in points
 const THUMBNAIL_SIZE: f32 = 56.0;
 const THUMBNAIL_CENTER_Y: f32 = 32.0;
-/// A placeholder disc's radius relative to the thumbnail's width.
+/// A placeholder disc's radius relative to the thumbnail's width
 const PLACEHOLDER_RADIUS: f32 = 0.45;
-/// A tile label's font size, its gap below the thumbnail and its total side margin, in points.
+/// A tile label's font size, its gap below the thumbnail and its total side margin, in points
 const LABEL_FONT_SIZE: f32 = 9.5;
 const LABEL_GAP: f32 = 3.0;
 const LABEL_MARGIN: f32 = 4.0;
-/// The hover preview's size and its gap above the label, in points.
+/// The hover preview's size and its gap above the label, in points
 const BIG_PREVIEW_SIZE: f32 = 256.0;
 const BIG_PREVIEW_LABEL_GAP: f32 = 4.0;
-/// How long the pointer rests on a tile before its big preview renders, in seconds (well inside
-/// the popup's delay).
+/// Dwell in seconds before rendering, shorter than the popup delay
 const BIG_PREVIEW_DWELL: f32 = 0.1;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -564,6 +563,7 @@ fn textures(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter:
     tiles(ui, |ui| {
         for name in names {
             let Some(img) = app.session.images.get(&name).cloned() else { continue };
+
             let tex = app.thumbs.image(ctx, &name, &img);
             let asset = Asset::Texture(name.clone());
             let preview = || ShelfPreview::Image(name.clone(), img);
@@ -585,8 +585,7 @@ fn textures(app: &mut TextureCraftApp, ui: &mut Ui, ctx: &egui::Context, filter:
     });
 }
 
-/// A shelf tile: thumbnail (a placeholder disc while it renders) and a wrapped label; tiles with
-/// a `drag` asset can be dragged. Hovering shows a big `preview` (made only then) over the label.
+/// Asset tile with optional dragging and a larger hover preview
 fn tile(
     ui: &mut Ui,
     thumbs: &mut Thumbs,
@@ -618,25 +617,26 @@ fn tile(
     resp.on_hover_ui(|ui| hover_preview(ui, tex, big.as_ref(), label))
 }
 
-/// A hovered tile's big preview: requested once the pointer has rested [`BIG_PREVIEW_DWELL`], so
-/// it renders during the popup's delay but not for tiles the pointer sweeps across (None until the
-/// worker renders it).
+/// Start rendering during the popup delay once the pointer rests
 fn big_preview(ui: &Ui, thumbs: &mut Thumbs, preview: impl FnOnce() -> ShelfPreview) -> Option<egui::TextureHandle> {
     let ctx = ui.ctx();
-    let size_px = (BIG_PREVIEW_SIZE * ctx.pixels_per_point()).round() as usize;
     let preview = preview();
-    // Keep smart mask hover previews within the camera's allocation limit at high display scales.
-    let size_px = if matches!(&preview, ShelfPreview::SmartMask(_)) { size_px.clamp(1, MAX_PREVIEW_SIZE_PX) } else { size_px };
-    let still_for = ui.input(|i| i.pointer.time_since_last_movement());
-    if still_for >= BIG_PREVIEW_DWELL {
+    let requested_size_px = (BIG_PREVIEW_SIZE * ctx.pixels_per_point()).round() as usize;
+
+    // High display scales must respect the mask camera's allocation limit
+    let size_px = if matches!(&preview, ShelfPreview::SmartMask(_)) { requested_size_px.clamp(1, MAX_PREVIEW_SIZE_PX) } else { requested_size_px };
+
+    // Scrolling moves tiles beneath a stationary pointer
+    let idle_seconds = ui.input(|input| if input.is_scrolling() { 0.0 } else { input.pointer.time_since_last_movement().min(input.time_since_last_scroll()) });
+    if idle_seconds >= BIG_PREVIEW_DWELL {
         return thumbs.big(ctx, preview, size_px);
     }
 
-    ctx.request_repaint_after_secs(BIG_PREVIEW_DWELL - still_for);
+    ctx.request_repaint_after_secs(BIG_PREVIEW_DWELL - idle_seconds);
     thumbs.rendered_big(ctx, &preview, size_px)
 }
 
-/// `tex` drawn into `rect`, or a placeholder disc while it renders.
+/// `tex` drawn into `rect`, or a placeholder disc while it renders
 fn thumbnail(painter: &egui::Painter, tex: Option<&egui::TextureHandle>, rect: egui::Rect, tk: &Tokens) {
     match tex {
         Some(t) => {
@@ -648,8 +648,7 @@ fn thumbnail(painter: &egui::Painter, tex: Option<&egui::TextureHandle>, rect: e
     }
 }
 
-/// A tile's hover popup: the `big` preview (the tile's `small` thumbnail scaled up until it
-/// renders) over the label.
+/// Use the thumbnail as a placeholder until the hover preview arrives
 fn hover_preview(ui: &mut Ui, small: Option<&egui::TextureHandle>, big: Option<&egui::TextureHandle>, label: &str) {
     let tk = Tokens::get(ui.ctx());
     ui.set_max_width(BIG_PREVIEW_SIZE);
