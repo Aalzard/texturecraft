@@ -266,36 +266,35 @@ enum Op {
     Slope { scale: f32, seed: u32 },
 }
 
-/// Index (among visible effects) of the last neighbourhood filter of an effect stack, its
-/// radius in texels (`res` texels per UV tile across) and what it does.
+/// The last neighbourhood filter of an effect stack (see [`neighbourhood_filters`]).
 fn neighbourhood(effects: &[Effect], res: u32) -> Option<(usize, f32, Op)> {
-    let texels = |v: f32| (v * res as f32 / 2048.0).max(0.5);
-    effects
-        .iter()
-        .filter(|e| e.visible)
-        .enumerate()
-        .filter_map(|(i, e)| match &e.kind {
-            EffectKind::Filter(Filter::Blur { radius }) if *radius > 0.0 => Some((i, texels(*radius), Op::Blur(None))),
-            EffectKind::Filter(Filter::Sharpen { amount }) => Some((i, (1.5 * res as f32 / 2048.0).max(0.75), Op::Blur(Some(*amount)))),
-            EffectKind::Filter(Filter::DirectionalBlur { radius, angle }) if *radius > 0.0 => Some((i, texels(*radius), Op::Line(direction(*angle)))),
-            EffectKind::Filter(Filter::Warp { intensity, scale, seed }) if *intensity > 0.0 => {
-                Some((i, texels(*intensity), Op::Warp { scale: *scale, seed: *seed, dir: None }))
-            }
-            EffectKind::Filter(Filter::DirectionalWarp { intensity, angle, scale, seed }) if *intensity > 0.0 => {
-                Some((i, texels(*intensity), Op::Warp { scale: *scale, seed: *seed, dir: Some(direction(*angle)) }))
-            }
-            EffectKind::Filter(Filter::HighPass { radius }) => Some((i, texels(*radius), Op::HighPass)),
-            EffectKind::Filter(Filter::EdgeDetect { width }) => Some((i, texels(*width), Op::Edge)),
-            // Three box passes ramp an edge over about twice their radius.
-            EffectKind::Filter(Filter::Bevel { width }) => Some((i, texels(*width * 0.5), Op::Bevel)),
-            EffectKind::Filter(Filter::Glow { radius, amount }) => Some((i, texels(*radius), Op::Glow(*amount))),
-            EffectKind::Filter(Filter::Mosaic { size }) => Some((i, texels(*size), Op::Mosaic)),
-            EffectKind::Filter(Filter::SlopeBlur { radius, scale, seed }) if *radius > 0.0 => {
-                Some((i, texels(*radius), Op::Slope { scale: *scale, seed: *seed }))
-            }
-            _ => None,
-        })
-        .last()
+    neighbourhood_filters(effects, res).last()
+}
+
+/// The neighbourhood filters of an effect stack, bottom → top: index among the visible effects, radius in texels (`res` texels per UV tile across) and what it does.
+fn neighbourhood_filters(effects: &[Effect], res: u32) -> impl Iterator<Item = (usize, f32, Op)> + '_ {
+    let texels = move |size: f32| (size * res as f32 / 2048.0).max(0.5);
+    effects.iter().filter(|effect| effect.visible).enumerate().filter_map(move |(index, effect)| match &effect.kind {
+        EffectKind::Filter(Filter::Blur { radius }) if *radius > 0.0 => Some((index, texels(*radius), Op::Blur(None))),
+        EffectKind::Filter(Filter::Sharpen { amount }) => Some((index, (1.5 * res as f32 / 2048.0).max(0.75), Op::Blur(Some(*amount)))),
+        EffectKind::Filter(Filter::DirectionalBlur { radius, angle }) if *radius > 0.0 => Some((index, texels(*radius), Op::Line(direction(*angle)))),
+        EffectKind::Filter(Filter::Warp { intensity, scale, seed }) if *intensity > 0.0 => {
+            Some((index, texels(*intensity), Op::Warp { scale: *scale, seed: *seed, dir: None }))
+        }
+        EffectKind::Filter(Filter::DirectionalWarp { intensity, angle, scale, seed }) if *intensity > 0.0 => {
+            Some((index, texels(*intensity), Op::Warp { scale: *scale, seed: *seed, dir: Some(direction(*angle)) }))
+        }
+        EffectKind::Filter(Filter::HighPass { radius }) => Some((index, texels(*radius), Op::HighPass)),
+        EffectKind::Filter(Filter::EdgeDetect { width }) => Some((index, texels(*width), Op::Edge)),
+        // Three box passes ramp an edge over about twice their radius
+        EffectKind::Filter(Filter::Bevel { width }) => Some((index, texels(*width * 0.5), Op::Bevel)),
+        EffectKind::Filter(Filter::Glow { radius, amount }) => Some((index, texels(*radius), Op::Glow(*amount))),
+        EffectKind::Filter(Filter::Mosaic { size }) => Some((index, texels(*size), Op::Mosaic)),
+        EffectKind::Filter(Filter::SlopeBlur { radius, scale, seed }) if *radius > 0.0 => {
+            Some((index, texels(*radius), Op::Slope { scale: *scale, seed: *seed }))
+        }
+        _ => None,
+    })
 }
 
 /// Unit texel-space vector of `angle` degrees. Texel rows run down: positive angles turn
@@ -529,153 +528,205 @@ enum Job<'a> {
     Content(Channel),
 }
 
-/// One neighbourhood-filtered field of `layer` over `tiles` plus the filter's reach, built on
-/// the fields already computed below it.
+/// A layer's mask or content channel after every neighbourhood filter of its stack, over `tiles`.
 fn field(inp: &Inputs, channels: &[Channel], below: &Fields, id: LayerId, job: Job, tiles: &[(u32, u32)]) -> Option<Field> {
-    let (gw, gh) = (inp.gbuf.width, inp.gbuf.height);
     let effects = match job {
-        Job::Mask(m) => &m.effects,
+        Job::Mask(mask) => &mask.effects,
         Job::Content(_) => &inp.project.content_layer(id)?.content_effects,
     };
-    let (k, radius, op) = neighbourhood(effects, inp.tile_res())?;
-    let opacity = effects.iter().filter(|e| e.visible).nth(k).map(|e| e.opacity.clamp(0.0, 1.0)).unwrap_or(1.0);
-    // Clamped: a hostile radius must not overflow the halo and window arithmetic.
-    let r = radius.round().clamp(1.0, gw.max(gh) as f32) as u32;
-    // Three box passes reach 3r texels, the other filters r (and a texel for bilinear samples).
-    let blurs = matches!(op, Op::Blur(_) | Op::HighPass | Op::Bevel | Op::Glow(_));
-    let reach = if blurs { 3 * r } else { r + 1 };
-    let halo = reach.div_ceil(TILE);
-    let (tx0, ty0) = tiles.iter().fold((u32::MAX, u32::MAX), |(a, b), t| (a.min(t.0), b.min(t.1)));
-    let (tx1, ty1) = tiles.iter().fold((0, 0), |(a, b), t| (a.max(t.0), b.max(t.1)));
-    let (rx0, ry0) = (tx0.saturating_sub(halo) * TILE, ty0.saturating_sub(halo) * TILE);
-    let (rx1, ry1) = (((tx1 + 1 + halo) * TILE).min(gw), ((ty1 + 1 + halo) * TILE).min(gh));
-    let (w, h) = (rx1.saturating_sub(rx0), ry1.saturating_sub(ry0));
-    if w == 0 || h == 0 {
-        return None;
+    let filters: Vec<(usize, f32, Op)> = neighbourhood_filters(effects, inp.tile_res()).collect();
+    let longest_side = inp.gbuf.width.max(inp.gbuf.height);
+
+    // Each filter's region also holds what every filter above it reads around the tiles
+    let mut margins: Vec<u32> = filters.iter().map(|&(_, radius, op)| filter_extent(radius, op, longest_side).1.div_ceil(TILE)).collect();
+    for index in (0..margins.len().saturating_sub(1)).rev() {
+        margins[index] += margins[index + 1];
     }
+
+    let mut previous: Option<(usize, Field)> = None;
+    for (&filter, &margin) in filters.iter().zip(&margins) {
+        let region = region_around(inp, tiles, margin)?;
+        let start = previous.as_ref().map(|(index, field)| (*index, field));
+        let filtered = filter_region(inp, channels, below, id, job, effects, filter, region, start)?;
+        previous = Some((filter.0, filtered));
+    }
+    previous.map(|(_, field)| field)
+}
+
+/// The tile-aligned texel region `(x0, y0, w, h)` around `tiles` plus `margin` tiles, clipped to the set.
+fn region_around(inp: &Inputs, tiles: &[(u32, u32)], margin: u32) -> Option<(u32, u32, u32, u32)> {
+    let (first_x, first_y) = tiles.iter().fold((u32::MAX, u32::MAX), |(min_x, min_y), tile| (min_x.min(tile.0), min_y.min(tile.1)));
+    let (last_x, last_y) = tiles.iter().fold((0, 0), |(max_x, max_y), tile| (max_x.max(tile.0), max_y.max(tile.1)));
+    let (x0, y0) = (first_x.saturating_sub(margin) * TILE, first_y.saturating_sub(margin) * TILE);
+    let (x1, y1) = (((last_x + 1 + margin) * TILE).min(inp.gbuf.width), ((last_y + 1 + margin) * TILE).min(inp.gbuf.height));
+    let (w, h) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
+    (w > 0 && h > 0).then_some((x0, y0, w, h))
+}
+
+/// A neighbourhood filter's radius in whole texels and how many texels around a texel it reads.
+fn filter_extent(radius: f32, op: Op, longest_side: u32) -> (u32, u32) {
+    // Clamped so a hostile radius can't overflow the region arithmetic
+    let radius_texels = radius.round().clamp(1.0, longest_side as f32) as u32;
+
+    // Three box passes reach three radii; the gathering filters one radius plus a bilinear texel
+    let reach = if is_box_blur(op) { 3 * radius_texels } else { radius_texels + 1 };
+    (radius_texels, reach)
+}
+
+/// Whether neighbourhood filter `op` is computed from box blurs (the others gather samples).
+fn is_box_blur(op: Op) -> bool {
+    matches!(op, Op::Blur(_) | Op::HighPass | Op::Bevel | Op::Glow(_))
+}
+
+/// The stack up to and including neighbourhood filter `filter` over texel `region`, continued from `start` (the filter below's field) when given.
+#[allow(clippy::too_many_arguments)]
+fn filter_region(
+    inp: &Inputs,
+    channels: &[Channel],
+    below: &Fields,
+    id: LayerId,
+    job: Job,
+    effects: &[Effect],
+    (index, radius, op): (usize, f32, Op),
+    (rx0, ry0, w, h): (u32, u32, u32, u32),
+    start: Option<(usize, &Field)>,
+) -> Option<Field> {
+    let opacity = effects.iter().filter(|effect| effect.visible).nth(index).map(|effect| effect.opacity.clamp(0.0, 1.0)).unwrap_or(1.0);
+    let (radius_texels, _) = filter_extent(radius, op, inp.gbuf.width.max(inp.gbuf.height));
     let comps = match job {
         Job::Mask(_) => 1,
         Job::Content(_) => 4,
     };
-    // Evaluate the stack before the filter, tile by tile (content premultiplied by coverage).
+
+    // Evaluate the stack up to the filter, tile by tile (content premultiplied by coverage)
+    let (rx1, ry1) = (rx0 + w, ry0 + h);
     let region_tiles: Vec<(u32, u32)> = (ry0 / TILE..ry1.div_ceil(TILE)).flat_map(|y| (rx0 / TILE..rx1.div_ceil(TILE)).map(move |x| (x, y))).collect();
     let parts: Vec<Vec<(u32, u32, [f32; 4])>> = region_tiles
         .par_iter()
         .map(|&(tx, ty)| {
             let full = anchor_plan(inp, id, channels, tx, ty, Some(below));
-            let preview_tile = inp.preview.and_then(|p| p.alpha.tile(tx, ty));
+            let preview_tile = inp.preview.and_then(|preview| preview.alpha.tile(tx, ty));
             let mut mask = None;
             let mut nodes = Vec::new();
             match job {
-                Job::Mask(m) => {
-                    let Some(mut mp) = mask_plan(inp, id, m, tx, ty, None) else { return Vec::new() };
-                    mp.effects.truncate(k);
-                    mask = Some(mp);
+                Job::Mask(layer_mask) => {
+                    let Some(mut mask_stack) = mask_plan(inp, id, layer_mask, tx, ty, None) else { return Vec::new() };
+
+                    mask_stack.effects.truncate(index);
+                    mask_stack.start = start;
+                    mask = Some(mask_stack);
                 }
-                Job::Content(ch) => {
-                    nodes = plan(inp, &[id], &[ch], tx, ty, 0, Some(below));
-                    if let Some(c) = nodes.first_mut().and_then(|n| n.chans.first_mut()) {
-                        c.effects.truncate(k);
-                        c.start = None;
+                Job::Content(channel) => {
+                    nodes = plan(inp, &[id], &[channel], tx, ty, 0, Some(below));
+                    if let Some(chan) = nodes.first_mut().and_then(|node| node.chans.first_mut()) {
+                        chan.effects.truncate(index);
+                        chan.start = start;
                     }
                 }
             }
             tile_texels(inp.gbuf, tx, ty)
-                .map(|(x, y, o)| {
-                    let mut tex = Texel::new(inp, x, y, o, stroke_at(preview_tile, o));
+                .map(|(x, y, offset)| {
+                    let mut texel = Texel::new(inp, x, y, offset, stroke_at(preview_tile, offset));
                     if !full.is_empty() {
-                        tex.anchors_below(&full, id);
+                        texel.anchors_below(&full, id);
                     }
-                    let v = match (&mask, nodes.first()) {
-                        (Some(mp), _) => [tex.mask(mp), 0.0, 0.0, 0.0],
-                        (None, Some(n)) => match n.chans.first().and_then(|c| tex.content(&n.content, c)) {
-                            Some((v, cov)) => [v[0] * cov, v[1] * cov, v[2] * cov, cov],
+                    let value = match (&mask, nodes.first()) {
+                        (Some(mask_stack), _) => [texel.mask(mask_stack), 0.0, 0.0, 0.0],
+                        (None, Some(node)) => match node.chans.first().and_then(|chan| texel.content(&node.content, chan)) {
+                            Some((color, cov)) => [color[0] * cov, color[1] * cov, color[2] * cov, cov],
                             None => [0.0; 4],
                         },
                         (None, None) => [0.0; 4],
                     };
-                    (x, y, v)
+                    (x, y, value)
                 })
                 .collect()
         })
         .collect();
-    // Scatter into the region, a row of tiles at a time (the region is tile aligned).
-    let n = (w * h) as usize;
-    let mut orig = vec![0.0f32; n * comps];
-    let mut cover = vec![0.0f32; n];
+
+    // Scatter into the region, a row of tiles at a time (the region is tile aligned)
+    let texel_count = (w * h) as usize;
+    let mut orig = vec![0.0f32; texel_count * comps];
+    let mut cover = vec![0.0f32; texel_count];
     let row_tiles = (rx1.div_ceil(TILE) - rx0 / TILE).max(1) as usize;
     let band = (TILE * w) as usize;
     orig.par_chunks_mut(band * comps).zip(cover.par_chunks_mut(band)).zip(parts.par_chunks(row_tiles)).for_each(|((orig, cover), row)| {
-        for &(x, y, v) in row.iter().flatten() {
-            let i = (((y - ry0) % TILE) * w + (x - rx0)) as usize;
-            if let (Some(c), Some(px)) = (cover.get_mut(i), orig.get_mut(i * comps..(i + 1) * comps)) {
-                *c = 1.0;
-                px.copy_from_slice(&v[..comps]);
+        for &(x, y, value) in row.iter().flatten() {
+            let texel = (((y - ry0) % TILE) * w + (x - rx0)) as usize;
+            if let (Some(covered), Some(pixel)) = (cover.get_mut(texel), orig.get_mut(texel * comps..(texel + 1) * comps)) {
+                *covered = 1.0;
+                pixel.copy_from_slice(&value[..comps]);
             }
         }
     });
-    // High pass centers on the channel's mid value (0 for signed channels like height).
+
+    // High pass centers on the channel's mid value (0 for signed channels like height)
     let mid = match job {
-        Job::Content(ch) if ch.kind() == ChannelKind::Signed => 0.0,
+        Job::Content(channel) if channel.kind() == ChannelKind::Signed => 0.0,
         _ => 0.5,
     };
-    // The filter at the radius of a tile filling `scale` of its atlas block (a smaller tile has
-    // fewer texels per UV unit, so its filters reach fewer texels).
+
+    // A smaller UV tile has fewer texels per UV unit, so its filters reach fewer texels
     let filtered = |scale: f32| -> Vec<f32> {
         let res = ((inp.tile_res() as f32 * scale).round() as u32).max(1);
-        let r = neighbourhood(effects, res).map_or(r, |(_, radius, _)| radius.round().clamp(1.0, r as f32) as u32);
-        if !blurs {
-            return gather(op, &orig, &cover, comps, (rx0, ry0, w, h), r as f32, res, opacity);
+        let scaled_radius = neighbourhood_filters(effects, res)
+            .find(|filter| filter.0 == index)
+            .map_or(radius_texels, |filter| filter.1.round().clamp(1.0, radius_texels as f32) as u32);
+        if !is_box_blur(op) {
+            return gather(op, &orig, &cover, comps, (rx0, ry0, w, h), scaled_radius as f32, res, opacity);
         }
-        // Weighted so uncovered texels don't bleed in.
-        let (wu, hu, ru) = (w as usize, h as usize, r as usize);
+
+        // Weighted so uncovered texels don't bleed in
+        let (width, height, blur_radius) = (w as usize, h as usize, scaled_radius as usize);
         let mut weights = cover.clone();
-        blur(&mut weights, wu, hu, ru);
+        blur(&mut weights, width, height, blur_radius);
         let mut data = orig.clone();
-        for p in 0..comps {
-            let mut vals: Vec<f32> = orig.par_chunks(comps).map(|px| px.get(p).copied().unwrap_or(0.0)).collect();
-            blur(&mut vals, wu, hu, ru);
-            data.par_chunks_mut(comps).zip(vals.par_iter()).zip(weights.par_iter()).for_each(|((px, v), wt)| {
-                // Content is premultiplied, so the mid value is too (coverage itself is kept).
-                let cov = if comps == 4 { px.get(3).copied().unwrap_or(0.0) } else { 1.0 };
-                if *wt > 1e-6
-                    && let Some(slot) = px.get_mut(p)
+        for component in 0..comps {
+            let mut sums: Vec<f32> = orig.par_chunks(comps).map(|pixel| pixel.get(component).copied().unwrap_or(0.0)).collect();
+            blur(&mut sums, width, height, blur_radius);
+            data.par_chunks_mut(comps).zip(sums.par_iter()).zip(weights.par_iter()).for_each(|((pixel, sum), weight)| {
+                // Content is premultiplied, so the mid value is too (coverage itself is kept)
+                let cov = if comps == 4 { pixel.get(3).copied().unwrap_or(0.0) } else { 1.0 };
+                if *weight > 1e-6
+                    && let Some(slot) = pixel.get_mut(component)
                 {
-                    let (o, blurred) = (*slot, v / wt);
-                    let filtered = match op {
-                        Op::Blur(Some(amount)) => o + amount * (o - blurred),
-                        Op::HighPass if p < 3 => o - blurred + mid * cov,
-                        // Away from 0 by at most the value itself: 0 at the edge, full inside.
-                        Op::Bevel if p < 3 => o.signum() * o.abs().min((2.0 * blurred * o.signum() - o.abs()).max(0.0)),
-                        Op::Glow(amount) if p < 3 => o + amount * blurred,
-                        Op::HighPass | Op::Bevel | Op::Glow(_) => o,
+                    let (original, blurred) = (*slot, sum / weight);
+                    let result = match op {
+                        Op::Blur(Some(amount)) => original + amount * (original - blurred),
+                        Op::HighPass if component < 3 => original - blurred + mid * cov,
+                        // Away from 0 by at most the value itself: 0 at the edge, full inside
+                        Op::Bevel if component < 3 => original.signum() * original.abs().min((2.0 * blurred * original.signum() - original.abs()).max(0.0)),
+                        Op::Glow(amount) if component < 3 => original + amount * blurred,
+                        Op::HighPass | Op::Bevel | Op::Glow(_) => original,
                         _ => blurred,
                     };
-                    *slot = o + (filtered - o) * opacity;
+                    *slot = original + (result - original) * opacity;
                 }
             });
         }
         data
     };
-    // Each block keeps the result at its tile's scale (blocks are TILE aligned).
+
+    // Each block keeps the result at its tile's scale (blocks are TILE aligned)
     let scales = inp.project.texture_set(inp.ts).map(TextureSet::block_scales).unwrap_or_default();
     let mut levels: Vec<f32> =
         (ry0..ry1).step_by(TILE as usize).flat_map(|y| (rx0..rx1).step_by(TILE as usize).map(move |x| (x, y))).map(|(x, y)| scales.at(x, y)).collect();
     levels.sort_by(f32::total_cmp);
     levels.dedup();
-    let (first, rest) = levels.split_first().map_or((1.0, &[][..]), |(f, r)| (*f, r));
+    let (first, rest) = levels.split_first().map_or((1.0, &[][..]), |(first, rest)| (*first, rest));
     let mut data = filtered(first);
     for &scale in rest {
         let other = filtered(scale);
         let row = w as usize * comps;
         data.par_chunks_mut(row).zip(other.par_chunks(row)).enumerate().for_each(|(y, (dst, src))| {
-            for (x, (d, s)) in dst.chunks_mut(comps).zip(src.chunks(comps)).enumerate() {
+            for (x, (target, source)) in dst.chunks_mut(comps).zip(src.chunks(comps)).enumerate() {
                 if scales.at(rx0 + x as u32, ry0 + y as u32) == scale {
-                    d.copy_from_slice(s);
+                    target.copy_from_slice(source);
                 }
             }
         });
     }
+
     unpremultiply(&mut data, comps);
     Some(Field { x0: rx0, y0: ry0, w, h, comps, data })
 }
@@ -2353,6 +2404,55 @@ mod tests {
             let values = assert_sparse_mask_matches_image(&fixture, upper, &texels).unwrap();
             assert!(values.iter().zip(&original).any(|(value, original)| (value - original).abs() > 0.1), "the filter changes the anchor values");
         }
+    }
+
+    #[test]
+    fn a_mask_runs_every_neighbourhood_filter_in_order() {
+        let mut fixture = fixture();
+        fixture.gbuf = UvGBuffer::new(&fixture.mesh, 0, 128, 128);
+        fixture.project.texture_sets[0].resolution = 128;
+        let layer = fill_layer(&mut fixture.project, [1.0; 3], 1.0);
+        let checker = Source::Procedural { pattern: Procedural::new(ProceduralKind::Checker), low: [0.0; 3], high: [1.0; 3] };
+        let warp = Filter::DirectionalWarp { intensity: 256.0, angle: 90.0, scale: 4.0, seed: 3 };
+        let texels: Vec<_> = (0..128).map(|x| (x, 63)).collect();
+        let mut masked = |filters: &[Filter]| {
+            let mut mask = Mask::new(MaskBackground::Black);
+            mask.effects.push(Effect::new(fixture.project.alloc_id(), EffectKind::Fill { source: checker.clone(), projection: Projection::default() }));
+            for filter in filters {
+                mask.effects.push(Effect::new(fixture.project.alloc_id(), EffectKind::Filter(filter.clone())));
+            }
+            fixture.project.layer_mut(layer).unwrap().mask = Some(mask);
+            assert_sparse_mask_matches_image(&fixture, layer, &texels).unwrap()
+        };
+
+        let warped = masked(std::slice::from_ref(&warp));
+        let blurred_then_warped = masked(&[Filter::Blur { radius: 64.0 }, warp]);
+        assert!(blurred_then_warped.iter().zip(&warped).any(|(chained, single)| (chained - single).abs() > 0.1), "the blur under the warp still runs");
+        assert!(blurred_then_warped.iter().any(|value| *value > 0.05 && *value < 0.95), "the blur softens the checker before the warp moves it");
+    }
+
+    #[test]
+    fn a_content_stack_runs_every_neighbourhood_filter_in_order() {
+        let mut fixture = fixture();
+        let layer = fill_layer(&mut fixture.project, [0.0; 3], 1.0);
+        let LayerKind::Fill(fill) = &mut fixture.project.layer_mut(layer).unwrap().kind else { panic!("expected a fill layer") };
+
+        fill.sources.insert(Channel::BaseColor, Source::Procedural { pattern: Procedural::new(ProceduralKind::Checker), low: [0.0; 3], high: [1.0; 3] });
+        let warp = Filter::DirectionalWarp { intensity: 256.0, angle: 90.0, scale: 4.0, seed: 3 };
+        let warp_effect = content_fx(&mut fixture, layer, EffectKind::Filter(warp));
+        let row = |fixture: &Fixture| -> Vec<f32> {
+            let composite = run(fixture, None);
+            (0..64).map(|x| composite.value(Channel::BaseColor, x, 20)[0]).collect()
+        };
+        let warped = row(&fixture);
+
+        content_fx(&mut fixture, layer, EffectKind::Filter(Filter::Blur { radius: 64.0 }));
+        let effects = &mut fixture.project.layer_mut(layer).unwrap().content_effects;
+        let warp_index = effects.iter().position(|effect| effect.id == warp_effect).unwrap();
+        let warp_on_top = effects.remove(warp_index);
+        effects.push(warp_on_top);
+        let blurred_then_warped = row(&fixture);
+        assert!(blurred_then_warped.iter().zip(&warped).any(|(chained, single)| (chained - single).abs() > 0.1), "the blur under the warp still runs");
     }
 
     #[test]
