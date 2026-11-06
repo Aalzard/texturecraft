@@ -23,9 +23,13 @@ const WORKER_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The app on the Materials tab, `step_seconds` per frame, and two materials whose names show
 /// nowhere else.
-fn materials_shelf(step_seconds: f32) -> (Harness<'static, TextureCraftApp>, Vec<&'static SmartMaterial>) {
+fn materials_shelf(step_seconds: f32, pixels_per_point: f32) -> (Harness<'static, TextureCraftApp>, Vec<&'static SmartMaterial>) {
     let session = texturecraft_engine::sample_session(256, 64).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 960.0)).with_step_dt(step_seconds).build_eframe(|cc| TextureCraftApp::new(cc, session));
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1600.0, 960.0))
+        .with_step_dt(step_seconds)
+        .with_pixels_per_point(pixels_per_point)
+        .build_eframe(|cc| TextureCraftApp::new(cc, session));
     h.state_mut().ui.shelf_tab = MATERIALS_TAB;
     h.run_steps(4);
 
@@ -55,7 +59,7 @@ fn big_preview_ready(h: &mut Harness<'static, TextureCraftApp>, material: &Smart
 
 #[test]
 fn hovering_a_shelf_tile_shows_its_big_preview() {
-    let (mut h, materials) = materials_shelf(1.0 / 4.0);
+    let (mut h, materials) = materials_shelf(1.0 / 4.0, 1.0);
     let material = materials[0];
     let tile = h.get_by_label(material.label).rect();
     assert!(largest_drawn_texture(&h, BIG_PREVIEW_SIZE).is_none(), "nothing big before the hover");
@@ -77,7 +81,7 @@ fn hovering_a_shelf_tile_shows_its_big_preview() {
 
 #[test]
 fn the_big_preview_renders_after_a_rest_but_not_during_a_sweep() {
-    let (mut h, materials) = materials_shelf(STEP_SECONDS);
+    let (mut h, materials) = materials_shelf(STEP_SECONDS, 1.0);
     let (first, second) = (materials[0], materials[1]);
     let (from, to) = (h.get_by_label(first.label).rect().center(), h.get_by_label(second.label).rect().center());
 
@@ -114,10 +118,10 @@ fn high_dpi_smart_mask_hover_stays_within_the_renderer_limit() {
     use texturecraft_engine::mask_preview::MAX_PREVIEW_SIZE_PX;
     use texturecraft_engine::smart_masks::SMART_MASKS;
 
-    let (mut harness, _) = materials_shelf(1.0 / 4.0);
-    harness.ctx.set_pixels_per_point(3.0);
+    let (mut harness, _) = materials_shelf(1.0 / 4.0, 3.0);
     harness.state_mut().ui.shelf_tab = 2;
     harness.run_steps(4);
+    assert_eq!(harness.ctx.pixels_per_point(), 3.0, "the test uses the native 300% display scale");
     harness.get_by_label(SMART_MASKS[0].label).hover();
 
     let expected = Some([MAX_PREVIEW_SIZE_PX; 2]);

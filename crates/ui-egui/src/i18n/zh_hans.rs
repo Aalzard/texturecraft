@@ -1000,4 +1000,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Value Bounds Max", "值上限"),
     ("Value Bounds Min", "值下限"),
     ("Vertex Color", "顶点颜色"),
+    ("Remove resolution override", "移除分辨率覆盖"),
+    ("Texture set resolution", "纹理集分辨率"),
+    ("UV tile {tile} resolution", "UV 图块 {tile} 的分辨率"),
 ];

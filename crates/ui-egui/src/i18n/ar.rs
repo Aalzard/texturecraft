@@ -1032,4 +1032,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Value Bounds Max", "الحد الأقصى للقيمة"),
     ("Value Bounds Min", "الحد الأدنى للقيمة"),
     ("Vertex Color", "لون الرأس"),
+    ("Remove resolution override", "إزالة تجاوز الدقة"),
+    ("Texture set resolution", "دقة مجموعة الخامات"),
+    ("UV tile {tile} resolution", "دقة بلاطة UV {tile}"),
 ];

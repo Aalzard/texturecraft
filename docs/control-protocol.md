@@ -24,6 +24,39 @@ as the history reaches); `edit.history` lists the steps done and the undone ones
 Any command takes `merge: true` to fold its edit into the previous undo step when that step has
 the same label: a drag that applies a value on every frame stays one step.
 
+Bake mode applies edits in Common Settings and Mesh Map Settings to every texture set. Each
+set keeps its own enabled mesh-map checkboxes and Include in Bake flag. Edits update only the
+changed fields; Restore Defaults resets the whole parameter section across all sets.
+
+`bake.settings {ts: "all", patch: {maps: {ao: {parameters: {rays: {rays: 128}}}}}}` changes
+only AO secondary rays. A `patch` uses the nested `BakeSettings` field names and named enum
+values returned in the command's `model` result; omitted fields retain each set's values, and
+`null` clears optional fields such as `common.resolution_height`. All targeted sets are validated
+before the edit is applied as one undo step. `model` still replaces the complete settings;
+when combined, `patch` follows `model`, then the flat command parameters apply. Omitting `ts`
+still targets the active set for scripts that need individual control.
+
+The bake texture-set list shows visibility eyes and expandable UV tile rows. Visibility affects
+the viewport independently of bake inclusion. Its resolution menus edit the texture-set size
+(`textureSet.resolution`) and individual tile overrides (`textureSet.tile.resolution`), independently
+of Common Settings' bake Output Size. Overridden tiles display a resolution marked with an asterisk;
+inherited tile resolutions appear only on hover or while their menu is open. Remove resolution
+override hides the number and restores inheritance from the set, including when their current
+sizes happen to match.
+
+Baked maps use a uniform UV tile atlas: every selected tile receives the full bake Output Size,
+including rectangular output sizes. Changing a texture-set or tile working resolution preserves
+the stored bake pixels. Materials, mesh-map previews, and exports sample those pixels through
+the working tile layout. Older project files load their baked pixels as-is without layout
+conversion; rebaking restores correct mapping and detail.
+
+`bake.tile.set {ts?, tile: 1002, enabled: false}`
+excludes one UV tile; `textureSet.inspect` / `session.inspect` expose each tile's `bakeEnabled`.
+Tile choices are saved and undoable. Unchecked tiles retain their previous baked pixels, resampled
+if output size changes, or neutral values when no previous map exists. A running bake uses the
+tile selection captured when its worker started. Sets with no checked tiles are skipped; their
+geometry still contributes to occlusion when baking other tiles.
+
 ## Control channel (desktop app)
 
 ```sh

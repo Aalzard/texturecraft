@@ -163,6 +163,51 @@ fn window_snapshots() {
 
 #[test]
 #[ignore]
+fn bake_uv_tiles_snapshot() {
+    let Some(output_dir) = std::env::var_os("TC_UI_SNAPSHOTS").map(PathBuf::from) else {
+        eprintln!("set TC_UI_SNAPSHOTS=<dir> to write the pictures");
+        return;
+    };
+
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let mut session =
+        texturecraft_engine::Session::new_project("UV tile baking", texturecraft_engine::geom::primitives::udim_plane(), "builtin:udim_plane", None, 256)
+            .unwrap();
+    texturecraft_engine::execute(&mut session, "textureSet.tile.resolution", &serde_json::json!({"tile": 1002, "resolution": 128})).unwrap();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1600.0, 960.0))
+        .with_pixels_per_point(1.0)
+        .wgpu()
+        .build_eframe(|context| TextureCraftApp::new(context, session));
+    harness.state_mut().ui.mode = Mode::Baking;
+    save(&mut harness, &output_dir, "bake-uv-tiles");
+
+    harness.get_by_value("128 × 128*").click();
+    save(&mut harness, &output_dir, "bake-tile-resolution-menu");
+    harness.get_by_label("Remove resolution override").click();
+    save(&mut harness, &output_dir, "bake-tile-resolution-inherited");
+    assert!(harness.query_by_value("128 × 128*").is_none());
+    assert!(harness.state().session.doc.project.texture_sets[0].tile_resolutions.is_empty());
+    let inherited_resolution = harness.get_by_label("UV tile 1002 resolution").rect().center();
+    harness.hover_at(inherited_resolution);
+    save(&mut harness, &output_dir, "bake-tile-resolution-hover");
+    assert_eq!(harness.get_all_by_value("256 × 256").count(), 2);
+    harness.hover_at(egui::pos2(900.0, 500.0));
+    harness.state_mut().session.undo().unwrap();
+    harness.run_steps(3);
+
+    harness.get_by_role_and_label(egui::Role::CheckBox, "1002").click();
+    save(&mut harness, &output_dir, "bake-uv-tiles-partial");
+    assert!(harness.state().session.doc.project.texture_sets[0].bake_excluded_tiles.contains(&1002));
+
+    harness.get_by_label("Show or hide the texture set").click();
+    save(&mut harness, &output_dir, "bake-uv-tiles-hidden");
+    assert!(!harness.state().session.doc.project.texture_sets[0].visible);
+    assert!(harness.state().session.doc.project.texture_sets[0].bake.common.is_enabled);
+}
+
+#[test]
+#[ignore]
 fn smart_mask_shelf_snapshot() {
     let Some(output_dir) = std::env::var_os("TC_UI_SNAPSHOTS").map(PathBuf::from) else {
         eprintln!("set TC_UI_SNAPSHOTS=<dir> to write the picture");
