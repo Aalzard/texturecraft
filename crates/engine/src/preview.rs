@@ -1,6 +1,7 @@
-//! Shelf previews: built-in materials and smart masks evaluated on a unit sphere seen from +Z,
-//! without a mesh or baked maps (generators that need mesh maps are approximated with world-space
-//! noise). Cheap enough for lazily rendered thumbnails.
+//! Shelf previews: built-in materials evaluated on a unit sphere seen from +Z, without a mesh or
+//! baked maps (generators that need mesh maps are approximated with world-space noise), and
+//! library filters. Cheap enough for lazily rendered thumbnails. Smart masks have their own baked
+//! preview ([`crate::mask_preview`]).
 
 use texturecraft_compose::pattern::{Coords, procedural, world_noise};
 use texturecraft_core::{
@@ -183,13 +184,6 @@ pub fn filter(id: &str, size: usize) -> Option<Vec<Option<Sample>>> {
     )
 }
 
-/// Preview of smart mask `id`: the mask value per pixel (None for an unknown id).
-pub fn smart_mask(id: &str, size: usize) -> Option<Vec<Option<f32>>> {
-    let (bg, fx) = crate::smart_masks::preset(id)?;
-    let m = crate::smart_masks::build_mask(&mut Project::new("preview", ""), bg, fx);
-    Some(sphere_normals(size).map(|n| n.map(|n| mask(&m, &coords(n)))).collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,11 +196,7 @@ mod tests {
             assert!(center.base.iter().chain([&center.metallic, &center.roughness, &center.height]).all(|v| v.is_finite()), "{}", m.id);
             assert!(px[0].is_none(), "corners are outside the sphere");
         }
-        for sm in crate::smart_masks::SMART_MASKS {
-            let px = smart_mask(sm.id, 16).unwrap_or_else(|| panic!("{}", sm.id));
-            assert!(px.iter().flatten().all(|v| (0.0..=1.0).contains(v)), "{}", sm.id);
-        }
-        assert!(material("nope", 8).is_none() && smart_mask("nope", 8).is_none() && filter("nope", 8).is_none());
+        assert!(material("nope", 8).is_none() && filter("nope", 8).is_none());
         for f in crate::filter_lib::FILTERS {
             let px = filter(f.id, 24).unwrap_or_else(|| panic!("{}", f.id));
             let center = px[12 * 24 + 12].unwrap_or_else(|| panic!("{}", f.id));

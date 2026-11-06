@@ -160,3 +160,32 @@ fn window_snapshots() {
     harness.event(egui::Event::PointerButton { pos: cursor_position, button, pressed: false, modifiers });
     harness.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
 }
+
+#[test]
+#[ignore]
+fn smart_mask_shelf_snapshot() {
+    let Some(output_dir) = std::env::var_os("TC_UI_SNAPSHOTS").map(PathBuf::from) else {
+        eprintln!("set TC_UI_SNAPSHOTS=<dir> to write the picture");
+        return;
+    };
+
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let session =
+        texturecraft_engine::Session::new_project("Mask previews", texturecraft_engine::geom::primitives::cube(2.0), "builtin:cube", None, 128).unwrap();
+    let mut harness =
+        Harness::builder().with_size(egui::vec2(1600.0, 960.0)).with_pixels_per_point(1.0).wgpu().build_eframe(|cc| TextureCraftApp::new(cc, session));
+    harness.state_mut().ui.shelf_tab = 2;
+    let context = harness.ctx.clone();
+    let started = std::time::Instant::now();
+    loop {
+        harness.run_steps(1);
+        let thumbnails = &mut harness.state_mut().thumbs;
+        if texturecraft_engine::smart_masks::SMART_MASKS.iter().all(|preset| thumbnails.smart_mask(&context, preset.id).is_some()) {
+            break;
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(60), "smart mask thumbnails did not arrive");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    eprintln!("all smart mask thumbnails ready after {:.3} s", started.elapsed().as_secs_f64());
+    save(&mut harness, &output_dir, "smart-mask-shelf");
+}

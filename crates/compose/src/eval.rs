@@ -1835,47 +1835,115 @@ pub fn pad_tiles(out: &mut Composite, dmap: &DilationMap, tiles: &[(u32, u32)]) 
     written
 }
 
-/// The mask of layer `id` as an 8-bit grayscale image of `size × size` stretched over the
-/// texture set (nearest texel; uncovered texels black). None when the layer has no enabled mask.
-pub fn mask_image(inp: &Inputs, id: LayerId, size: u32) -> Option<Vec<u8>> {
-    let mask = layer_mask(inp.project, id).filter(|m| m.enabled)?;
-    let channels = inp.project.texture_set(inp.ts).map(|t| t.channel_list()).unwrap_or_default();
-    let (w, h) = (inp.gbuf.width, inp.gbuf.height);
-    let all = all_tiles(w, h);
-    let fields = neighbourhood_fields(inp, &channels, &all);
-    let tiles: Vec<(u32, u32, Vec<u8>)> = all
+/// The layer mask as a square grayscale image, using nearest texels and black outside the mesh
+/// Returns None without an enabled mask
+pub fn mask_image(inputs: &Inputs, id: LayerId, size: u32) -> Option<Vec<u8>> {
+    let mask = layer_mask(inputs.project, id).filter(|mask| mask.enabled)?;
+    let channels = inputs.project.texture_set(inputs.ts).map(|set| set.channel_list()).unwrap_or_default();
+    let (width, height) = (inputs.gbuf.width, inputs.gbuf.height);
+    let coordinates = all_tiles(width, height);
+    let fields = neighbourhood_fields(inputs, &channels, &coordinates);
+    let tiles: HashMap<(u32, u32), Vec<u8>> = coordinates
         .par_iter()
-        .filter_map(|&(tx, ty)| {
-            let mp = mask_plan(inp, id, mask, tx, ty, Some(&fields))?;
-            let full = anchor_plan(inp, id, &channels, tx, ty, Some(&fields));
-            let mut buf = vec![0u8; TILE_AREA];
-            for (x, y, o) in tile_texels(inp.gbuf, tx, ty) {
-                let mut tex = Texel::new(inp, x, y, o, 0.0);
-                if !full.is_empty() {
-                    tex.anchors_below(&full, id);
-                }
-                if let Some(b) = buf.get_mut(o) {
-                    *b = (tex.mask(&mp) * 255.0 + 0.5) as u8;
+        .map(|&tile| {
+            let mut values = vec![0u8; TILE_AREA];
+            for (offset, value) in mask_tile(inputs, id, mask, &channels, &fields, tile, 0..TILE_AREA) {
+                if let Some(destination) = values.get_mut(offset) {
+                    *destination = (value * 255.0 + 0.5) as u8;
                 }
             }
-            Some((tx, ty, buf))
+            (tile, values)
         })
         .collect();
+
     let size = size.max(1);
-    let mut out = vec![0u8; (size * size) as usize];
-    let lookup: std::collections::HashMap<(u32, u32), &Vec<u8>> = tiles.iter().map(|(x, y, b)| ((*x, *y), b)).collect();
+    let mut output = vec![0u8; (size * size) as usize];
     for y in 0..size {
         for x in 0..size {
-            let (sx, sy) = ((x as u64 * w as u64 / size as u64) as u32, (y as u64 * h as u64 / size as u64) as u32);
-            if let Some(t) = lookup.get(&(sx / TILE, sy / TILE))
-                && let Some(v) = t.get(((sy % TILE) * TILE + sx % TILE) as usize)
-                && let Some(d) = out.get_mut((y * size + x) as usize)
+            let sample_x = (u64::from(x) * u64::from(width) / u64::from(size)) as u32;
+            let sample_y = (u64::from(y) * u64::from(height) / u64::from(size)) as u32;
+            if let Some(tile) = tiles.get(&(sample_x / TILE, sample_y / TILE))
+                && let Some(value) = tile.get(((sample_y % TILE) * TILE + sample_x % TILE) as usize)
+                && let Some(destination) = output.get_mut((y * size + x) as usize)
             {
-                *d = *v;
+                *destination = *value;
             }
         }
     }
-    Some(out)
+    Some(output)
+}
+
+/// Mask values at texture-set coordinates, in request order; None without an enabled mask
+/// Uncovered and out-of-range texels read zero; neighbourhood filters also evaluate surrounding texels
+pub fn mask_at(inputs: &Inputs, id: LayerId, texels: &[(u32, u32)]) -> Option<Vec<f32>> {
+    let mask = layer_mask(inputs.project, id).filter(|mask| mask.enabled)?;
+    let mut output = vec![0.0; texels.len()];
+
+    // Group valid requests before planning effects, which may resample painted tiles
+    let mut requested: HashMap<(u32, u32), Vec<(usize, usize)>> = HashMap::new();
+    for (index, &(x, y)) in texels.iter().enumerate() {
+        if x >= inputs.gbuf.width || y >= inputs.gbuf.height {
+            continue;
+        }
+
+        let offset = ((y % TILE) * TILE + x % TILE) as usize;
+        requested.entry((x / TILE, y / TILE)).or_default().push((offset, index));
+    }
+
+    if requested.is_empty() {
+        return Some(output);
+    }
+
+    let channels = inputs.project.texture_set(inputs.ts).map(|set| set.channel_list()).unwrap_or_default();
+    // Filters and anchors can depend on texels outside the requested tiles
+    let fields = neighbourhood_fields(inputs, &channels, &all_tiles(inputs.gbuf.width, inputs.gbuf.height));
+    let values: Vec<(usize, f32)> = requested
+        .par_iter_mut()
+        .flat_map_iter(|(&tile, requests)| {
+            requests.sort_unstable_by_key(|&(offset, _)| offset);
+            let groups = requests.chunk_by(|left, right| left.0 == right.0);
+            let offsets = groups.clone().filter_map(|group| group.first().map(|&(offset, _)| offset));
+            mask_tile(inputs, id, mask, &channels, &fields, tile, offsets)
+                .zip(groups)
+                .flat_map(|((_, value), group)| group.iter().map(move |&(_, index)| (index, value)))
+        })
+        .collect();
+
+    for (index, value) in values {
+        if let Some(destination) = output.get_mut(index) {
+            *destination = value;
+        }
+    }
+    Some(output)
+}
+
+/// Mask values in offset order, including zeros for uncovered texels so request groups stay aligned
+fn mask_tile<'a>(
+    inputs: &'a Inputs<'a>,
+    id: LayerId,
+    mask: &'a Mask,
+    channels: &[Channel],
+    fields: &'a Fields,
+    (tile_x, tile_y): (u32, u32),
+    offsets: impl Iterator<Item = usize> + 'a,
+) -> impl Iterator<Item = (usize, f32)> + 'a {
+    let plan = mask_plan(inputs, id, mask, tile_x, tile_y, Some(fields));
+    let anchor_stack = anchor_plan(inputs, id, channels, tile_x, tile_y, Some(fields));
+    offsets.map(move |offset| {
+        let Some(plan) = plan.as_ref() else { return (offset, 0.0) };
+
+        let x = tile_x * TILE + (offset % TILE as usize) as u32;
+        let y = tile_y * TILE + (offset / TILE as usize) as u32;
+        if x >= inputs.gbuf.width || y >= inputs.gbuf.height || inputs.gbuf.tri.get((y * inputs.gbuf.width + x) as usize).is_none_or(|tri| *tri == NO_TRI) {
+            return (offset, 0.0);
+        }
+
+        let mut texel = Texel::new(inputs, x, y, offset, 0.0);
+        if !anchor_stack.is_empty() {
+            texel.anchors_below(&anchor_stack, id);
+        }
+        (offset, texel.mask(plan))
+    })
 }
 
 /// Tiles [`effect_histogram`] samples at most (a million texels).
@@ -2173,6 +2241,111 @@ mod tests {
         let out = run(&f, None);
         let vals: Vec<f32> = (0..64).map(|x| out.value(Channel::BaseColor, x, 20)[0]).collect();
         assert!(vals.iter().any(|v| *v > 0.99) && vals.iter().any(|v| *v < 0.51), "{vals:?}");
+    }
+
+    fn assert_sparse_mask_matches_image(fixture: &Fixture, layer: LayerId, texels: &[(u32, u32)]) -> Option<Vec<f32>> {
+        let images = ImageStore::default();
+        let inputs = Inputs {
+            project: &fixture.project,
+            ts: 0,
+            mesh: &fixture.mesh,
+            gbuf: &fixture.gbuf,
+            pixels: &fixture.pixels,
+            baked: &fixture.baked,
+            preview: None,
+            images: &images,
+            bounds: fixture.mesh.bounds(),
+        };
+        let sparse = mask_at(&inputs, layer, texels);
+        let image = mask_image(&inputs, layer, fixture.gbuf.width);
+        assert_eq!(sparse.is_some(), image.is_some());
+        let values = sparse?;
+        let image = image?;
+        assert_eq!(values.len(), texels.len());
+
+        for (&(x, y), &value) in texels.iter().zip(&values) {
+            let expected =
+                if x < fixture.gbuf.width && y < fixture.gbuf.height { f32::from(image[(y * fixture.gbuf.width + x) as usize]) / 255.0 } else { 0.0 };
+            assert!((value - expected).abs() <= 0.5 / 255.0 + 1e-6, "({x}, {y}): {value} vs {expected}");
+        }
+        Some(values)
+    }
+
+    #[test]
+    fn mask_at_reads_the_same_values_as_the_mask_image() {
+        let mut fixture = fixture();
+        fixture.gbuf = UvGBuffer::new(&fixture.mesh, 0, 128, 128);
+        fixture.project.texture_sets[0].resolution = 128;
+        fixture.gbuf.tri[30 * 128 + 90] = NO_TRI;
+        let layer = fill_layer(&mut fixture.project, [1.0; 3], 1.0);
+        let maskless = fill_layer(&mut fixture.project, [1.0; 3], 1.0);
+        let effect = fixture.project.alloc_id();
+        let mut mask = Mask::new(MaskBackground::Black);
+        let pattern = Procedural::new(ProceduralKind::Checker);
+        mask.effects.push(Effect::new(
+            effect,
+            EffectKind::Fill { source: Source::Procedural { pattern, low: [0.0; 3], high: [1.0; 3] }, projection: Projection::default() },
+        ));
+        fixture.project.layer_mut(layer).unwrap().mask = Some(mask);
+
+        // Cross tile boundaries and include duplicates, a UV hole and invalid coordinates
+        let texels = [(0, 0), (0, 40), (63, 63), (64, 64), (127, 127), (0, 40), (90, 30), (128, 0), (0, 128), (u32::MAX, u32::MAX)];
+        let values = assert_sparse_mask_matches_image(&fixture, layer, &texels).unwrap();
+        assert!(values.iter().any(|value| *value > 0.99) && values.iter().take(6).any(|value| *value < 0.01));
+        assert_eq!(&values[6..], &[0.0; 4]);
+        assert_eq!(assert_sparse_mask_matches_image(&fixture, layer, &[]), Some(Vec::new()));
+        assert!(assert_sparse_mask_matches_image(&fixture, maskless, &texels).is_none());
+        let missing = fixture.project.alloc_id();
+        assert!(assert_sparse_mask_matches_image(&fixture, missing, &texels).is_none());
+        fixture.project.layer_mut(layer).unwrap().mask.as_mut().unwrap().enabled = false;
+        assert!(assert_sparse_mask_matches_image(&fixture, layer, &texels).is_none());
+    }
+
+    #[test]
+    fn mask_at_ignores_out_of_range_texels_before_resampling_paint() {
+        let mut fixture = fixture();
+        let layer = fill_layer(&mut fixture.project, [1.0; 3], 1.0);
+        let paint = fixture.project.alloc_id();
+        let mut mask = Mask::new(MaskBackground::Black);
+        mask.effects.push(Effect::new(paint, EffectKind::Paint));
+        fixture.project.layer_mut(layer).unwrap().mask = Some(mask);
+        fixture.pixels.mask_mut(paint, (32, 32)).set(4, 5, &[u16::MAX; 2]);
+
+        let texels = [(8, 10), (u32::MAX, 0), (0, u32::MAX), (u32::MAX, u32::MAX), (64, 0), (0, 64)];
+        let values = assert_sparse_mask_matches_image(&fixture, layer, &texels).unwrap();
+        assert!(values[0] > 0.5, "valid texels still read resampled paint");
+        assert_eq!(&values[1..], &[0.0; 5]);
+        assert_eq!(assert_sparse_mask_matches_image(&fixture, layer, &texels[1..]), Some(vec![0.0; 5]));
+    }
+
+    #[test]
+    fn mask_at_preserves_anchors_and_neighbourhood_filters_across_tiles() {
+        let mut fixture = fixture();
+        fixture.gbuf = UvGBuffer::new(&fixture.mesh, 0, 128, 128);
+        fixture.project.texture_sets[0].resolution = 128;
+        let lower = fill_layer(&mut fixture.project, [0.0; 3], 1.0);
+        let LayerKind::Fill(fill) = &mut fixture.project.layer_mut(lower).unwrap().kind else { panic!("expected a fill layer") };
+
+        fill.sources.insert(Channel::BaseColor, Source::Procedural { pattern: Procedural::new(ProceduralKind::Checker), low: [0.0; 3], high: [1.0; 3] });
+        let anchor = content_fx(&mut fixture, lower, EffectKind::Anchor);
+        let upper = fill_layer(&mut fixture.project, [1.0; 3], 1.0);
+        let mut mask = Mask::new(MaskBackground::Black);
+        mask.effects.push(Effect::new(
+            fixture.project.alloc_id(),
+            EffectKind::Fill { source: Source::Anchor { anchor, channel: Channel::BaseColor }, projection: Projection::default() },
+        ));
+        fixture.project.layer_mut(upper).unwrap().mask = Some(mask.clone());
+        let texels: Vec<_> = (0..128).map(|x| (x, 63)).collect();
+        let original = assert_sparse_mask_matches_image(&fixture, upper, &texels).unwrap();
+        assert!(original.iter().any(|value| *value > 0.99) && original.iter().any(|value| *value < 0.01), "the anchor supplies the checker");
+
+        for filter in [Filter::Blur { radius: 64.0 }, Filter::DirectionalWarp { intensity: 256.0, angle: 90.0, scale: 4.0, seed: 3 }] {
+            let mut filtered = mask.clone();
+            filtered.effects.push(Effect::new(fixture.project.alloc_id(), EffectKind::Filter(filter)));
+            fixture.project.layer_mut(upper).unwrap().mask = Some(filtered);
+            let values = assert_sparse_mask_matches_image(&fixture, upper, &texels).unwrap();
+            assert!(values.iter().zip(&original).any(|(value, original)| (value - original).abs() > 0.1), "the filter changes the anchor values");
+        }
     }
 
     #[test]
