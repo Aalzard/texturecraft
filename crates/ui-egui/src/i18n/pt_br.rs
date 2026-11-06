@@ -23,15 +23,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("About TextureCraft", "Sobre o TextureCraft"),
     ("About TextureCraft...", "Sobre o TextureCraft..."),
     (
-        "Add a fill layer using this image (or drag it onto the 3D view to place it as a decal)",
-        "Adicionar uma camada de preenchimento com esta imagem (ou arraste-a para a vista 3D para posicioná-la como decalque)",
-    ),
-    ("Add a fill layer using this pattern", "Adicionar uma camada de preenchimento com este padrão"),
-    (
-        "Add a fill layer with this material above the selected layer (or drag it into the layer stack)",
-        "Adicionar uma camada de preenchimento com este material acima da camada selecionada (ou arraste-o para a pilha de camadas)",
-    ),
-    (
         "Add an anchor point to a layer below to use its stack as a mask.",
         "Adicione um ponto de ancoragem a uma camada abaixo para usar sua pilha como máscara.",
     ),
@@ -54,20 +45,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Add paint", "Adicionar pintura"),
     ("Add paint layer", "Adicionar camada de pintura"),
     ("Add smart material from the shelf", "Adicionar material inteligente da prateleira"),
-    (
-        "Add the smart material folder above the selected layer (or drag it into the layer stack)",
-        "Adicionar a pasta do material inteligente acima da camada selecionada (ou arraste-a para a pilha de camadas)",
-    ),
-    (
-        "Add this finish to the selected layer's roughness and height (or drag it onto a layer)",
-        "Adicionar este acabamento à rugosidade e à altura da camada selecionada (ou arraste-o para uma camada)",
-    ),
     ("Add to the layer content", "Adicionar ao conteúdo da camada"),
     ("Add to the mask", "Adicionar à máscara"),
-    (
-        "Add to the selected layer's content, or its mask when the mask is selected (or drag it onto a layer)",
-        "Adicionar ao conteúdo da camada selecionada, ou à sua máscara quando a máscara estiver selecionada (ou arraste-o para uma camada)",
-    ),
     ("Add white mask", "Adicionar máscara branca"),
     ("Adjustments", "Ajustes"),
     (
@@ -687,10 +666,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Rendering, path traced", "Renderização com path tracing"),
     ("Replace", "Substituir"),
     ("Replace Color", "Substituir cor"),
-    (
-        "Replace the selected layer's mask with this smart mask (or drag it onto a layer)",
-        "Substituir a máscara da camada selecionada por esta máscara inteligente (ou arraste-a para uma camada)",
-    ),
     ("Replacement color", "Cor de substituição"),
     ("Report a bug...", "Relatar um bug..."),
     ("Rescan the library folder", "Reexaminar a pasta da biblioteca"),
@@ -851,10 +826,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Undo", "Desfazer"),
     ("Uniform value", "Valor uniforme"),
     ("Use an equirectangular .hdr or .exr image as the environment", "Usar uma imagem equirretangular .hdr ou .exr como ambiente"),
-    (
-        "Use as the brush alpha (or drag it onto the viewport or brush properties)",
-        "Usar como alpha do pincel (ou arraste-o para a viewport ou para as propriedades do pincel)",
-    ),
     ("Use the control channel or `texturecraft-cli render` for screenshots", "Use o canal de controle ou `texturecraft-cli render` para capturas de tela"),
     ("Value", "Valor"),
     ("Version {version}", "Versão {version}"),

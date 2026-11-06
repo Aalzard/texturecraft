@@ -233,4 +233,20 @@ fn smart_mask_shelf_snapshot() {
     }
     eprintln!("all smart mask thumbnails ready after {:.3} s", started.elapsed().as_secs_f64());
     save(&mut harness, &output_dir, "smart-mask-shelf");
+
+    let mask = &texturecraft_engine::smart_masks::SMART_MASKS[0];
+    harness.get_by_role_and_label(egui::Role::Button, mask.label).hover();
+    let preview = texturecraft_ui_egui::shelf_preview::ShelfPreview::SmartMask(mask.id);
+    let started = std::time::Instant::now();
+    loop {
+        harness.run_steps(1);
+        if harness.state_mut().thumbs.rendered_big(&context, &preview, 256).is_some() {
+            break;
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(60), "smart mask hover preview did not arrive");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    harness.run_steps(60);
+    assert_eq!(harness.query_all_by_label(mask.label).count(), 2, "the popup shows the mask name");
+    save(&mut harness, &output_dir, "smart-mask-hover");
 }

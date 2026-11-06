@@ -22,15 +22,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("AO intensity", "شدة الانسداد المحيطي (AO)"),
     ("About TextureCraft", "حول TextureCraft"),
     ("About TextureCraft...", "حول TextureCraft..."),
-    (
-        "Add a fill layer using this image (or drag it onto the 3D view to place it as a decal)",
-        "إضافة طبقة تعبئة بهذه الصورة (أو اسحبها إلى العرض ثلاثي الأبعاد لوضعها كملصق)",
-    ),
-    ("Add a fill layer using this pattern", "إضافة طبقة تعبئة بهذا النمط"),
-    (
-        "Add a fill layer with this material above the selected layer (or drag it into the layer stack)",
-        "إضافة طبقة تعبئة بهذه المادة فوق الطبقة المحددة (أو اسحبها إلى مكدس الطبقات)",
-    ),
     ("Add an anchor point to a layer below to use its stack as a mask.", "أضف نقطة ارتكاز إلى طبقة سفلية لاستخدام مكدسها كقناع."),
     ("Add anchor point", "إضافة نقطة ارتكاز"),
     ("Add as decal (view center)", "إضافة كملصق (مركز العرض)"),
@@ -51,20 +42,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Add paint", "إضافة رسم"),
     ("Add paint layer", "إضافة طبقة رسم"),
     ("Add smart material from the shelf", "إضافة مادة ذكية من الرف"),
-    (
-        "Add the smart material folder above the selected layer (or drag it into the layer stack)",
-        "إضافة مجلد المادة الذكية فوق الطبقة المحددة (أو اسحبه إلى مكدس الطبقات)",
-    ),
-    (
-        "Add this finish to the selected layer's roughness and height (or drag it onto a layer)",
-        "إضافة هذه اللمسة النهائية إلى خشونة وارتفاع الطبقة المحددة (أو اسحبها إلى طبقة)",
-    ),
     ("Add to the layer content", "إضافة إلى محتوى الطبقة"),
     ("Add to the mask", "إضافة إلى القناع"),
-    (
-        "Add to the selected layer's content, or its mask when the mask is selected (or drag it onto a layer)",
-        "إضافة إلى محتوى الطبقة المحددة، أو إلى قناعها عند تحديد القناع (أو اسحبها إلى طبقة)",
-    ),
     ("Add white mask", "إضافة قناع أبيض"),
     ("Adjustments", "تعديلات"),
     (
@@ -663,7 +642,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Rendering, path traced", "التصيير، بتتبع المسار"),
     ("Replace", "استبدال"),
     ("Replace Color", "استبدال اللون"),
-    ("Replace the selected layer's mask with this smart mask (or drag it onto a layer)", "استبدال قناع الطبقة المحددة بهذا القناع الذكي (أو اسحبه إلى طبقة)"),
     ("Replacement color", "لون الاستبدال"),
     ("Report a bug...", "الإبلاغ عن خطأ..."),
     ("Rescan the library folder", "إعادة فحص مجلد المكتبة"),
@@ -824,7 +802,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Undo", "تراجع"),
     ("Uniform value", "قيمة موحدة"),
     ("Use an equirectangular .hdr or .exr image as the environment", "استخدم صورة .hdr أو .exr متساوية المستطيلات كبيئة"),
-    ("Use as the brush alpha (or drag it onto the viewport or brush properties)", "استخدم كألفا للفرشاة (أو اسحبها إلى منفذ العرض أو خصائص الفرشاة)"),
     ("Use the control channel or `texturecraft-cli render` for screenshots", "استخدم قناة التحكم أو الأمر `texturecraft-cli render` لالتقاط لقطات الشاشة"),
     ("Value", "القيمة"),
     ("Version {version}", "الإصدار {version}"),
