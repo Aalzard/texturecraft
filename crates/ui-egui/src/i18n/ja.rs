@@ -1083,4 +1083,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Value Bounds Max", "値の上限"),
     ("Value Bounds Min", "値の下限"),
     ("Vertex Color", "頂点カラー"),
+    ("Remove resolution override", "解像度の上書きを解除"),
+    ("Texture set resolution", "テクスチャセットの解像度"),
+    ("UV tile {tile} resolution", "UVタイル {tile} の解像度"),
 ];

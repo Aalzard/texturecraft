@@ -165,6 +165,7 @@ pub fn filter(id: &str, size: usize) -> Option<Vec<Option<Sample>>> {
         gbuf: &gbuf,
         pixels: &pixels,
         baked: &baked,
+        block_scales: p.texture_set(0).map(|set| set.block_scales()).unwrap_or_default(),
         preview: None,
         images: &images,
         bounds: mesh.bounds(),
