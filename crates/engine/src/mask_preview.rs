@@ -15,6 +15,8 @@ use crate::{EngineError, Result, Session};
 const TEXTURE_PX: u32 = 512;
 /// Camera rays per preview pixel along each axis (anti-aliased outline).
 const SUPERSAMPLE: usize = 2;
+/// Bound camera samples and output allocations for shelf previews.
+pub const MAX_PREVIEW_SIZE_PX: usize = 512;
 /// AO and thickness rays per texel (the default is 64; fewer look the same at thumbnail size).
 const OCCLUSION_RAYS: u32 = 12;
 /// Mesh curvature rays per texel (the default is 32; fewer look the same at thumbnail size).
@@ -57,8 +59,12 @@ impl MaskPreview {
     }
 
     /// Smart mask `id` per preview pixel, row-major `size²`, None where the shape is not seen
-    /// (None for an unknown id).
+    /// Returns None for an unknown id or a size outside 1..=[`MAX_PREVIEW_SIZE_PX`].
     pub fn render(&mut self, id: &str, size: usize) -> Option<Vec<Option<MaskPreviewPixel>>> {
+        if !(1..=MAX_PREVIEW_SIZE_PX).contains(&size) {
+            return None;
+        }
+
         crate::execute(&mut self.session, "mask.smart.apply", &json!({ "name": id, "layer": self.layer.0 })).ok()?;
         // Nothing is undone here; the snapshots would pile up over the presets
         self.session.undo.clear();
@@ -112,6 +118,18 @@ mod tests {
     fn difference(a: &[Option<MaskPreviewPixel>], b: &[Option<MaskPreviewPixel>]) -> f32 {
         let pairs: Vec<(f32, f32)> = a.iter().zip(b).filter_map(|(a, b)| Some((a.as_ref()?.mask, b.as_ref()?.mask))).collect();
         pairs.iter().map(|(a, b)| (a - b).abs()).sum::<f32>() / pairs.len().max(1) as f32
+    }
+
+    #[test]
+    fn invalid_preview_sizes_are_rejected_before_changing_the_shape() {
+        let session = Session::new_project("Mask preview", primitives::cube(2.0), "builtin:cube", None, 128).unwrap();
+        let layer = session.doc.project.texture_set(0).unwrap().stack[0];
+        let mut preview = MaskPreview { session, layer, cameras: Vec::new() };
+        for size in [0, MAX_PREVIEW_SIZE_PX + 1, usize::MAX / 2 + 1, usize::MAX] {
+            assert!(preview.render("edges_sharp", size).is_none(), "size {size} should be rejected before rendering");
+            assert!(preview.cameras.is_empty(), "invalid sizes must not allocate a camera");
+            assert!(preview.session.doc.project.layer(layer).unwrap().mask.is_none(), "invalid sizes must not apply a mask");
+        }
     }
 
     #[test]

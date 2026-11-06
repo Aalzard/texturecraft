@@ -108,3 +108,23 @@ fn the_big_preview_renders_after_a_rest_but_not_during_a_sweep() {
     assert!(big_preview_ready(&mut h, first), "the preview rendered during the popup's delay");
     assert_eq!(h.query_all_by_label(first.label).count(), 1, "the popup is not open yet");
 }
+
+#[test]
+fn high_dpi_smart_mask_hover_stays_within_the_renderer_limit() {
+    use texturecraft_engine::mask_preview::MAX_PREVIEW_SIZE_PX;
+    use texturecraft_engine::smart_masks::SMART_MASKS;
+
+    let (mut harness, _) = materials_shelf(1.0 / 4.0);
+    harness.ctx.set_pixels_per_point(3.0);
+    harness.state_mut().ui.shelf_tab = 2;
+    harness.run_steps(4);
+    harness.get_by_label(SMART_MASKS[0].label).hover();
+
+    let expected = Some([MAX_PREVIEW_SIZE_PX; 2]);
+    let started = Instant::now();
+    while largest_drawn_texture(&harness, BIG_PREVIEW_SIZE) != expected && started.elapsed() < WORKER_TIMEOUT {
+        harness.run_steps(1);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(largest_drawn_texture(&harness, BIG_PREVIEW_SIZE), expected, "the popup uses a bounded big preview at 300% scale");
+}

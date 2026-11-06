@@ -132,7 +132,7 @@ impl Session {
     fn material_files(&mut self, opts: ExportOptions, tiled: bool, materials: usize) -> Result<Vec<Vec<ExportedFile>>> {
         let opts = ExportOptions { atlas: true, ..opts };
         (0..materials)
-            .map(|m| match self.doc.project.texture_sets.iter().position(|t| t.material == m) {
+            .map(|m| match self.texture_set_of_material(m) {
                 Some(ts) if tiled || self.doc.project.texture_sets.get(ts).is_some_and(|t| t.tile_grid().is_none()) => self.export_files(&[ts], &opts),
                 _ => Ok(Vec::new()),
             })
