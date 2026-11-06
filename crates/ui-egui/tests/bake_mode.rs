@@ -434,39 +434,48 @@ fn check_all_enables_every_map_then_disables_them_all() {
 #[test]
 fn the_breadcrumb_switches_the_shown_map() {
     let mut harness = harness(Some(BakedMap::Curvature));
-    harness.get_by_label("Details");
+    harness.get_by_label("Sampling Radius");
     assert_eq!(harness.get_all_by_role_and_label(Role::Button, "Position").count(), 1, "only the list row before the menu opens");
+
     let dropdowns: Vec<_> = harness.get_all_by_label(egui_phosphor::regular::CARET_RIGHT).collect();
     let [_texture_set_dropdown, map_dropdown] = dropdowns.as_slice() else { panic!("the breadcrumb has a texture set and a map dropdown") };
     map_dropdown.click();
     harness.run_steps(3);
     assert_eq!(harness.get_all_by_role_and_label(Role::Button, "Position").count(), 2, "the map menu lists Position");
+
     // The menu draws its items after the list rows
     harness.get_all_by_role_and_label(Role::Button, "Position").last().unwrap().click();
     harness.run_steps(3);
     harness.get_by_label("Normalization Scale");
-    assert!(harness.query_by_label("Details").is_none());
+    assert!(harness.query_by_label("Sampling Radius").is_none());
     assert_eq!(enabled_maps(&harness), [BakedMap::Curvature]);
 }
 
 #[test]
 fn curvature_controls_follow_the_method_and_notes_visibility_rules() {
     let mut harness = harness(Some(BakedMap::Curvature));
-    harness.get_by_label("Details");
-    harness.get_by_label("Seams Intensity");
-    click(&mut harness, "Enable Seams");
-    assert!(harness.query_by_label("Seams Intensity").is_none());
-    click(&mut harness, "Method");
-    click(&mut harness, "Generate from Mesh");
-    assert_eq!(harness.state().session.doc.project.texture_sets[0].bake.maps.curvature.parameters.method, CurvatureMethod::Mesh);
+    let curvature = |harness: &Harness<'_, TextureCraftApp>| harness.state().session.doc.project.texture_sets[0].bake.maps.curvature.parameters;
+
+    assert_eq!(curvature(&harness).method, CurvatureMethod::Mesh);
     assert!(harness.query_by_label("Details").is_none());
     harness.get_by_label("Sampling Radius");
     assert!(harness.query_by_label("Value Bounds Min").is_none());
     assert!(harness.query_by_label("Value Bounds Max").is_none());
+
     click(&mut harness, "Auto Tonemapping");
     harness.get_by_label("Value Bounds Min");
     harness.get_by_label("Value Bounds Max");
-    assert!(!harness.state().session.doc.project.texture_sets[0].bake.maps.curvature.parameters.mesh.auto_tonemapping);
+    assert!(!curvature(&harness).mesh.auto_tonemapping);
+
+    click(&mut harness, "Method");
+    click(&mut harness, "Generate from Normal Map");
+    assert_eq!(curvature(&harness).method, CurvatureMethod::NormalMap);
+    assert!(harness.query_by_label("Sampling Radius").is_none());
+    harness.get_by_label("Details");
+
+    harness.get_by_label("Seams Intensity");
+    click(&mut harness, "Enable Seams");
+    assert!(harness.query_by_label("Seams Intensity").is_none());
 }
 
 #[test]

@@ -566,6 +566,25 @@ fn a_high_poly_box_has_bright_edges_and_flat_faces() {
 }
 
 #[test]
+fn default_curvature_brightens_box_edges_and_never_darkens_them() {
+    let mut bake_settings = settings(256, &[BakedMap::Curvature]);
+    bake_settings.cage = CageSettings { max_frontal: 0.06, max_rear: 0.02, ..bake_settings.cage };
+    bake_settings.maps.curvature.parameters.method = CurvatureMethod::default();
+
+    // A box has no concave texel, whether it is baked from itself or from a beveled high poly
+    let low = primitives::cube(2.0);
+    let high = primitives::rounded_box(Vec3::ONE, 0.15);
+    let bakes = [("itself", run(&low, &bake_settings).unwrap()), ("a beveled high poly", transfer(&low, &high, None, &bake_settings).unwrap())];
+    for (source, bake_output) in bakes {
+        let curvature = covered_values(&low, &bake_output, BakedMap::Curvature);
+        let darkest = curvature.iter().map(|(_, value)| *value).fold(1.0, f32::min);
+        let brightest = curvature.iter().map(|(_, value)| *value).fold(0.0, f32::max);
+        assert!(darkest > 0.45, "baked from {source}, darkest {darkest}");
+        assert!(brightest > 0.6, "baked from {source}, brightest {brightest}");
+    }
+}
+
+#[test]
 fn a_narrow_high_poly_bevel_stays_bright() {
     let s = {
         let mut base = settings(1024, &[BakedMap::Curvature]);
