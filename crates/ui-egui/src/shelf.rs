@@ -11,6 +11,7 @@ use texturecraft_engine::core::ProceduralKind;
 use texturecraft_engine::filter_lib::FILTERS;
 #[cfg(not(target_arch = "wasm32"))]
 use texturecraft_engine::formats::mcmat::MCMAT_EXT;
+use texturecraft_engine::geom::glam::Vec2;
 use texturecraft_engine::materials::MATERIALS;
 use texturecraft_engine::paint::alphas;
 use texturecraft_engine::paint::presets::{BrushPreset, PRESETS};
@@ -119,11 +120,27 @@ pub enum DropZone {
     Brush,
     /// The 2D view: alphas and materials.
     View2d,
-    /// The 3D view: alphas, materials and textures (placed as decals where they drop).
+    /// The 3D view: alphas, materials (on the texture set they drop on) and textures (placed as decals where they drop).
     View3d,
 }
 
-/// Highlight accepted shelf assets on hover and apply them on drop
+/// The texture set under the pointer while a shelf material is dragged over the 3D view `response`: the set a drop there applies it to
+pub fn material_drop_set(app: &TextureCraftApp, ui: &Ui, response: &egui::Response) -> Option<usize> {
+    if app.ui.mode != crate::state::Mode::Painting {
+        return None;
+    }
+
+    response.dnd_hover_payload::<ShelfDrag>().filter(|drag| drag.asset.is_material())?;
+    set_under_pointer(app, ui, response)
+}
+
+/// The texture set of the surface under the pointer in the 3D view `response`
+fn set_under_pointer(app: &TextureCraftApp, ui: &Ui, response: &egui::Response) -> Option<usize> {
+    let local_position = ui.input(|input| input.pointer.interact_pos())? - response.rect.min;
+    app.session.texture_set_at(Vec2::new(local_position.x, local_position.y), app.session.viewport)
+}
+
+/// Highlight accepted shelf assets on hover and apply them on drop. In the 3D view a material goes to the texture set under the pointer, highlighted by the view itself ([`material_drop_set`])
 pub fn drop_target(app: &mut TextureCraftApp, ui: &Ui, response: &egui::Response, zone: DropZone) {
     if app.ui.mode != crate::state::Mode::Painting {
         return;
@@ -136,23 +153,28 @@ pub fn drop_target(app: &mut TextureCraftApp, ui: &Ui, response: &egui::Response
         Asset::Texture(_) => zone == DropZone::View3d,
         Asset::SmartMask(_) | Asset::Filter(_) => false,
     };
-    if response.dnd_hover_payload::<ShelfDrag>().is_some_and(|drag| accepts(&drag)) {
+    let onto_set = |asset: &Asset| zone == DropZone::View3d && asset.is_material();
+    if response.dnd_hover_payload::<ShelfDrag>().is_some_and(|drag| accepts(&drag) && !onto_set(&drag.asset)) {
         ui.painter().rect_stroke(response.rect.shrink(1.0), 3.0, Stroke::new(2.0, tokens.accent), egui::StrokeKind::Inside);
     }
+
     let pointer = ui.input(|input| input.pointer.interact_pos());
-    if let Some(drag) = dnd_release::<ShelfDrag>(response)
-        && accepts(&drag)
-    {
-        match (&drag.asset, pointer) {
-            (Asset::Texture(name), Some(position)) => {
-                let (local_position, viewport_size) = (position - response.rect.min, response.rect.size());
-                app.run(
-                    "layer.add.decal",
-                    json!({"image": name, "x": local_position.x, "y": local_position.y, "viewport": [viewport_size.x, viewport_size.y]}),
-                );
-            }
-            (asset, _) => apply(app, asset),
+    let Some(drag) = dnd_release::<ShelfDrag>(response).filter(|drag| accepts(drag)) else { return };
+
+    match (&drag.asset, pointer) {
+        (Asset::Texture(name), Some(position)) => {
+            let (local_position, viewport_size) = (position - response.rect.min, response.rect.size());
+            app.run("layer.add.decal", json!({"image": name, "x": local_position.x, "y": local_position.y, "viewport": [viewport_size.x, viewport_size.y]}));
         }
+        // The background takes nothing
+        (asset, _) if onto_set(asset) => {
+            let Some(ts) = set_under_pointer(app, ui, response) else { return };
+
+            if app.run("textureSet.select", json!({"ts": ts})).is_some() {
+                apply(app, asset);
+            }
+        }
+        (asset, _) => apply(app, asset),
     }
 }
 

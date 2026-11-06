@@ -10,7 +10,7 @@ use texturecraft_engine::camera_cmds::DEFAULT_CAMERA;
 use texturecraft_engine::core::{BakedMap, Channel};
 use texturecraft_engine::geom::glam::{Vec2, Vec3};
 use texturecraft_engine::{Tool, ViewMode};
-use texturecraft_render::{Frame, Shade, ViewKind};
+use texturecraft_render::{Frame, SetHighlight, Shade, ViewKind};
 
 use crate::TextureCraftApp;
 use crate::gpu::ViewCallback;
@@ -215,6 +215,14 @@ fn shade(app: &TextureCraftApp) -> Shade {
         wireframe_3d: app.ui.wireframe_3d,
         ..Shade::from_project(&app.session.doc.project)
     }
+}
+
+/// The texture set a shelf material dragged over the 3D view `response` would drop on, its edges drawn in the accent color
+fn drop_highlight(app: &TextureCraftApp, ui: &Ui, response: &egui::Response) -> Option<SetHighlight> {
+    let set = crate::shelf::material_drop_set(app, ui, response)?;
+    let accent = egui::Rgba::from(Tokens::get(ui.ctx()).viewport_accent);
+
+    Some(SetHighlight { set, color: [accent.r(), accent.g(), accent.b()] })
 }
 
 /// Show what the GPU side reported (each message once while its toast is up).
@@ -565,11 +573,11 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         size: frame_size_in_pixels(ui, rect),
         kind: ViewKind::Scene,
         camera: app.session.camera,
-        shade: shade(app),
+        shade: Shade { highlight: drop_highlight(app, ui, &resp), ..shade(app) },
         visible: app.session.doc.project.texture_sets.iter().map(|t| t.visible).collect(),
     };
     add_callback(app, ui, rect, frame, sync);
-    // Shelf drops: a material goes above the selection, an alpha on the brush.
+    // Shelf drops: a material goes above the selection of the set under the pointer, an alpha on the brush
     crate::shelf::drop_target(app, ui, &resp, crate::shelf::DropZone::View3d);
 
     // Brush cursor.
