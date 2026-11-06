@@ -25,15 +25,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("AO intensity", "AO 강도"),
     ("About TextureCraft", "TextureCraft 정보"),
     ("About TextureCraft...", "TextureCraft 정보..."),
-    (
-        "Add a fill layer using this image (or drag it onto the 3D view to place it as a decal)",
-        "이 이미지로 채우기 레이어를 추가합니다 (또는 3D 뷰로 드래그하여 데칼로 배치)",
-    ),
-    ("Add a fill layer using this pattern", "이 패턴으로 채우기 레이어를 추가합니다"),
-    (
-        "Add a fill layer with this material above the selected layer (or drag it into the layer stack)",
-        "선택한 레이어 위에 이 머티리얼로 채우기 레이어를 추가합니다 (또는 레이어 스택으로 드래그)",
-    ),
     ("Add an anchor point to a layer below to use its stack as a mask.", "아래 레이어에 앵커 포인트를 추가하면 해당 스택을 마스크로 사용할 수 있습니다."),
     ("Add anchor point", "앵커 포인트 추가"),
     ("Add as decal (view center)", "데칼로 추가 (뷰 중앙)"),
@@ -54,20 +45,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Add paint", "페인트 추가"),
     ("Add paint layer", "페인트 레이어 추가"),
     ("Add smart material from the shelf", "셸프에서 스마트 머티리얼 추가"),
-    (
-        "Add the smart material folder above the selected layer (or drag it into the layer stack)",
-        "선택한 레이어 위에 스마트 머티리얼 폴더를 추가합니다 (또는 레이어 스택으로 드래그)",
-    ),
-    (
-        "Add this finish to the selected layer's roughness and height (or drag it onto a layer)",
-        "선택한 레이어의 러프니스와 높이에 이 마감을 추가합니다 (또는 레이어로 드래그)",
-    ),
     ("Add to the layer content", "레이어 콘텐츠에 추가"),
     ("Add to the mask", "마스크에 추가"),
-    (
-        "Add to the selected layer's content, or its mask when the mask is selected (or drag it onto a layer)",
-        "선택한 레이어의 콘텐츠에 추가하거나, 마스크가 선택된 경우 마스크에 추가합니다 (또는 레이어로 드래그)",
-    ),
     ("Add white mask", "흰색 마스크 추가"),
     ("Adjustments", "조정"),
     (
@@ -672,10 +651,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Rendering, path traced", "렌더링, 패스 트레이싱"),
     ("Replace", "대체"),
     ("Replace Color", "색상 바꾸기"),
-    (
-        "Replace the selected layer's mask with this smart mask (or drag it onto a layer)",
-        "선택한 레이어의 마스크를 이 스마트 마스크로 대체합니다 (또는 레이어로 드래그)",
-    ),
     ("Replacement color", "대체 색상"),
     ("Report a bug...", "버그 신고..."),
     ("Rescan the library folder", "라이브러리 폴더를 다시 검색합니다"),
@@ -836,7 +811,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Undo", "실행 취소"),
     ("Uniform value", "균일 값"),
     ("Use an equirectangular .hdr or .exr image as the environment", "등장방형 .hdr 또는 .exr 이미지를 환경으로 사용합니다"),
-    ("Use as the brush alpha (or drag it onto the viewport or brush properties)", "브러시 알파로 사용합니다 (또는 뷰포트나 브러시 속성으로 드래그)"),
     ("Use the control channel or `texturecraft-cli render` for screenshots", "스크린샷은 제어 채널 또는 `texturecraft-cli render`를 사용하세요"),
     ("Value", "값"),
     ("Version {version}", "버전 {version}"),

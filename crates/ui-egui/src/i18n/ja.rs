@@ -26,15 +26,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("About TextureCraft", "TextureCraftについて"),
     ("About TextureCraft...", "TextureCraftについて..."),
     (
-        "Add a fill layer using this image (or drag it onto the 3D view to place it as a decal)",
-        "この画像で塗りつぶしレイヤーを追加 (3Dビューにドラッグするとデカールとして配置)",
-    ),
-    ("Add a fill layer using this pattern", "このパターンで塗りつぶしレイヤーを追加"),
-    (
-        "Add a fill layer with this material above the selected layer (or drag it into the layer stack)",
-        "このマテリアルの塗りつぶしレイヤーを選択中のレイヤーの上に追加 (レイヤースタックへのドラッグも可)",
-    ),
-    (
         "Add an anchor point to a layer below to use its stack as a mask.",
         "下のレイヤーにアンカーポイントを追加すると、そのスタックをマスクとして使用できます。",
     ),
@@ -57,20 +48,8 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Add paint", "ペイントを追加"),
     ("Add paint layer", "ペイントレイヤーを追加"),
     ("Add smart material from the shelf", "シェルフからスマートマテリアルを追加"),
-    (
-        "Add the smart material folder above the selected layer (or drag it into the layer stack)",
-        "スマートマテリアルのフォルダーを選択中のレイヤーの上に追加 (レイヤースタックへのドラッグも可)",
-    ),
-    (
-        "Add this finish to the selected layer's roughness and height (or drag it onto a layer)",
-        "この仕上げを選択中のレイヤーのラフネスとハイトに追加 (レイヤーへのドラッグも可)",
-    ),
     ("Add to the layer content", "レイヤーのコンテンツに追加"),
     ("Add to the mask", "マスクに追加"),
-    (
-        "Add to the selected layer's content, or its mask when the mask is selected (or drag it onto a layer)",
-        "選択中のレイヤーのコンテンツ (マスク選択時はマスク) に追加 (レイヤーへのドラッグも可)",
-    ),
     ("Add white mask", "白マスクを追加"),
     ("Adjustments", "色調補正"),
     (
@@ -681,10 +660,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Rendering, path traced", "パストレースによるレンダリング"),
     ("Replace", "置換"),
     ("Replace Color", "色の置き換え"),
-    (
-        "Replace the selected layer's mask with this smart mask (or drag it onto a layer)",
-        "選択中のレイヤーのマスクをこのスマートマスクで置換 (レイヤーへのドラッグも可)",
-    ),
     ("Replacement color", "置き換え後の色"),
     ("Report a bug...", "バグを報告..."),
     ("Rescan the library folder", "ライブラリフォルダーを再スキャン"),
@@ -845,10 +820,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Undo", "元に戻す"),
     ("Uniform value", "均一値"),
     ("Use an equirectangular .hdr or .exr image as the environment", "正距円筒図法の .hdr または .exr 画像を環境として使用"),
-    (
-        "Use as the brush alpha (or drag it onto the viewport or brush properties)",
-        "ブラシのアルファとして使用 (ビューポートやブラシプロパティへのドラッグも可)",
-    ),
     (
         "Use the control channel or `texturecraft-cli render` for screenshots",
         "スクリーンショットにはコントロールチャンネルまたは `texturecraft-cli render` を使用",
