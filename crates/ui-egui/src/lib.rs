@@ -128,7 +128,7 @@ impl TextureCraftApp {
         theme::install(&cc.egui_ctx);
         // Bakes cast their rays on a GPU device of their own (created on the first bake).
         #[cfg(not(target_arch = "wasm32"))]
-        texturecraft_engine::bake_cmds::install_gpu_tracer(Arc::new(texturecraft_render::gpu_bake::GpuBaker::new()));
+        texturecraft_engine::bake::install_gpu_tracer(Arc::new(texturecraft_render::gpu_bake::GpuBaker::new()));
         let gpu = cc.wgpu_render_state.as_ref().map(|rs| gpu::init(rs, &cc.egui_ctx));
         // The first run speaks the OS (or browser) language.
         let ui = cc.storage.and_then(|s| eframe::get_value::<UiState>(s, "ui")).unwrap_or_else(|| {

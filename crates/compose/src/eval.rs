@@ -93,6 +93,7 @@ pub struct Inputs<'a> {
     pub gbuf: &'a UvGBuffer,
     pub pixels: &'a PixelStore,
     pub baked: &'a BakedMaps,
+    pub block_scales: BlockScales,
     pub preview: Option<&'a StrokePreview>,
     /// Imported image resources (fill sources).
     pub images: &'a ImageStore,
@@ -1043,7 +1044,11 @@ impl<'a, 'b> Texel<'a, 'b> {
     }
 
     fn baked(&self, m: BakedMap) -> Option<f32> {
-        self.inp.baked.scalar(m, self.x, self.y, (self.res, self.inp.gbuf.height))
+        self.baked_color(m).map(|value| value[0])
+    }
+
+    fn baked_color(&self, map: BakedMap) -> Option<[f32; 3]> {
+        self.inp.baked.sample_working(map, self.x, self.y, (self.res, self.inp.gbuf.height), &self.inp.block_scales)
     }
 
     /// Where projection `proj` samples this texel: the texel's coordinates, or for a decal its
@@ -1179,7 +1184,7 @@ impl<'a, 'b> Texel<'a, 'b> {
                     v += (val - v) * o;
                 }
                 EffectKind::ColorSelection { colors, tolerance } => {
-                    let id = self.inp.baked.sample(BakedMap::Id, self.x, self.y, (self.res, self.inp.gbuf.height));
+                    let id = self.baked_color(BakedMap::Id);
                     let hit = id.is_some_and(|c| colors.iter().any(|k| (k[0] - c[0]).abs().max((k[1] - c[1]).abs()).max((k[2] - c[2]).abs()) <= *tolerance));
                     let val = if hit { 1.0 } else { 0.0 };
                     v += (blend1(e.blend, v, val) - v) * o;
@@ -1981,7 +1986,7 @@ pub fn effect_histogram(inp: &Inputs, effect: LayerId, channel: Channel, bins: u
             false
         }
     };
-    let cut_inp = Inputs { project: &cut, preview: None, ..*inp };
+    let cut_inp = Inputs { project: &cut, preview: None, block_scales: inp.block_scales.clone(), ..*inp };
     let channels = cut.texture_set(inp.ts).map(|t| t.channel_list()).unwrap_or_default();
     let tiles = histogram_tiles(inp.gbuf.width, inp.gbuf.height);
     // A field covers the bounding box of the tiles it is built for, which for a scattered sample
@@ -2058,7 +2063,7 @@ pub fn flatten_layer(inp: &Inputs, id: LayerId, tiles: &[(u32, u32)]) -> Option<
     if let Some(l) = solo.layers.get_mut(&id) {
         l.visible = true;
     }
-    let solo_inp = Inputs { project: &solo, preview: None, ..*inp };
+    let solo_inp = Inputs { project: &solo, preview: None, block_scales: inp.block_scales.clone(), ..*inp };
     let fields = neighbourhood_fields(&solo_inp, &channels, tiles);
     let out: Vec<Vec<FlatTile>> = tiles
         .par_iter()
@@ -2135,6 +2140,7 @@ mod tests {
             gbuf: &f.gbuf,
             pixels: &f.pixels,
             baked: &f.baked,
+            block_scales: f.project.texture_sets[0].block_scales(),
             preview,
             images: &images,
             bounds: f.mesh.bounds(),
@@ -2252,6 +2258,7 @@ mod tests {
             gbuf: &fixture.gbuf,
             pixels: &fixture.pixels,
             baked: &fixture.baked,
+            block_scales: fixture.project.texture_sets[0].block_scales(),
             preview: None,
             images: &images,
             bounds: fixture.mesh.bounds(),
@@ -2606,6 +2613,7 @@ soft {soft:?}"
             gbuf: &f.gbuf,
             pixels: &f.pixels,
             baked: &f.baked,
+            block_scales: f.project.texture_sets[0].block_scales(),
             preview: None,
             images: &images,
             bounds: f.mesh.bounds(),
@@ -2667,6 +2675,7 @@ soft {soft:?}"
                 gbuf: &f.gbuf,
                 pixels: &f.pixels,
                 baked: &f.baked,
+                block_scales: f.project.texture_sets[0].block_scales(),
                 preview: None,
                 images: &images,
                 bounds: f.mesh.bounds(),

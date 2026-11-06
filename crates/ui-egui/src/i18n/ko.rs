@@ -1068,4 +1068,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Value Bounds Max", "값 상한"),
     ("Value Bounds Min", "값 하한"),
     ("Vertex Color", "정점 색상"),
+    ("Remove resolution override", "해상도 재정의 제거"),
+    ("Texture set resolution", "텍스처 세트 해상도"),
+    ("UV tile {tile} resolution", "UV 타일 {tile} 해상도"),
 ];
