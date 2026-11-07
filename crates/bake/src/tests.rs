@@ -14,6 +14,12 @@ use texturecraft_geom::primitives;
 
 use super::*;
 
+#[path = "test/cage_shell.rs"]
+mod cage_shell;
+
+#[path = "test/high_poly_reach.rs"]
+mod high_poly_reach;
+
 #[path = "test/setting.rs"]
 mod setting;
 
