@@ -5,6 +5,7 @@ mod bake;
 mod bake_resolution;
 mod bake_settings;
 mod bake_tiles;
+mod color_selection;
 mod content_effects;
 mod export_colour_space;
 mod filter_swap;
