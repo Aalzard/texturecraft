@@ -924,23 +924,28 @@ pub(crate) fn properties_title(app: &TextureCraftApp) -> String {
 }
 
 pub(crate) fn properties(app: &mut TextureCraftApp, ui: &mut Ui) {
-    let tk = Tokens::get(ui.ctx());
-    let sel = app.session.selected_layer().and_then(|id| app.session.doc.project.layers.get(&id).cloned());
-    let target = app.session.target;
-    egui::ScrollArea::vertical().id_salt("props").auto_shrink([false, false]).show(ui, |ui| match (&sel, target) {
-        (Some(l), StackTarget::Effect(e)) => effect_properties(app, ui, l, e),
-        (Some(l), StackTarget::Content) if matches!(l.kind, LayerKind::Fill(_)) => fill_properties(app, ui, l),
-        (Some(l), StackTarget::Content) if l.is_group() => {
-            ui.label(RichText::new(tr("A folder blends its children (pass-through). Set per-channel opacity in the layer rows.")).color(tk.text_dim));
+    egui::ScrollArea::vertical().id_salt("props").auto_shrink([false, false]).show(ui, |ui| properties_contents(app, ui));
+}
+
+/// What the Properties panel edits: the selected effect, fill, folder or instance, else the tool
+pub(crate) fn properties_contents(app: &mut TextureCraftApp, ui: &mut Ui) {
+    let tokens = Tokens::get(ui.ctx());
+    let selected = app.session.selected_layer().and_then(|id| app.session.doc.project.layers.get(&id).cloned());
+
+    match (&selected, app.session.target) {
+        (Some(layer), StackTarget::Effect(effect)) => effect_properties(app, ui, layer, effect),
+        (Some(layer), StackTarget::Content) if matches!(layer.kind, LayerKind::Fill(_)) => fill_properties(app, ui, layer),
+        (Some(layer), StackTarget::Content) if layer.is_group() => {
+            ui.label(RichText::new(tr("A folder blends its children (pass-through). Set per-channel opacity in the layer rows.")).color(tokens.text_dim));
         }
-        (Some(l), StackTarget::Content) if l.instance_source().is_some() => instance_properties(app, ui, l),
-        (Some(l), StackTarget::Mask) => {
-            height_mask_section(app, ui, l);
+        (Some(layer), StackTarget::Content) if layer.instance_source().is_some() => instance_properties(app, ui, layer),
+        (Some(layer), StackTarget::Mask) => {
+            height_mask_section(app, ui, layer);
             ui.separator();
             tool_properties(app, ui);
         }
         _ => tool_properties(app, ui),
-    });
+    }
 }
 
 /// An instance draws its source: point there for edits.

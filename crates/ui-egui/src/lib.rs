@@ -24,6 +24,7 @@ mod preview_image;
 mod preview_request;
 mod preview_worker;
 pub mod profile;
+pub mod properties_popup;
 pub mod render_mode;
 pub mod shelf;
 pub mod shelf_preview;
@@ -111,6 +112,8 @@ pub struct TextureCraftApp {
     pub last_paint_point: Option<texturecraft_engine::geom::glam::Vec2>,
     /// The decal layer the next click in the 3D view places.
     pub placing_decal: Option<texturecraft_engine::core::LayerId>,
+    /// The Properties popup a right click in a view opens.
+    pub properties_popup: Option<properties_popup::PropertiesPopup>,
     /// The wgpu state (screenshots read the renderer's targets).
     pub render_state: Option<eframe::egui_wgpu::RenderState>,
     /// CJK fallback fonts for the UI language.
@@ -164,6 +167,7 @@ impl TextureCraftApp {
             render: render_mode::RenderView::default(),
             last_paint_point: None,
             placing_decal: None,
+            properties_popup: None,
             render_state: cc.wgpu_render_state.clone(),
             fonts: fonts::UiFonts::default(),
             banner: None,
