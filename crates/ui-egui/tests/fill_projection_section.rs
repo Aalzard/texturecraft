@@ -62,6 +62,11 @@ fn hardness_and_axis_stay_outside_the_section() {
     toggle_section(&mut harness);
     assert!(harness.query_by_label("Offset X").is_none());
     assert!(harness.query_by_label("Axis").is_some());
+
+    let (mut harness, _) = app_with_fill("cylindrical");
+    toggle_section(&mut harness);
+    assert!(harness.query_by_label("Scale / tiling").is_none());
+    assert!(harness.query_by_label("Axis").is_some());
 }
 
 #[test]
@@ -78,4 +83,20 @@ fn each_fill_keeps_its_own_open_state() {
     texturecraft_engine::execute(&mut harness.state_mut().session, "layer.select", &json!({"layer": first})).unwrap();
     harness.run_steps(SETTLE_FRAMES);
     assert!(harness.query_by_label("Rotation").is_none(), "the first fill stays closed");
+}
+
+#[test]
+fn a_fill_effect_keeps_a_state_apart_from_its_layer() {
+    let (mut harness, layer) = app_with_fill("uv");
+    toggle_section(&mut harness);
+
+    let session = &mut harness.state_mut().session;
+    let added = texturecraft_engine::execute(session, "effect.add.fill", &json!({"layer": layer, "target": "content"})).unwrap();
+    let effect = added["effect"].as_u64().unwrap();
+    texturecraft_engine::execute(session, "layer.select", &json!({"layer": layer, "target": effect})).unwrap();
+    harness.run_steps(SETTLE_FRAMES);
+    assert!(harness.query_by_label("Rotation").is_some(), "the effect's section starts open");
+
+    toggle_section(&mut harness);
+    assert!(harness.query_by_label("Rotation").is_none());
 }

@@ -1572,16 +1572,22 @@ fn anchor_label(app: &TextureCraftApp, anchor: LayerId, channel: Channel) -> Str
     trf("Anchor: {name} ({channel})", &[("name", &name), ("channel", &tr(channel.label()))])
 }
 
-/// Projection and channel sources of a fill layer (`base` = {"layer"}) or fill effect (`base` = {"effect"}) filling `on`, owned by `reader`
+/// Space above a fill's Material caption, setting it apart from the projection
+const FILL_MATERIAL_GAP: f32 = 6.0;
+
+/// Space between a fill's channel chips and its channel sources
+const FILL_CHANNELS_GAP: f32 = 4.0;
+
+/// Projection and sources of a fill layer or fill effect (`base`) for its channels `on`; `reader` owns it
 fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value, on: &[Channel], reader: LayerId) {
     let salt = base.to_string();
     if let Projection::Decal(decal) = &fill.projection {
         decal_editor(app, ui, decal, reader);
     } else {
-        projection_editor(app, ui, fill, base);
+        projection_editor(app, ui, fill, base, &salt);
     }
 
-    ui.add_space(6.0);
+    ui.add_space(FILL_MATERIAL_GAP);
     ui.label(caption(tr("Material")));
     let channels = app.session.doc.project.texture_set(app.session.ts()).map(|texture_set| texture_set.channel_list()).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
@@ -1594,7 +1600,7 @@ fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value
         }
     });
 
-    ui.add_space(4.0);
+    ui.add_space(FILL_CHANNELS_GAP);
     let anchors = anchors_below(app, reader);
     for channel in channels {
         if on.contains(&channel) {
@@ -1609,11 +1615,11 @@ const FILL_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.01..=20.0;
 /// Slider range of a UV fill's rotation, a full turn
 const FILL_ROTATION_DEGREES_RANGE: std::ops::RangeInclusive<f32> = 0.0..=360.0;
 
-/// Tri-planar hardness: the exponent on the normal that weights the three projections, clamped to the same range by `layer.fill.projection`
+/// Tri-planar hardness, the exponent weighting the three projections; `layer.fill.projection` clamps to the same range
 const TRIPLANAR_HARDNESS_RANGE: std::ops::RangeInclusive<f32> = 1.0..=64.0;
 
-/// A fill's projection kind, axis and tri-planar hardness, then its collapsible UV transformations; each edit sends only its field
-fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value) {
+/// A fill's projection kind, axis and hardness, then its collapsible UV transformations
+fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value, salt: &str) {
     let projection_label = fill.projection.label();
     combo(ui, tr("Projection"), tr(projection_label), |ui| {
         for (id, label) in [
@@ -1629,8 +1635,9 @@ fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: 
         }
     });
 
-    let mut edit = |extra: Value| {
-        app.run("layer.fill.projection", with(base, extra));
+    // Each edit sends only the fields it changed; the command keeps the others
+    let mut edit = |fields: Value| {
+        app.run("layer.fill.projection", with(base, fields));
     };
     if let Projection::Planar { axis, .. } | Projection::Cylindrical { axis, .. } = &fill.projection
         && let Some(picked_axis) = axis_combo(ui, *axis)
@@ -1638,14 +1645,14 @@ fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: 
         edit(json!({"axis": picked_axis}));
     }
     if let Projection::Triplanar { sharpness, .. } = &fill.projection {
-        let mut sharpness = *sharpness;
-        if let Some(merge) = slider_edit(ui, tr("Hardness"), &mut sharpness, TRIPLANAR_HARDNESS_RANGE, 1) {
-            edit(json!({"sharpness": sharpness, "merge": merge}));
+        let mut hardness = *sharpness;
+        if let Some(merge) = slider_edit(ui, tr("Hardness"), &mut hardness, TRIPLANAR_HARDNESS_RANGE, 1) {
+            edit(json!({"sharpness": hardness, "merge": merge}));
         }
     }
 
     // One id per fill so each keeps its own open or closed state
-    section(ui, &format!("sec_fill_transform{base}"), tr("UV transformations"), true, |ui| {
+    section(ui, &format!("sec_fill_transform{salt}"), tr("UV transformations"), true, |ui| {
         projection_transform(ui, &fill.projection, &mut edit);
     });
 }
@@ -1669,13 +1676,13 @@ fn projection_transform(ui: &mut Ui, projection: &Projection, edit: &mut impl Fn
             if let Some(merge) = slider_edit(ui, tr("Rotation"), &mut rotation_degrees, FILL_ROTATION_DEGREES_RANGE, 0) {
                 edit(json!({"rotation": rotation_degrees, "merge": merge}));
             }
-            if let Some((offset, merge)) = offset_sliders(ui, ["U", "V"], *offset) {
-                edit(json!({"offset": offset, "merge": merge}));
+            if let Some((edited_offset, merge)) = offset_sliders(ui, ["U", "V"], *offset) {
+                edit(json!({"offset": edited_offset, "merge": merge}));
             }
         }
         Projection::Triplanar { offset, .. } | Projection::Planar { offset, .. } => {
-            if let Some((offset, merge)) = offset_sliders(ui, ["X", "Y", "Z"], *offset) {
-                edit(json!({"offset": offset, "merge": merge}));
+            if let Some((edited_offset, merge)) = offset_sliders(ui, ["X", "Y", "Z"], *offset) {
+                edit(json!({"offset": edited_offset, "merge": merge}));
             }
         }
         Projection::Spherical { .. } | Projection::Cylindrical { .. } | Projection::Decal(_) => {}
