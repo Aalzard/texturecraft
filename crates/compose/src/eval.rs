@@ -771,26 +771,46 @@ fn fields_of(inp: &Inputs, channels: &[Channel], list: &[LayerId], tiles: &[(u32
     if tiles.is_empty() || inp.gbuf.width == 0 {
         return out;
     }
-    let res = inp.gbuf.width;
+
+    let working_width = inp.gbuf.width;
     let mut order = Vec::new();
     draw_order(inp.project, list, 0, &mut order);
+    prepare_curvature_sizes(inp, &order);
+
     for id in order {
         let Some(layer) = inp.project.content_layer(id) else { continue };
-        if let Some(m) = layer_mask(inp.project, id).filter(|m| m.enabled && neighbourhood(&m.effects, res).is_some())
-            && let Some(f) = field(inp, channels, &out, id, Job::Mask(m), tiles)
+
+        if let Some(mask) = layer_mask(inp.project, id).filter(|mask| mask.enabled && neighbourhood(&mask.effects, working_width).is_some())
+            && let Some(filtered) = field(inp, channels, &out, id, Job::Mask(mask), tiles)
         {
-            out.insert(FieldKey::Mask(id), f);
+            out.insert(FieldKey::Mask(id), filtered);
         }
-        if layer.is_group() || neighbourhood(&layer.content_effects, res).is_none() {
+
+        if layer.is_group() || neighbourhood(&layer.content_effects, working_width).is_none() {
             continue;
         }
-        for ch in channels.iter().filter(|c| layer.channels.contains_key(c)) {
-            if let Some(f) = field(inp, channels, &out, id, Job::Content(*ch), tiles) {
-                out.insert(FieldKey::Content(id, *ch), f);
+        for channel in channels.iter().filter(|channel| layer.channels.contains_key(channel)) {
+            if let Some(filtered) = field(inp, channels, &out, id, Job::Content(*channel), tiles) {
+                out.insert(FieldKey::Content(id, *channel), filtered);
             }
         }
     }
     out
+}
+
+/// Build the curvature detail sizes every visible generator of `layers` reads, once, before tiles composite in parallel.
+fn prepare_curvature_sizes(inp: &Inputs, layers: &[LayerId]) {
+    let mut needed = [false; CurvatureDetail::BLURRED_SIZES];
+    let visible = layers.iter().filter(|id| inp.project.layers.get(id).is_some_and(|layer| layer.visible));
+    let masks = visible.filter_map(|id| layer_mask(inp.project, *id)).filter(|mask| mask.enabled);
+    for effect in masks.flat_map(|mask| &mask.effects).filter(|effect| effect.visible) {
+        if let EffectKind::Generator(Generator { detail: Some(detail), .. }) = &effect.kind {
+            for (slot, in_use) in needed.iter_mut().zip(detail.blurred_sizes_in_use()) {
+                *slot |= in_use;
+            }
+        }
+    }
+    CurvatureSizes::of(inp, &needed);
 }
 
 struct Node<'a> {
@@ -810,7 +830,7 @@ struct Node<'a> {
 
 /// Plans of the visible effects of a stack: mask effects (`channel` None) or the content
 /// effects of one channel (paint effects then read that channel's pixels).
-fn effect_plans<'a>(inp: &Inputs<'a>, effects: &'a [Effect], tx: u32, ty: u32, channel: Option<Channel>) -> Vec<EffectPlan<'a>> {
+fn effect_plans<'a>(inp: &Inputs<'a>, effects: &'a [Effect], tile_x: u32, tile_y: u32, channel: Option<Channel>) -> Vec<EffectPlan<'a>> {
     effects
         .iter()
         .filter(|effect| effect.visible)
@@ -819,14 +839,17 @@ fn effect_plans<'a>(inp: &Inputs<'a>, effects: &'a [Effect], tx: u32, ty: u32, c
                 Some(channel) => (inp.pixels.layer(effect.id, channel), PaintTarget::Layer(effect.id)),
                 None => (inp.pixels.masks.get(&effect.id), PaintTarget::Mask(effect.id)),
             };
-            let reads_detail = matches!(&effect.kind, EffectKind::Generator(generator) if generator.detail.is_some());
+            let curvature_sizes = match &effect.kind {
+                EffectKind::Generator(Generator { detail: Some(detail), .. }) => CurvatureSizes::of(inp, &detail.blurred_sizes_in_use()),
+                _ => None,
+            };
             EffectPlan {
                 kind: &effect.kind,
                 blend: effect.blend,
                 opacity: effect.opacity,
-                data: if effect.kind.painted() { tile_of(inp, image, tx, ty, channel) } else { None },
+                data: if effect.kind.painted() { tile_of(inp, image, tile_x, tile_y, channel) } else { None },
                 preview: previews(inp, target),
-                curvature_sizes: if reads_detail { CurvatureSizes::of(inp) } else { None },
+                curvature_sizes,
             }
         })
         .collect()
@@ -1215,7 +1238,9 @@ impl<'a, 'b> Texel<'a, 'b> {
 
         let baked_size = (self.inp.baked.resolution, self.inp.baked.height(BakedMap::Curvature));
         let (baked_x, baked_y) = ((baked_uv[0] * baked_size.0 as f32) as u32, (baked_uv[1] * baked_size.1 as f32) as u32);
-        let blurred = |index: usize| curvature_sizes.and_then(|sizes| sizes.levels.get(index)).map_or(0.0, |level| level.sample(baked_x, baked_y));
+        let blurred = |index: usize| {
+            curvature_sizes.and_then(|sizes| sizes.levels.get(index)).and_then(Option::as_deref).map_or(0.0, |level| level.sample(baked_x, baked_y))
+        };
         let (mut edges, mut cavities) = (0.0f32, 0.0f32);
         for (index, (size, weight)) in CurvatureDetail::SIZES.iter().zip(detail.weights).enumerate() {
             let deviation = if index == 0 { curvature - 0.5 } else { blurred(index - 1) };

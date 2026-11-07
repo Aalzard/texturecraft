@@ -19,6 +19,14 @@ impl CurvatureDetail {
 
     /// Mostly the finer sizes, tuned the same way: worn edges are thin lines.
     pub const EDGE_WEIGHTS: [f32; 7] = [1.0, 0.8, 0.5, 0.25, 0.1, 0.0, 0.0];
+
+    /// How many sizes are blurred copies of the map (all but the first).
+    pub const BLURRED_SIZES: usize = CurvatureDetail::SIZES.len() - 1;
+
+    /// Which blurred sizes this detail reads: those with a weight above 0.
+    pub fn blurred_sizes_in_use(&self) -> [bool; CurvatureDetail::BLURRED_SIZES] {
+        std::array::from_fn(|blurred| self.weights.get(blurred + 1).is_some_and(|weight| *weight > 0.0))
+    }
 }
 
 impl Default for CurvatureDetail {
