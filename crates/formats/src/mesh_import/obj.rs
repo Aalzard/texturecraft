@@ -73,6 +73,8 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
         if let Some(i) = m.indices.iter().find(|i| **i as usize >= n) {
             return Err(malformed(KIND, format!("face index {i} out of range")));
         }
+        // tobj names models without `o`/`g` "unnamed_object"; an empty name takes the file stem.
+        let part = if model.name == "unnamed_object" { "" } else { model.name.as_str() };
         let (mut rest, mut corners) = (m.indices.as_slice(), Vec::new());
         for arity in arities {
             let Some((face, tail)) = rest.split_at_checked(arity) else { break };
@@ -80,7 +82,7 @@ fn read_inner(bytes: &[u8]) -> Result<RawMesh> {
             corners.clear();
             corners.extend(face.iter().map(|i| base + i));
             if arity >= 3 {
-                raw.polygon(&name, &model.name, &corners);
+                raw.polygon(&name, part, &corners);
             }
         }
     }

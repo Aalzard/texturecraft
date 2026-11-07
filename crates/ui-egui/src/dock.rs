@@ -1,4 +1,4 @@
-//! Panel bodies of the right column: Texture Set List, Layers, Texture Set Settings, Properties
+//! Panel bodies of the right column: Texture Sets, Layers, Texture Set Settings, Properties
 //! (hosted as dock tabs by `docking`).
 
 use egui::{Color32, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
@@ -827,7 +827,7 @@ pub(crate) fn texture_set_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
                 let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
                 ui.painter().rect_filled(r, 2.0, if present { mesh_map_color(m) } else { tk.button });
                 ui.vertical(|ui| {
-                    ui.label(RichText::new(tr(m.label())).strong());
+                    ui.label(RichText::new(tr(crate::i18n::baked_map_label(m))).strong());
                     ui.label(
                         RichText::new(if present { format!("{}_{}", set.name, m.id()) } else { tr("Missing (bake to create)").into() })
                             .size(10.5)
@@ -892,8 +892,8 @@ fn image_drop(ui: &Ui, resp: &egui::Response) -> Option<String> {
     }
 }
 
-fn mesh_map_color(m: BakedMap) -> Color32 {
-    match m {
+fn mesh_map_color(map: BakedMap) -> Color32 {
+    match map {
         BakedMap::Normal => Color32::from_rgb(128, 128, 255),
         BakedMap::WorldNormal => Color32::from_rgb(120, 200, 140),
         BakedMap::Id => Color32::from_rgb(220, 60, 60),
@@ -904,8 +904,6 @@ fn mesh_map_color(m: BakedMap) -> Color32 {
         BakedMap::Height => Color32::from_gray(128),
         BakedMap::BentNormal => Color32::from_rgb(140, 170, 230),
         BakedMap::Opacity => Color32::from_gray(230),
-        BakedMap::ColorMap => Color32::from_rgb(200, 150, 90),
-        BakedMap::WorldDirection => Color32::from_gray(180),
     }
 }
 
@@ -992,38 +990,43 @@ fn height_mask_section(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
 }
 
 fn tool_properties(app: &mut TextureCraftApp, ui: &mut Ui) {
-    let tk = Tokens::get(ui.ctx());
-    // Brush preview: a stroke and a sphere with the tool's material.
+    let tokens = Tokens::get(ui.ctx());
+    // Brush preview: a stroke and a sphere with the tool's material
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 88.0), Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(rect, 2.0, tk.viewport);
-    let half = rect.width() * 0.5;
-    let b = &app.session.tool.brush;
-    let mut pts = Vec::new();
-    for k in 0..=40 {
-        let t = k as f32 / 40.0;
-        pts.push(pos2(rect.left() + 14.0 + t * (half - 28.0), rect.center().y + (t * 9.0).sin() * 18.0));
+    let painter = ui.painter();
+    painter.rect_filled(rect, 2.0, tokens.viewport);
+    let half_width = rect.width() * 0.5;
+    let brush = &app.session.tool.brush;
+    let mut points = Vec::new();
+    for step in 0..=40 {
+        let fraction = step as f32 / 40.0;
+        points.push(pos2(rect.left() + 14.0 + fraction * (half_width - 28.0), rect.center().y + (fraction * 9.0).sin() * 18.0));
     }
-    let w = (b.size / 0.25 * 60.0).clamp(2.0, 30.0);
-    let a = (b.flow * b.opacity * 255.0) as u8;
-    p.add(egui::Shape::line(pts, Stroke::new(w, Color32::from_white_alpha(a.max(30)))));
-    let base = app.session.tool.values.get(&Channel::BaseColor).copied().unwrap_or([0.8; 3]);
-    crate::thumbs::paint_sphere(p, pos2(rect.left() + half * 1.5, rect.center().y), 36.0, base);
+
+    let stroke_width = (brush.size / 0.25 * 60.0).clamp(2.0, 30.0);
+    let alpha = (brush.flow * brush.opacity * 255.0) as u8;
+    painter.add(egui::Shape::line(points, Stroke::new(stroke_width, Color32::from_white_alpha(alpha.max(30)))));
+    let base_color = app.session.tool.values.get(&Channel::BaseColor).copied().unwrap_or([0.8; 3]);
+    crate::thumbs::paint_sphere(painter, pos2(rect.left() + half_width * 1.5, rect.center().y), 36.0, base_color);
     ui.add_space(4.0);
+
     ui.horizontal(|ui| {
+        let button_size = ui.spacing().interact_size.y;
         for (tab, icon, tip) in
             [(PropsTab::Brush, ic::PAINT_BRUSH, tr("Brush")), (PropsTab::Alpha, ic::CIRCLE_HALF, tr("Alpha")), (PropsTab::Material, ic::SPHERE, tr("Material"))]
         {
-            if icon_button(ui, icon, tip, app.ui.props_tab == tab, 24.0).clicked() {
+            if icon_button(ui, icon, tip, app.ui.props_tab == tab, button_size).clicked() {
                 app.ui.props_tab = tab;
             }
         }
     });
     ui.separator();
+
     if app.session.quick_mask.editing {
-        ui.label(RichText::new(tr("Editing the quick mask: strokes paint where painting is allowed. Press U to finish.")).color(tk.text_dim));
+        ui.label(RichText::new(tr("Editing the quick mask: strokes paint where painting is allowed. Press U to finish.")).color(tokens.text_dim));
         ui.separator();
     }
+
     let tool_section: Option<fn(&mut TextureCraftApp, &mut Ui)> = match app.session.tool.tool {
         Tool::Projection => Some(stencil_section),
         Tool::Clone => Some(clone_section),
@@ -1036,6 +1039,7 @@ fn tool_properties(app: &mut TextureCraftApp, ui: &mut Ui) {
         section(app, ui);
         ui.separator();
     }
+
     match app.ui.props_tab {
         PropsTab::Brush => brush_section(app, ui),
         PropsTab::Alpha => alpha_section(app, ui),

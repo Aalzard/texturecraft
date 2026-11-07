@@ -61,7 +61,7 @@ Everything TextureCraft does today, by area. What's still missing is in [`ROADMA
   velvet, skin, wax, glass, ice, woods, bamboo, bark, stone, cobblestone, gravel, plaster, sand,
   mud, snow, bone, moss, plastics, fabric, linen, wool, leather, ceramic, rust, cork, paper), **21 smart
   materials** (rusted iron, worn paint, oxidized copper, bronze statue, weathered wood, mossy
-  brick and stone, sun-faded paint…) and **18 smart masks**, all procedural, so they work at any
+  brick and stone, sun-faded paint…) and **24 smart masks**, all procedural, so they work at any
   resolution. Drag them from the tabbed, searchable shelf onto the layer stack or straight onto
   the model.
 - **Your own library:** right-click a layer or folder, choose *Create smart material*, and it

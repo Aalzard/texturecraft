@@ -596,7 +596,9 @@ impl Sampler<'_> {
 
     fn baked(&self, m: BakedMap, at: At) -> [f32; 3] {
         match at {
-            At::Texel(x, y) if self.set.baked.contains(&m) => self.baked.sample(m, x, y, self.res).unwrap_or(m.neutral()),
+            At::Texel(x, y) if self.set.baked.contains(&m) => {
+                self.baked.sample_working(m, x, y, (self.res, self.comp.height), &self.scales).unwrap_or(m.neutral())
+            }
             _ => m.neutral(),
         }
     }
@@ -968,7 +970,9 @@ pub fn write_files(files: &[ExportedFile], dir: &std::path::Path) -> Result<Vec<
     files
         .iter()
         .map(|f| {
-            if f.name.is_empty() || f.name != sanitize_file_stem(&f.name) || f.name.trim_matches('.').is_empty() {
+            // The planned name is `<sanitized stem>.<ext>`; the stem alone is capped at MAX_STEM.
+            let (stem, ext) = f.name.rsplit_once('.').unwrap_or((&f.name, ""));
+            if f.name.is_empty() || stem != sanitize_file_stem(stem) || !ext.chars().all(|c| c.is_ascii_alphanumeric()) || f.name.trim_matches('.').is_empty() {
                 return Err(FormatError::Invalid(format!("\"{}\" is not a plain file name", f.name)));
             }
             let path = dir.join(&f.name);

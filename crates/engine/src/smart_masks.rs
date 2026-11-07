@@ -44,6 +44,12 @@ pub const SMART_MASKS: &[SmartMask] = &[
     SmartMask { id: "moss_top", label: "Moss from Top" },
     SmartMask { id: "water_stains", label: "Water Stains" },
     SmartMask { id: "sun_faded", label: "Sun Faded" },
+    SmartMask { id: "snow_top", label: "Snow from Top" },
+    SmartMask { id: "moss_ground", label: "Moss from Ground" },
+    SmartMask { id: "rust_cavities", label: "Rust in Cavities" },
+    SmartMask { id: "edge_scratches", label: "Edge Scratches" },
+    SmartMask { id: "dirt_streaks", label: "Dirt Streaks" },
+    SmartMask { id: "occluded", label: "Occluded Areas" },
 ];
 
 fn norm(x: &str) -> String {
@@ -118,6 +124,18 @@ pub(crate) fn preset(id: &str) -> Option<(MaskBackground, Vec<(EffectKind, Blend
         ],
         // Surfaces facing the sky, softly graded.
         "sun_faded" => vec![(directional(G::Direction, UP, 0.5, 0.45, 0.1, false), Normal)],
+        // A crisp cap on what faces up, with a ragged border.
+        "snow_top" => vec![(directional(G::Direction, UP, 0.6, 0.08, 0.6, false), Normal)],
+        // Growth creeping up from the lowest parts, in clumps.
+        "moss_ground" => vec![(directional(G::Position, [0.0, -1.0, 0.0], 0.4, 0.3, 0.5, false), Normal), (pattern(P::Cells, 6.0, 25, 1.4), Multiply)],
+        // Cavities eaten by blotchy corrosion.
+        "rust_cavities" => vec![(generator(G::Dirt, 0.6, 0.25, 0.5), Normal), (pattern(P::Grunge, 3.0, 27, 1.3), Multiply)],
+        // Scratches gathered where edges get handled.
+        "edge_scratches" => vec![(generator(G::EdgeWear, 0.75, 0.3, 0.2), Normal), (pattern(P::Scratches, 4.0, 29, 1.2), Multiply)],
+        // Grime running down from the crevices it collects in.
+        "dirt_streaks" => vec![(pattern(P::Streaks, 2.5, 31, 1.1), Normal), (generator(G::Dirt, 0.5, 0.25, 0.4), Multiply)],
+        // Hidden surfaces light hardly reaches (the opposite of exposed areas).
+        "occluded" => vec![(directional(G::AmbientOcclusion, UP, 0.5, 0.3, 0.0, true), Normal)],
         _ => return None,
     };
     Some((MaskBackground::Black, fx))

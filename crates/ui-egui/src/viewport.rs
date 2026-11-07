@@ -3,13 +3,14 @@
 
 use std::sync::Mutex;
 
+use egui::emath::GuiRounding as _;
 use egui::{Color32, PointerButton, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 use texturecraft_engine::camera_cmds::DEFAULT_CAMERA;
 use texturecraft_engine::core::{BakedMap, Channel};
 use texturecraft_engine::geom::glam::{Vec2, Vec3};
 use texturecraft_engine::{Tool, ViewMode};
-use texturecraft_render::{Frame, Shade, ViewKind};
+use texturecraft_render::{Frame, SetHighlight, Shade, ViewKind};
 
 use crate::TextureCraftApp;
 use crate::gpu::ViewCallback;
@@ -34,67 +35,194 @@ pub fn set_focus_picking(ctx: &egui::Context, on: bool) {
     ctx.data_mut(|d| d.insert_temp(focus_pick_id(), on));
 }
 
+/// The viewport dock tab: the paint bar, then the 3D and 2D views in the chosen layout with the mode's overlays
 pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
-    let tk = Tokens::get(ui.ctx());
+    let mode = app.ui.mode;
+    let bake_painting = mode == crate::state::Mode::Baking
+        && app.ui.bake_paint_brush.on
+        && !app.session.bake_meshes.high.is_empty()
+        && app.session.doc.project.texture_sets.get(app.session.ts()).is_some_and(|texture_set| {
+            !texture_set.bake.high_poly.use_low_as_high && texture_set.bake.cage.kind == texturecraft_engine::core::CageType::DistanceBased
+        });
+    app.ui.bake_paint_brush.on = bake_painting;
+
+    if !app.ui.hide_ui {
+        crate::toolbar::paint_bar(app, ui);
+    }
+
+    let tokens = Tokens::get(ui.ctx());
     let aux = match app.session.view {
-        _ if app.session.quick_mask.editing => Some(crate::gpu::AuxView::QuickMask),
-        ViewMode::MeshMap(m) => Some(crate::gpu::AuxView::MeshMap(m)),
+        _ if mode == crate::state::Mode::Painting && app.session.quick_mask.editing => Some(crate::gpu::AuxView::QuickMask),
+        ViewMode::MeshMap(map) => Some(crate::gpu::AuxView::MeshMap(map)),
         ViewMode::Mask(id) => Some(crate::gpu::AuxView::Mask(id)),
         _ => None,
     };
     let mut sync = PendingSync(Some(aux));
-    let full = ui.max_rect();
-    let mode = app.ui.mode;
+    let full = ui.available_rect_before_wrap();
     path_keys(app, ui);
-    // Bake mode shows the 3D view alone, except while the skew brush needs the 2D view to paint in.
-    let skew_painting = mode == crate::state::Mode::Baking && app.ui.skew_brush.on;
-    let layout = if mode == crate::state::Mode::Painting || skew_painting { app.ui.layout } else { ViewLayout::Only3D };
+
+    // Skew painting needs the 2D view alongside the 3D Bake preview
+    let layout = if mode == crate::state::Mode::Painting || bake_painting { app.ui.layout } else { ViewLayout::Only3D };
     match layout {
         ViewLayout::Only3D => view_3d(app, ui, full, &mut sync),
         ViewLayout::Only2D => view_2d(app, ui, full, &mut sync),
         ViewLayout::Split => {
-            let mid = full.center().x;
-            let left = Rect::from_min_max(full.min, pos2(mid - 1.0, full.max.y));
-            let right = Rect::from_min_max(pos2(mid + 1.0, full.min.y), full.max);
+            // The 2D view's edges sit on whole pixels, so rounding can't nudge a texture its zoom keeps at one size
+            let pixels_per_point = ui.ctx().pixels_per_point();
+            let full = full.with_max_x(full.right().round_to_pixels(pixels_per_point));
+            let divider_x = split_divider_x(app, ui, full);
+            let left = Rect::from_min_max(full.min, pos2(divider_x - SPLIT_LINE_HALF_WIDTH, full.max.y));
+            let right = Rect::from_min_max(pos2(divider_x + SPLIT_LINE_HALF_WIDTH, full.min.y), full.max);
+            // Each view draws only on its side, so overlays such as the texture set name stay out of a narrow neighbour
+            let clip = ui.clip_rect();
+            ui.set_clip_rect(left.intersect(clip));
             view_3d(app, ui, left, &mut sync);
+            ui.set_clip_rect(right.intersect(clip));
             view_2d(app, ui, right, &mut sync);
-            ui.painter().line_segment([pos2(mid, full.top()), pos2(mid, full.bottom())], Stroke::new(2.0, tk.chrome));
+            ui.set_clip_rect(clip);
+            split_divider_grab(ui, full, divider_x);
+            let line = Stroke::new(SPLIT_LINE_HALF_WIDTH * 2.0, tokens.chrome);
+            ui.painter().line_segment([pos2(divider_x, full.top()), pos2(divider_x, full.bottom())], line);
         }
     }
+
     if mode == crate::state::Mode::Rendering {
         crate::render_mode::show(app, ui, full);
     } else if app.render.is_active() {
         crate::render_mode::stop(app);
     }
-    // Keep drawing while the 3D view accumulates anti-aliasing samples (it stops on its own).
+    if mode == crate::state::Mode::Baking {
+        crate::bake_mode::bake_bar(app, ui.ctx(), full);
+    }
+
+    // Keep drawing until the 3D view finishes accumulating anti-aliasing samples
     let accumulating = layout != ViewLayout::Only2D
-        && app
-            .render_state
-            .as_ref()
-            .is_some_and(|rs| rs.renderer.read().callback_resources.get::<crate::gpu::GpuState>().is_some_and(|g| g.renderer.accumulating(VIEW_3D)));
+        && app.render_state.as_ref().is_some_and(|render_state| {
+            render_state.renderer.read().callback_resources.get::<crate::gpu::GpuState>().is_some_and(|gpu| gpu.renderer.accumulating(VIEW_3D))
+        });
     if app.session.stroke_active() || accumulating {
         ui.ctx().request_repaint();
     }
 }
 
+/// Half the split divider's line width: each view starts this far from the line's centre
+const SPLIT_LINE_HALF_WIDTH: f32 = 1.0;
+
+/// Narrowest a split view may get: a sliver that is still easy to grab and drag back out
+const MIN_SPLIT_VIEW_WIDTH: f32 = 16.0;
+
+/// Width of the split divider's grab zone, centred on its line
+const SPLIT_DIVIDER_GRAB_WIDTH: f32 = 8.0;
+
+/// The split divider's widget id, shared by its drag read and its grab zone
+fn split_divider_id(ui: &Ui) -> egui::Id {
+    ui.scope_id().with("split_divider")
+}
+
+/// The 3D view's share of `width`, keeping both views at least [`MIN_SPLIT_VIEW_WIDTH`] wide when they fit
+fn clamp_split_ratio(ratio: f32, width: f32) -> f32 {
+    let min_ratio = (MIN_SPLIT_VIEW_WIDTH / width).min(0.5);
+    let ratio = if ratio.is_finite() { ratio } else { 0.5 };
+    ratio.clamp(min_ratio, 1.0 - min_ratio)
+}
+
+/// The split divider's x position: while it is dragged it follows the pointer and changes the 2D zoom so the texture keeps its size on screen
+fn split_divider_x(app: &mut TextureCraftApp, ui: &Ui, full: Rect) -> f32 {
+    // The 2D view's left edge, beside the line, sits on a whole pixel
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    let divider_x = |ratio: f32| {
+        let unsnapped = full.left() + full.width() * clamp_split_ratio(ratio, full.width());
+        (unsnapped + SPLIT_LINE_HALF_WIDTH).round_to_pixels(pixels_per_point) - SPLIT_LINE_HALF_WIDTH
+    };
+    let old_x = divider_x(app.ui.split_ratio);
+
+    // Read the drag before the views lay out so they follow the pointer in the same frame
+    let ctx = ui.ctx();
+    if ctx.is_being_dragged(split_divider_id(ui))
+        && ctx.input(|i| i.pointer.primary_down())
+        && let Some(pointer) = ctx.pointer_interact_pos()
+    {
+        // `max` and `min` rather than `clamp`, so a NaN bound from a corrupt saved zoom can't panic
+        let (min_x, max_x) = divider_range_keeping_uv_size(&app.ui, full, old_x, pixels_per_point);
+        let target_x = pointer.x.max(min_x).min(max_x);
+        app.ui.split_ratio = clamp_split_ratio((target_x - full.left()) / full.width(), full.width());
+        let new_x = divider_x(app.ui.split_ratio);
+        keep_uv_view_on_screen(&mut app.ui, full, old_x, new_x);
+    }
+
+    divider_x(app.ui.split_ratio)
+}
+
+/// Lowest 2D zoom, for the wheel and the divider (inside the renderer's own limit of 0.05)
+const UV_VIEW_MIN_ZOOM: f32 = 0.1;
+
+/// Highest 2D zoom, for the wheel and the divider (inside the renderer's own limit of 64)
+const UV_VIEW_MAX_ZOOM: f32 = 40.0;
+
+/// The 2D view's width when the split divider is at `divider_x`
+fn uv_view_width(full: Rect, divider_x: f32) -> f32 {
+    (full.right() - divider_x - SPLIT_LINE_HALF_WIDTH).max(1.0)
+}
+
+/// The share of the 2D view's height that a zoom of 1 fills at `width`: the view fits the texture to its narrower side
+fn uv_view_fit(full: Rect, width: f32) -> f32 {
+    (width / full.height().max(1.0)).min(1.0)
+}
+
+/// The divider positions where the 2D zoom that keeps the texture's screen size stays inside the 2D zoom range
+fn divider_range_keeping_uv_size(ui_state: &crate::state::UiState, full: Rect, old_x: f32, pixels_per_point: f32) -> (f32, f32) {
+    // The zoom times the fit is the texture's screen size, which a divider drag keeps
+    let screen_zoom = ui_state.uv_zoom * uv_view_fit(full, uv_view_width(full, old_x));
+
+    // Whole pixels, rounded inward, so snapping the divider to a pixel can't step past the range
+    let narrowest_view = (full.height() * screen_zoom / UV_VIEW_MAX_ZOOM * pixels_per_point).ceil() / pixels_per_point;
+    let widest_view = (full.height() * screen_zoom / UV_VIEW_MIN_ZOOM * pixels_per_point).floor() / pixels_per_point;
+
+    let edge = full.right() - SPLIT_LINE_HALF_WIDTH;
+    (edge - widest_view, edge - narrowest_view)
+}
+
+/// Keeps the 2D view's texture at the same size and offset from the view's centre when the divider moves its left edge from `old_x` to `new_x`
+fn keep_uv_view_on_screen(ui_state: &mut crate::state::UiState, full: Rect, old_x: f32, new_x: f32) {
+    let (old_width, new_width) = (uv_view_width(full, old_x), uv_view_width(full, new_x));
+    ui_state.uv_zoom *= uv_view_fit(full, old_width) / uv_view_fit(full, new_width);
+
+    // The horizontal pan is in half view widths
+    ui_state.uv_pan[0] *= old_width / new_width;
+}
+
+/// The split divider's grab zone with a resize cursor, claimed after the views so it wins the pointer over them
+fn split_divider_grab(ui: &Ui, full: Rect, divider_x: f32) {
+    let zone = Rect::from_x_y_ranges(divider_x - SPLIT_DIVIDER_GRAB_WIDTH * 0.5..=divider_x + SPLIT_DIVIDER_GRAB_WIDTH * 0.5, full.y_range());
+    ui.interact(zone, split_divider_id(ui), Sense::drag()).on_hover_and_drag_cursor(egui::CursorIcon::ResizeHorizontal);
+}
+
 fn shade(app: &TextureCraftApp) -> Shade {
     let (view_mode, channel) = match app.session.view {
-        _ if app.session.quick_mask.editing => (2, 0),
+        _ if app.ui.mode == crate::state::Mode::Painting && app.session.quick_mask.editing => (2, 0),
         ViewMode::Material => (0, 0),
-        ViewMode::Channel(c) => (1, c.index() as u32),
+        ViewMode::Channel(selected_channel) => (1, selected_channel.index() as u32),
         ViewMode::MeshMap(_) | ViewMode::Mask(_) => (2, 0),
         ViewMode::UvChecker => (3, 0),
     };
-    let ts = app.session.ts();
-    let hs = app.session.doc.project.texture_sets.get(ts).map(|t| t.atlas_height_strength()).unwrap_or(1.0);
+    let set_index = app.session.ts();
+    let height_strength = app.session.doc.project.texture_sets.get(set_index).map(|texture_set| texture_set.atlas_height_strength()).unwrap_or(1.0);
     Shade {
-        height_strength: hs,
+        height_strength,
         view_mode,
         channel,
         wireframe: app.ui.uv_wireframe,
         wireframe_3d: app.ui.wireframe_3d,
         ..Shade::from_project(&app.session.doc.project)
     }
+}
+
+/// The texture set a shelf material dragged over the 3D view `response` would drop on, its edges drawn in the accent color
+fn drop_highlight(app: &TextureCraftApp, ui: &Ui, response: &egui::Response) -> Option<SetHighlight> {
+    let set = crate::shelf::material_drop_set(app, ui, response)?;
+    let accent = egui::Rgba::from(Tokens::get(ui.ctx()).viewport_accent);
+
+    Some(SetHighlight { set, color: [accent.r(), accent.g(), accent.b()] })
 }
 
 /// Show what the GPU side reported (each message once while its toast is up).
@@ -154,6 +282,13 @@ const MAX_NAME_CHARS: usize = 32;
 /// that view handled its input: a stroke shows in the frame it is painted, not the next.
 pub struct PendingSync(Option<Option<crate::gpu::AuxView>>);
 
+/// A view's render size in pixels, rounded as egui rounds the rect it draws the frame into, so the frame is never stretched
+fn frame_size_in_pixels(ui: &Ui, rect: Rect) -> [u32; 2] {
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    let pixels = |from: f32, to: f32| ((to * pixels_per_point).round() - (from * pixels_per_point).round()).max(1.0) as u32;
+    [pixels(rect.left(), rect.right()), pixels(rect.top(), rect.bottom())]
+}
+
 fn add_callback(app: &mut TextureCraftApp, ui: &Ui, rect: Rect, frame: Frame, sync: &mut PendingSync) {
     let tk = Tokens::get(ui.ctx());
     let scene = match (sync.0.take(), app.gpu.as_mut()) {
@@ -179,20 +314,38 @@ fn add_callback(app: &mut TextureCraftApp, ui: &Ui, rect: Rect, frame: Frame, sy
     ui.painter().add(eframe::egui_wgpu::Callback::new_paint_callback(rect, cb));
 }
 
-/// The view-mode dropdown shown at the top of each view.
+/// Width of the camera and view pickers centred at the top of a view
+const VIEW_HEADER_WIDTH: f32 = 300.0;
+
+/// Height of the view pickers' row
+const VIEW_HEADER_HEIGHT: f32 = 22.0;
+
+/// Gap between the view's top edge and its pickers
+const VIEW_HEADER_TOP_GAP: f32 = 8.0;
+
+/// Width of each of the two pickers
+const VIEW_PICKER_WIDTH: f32 = 130.0;
+
+/// The camera and view pickers at the top of a view, left out when the view is too narrow to hold them
 fn view_header(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, id: &str) {
-    let header = Rect::from_min_size(rect.min + vec2(rect.width() * 0.5 - 150.0, 8.0), vec2(300.0, 22.0));
+    if rect.width() < VIEW_HEADER_WIDTH {
+        return;
+    }
+
+    let header_min = rect.min + vec2((rect.width() - VIEW_HEADER_WIDTH) * 0.5, VIEW_HEADER_TOP_GAP);
+    let header = Rect::from_min_size(header_min, vec2(VIEW_HEADER_WIDTH, VIEW_HEADER_HEIGHT));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(header).layout(egui::Layout::left_to_right(egui::Align::Center)));
+
     let current = texturecraft_engine::camera_cmds::current(&app.session);
-    let names: Vec<String> = app.session.doc.project.cameras.iter().map(|c| c.name.clone()).collect();
-    let shown = current.and_then(|i| names.get(i)).map_or(tr(DEFAULT_CAMERA), String::as_str);
-    egui::ComboBox::from_id_salt(format!("{id}_cam")).width(130.0).selected_text(shown).show_ui(&mut child, |ui| {
+    let names: Vec<String> = app.session.doc.project.cameras.iter().map(|camera| camera.name.clone()).collect();
+    let shown = current.and_then(|index| names.get(index)).map_or(tr(DEFAULT_CAMERA), String::as_str);
+    egui::ComboBox::from_id_salt(format!("{id}_cam")).width(VIEW_PICKER_WIDTH).selected_text(shown).show_ui(&mut child, |ui| {
         if ui.selectable_label(current.is_none(), tr(DEFAULT_CAMERA)).clicked() {
             app.run("camera.select", json!({}));
         }
-        for (i, name) in names.iter().enumerate() {
-            if ui.selectable_label(current == Some(i), name).clicked() {
-                app.run("camera.select", json!({"index": i}));
+        for (index, name) in names.iter().enumerate() {
+            if ui.selectable_label(current == Some(index), name).clicked() {
+                app.run("camera.select", json!({"index": index}));
             }
         }
         ui.separator();
@@ -200,22 +353,27 @@ fn view_header(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, id: &str) {
             app.run("camera.add", json!({}));
         }
     });
-    let label = app.session.view.label();
-    let channels = app.session.doc.project.texture_set(app.session.ts()).map(|t| t.channel_list()).unwrap_or_default();
-    egui::ComboBox::from_id_salt(format!("{id}_mode")).width(130.0).selected_text(tr(&label)).show_ui(&mut child, |ui| {
+
+    let label = match app.session.view {
+        ViewMode::MeshMap(map) => crate::i18n::baked_map_label(map).to_owned(),
+        _ => app.session.view.label(),
+    };
+    let channels = app.session.doc.project.texture_set(app.session.ts()).map(|texture_set| texture_set.channel_list()).unwrap_or_default();
+    egui::ComboBox::from_id_salt(format!("{id}_mode")).width(VIEW_PICKER_WIDTH).selected_text(tr(&label)).show_ui(&mut child, |ui| {
         if ui.selectable_label(app.session.view == ViewMode::Material, tr("Material")).clicked() {
             app.run("viewport.view", json!({"mode": "material"}));
         }
         ui.separator();
-        for c in channels {
-            if ui.selectable_label(app.session.view == ViewMode::Channel(c), tr(c.label())).clicked() {
-                app.run("viewport.view", json!({"mode": c.id()}));
+        for channel in channels {
+            if ui.selectable_label(app.session.view == ViewMode::Channel(channel), tr(channel.label())).clicked() {
+                app.run("viewport.view", json!({"mode": channel.id()}));
             }
         }
         ui.separator();
-        for m in BakedMap::ALL {
-            if ui.selectable_label(app.session.view == ViewMode::MeshMap(m), trf("Mesh map: {map}", &[("map", &tr(m.label()))])).clicked() {
-                app.run("viewport.view", json!({"mode": format!("map:{}", m.id())}));
+        for map in BakedMap::ALL {
+            let map_label = trf("Mesh map: {map}", &[("map", &tr(crate::i18n::baked_map_label(map)))]);
+            if ui.selectable_label(app.session.view == ViewMode::MeshMap(map), map_label).clicked() {
+                app.run("viewport.view", json!({"mode": format!("map:{}", map.id())}));
             }
         }
         ui.separator();
@@ -261,7 +419,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
 
     // Navigation (S + drag manipulates the projection stencil instead, below).
     let delta = ui.input(|i| i.pointer.delta());
-    let s_held = ui.input(|i| i.key_down(egui::Key::S)) && !ui.ctx().egui_wants_keyboard_input();
+    let s_held = app.ui.mode == crate::state::Mode::Painting && ui.input(|i| i.key_down(egui::Key::S)) && !ui.ctx().egui_wants_keyboard_input();
     let stencil_drag = s_held && app.session.tool.stencil.is_some();
     if stencil_drag || adjusting {
         // The stencil moves, turns and scales instead of the camera (handled below), or the
@@ -284,9 +442,9 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     if resp.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
-            if shift {
-                let b = &mut app.session.tool.brush;
-                b.size = (b.size * (1.0 + scroll * 0.002)).clamp(0.0005, 0.25);
+            if shift && app.ui.mode == crate::state::Mode::Painting {
+                let brush = &mut app.session.tool.brush;
+                brush.size = (brush.size * (1.0 + scroll * 0.002)).clamp(0.0005, 0.25);
             } else {
                 app.session.camera.zoom(scroll * 0.0025);
             }
@@ -412,14 +570,14 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
 
     let frame = Frame {
         view_id: crate::viewport::VIEW_3D,
-        size: [(size.x * ui.ctx().pixels_per_point()).max(1.0) as u32, (size.y * ui.ctx().pixels_per_point()).max(1.0) as u32],
+        size: frame_size_in_pixels(ui, rect),
         kind: ViewKind::Scene,
         camera: app.session.camera,
-        shade: shade(app),
+        shade: Shade { highlight: drop_highlight(app, ui, &resp), ..shade(app) },
         visible: app.session.doc.project.texture_sets.iter().map(|t| t.visible).collect(),
     };
     add_callback(app, ui, rect, frame, sync);
-    // Shelf drops: a material goes above the selection, an alpha on the brush.
+    // Shelf drops: a material goes above the selection of the set under the pointer, an alpha on the brush
     crate::shelf::drop_target(app, ui, &resp, crate::shelf::DropZone::View3d);
 
     // Brush cursor.
@@ -606,6 +764,10 @@ fn decal_input(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, rect: 
 /// The frame of the selected decal layer over the 3D view with its handles (and a hint while
 /// placing it): outline, corner handles, the rotation handle and the projection direction.
 fn decal_overlay(app: &mut TextureCraftApp, ui: &Ui, rect: Rect) {
+    if app.ui.mode != crate::state::Mode::Painting {
+        return;
+    }
+
     let tk = Tokens::get(ui.ctx());
     use texturecraft_engine::core::{Fill, LayerKind, Projection};
     let p = &app.session.doc.project;
@@ -654,32 +816,33 @@ fn decal_overlay(app: &mut TextureCraftApp, ui: &Ui, rect: Rect) {
     }
 }
 
-/// Draw the projection stencil over the 3D view.
+/// Draw the projection stencil in Paint Mode
 fn stencil_overlay(app: &mut TextureCraftApp, ui: &Ui, rect: Rect) {
-    if app.session.tool.tool != Tool::Projection {
+    if app.ui.mode != crate::state::Mode::Painting || app.session.tool.tool != Tool::Projection {
         return;
     }
-    let Some(st) = app.session.tool.stencil.clone() else { return };
-    let Some(img) = app.session.images.get(&st.image).cloned() else { return };
-    let tex = app.thumbs.stencil(ui.ctx(), &st.image, &img);
+    let Some(stencil) = app.session.tool.stencil.clone() else { return };
+    let Some(image) = app.session.images.get(&stencil.image).cloned() else { return };
+
+    let texture = app.thumbs.stencil(ui.ctx(), &stencil.image, &image);
     let aspect = rect.width() / rect.height().max(1.0);
-    let (center, half, rot) = st.placement(img.width as f32 / img.height.max(1) as f32, aspect);
-    let to_screen = |nx: f32, ny: f32| pos2(rect.left() + (nx * 0.5 + 0.5) * rect.width(), rect.top() + (0.5 - ny * 0.5) * rect.height());
-    let (sn, cs) = rot.sin_cos();
-    let corner = |lx: f32, ly: f32| {
-        let (x, y) = (lx * half[0], ly * half[1]);
-        to_screen(center[0] + x * cs - y * sn, center[1] + x * sn + y * cs)
+    let (center, half_size, rotation) = stencil.placement(image.width as f32 / image.height.max(1) as f32, aspect);
+    let to_screen = |x: f32, y: f32| pos2(rect.left() + (x * 0.5 + 0.5) * rect.width(), rect.top() + (0.5 - y * 0.5) * rect.height());
+    let (sine, cosine) = rotation.sin_cos();
+    let corner = |x: f32, y: f32| {
+        let (x, y) = (x * half_size[0], y * half_size[1]);
+        to_screen(center[0] + x * cosine - y * sine, center[1] + x * sine + y * cosine)
     };
-    let tint = Color32::from_white_alpha((st.opacity * 255.0) as u8);
-    let mut mesh = egui::Mesh::with_texture(tex.id());
-    for (lx, ly, u, v) in [(-1.0, 1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.0), (1.0, -1.0, 1.0, 1.0), (-1.0, -1.0, 0.0, 1.0)] {
-        mesh.vertices.push(egui::epaint::Vertex { pos: corner(lx, ly), uv: pos2(u, v), color: tint });
+    let tint = Color32::from_white_alpha((stencil.opacity * 255.0) as u8);
+    let mut mesh = egui::Mesh::with_texture(texture.id());
+    for (x, y, u, v) in [(-1.0, 1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.0), (1.0, -1.0, 1.0, 1.0), (-1.0, -1.0, 0.0, 1.0)] {
+        mesh.vertices.push(egui::epaint::Vertex { pos: corner(x, y), uv: pos2(u, v), color: tint });
     }
     mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
-    let p = ui.painter_at(rect);
-    p.add(egui::Shape::mesh(mesh));
+    let painter = ui.painter_at(rect);
+    painter.add(egui::Shape::mesh(mesh));
     let outline = vec![corner(-1.0, 1.0), corner(1.0, 1.0), corner(1.0, -1.0), corner(-1.0, -1.0), corner(-1.0, 1.0)];
-    p.add(egui::Shape::dashed_line(&outline, Stroke::new(1.0, Color32::from_white_alpha(120)), 5.0, 4.0));
+    painter.add(egui::Shape::dashed_line(&outline, Stroke::new(1.0, Color32::from_white_alpha(120)), 5.0, 4.0));
 }
 
 /// A world point on screen in the 3D view `rect` (None behind the camera).
@@ -946,7 +1109,7 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
             let old = app.ui.uv_zoom;
-            let new = (old * (1.0 + scroll * 0.002)).clamp(0.1, 40.0);
+            let new = (old * (1.0 + scroll * 0.002)).clamp(UV_VIEW_MIN_ZOOM, UV_VIEW_MAX_ZOOM);
             // Zoom about the cursor.
             if let Some(hp) = resp.hover_pos() {
                 let c = [(hp.x - rect.left()) / size.x * 2.0 - 1.0, 1.0 - (hp.y - rect.top()) / size.y * 2.0];
@@ -982,9 +1145,9 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         let uv = to_uv(p);
         app.run("tool.cloneSource", json!({"uv": [uv.x, uv.y]}));
     }
-    let skew_on = app.ui.mode == crate::state::Mode::Baking && app.ui.skew_brush.on && !alt;
-    if skew_on {
-        skew_input(app, ui, &resp, &to_uv);
+    let bake_paint_on = app.ui.mode == crate::state::Mode::Baking && app.ui.bake_paint_brush.on && !alt;
+    if bake_paint_on {
+        bake_paint_input(app, ui, &resp, &to_uv);
     }
     let painting = app.ui.mode == crate::state::Mode::Painting && !alt && !adjusting && !v_held;
     if painting && path_tool {
@@ -1020,7 +1183,7 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     }
     let frame = Frame {
         view_id: VIEW_2D,
-        size: [(size.x * ui.ctx().pixels_per_point()).max(1.0) as u32, (size.y * ui.ctx().pixels_per_point()).max(1.0) as u32],
+        size: frame_size_in_pixels(ui, rect),
         kind: ViewKind::Uv { ts, zoom: app.ui.uv_zoom, pan: app.ui.uv_pan },
         camera: app.session.camera,
         shade: shade(app),
@@ -1050,9 +1213,9 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         path_overlay(app, ui, rect, &resp, true, show);
     }
     if app.ui.mode == crate::state::Mode::Baking {
-        skew_overlay(app, ui, &painter, to(0.0, 1.0), to(1.0, 0.0));
-        if skew_on && let Some(hover) = resp.hover_pos() {
-            let r = (to(app.ui.skew_brush.radius, 0.0).x - to(0.0, 0.0).x).abs().max(2.0);
+        bake_paint_overlay(app, ui, &painter, to(0.0, 1.0), to(1.0, 0.0));
+        if bake_paint_on && let Some(hover) = resp.hover_pos() {
+            let r = (to(app.ui.bake_paint_brush.radius, 0.0).x - to(0.0, 0.0).x).abs().max(2.0);
             painter.circle_stroke(hover, r, Stroke::new(1.0, Color32::from_white_alpha(200)));
         }
     }
@@ -1065,9 +1228,9 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
 }
 
 /// Paint the skew map under the pointer in the 2D view (a click is one dab, a drag a stroke).
-fn skew_input(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, to_uv: &dyn Fn(egui::Pos2) -> Vec2) {
-    let last = ui.scope_id().with("skew_last");
-    let brush = app.ui.skew_brush;
+fn bake_paint_input(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, to_uv: &dyn Fn(egui::Pos2) -> Vec2) {
+    let last = ui.scope_id().with(("bake_paint_last", app.session.ts(), app.ui.bake_paint_brush.target as u8));
+    let brush = app.ui.bake_paint_brush;
     let started = resp.drag_started_by(PointerButton::Primary) || resp.clicked_by(PointerButton::Primary);
     if !(started || resp.dragged_by(PointerButton::Primary)) {
         return;
@@ -1076,16 +1239,20 @@ fn skew_input(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, to_uv: 
     let uv = to_uv(p);
     let previous: Option<[f32; 2]> = if started { None } else { ui.data(|d| d.get_temp(last)) };
     let points: Vec<[f32; 2]> = previous.into_iter().chain([[uv.x, uv.y]]).collect();
-    if app.run("bake.skew.paint", json!({"points": points, "radius": brush.radius, "value": brush.value, "hardness": brush.hardness})).is_some() {
+    let command = match brush.target {
+        texturecraft_engine::core::BakePaintTarget::Skew => "bake.skew.paint",
+        texturecraft_engine::core::BakePaintTarget::Cage => "bake.cage.paint",
+    };
+    if app.run(command, json!({"points": points, "radius": brush.radius, "value": brush.value, "hardness": brush.hardness, "continue": !started})).is_some() {
         ui.data_mut(|d| d.insert_temp(last, [uv.x, uv.y]));
     }
 }
 
 /// The skew map as a translucent orange layer over the UV square from `top_left` to `bottom_right`.
-fn skew_overlay(app: &TextureCraftApp, ui: &Ui, painter: &egui::Painter, top_left: egui::Pos2, bottom_right: egui::Pos2) {
-    let Some(k) = app.session.bake_meshes.skew.as_ref().filter(|k| k.values.len() > 1) else { return };
-    let key = (app.session.bake_meshes.skew_rev, std::sync::Arc::as_ptr(k) as usize);
-    let id = ui.scope_id().with("skew_overlay_texture");
+fn bake_paint_overlay(app: &TextureCraftApp, ui: &Ui, painter: &egui::Painter, top_left: egui::Pos2, bottom_right: egui::Pos2) {
+    let Some(k) = app.session.doc.bake_paint.get(&(app.session.ts(), app.ui.bake_paint_brush.target)).filter(|k| k.values.len() > 1) else { return };
+    let key = (app.session.revision, std::sync::Arc::as_ptr(k) as usize);
+    let id = ui.scope_id().with("bake_paint_overlay_texture");
     let cached: Option<((u64, usize), egui::TextureHandle)> = ui.data(|d| d.get_temp(id));
     let tex = match cached {
         Some((c, t)) if c == key => t,
@@ -1097,10 +1264,14 @@ fn skew_overlay(app: &TextureCraftApp, ui: &Ui, painter: &egui::Painter, top_lef
             for y in 0..oh {
                 for x in 0..ow {
                     let v = k.values.get((y * h / oh) * w + x * w / ow).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+                    let v = match app.ui.bake_paint_brush.target {
+                        texturecraft_engine::core::BakePaintTarget::Skew => v,
+                        texturecraft_engine::core::BakePaintTarget::Cage => 1.0 - v,
+                    };
                     rgba.extend_from_slice(&[255, 140, 40, (v * 170.0) as u8]);
                 }
             }
-            let tex = ui.ctx().load_texture("skew_overlay", egui::ColorImage::from_rgba_unmultiplied([ow, oh], &rgba), egui::TextureOptions::NEAREST);
+            let tex = ui.ctx().load_texture("bake_paint_overlay", egui::ColorImage::from_rgba_unmultiplied([ow, oh], &rgba), egui::TextureOptions::NEAREST);
             ui.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
             tex
         }

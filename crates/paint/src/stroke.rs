@@ -202,21 +202,18 @@ impl Stroke {
         if !sym.any() {
             return Vec::new();
         }
+
         let mut out = Vec::new();
-        for mask in 1u8..8 {
-            let (mx, my, mz) = (mask & 1 != 0, mask & 2 != 0, mask & 4 != 0);
-            if (mx && !sym.x) || (my && !sym.y) || (mz && !sym.z) {
-                continue;
-            }
-            let f = Vec3::new(if mx { -1.0 } else { 1.0 }, if my { -1.0 } else { 1.0 }, if mz { -1.0 } else { 1.0 });
-            let m = |v: Vec3| v * f;
-            let normal = m(s.normal);
-            let tangent = m(s.tangent);
-            out.push(Stamp { center: self.center + m(s.center - self.center), normal, tangent, bitangent: normal.cross(tangent), copy: true, ..*s });
+        for sign in sym.mirror_signs().skip(1) {
+            let normal = s.normal * sign;
+            let tangent = s.tangent * sign;
+            out.push(Stamp { center: self.center + (s.center - self.center) * sign, normal, tangent, bitangent: normal.cross(tangent), copy: true, ..*s });
         }
+
         if sym.radial > 1 {
             let axis = [Vec3::X, Vec3::Y, Vec3::Z].get(sym.axis as usize).copied().unwrap_or(Vec3::Y);
             let base: Vec<Stamp> = std::iter::once(*s).chain(out.iter().copied()).collect();
+
             for k in 1..sym.radial {
                 let q = Quat::from_axis_angle(axis, f32::from(k) * std::f32::consts::TAU / f32::from(sym.radial));
                 out.extend(base.iter().map(|b| Stamp {
@@ -229,6 +226,7 @@ impl Stroke {
                 }));
             }
         }
+
         out
     }
 
@@ -291,6 +289,11 @@ mod tests {
         let out = s.add(&ctx, Vec2::new(250.0, 200.0), 1.0);
         assert_eq!(out.len(), 2);
         assert!((out[0].center.x + out[1].center.x).abs() < 1e-4);
+
+        st.symmetry.y = true;
+        st.symmetry.z = true;
+        let mut s = Stroke::new(&st, &m);
+        assert_eq!(s.add(&ctx, Vec2::new(250.0, 180.0), 1.0).len(), 8);
     }
 
     #[test]

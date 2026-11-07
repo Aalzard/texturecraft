@@ -200,7 +200,7 @@ fn ao_mixes_baked_and_channel() {
     let mesh_maps = fx.render_preset("Mesh maps");
     assert_eq!(mesh_maps.len(), 1, "only baked maps are exported");
     let ao = decode(&mesh_maps[0]);
-    assert_eq!(mesh_maps[0].name, "sphere_Body_Set_ambient_occlusion.png");
+    assert_eq!(mesh_maps[0].name, "sphere_Body_Set_ambientOcclusion.png");
     assert_eq!(ao.color(), image::ColorType::L16);
 }
 
@@ -361,6 +361,18 @@ fn write_files_is_atomic_and_refuses_paths() {
     assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
     let evil = ExportedFile { name: "../evil.png".into(), ..files[0].clone() };
     assert!(write_files(&[evil], &dir).is_err());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn write_files_accepts_planned_name_with_max_length_stem() {
+    let fx = Fx::new(&default_channels());
+    let files = fx.render_preset("Unreal Engine (Packed)");
+    let name = format!("{}.png", sanitize_file_stem(&"a".repeat(250)));
+    let dir = std::env::temp_dir().join(format!("tc-formats-export-long-{}", std::process::id()));
+    let long = ExportedFile { name, ..files[0].clone() };
+    let paths = write_files(&[long], &dir).unwrap();
+    assert_eq!(paths.len(), 1);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
