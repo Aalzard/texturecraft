@@ -12,11 +12,13 @@ pub(crate) use seam::fix_seams;
 mod position_projection;
 mod sampling;
 mod source;
+mod texel_grid;
 mod traced;
 mod transfer;
 
 pub(crate) use bake_context::BakeContext;
 pub(crate) use normal_curvature::curvature_from_normal;
 pub(crate) use sample::Sample;
+pub(crate) use texel_grid::TexelGrid;
 pub(crate) use traced::Traced;
 pub(crate) use transfer::Transfer;

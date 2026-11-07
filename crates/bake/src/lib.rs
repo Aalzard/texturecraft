@@ -189,12 +189,13 @@ fn bake_in_strips(
     let mut scene = tracer.scene(&meshes)?;
     progress.done.store(0, Relaxed);
 
-    // Normal-map curvature needs a normal bake even when normal output is disabled
+    // Normal-map curvature needs a world normal bake even when that output is disabled
     let from_normal = settings.maps.curvature.parameters.method == CurvatureMethod::NormalMap && settings.maps.is_enabled(BakedMap::Curvature);
     let mut maps: Vec<BakedMap> = settings.maps.enabled().collect();
-    if from_normal && !maps.contains(&BakedMap::Normal) {
-        maps.push(BakedMap::Normal);
+    if from_normal && !maps.contains(&BakedMap::WorldNormal) {
+        maps.push(BakedMap::WorldNormal);
     }
+
     let mut buffers = maps.iter().map(|map| alloc(width * height * map.components(), 0.0f32)).collect::<Result<Vec<_>, _>>()?;
     let mut covered = alloc(width * height, false)?;
     let mut padding_map = None;
@@ -281,15 +282,18 @@ fn bake_in_strips(
 
     let mut output: BTreeMap<BakedMap, Vec<f32>> = maps.into_iter().zip(buffers).collect();
     if from_normal {
-        let normal = if settings.maps.is_enabled(BakedMap::Normal) { output.get(&BakedMap::Normal).cloned() } else { output.remove(&BakedMap::Normal) };
-        if let (Some(normal), Some(curvature_pixels)) = (normal, output.get_mut(&BakedMap::Curvature)) {
+        let world_normal =
+            if settings.maps.is_enabled(BakedMap::WorldNormal) { output.get(&BakedMap::WorldNormal).cloned() } else { output.remove(&BakedMap::WorldNormal) };
+        if let (Some(world_normal), Some(curvature_pixels)) = (world_normal, output.get_mut(&BakedMap::Curvature)) {
             let parameters = settings.maps.curvature.parameters.normal_map;
-            map::curvature_from_normal(&normal, &covered, width, tile_size, parameters, curvature_pixels);
+            let grid = map::TexelGrid { covered: &covered, size: (width, height), tile_size };
+            map::curvature_from_normal(&world_normal, request.mesh, request.material, &grid, parameters, curvature_pixels);
             if parameters.enable_seams {
                 map::fix_seams(request.mesh, request.material, &covered, (width, height), parameters.seams_intensity, curvature_pixels);
             }
         }
     }
+
     let (bounds_min, bounds_max) = request.mesh.bounds();
     map::normalize(&mut output, &covered, width, tile_size, settings, (bounds_max - bounds_min).max_element().max(1e-6));
     if let Some(padding_map) = padding_map {
