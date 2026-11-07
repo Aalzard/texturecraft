@@ -562,8 +562,7 @@ impl Generator {
         };
         let detail = match kind {
             GeneratorKind::Curvature => Some(CurvatureDetail::default()),
-            // Worn edges are thin lines: mostly the finer sizes
-            GeneratorKind::EdgeWear => Some(CurvatureDetail { mode: CurvatureMode::Edges, weights: [1.0, 0.8, 0.5, 0.25, 0.1, 0.0, 0.0] }),
+            GeneratorKind::EdgeWear => Some(CurvatureDetail { mode: CurvatureMode::Edges, weights: CurvatureDetail::EDGE_WEIGHTS }),
             _ => None,
         };
         Generator { kind, level, softness, noise_amount, noise_scale: 8.0, seed: 7, direction: [0.0, 1.0, 0.0], invert: false, detail }

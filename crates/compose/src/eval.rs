@@ -432,15 +432,15 @@ fn gather(op: Op, orig: &[f32], cover: &[f32], comps: usize, (x0, y0, w, h): (u3
 /// the region it is computed in, so tiles composited in any grouping agree exactly.
 const FIX: f64 = (1u64 << 24) as f64;
 
-/// Three running-sum box blurs (≈ Gaussian) of a `w × h` image along rows then along columns.
-/// Rows (and columns, transposed) blur in parallel.
-pub(crate) fn blur(data: &mut [f32], w: usize, h: usize, r: usize) {
-    let fix = |v: &f32| if v.is_finite() { (f64::from(v.clamp(-1e6, 1e6)) * FIX).round() as i64 } else { 0 };
-    let mut v: Vec<i64> = data.par_iter().map(fix).collect();
-    blur_rows(&mut v, w, r);
-    let mut t = transpose(&v, w, h);
-    blur_rows(&mut t, h, r);
-    data.par_iter_mut().zip(transpose(&t, h, w)).for_each(|(d, s)| *d = (s as f64 / FIX) as f32);
+/// Three running-sum box blurs (≈ Gaussian) of a `width × height` image along its rows, then its columns, each in parallel.
+pub(crate) fn blur(data: &mut [f32], width: usize, height: usize, radius: usize) {
+    let to_fixed = |value: &f32| if value.is_finite() { (f64::from(value.clamp(-1e6, 1e6)) * FIX).round() as i64 } else { 0 };
+    let mut fixed: Vec<i64> = data.par_iter().map(to_fixed).collect();
+    blur_rows(&mut fixed, width, radius);
+
+    let mut columns = transpose(&fixed, width, height);
+    blur_rows(&mut columns, height, radius);
+    data.par_iter_mut().zip(transpose(&columns, height, width)).for_each(|(target, blurred)| *target = (blurred as f64 / FIX) as f32);
 }
 
 /// Three box blurs of radius `r` along every row (`w` long) of `data`.
@@ -813,18 +813,18 @@ struct Node<'a> {
 fn effect_plans<'a>(inp: &Inputs<'a>, effects: &'a [Effect], tx: u32, ty: u32, channel: Option<Channel>) -> Vec<EffectPlan<'a>> {
     effects
         .iter()
-        .filter(|e| e.visible)
-        .map(|e| {
-            let (img, target) = match channel {
-                Some(c) => (inp.pixels.layer(e.id, c), PaintTarget::Layer(e.id)),
-                None => (inp.pixels.masks.get(&e.id), PaintTarget::Mask(e.id)),
+        .filter(|effect| effect.visible)
+        .map(|effect| {
+            let (image, target) = match channel {
+                Some(channel) => (inp.pixels.layer(effect.id, channel), PaintTarget::Layer(effect.id)),
+                None => (inp.pixels.masks.get(&effect.id), PaintTarget::Mask(effect.id)),
             };
-            let reads_detail = matches!(&e.kind, EffectKind::Generator(generator) if generator.detail.is_some());
+            let reads_detail = matches!(&effect.kind, EffectKind::Generator(generator) if generator.detail.is_some());
             EffectPlan {
-                kind: &e.kind,
-                blend: e.blend,
-                opacity: e.opacity,
-                data: if e.kind.painted() { tile_of(inp, img, tx, ty, channel) } else { None },
+                kind: &effect.kind,
+                blend: effect.blend,
+                opacity: effect.opacity,
+                data: if effect.kind.painted() { tile_of(inp, image, tx, ty, channel) } else { None },
                 preview: previews(inp, target),
                 curvature_sizes: if reads_detail { CurvatureSizes::of(inp) } else { None },
             }
