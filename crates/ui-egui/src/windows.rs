@@ -156,10 +156,14 @@ pub(crate) fn display(app: &mut TextureCraftApp, ui: &mut Ui) {
     if ui.checkbox(&mut ortho, tr("Orthographic")).changed() {
         app.run("camera.set", json!({"ortho": ortho}));
     }
-    ui.horizontal(|ui| {
-        ui.label(tr("Tone mapping"));
-        ui.selectable_value(&mut d.tone_mapping, ToneMapping::Linear, tr("Linear"));
-        ui.selectable_value(&mut d.tone_mapping, ToneMapping::AcesFilmic, tr("ACES filmic"));
+    let tone_mapping_name = |tone_mapping: ToneMapping| match tone_mapping {
+        ToneMapping::Linear => tr("Linear"),
+        ToneMapping::AcesFilmic => tr("ACES filmic"),
+    };
+    combo(ui, tr("Tone mapping"), tone_mapping_name(d.tone_mapping), |ui| {
+        for tone_mapping in [ToneMapping::Linear, ToneMapping::AcesFilmic] {
+            ui.selectable_value(&mut d.tone_mapping, tone_mapping, tone_mapping_name(tone_mapping));
+        }
     });
     cameras(app, ui);
     ui.add_space(6.0);
@@ -177,7 +181,6 @@ pub(crate) fn display(app: &mut TextureCraftApp, ui: &mut Ui) {
     });
     ui.add_space(6.0);
     ui.label(caption(tr("Viewer settings")));
-    slider(ui, tr("Ambient occlusion intensity"), &mut d.ao_intensity, 0.0..=1.0, 2);
     ui.checkbox(&mut app.ui.wireframe_3d, tr("Show wireframe in the 3D view"));
     ui.checkbox(&mut app.ui.uv_wireframe, tr("Show UV wireframe in the 2D view"));
     ui.checkbox(&mut d.taa, tr("Temporal anti-aliasing (refines the 3D view while it is still)"));
