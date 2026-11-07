@@ -165,6 +165,8 @@ impl ViewMode {
 pub enum FillMode {
     #[default]
     Triangle,
+    /// The source polygon (quad or n-gon) the importer split into triangles
+    Polygon,
     UvIsland,
     Mesh,
 }
@@ -210,6 +212,12 @@ pub struct ToolState {
     /// Gray painted into masks.
     pub mask_value: f32,
     pub fill_mode: FillMode,
+    /// How a polygon fill box decides which polygons it selects
+    #[serde(default)]
+    pub fill_hit_test: crate::fill_hit_test::FillHitTest,
+    /// Polygon fill boxes in the 3D view select only the polygons the camera sees
+    #[serde(default = "default_fill_visible_only")]
+    pub fill_visible_only: bool,
     /// Stencil used by the Projection tool.
     #[serde(default)]
     pub stencil: Option<StencilState>,
@@ -229,6 +237,10 @@ pub struct ToolState {
 
 fn default_smudge_strength() -> f32 {
     0.5
+}
+
+fn default_fill_visible_only() -> bool {
+    true
 }
 
 /// What the Clone tool copies (the clone source modes).
@@ -260,6 +272,8 @@ impl Default for ToolState {
             enabled: [Channel::BaseColor, Channel::Metallic, Channel::Roughness, Channel::Height, Channel::Normal].into_iter().collect(),
             mask_value: 1.0,
             fill_mode: FillMode::Triangle,
+            fill_hit_test: Default::default(),
+            fill_visible_only: default_fill_visible_only(),
             stencil: None,
             smudge_strength: default_smudge_strength(),
             clone_source: None,
@@ -356,6 +370,8 @@ pub struct Session {
     /// The last stroke's camera visibility buffer: reused while the camera, view size and mesh
     /// are unchanged, so back-to-back dabs start instantly.
     pub(crate) depth_cache: Option<DepthCache>,
+    /// The polygon fill box being dragged
+    pub(crate) polygon_fill_drag: Option<crate::polygon_fill_drag::PolygonFillDrag>,
     /// The user's export presets (kept when another project opens).
     pub export_presets: crate::preset_cmds::UserPresets,
     /// The user's project templates (kept when another project opens).
@@ -405,6 +421,7 @@ impl Session {
             revision: 1,
             log: Vec::new(),
             depth_cache: None,
+            polygon_fill_drag: None,
             export_presets: Default::default(),
             templates: Default::default(),
         })
@@ -530,7 +547,7 @@ impl Session {
 
     /// Mark dirty every texture set whose composite differs between `other` and the current
     /// document (after an edit, undo or redo).
-    fn invalidate_changed(&mut self, other: &Document) {
+    pub(crate) fn invalidate_changed(&mut self, other: &Document) {
         self.follow_uv_layouts(&other.project);
         self.sync_caches();
         let resources = |d: &Document| d.resources.iter().map(|(n, b)| (n.clone(), Arc::as_ptr(b))).collect::<Vec<_>>();

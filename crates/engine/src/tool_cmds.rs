@@ -7,6 +7,7 @@ use texturecraft_geom::glam::Vec2;
 use texturecraft_paint::{Alignment, BrushAlpha, alphas};
 
 use crate::commands::{CommandSpec, always, bad, boolp, channel_param, color_param, f32p, strp};
+use crate::fill_hit_test::FillHitTest;
 use crate::session::{CloneFrom, CloneSource, FillMode, Tool};
 use crate::{Result, Session, cmd};
 
@@ -69,7 +70,16 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             clone_source
         ),
-        cmd!("tool.fillMode", "Polygon fill mode", [], None, "{mode: triangle|uvIsland|mesh}", always, fill_mode),
+        cmd!("tool.fillMode", "Polygon fill mode", [], None, "{mode: triangle|polygon|uvIsland|mesh}", always, fill_mode),
+        cmd!(
+            "tool.fillSelection",
+            "Polygon fill selection",
+            [],
+            None,
+            "{hitTest?: intersection|containedCenter (a box selects polygons it touches, or whose center it holds), visibleOnly?: bool (3D view boxes select only what the camera sees)}",
+            always,
+            fill_selection
+        ),
         cmd!("tool.stroke", "Paint stroke", [], None, "{points: [[x,y],...] viewport pixels, viewport?: [w,h]} — paints with the current tool", always, stroke),
         cmd!(
             "tool.strokeUv",
@@ -80,7 +90,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             stroke_uv
         ),
-        cmd!("tool.click", "Tool click", [], None, "{x, y, viewport?: [w,h]} — polygon fill / color picker / single dab", always, click),
+        cmd!(
+            "tool.click",
+            "Tool click",
+            [],
+            None,
+            "{x, y, viewport?: [w,h]} — polygon fill / color picker / single dab; polygon fill also takes a box {x0, y0, x1, y1, viewport?}, a 2D view point {uv: [u,v]} or a 2D view box {uv0: [u,v], uv1: [u,v]}",
+            always,
+            click
+        ),
         cmd!("tool.state", "Tool state", [], None, "{}", always, |s, _| Ok(serde_json::to_value(&s.tool).unwrap_or(Value::Null))),
     ]
 }
@@ -322,10 +340,25 @@ fn clone_source(s: &mut Session, p: &Value) -> Result<Value> {
 fn fill_mode(s: &mut Session, p: &Value) -> Result<Value> {
     s.tool.fill_mode = match strp(p, "mode").unwrap_or("triangle") {
         "triangle" => FillMode::Triangle,
+        "polygon" => FillMode::Polygon,
         "uvIsland" | "island" => FillMode::UvIsland,
         "mesh" => FillMode::Mesh,
         other => return Err(bad("tool.fillMode", format!("unknown fill mode `{other}`"))),
     };
+    Ok(Value::Null)
+}
+
+fn fill_selection(s: &mut Session, p: &Value) -> Result<Value> {
+    match strp(p, "hitTest") {
+        None => {}
+        Some("intersection") => s.tool.fill_hit_test = FillHitTest::Intersection,
+        Some("containedCenter") => s.tool.fill_hit_test = FillHitTest::ContainedCenter,
+        Some(other) => return Err(bad("tool.fillSelection", format!("unknown hit-test `{other}` (intersection or containedCenter)"))),
+    }
+    if let Some(visible_only) = boolp(p, "visibleOnly") {
+        s.tool.fill_visible_only = visible_only;
+    }
+
     Ok(Value::Null)
 }
 
@@ -370,19 +403,41 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn click(s: &mut Session, p: &Value) -> Result<Value> {
+    if s.tool.tool == Tool::PolygonFill
+        && let Some(triangles) = polygon_fill_click(s, p)?
+    {
+        s.update();
+        return Ok(json!({ "triangles": triangles }));
+    }
+
     let (Some(x), Some(y)) = (f32p(p, "x"), f32p(p, "y")) else { return Err(bad("tool.click", "`x` and `y` are required")) };
-    let vp = viewport_of(s, p);
+
+    let point = Vec2::new(x, y);
+    let viewport = viewport_of(s, p);
     let out = match s.tool.tool {
-        Tool::PolygonFill => json!({ "triangles": s.polygon_fill(Vec2::new(x, y), vp)? }),
+        Tool::PolygonFill => json!({ "triangles": s.polygon_fill(point, viewport)? }),
         Tool::ColorPicker => {
-            let v = s.color_pick(Vec2::new(x, y), vp)?;
-            json!(v.iter().map(|(c, v)| (c.id().to_string(), json!(v))).collect::<serde_json::Map<_, _>>())
+            let picked = s.color_pick(point, viewport)?;
+            json!(picked.iter().map(|(channel, value)| (channel.id().to_string(), json!(value))).collect::<serde_json::Map<_, _>>())
         }
-        Tool::GeometryMask => crate::instance_cmds::toggle_part_at(s, Vec2::new(x, y), vp)?,
-        _ => json!({ "stamps": s.stroke_points(&[Vec2::new(x, y)], vp)? }),
+        Tool::GeometryMask => crate::instance_cmds::toggle_part_at(s, point, viewport)?,
+        _ => json!({ "stamps": s.stroke_points(&[point], viewport)? }),
     };
     s.update();
     Ok(out)
+}
+
+/// The polygon fill forms of `tool.click` besides a plain `{x, y}` point: None for that point
+fn polygon_fill_click(s: &mut Session, p: &Value) -> Result<Option<usize>> {
+    let screen_box = (f32p(p, "x0"), f32p(p, "y0"), f32p(p, "x1"), f32p(p, "y1"));
+    let filled = match (pair(p, "uv0"), pair(p, "uv1"), pair(p, "uv"), screen_box) {
+        (Some(corner), Some(opposite), ..) => s.polygon_fill_box_uv(corner.into(), opposite.into())?,
+        (_, _, Some(uv), _) => s.polygon_fill_uv(uv.into())?,
+        (.., (Some(x0), Some(y0), Some(x1), Some(y1))) => s.polygon_fill_box(Vec2::new(x0, y0), Vec2::new(x1, y1), viewport_of(s, p))?,
+        _ => return Ok(None),
+    };
+
+    Ok(Some(filled))
 }
 
 fn stroke_uv(s: &mut Session, p: &Value) -> Result<Value> {
