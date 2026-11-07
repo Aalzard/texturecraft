@@ -17,6 +17,9 @@ use super::*;
 #[path = "test/setting.rs"]
 mod setting;
 
+#[path = "test/normal_map_curvature.rs"]
+mod normal_map_curvature;
+
 #[path = "test/tile_selection.rs"]
 mod tile_selection;
 
@@ -636,21 +639,6 @@ fn bump_tilts_the_baked_normal() {
     }
     let height = &out.maps[&BakedMap::Height];
     assert!(height[quad_texel(64, 0.0, 0.0)] > height[quad_texel(64, 0.6, 0.6)] + 0.2, "the bump top is higher");
-}
-
-#[test]
-fn curvature_from_the_normal_map_sees_the_bump() {
-    let s = {
-        let mut base = settings(64, &[BakedMap::Curvature]);
-        base.cage = CageSettings { max_frontal: 0.06, max_rear: 0.02, ..base.cage };
-        base.maps.curvature.parameters = CurvatureSettings { method: CurvatureMethod::NormalMap, ..base.maps.curvature.parameters };
-        base
-    };
-    let out = transfer(&quad(), &bumped(0.1, 0.4), None, &s).unwrap();
-    assert!(!out.maps.contains_key(&BakedMap::Normal), "the helper normal map is not returned");
-    let c = &out.maps[&BakedMap::Curvature];
-    assert!(c[quad_texel(64, 0.0, 0.0)] > 0.55, "convex top {}", c[quad_texel(64, 0.0, 0.0)]);
-    assert!((c[quad_texel(64, 0.9, 0.9)] - 0.5).abs() < 0.02, "flat corner {}", c[quad_texel(64, 0.9, 0.9)]);
 }
 
 #[test]
