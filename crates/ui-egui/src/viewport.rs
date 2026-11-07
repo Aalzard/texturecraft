@@ -214,13 +214,13 @@ fn shade(app: &TextureCraftApp) -> Shade {
     let set_index = app.session.ts();
     let height_strength = app.session.doc.project.texture_sets.get(set_index).map(|texture_set| texture_set.atlas_height_strength()).unwrap_or(1.0);
     // Polygon fill shows the polygons it fills without changing the saved wireframe toggles
-    let polygon_fill = app.ui.mode == crate::state::Mode::Painting && app.session.tool.tool == Tool::PolygonFill;
+    let polygon_fill_tool = app.ui.mode == crate::state::Mode::Painting && app.session.tool.tool == Tool::PolygonFill;
     Shade {
         height_strength,
         view_mode,
         channel,
-        wireframe: app.ui.uv_wireframe || polygon_fill,
-        wireframe_3d: app.ui.wireframe_3d || polygon_fill,
+        wireframe: app.ui.uv_wireframe || polygon_fill_tool,
+        wireframe_3d: app.ui.wireframe_3d || polygon_fill_tool,
         ..Shade::from_project(&app.session.doc.project)
     }
 }
@@ -1040,7 +1040,12 @@ fn polygon_fill_input(
     let pointer = ui.input(|input| input.pointer.latest_pos());
     let (filled, dragged_box) = match (origin, pointer) {
         _ if response.clicked_by(PointerButton::Primary) => (response.interact_pointer_pos().map(|point| fill_at(&mut app.session, point)), None),
-        (Some(origin), Some(pointer)) if released => (Some(drag_box(&mut app.session, origin, pointer).map(|_| app.session.end_polygon_fill_box())), None),
+        (Some(origin), Some(pointer)) if released => {
+            // The drag ends on release even when its last move failed
+            let shown = drag_box(&mut app.session, origin, pointer);
+            let filled = app.session.end_polygon_fill_box();
+            (Some(shown.map(|_| filled)), None)
+        }
         (Some(origin), Some(pointer)) => (Some(drag_box(&mut app.session, origin, pointer)), Some(Rect::from_two_pos(origin, pointer))),
         _ => (None, None),
     };

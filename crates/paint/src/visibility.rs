@@ -2,7 +2,7 @@
 //! rendered once at the start of a stroke.
 
 use rayon::prelude::*;
-use texturecraft_geom::glam::{Mat4, Vec3, Vec4};
+use texturecraft_geom::glam::{Mat4, Vec2, Vec3};
 use texturecraft_geom::{Mesh, NO_TRI, OrbitCamera};
 
 const BAND: usize = 16;
@@ -11,7 +11,7 @@ const BAND: usize = 16;
 const MAX_SIZE: u32 = 4096;
 
 /// Clip-space w below which a vertex counts as behind the camera.
-const MIN_CLIP_W: f32 = 1e-5;
+pub const MIN_CLIP_W: f32 = 1e-5;
 
 /// Screen area (pixels squared) below which a triangle is skipped as degenerate.
 const MIN_SCREEN_AREA: f32 = 1e-9;
@@ -30,28 +30,38 @@ pub struct EyeDepth {
     pub view_proj: Mat4,
     pub eye: Vec3,
     pub dist: Vec<f32>,
-    /// The nearest triangle per screen pixel ([`NO_TRI`] where empty).
+    /// The nearest triangle per screen pixel ([`NO_TRI`] where empty); empty unless rendered with [`EyeDepth::render_with_triangles`].
     pub triangle: Vec<u32>,
     /// Tolerance in world units (≈ 0.4% of the scene radius).
     pub bias: f32,
 }
 
+/// Where `position` lands in a `size` pixel view through `view_proj` (origin top-left), or None behind the camera.
+pub fn screen_point(view_proj: Mat4, position: Vec3, size: Vec2) -> Option<Vec2> {
+    let clip = view_proj * position.extend(1.0);
+    (clip.w > MIN_CLIP_W).then(|| Vec2::new(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5) * size)
+}
+
 impl EyeDepth {
-    /// Rasterize `mesh` seen by `camera` into a `width × height` buffer (sizes capped at [`MAX_SIZE`]).
+    /// Rasterize `mesh` seen by `camera` into a `width × height` buffer (sizes capped at [`MAX_SIZE`]), without [`EyeDepth::triangle`].
     pub fn render(mesh: &Mesh, camera: &OrbitCamera, width: u32, height: u32) -> EyeDepth {
+        Self::rasterize(mesh, camera, width, height, false)
+    }
+
+    /// [`EyeDepth::render`] that also records the nearest triangle per pixel in [`EyeDepth::triangle`].
+    pub fn render_with_triangles(mesh: &Mesh, camera: &OrbitCamera, width: u32, height: u32) -> EyeDepth {
+        Self::rasterize(mesh, camera, width, height, true)
+    }
+
+    /// The eye-distance buffer, plus the nearest triangle per pixel when `record_triangles` is set.
+    fn rasterize(mesh: &Mesh, camera: &OrbitCamera, width: u32, height: u32, record_triangles: bool) -> EyeDepth {
         let (width, height) = (width.clamp(1, MAX_SIZE), height.clamp(1, MAX_SIZE));
-        let view_proj = camera.view_proj(width as f32 / height as f32);
+        let size = Vec2::new(width as f32, height as f32);
+        let view_proj = camera.view_proj(size.x / size.y);
         let eye = camera.eye();
 
         // Project every vertex once
-        let screen: Vec<Option<(f32, f32)>> = mesh
-            .positions
-            .iter()
-            .map(|position| {
-                let clip: Vec4 = view_proj * position.extend(1.0);
-                (clip.w > MIN_CLIP_W).then(|| ((clip.x / clip.w * 0.5 + 0.5) * width as f32, (0.5 - clip.y / clip.w * 0.5) * height as f32))
-            })
-            .collect();
+        let screen: Vec<Option<Vec2>> = mesh.positions.iter().map(|position| screen_point(view_proj, *position, size)).collect();
         let vertex_distance: Vec<f32> = mesh.positions.iter().map(|position| position.distance(eye)).collect();
 
         // Bin each triangle into the bands of rows it covers
@@ -60,8 +70,8 @@ impl EyeDepth {
             let Some([first, second, third]) = mesh.tri(triangle) else { continue };
             let (Some(Some(first)), Some(Some(second)), Some(Some(third))) = (screen.get(first), screen.get(second), screen.get(third)) else { continue };
 
-            let top = first.1.min(second.1).min(third.1).floor().max(0.0);
-            let bottom = first.1.max(second.1).max(third.1).ceil().min(height as f32);
+            let top = first.y.min(second.y).min(third.y).floor().max(0.0);
+            let bottom = first.y.max(second.y).max(third.y).ceil().min(size.y);
             if bottom <= top || !top.is_finite() || !bottom.is_finite() {
                 continue;
             }
@@ -72,9 +82,11 @@ impl EyeDepth {
         }
 
         let mut dist = vec![f32::MAX; (width * height) as usize];
-        let mut triangle = vec![NO_TRI; (width * height) as usize];
+        let mut triangle = if record_triangles { vec![NO_TRI; (width * height) as usize] } else { Vec::new() };
         let band_len = BAND * width as usize;
-        dist.par_chunks_mut(band_len).zip(triangle.par_chunks_mut(band_len)).enumerate().for_each(|(band, (band_dist, band_triangles))| {
+        let mut triangle_bands: Vec<Option<&mut [u32]>> = triangle.chunks_mut(band_len).map(Some).collect();
+        triangle_bands.resize_with(dist.len().div_ceil(band_len), || None);
+        dist.par_chunks_mut(band_len).zip(triangle_bands.into_par_iter()).enumerate().for_each(|(band, (band_dist, mut band_triangles))| {
             let first_row = band * BAND;
             let row_count = band_dist.len() / width as usize;
             for &candidate in bands.get(band).map(Vec::as_slice).unwrap_or(&[]) {
@@ -84,24 +96,22 @@ impl EyeDepth {
                 else {
                     continue;
                 };
-                let corner_distance = corners.map(|vertex| vertex_distance[vertex]);
-                let area =
-                    (second_point.0 - first_point.0) * (third_point.1 - first_point.1) - (second_point.1 - first_point.1) * (third_point.0 - first_point.0);
+
+                let corner_distance = corners.map(|vertex| vertex_distance.get(vertex).copied().unwrap_or(f32::MAX));
+                let area = (*second_point - *first_point).perp_dot(*third_point - *first_point);
                 if area.abs() < MIN_SCREEN_AREA {
                     continue;
                 }
 
-                let left = first_point.0.min(second_point.0).min(third_point.0).floor().max(0.0) as usize;
-                let right = (first_point.0.max(second_point.0).max(third_point.0).ceil().min(width as f32)) as usize;
-                let top = (first_point.1.min(second_point.1).min(third_point.1).floor().max(first_row as f32)) as usize;
-                let bottom = (first_point.1.max(second_point.1).max(third_point.1).ceil().min((first_row + row_count) as f32)) as usize;
+                let low = first_point.min(*second_point).min(*third_point).floor();
+                let high = first_point.max(*second_point).max(*third_point).ceil();
+                let (left, right) = (low.x.max(0.0) as usize, (high.x.min(size.x) as usize).min(width as usize));
+                let (top, bottom) = (low.y.max(first_row as f32) as usize, high.y.min((first_row + row_count) as f32) as usize);
                 for row in top.max(first_row)..bottom {
-                    for column in left..right.min(width as usize) {
-                        let (sample_x, sample_y) = (column as f32 + 0.5, row as f32 + 0.5);
-                        let first_weight =
-                            ((second_point.0 - sample_x) * (third_point.1 - sample_y) - (second_point.1 - sample_y) * (third_point.0 - sample_x)) / area;
-                        let second_weight =
-                            ((third_point.0 - sample_x) * (first_point.1 - sample_y) - (third_point.1 - sample_y) * (first_point.0 - sample_x)) / area;
+                    for column in left..right {
+                        let sample = Vec2::new(column as f32 + 0.5, row as f32 + 0.5);
+                        let first_weight = (*third_point - *second_point).perp_dot(sample - *second_point) / area;
+                        let second_weight = (*first_point - *third_point).perp_dot(sample - *third_point) / area;
                         let third_weight = 1.0 - first_weight - second_weight;
                         if first_weight < -EDGE_TOLERANCE || second_weight < -EDGE_TOLERANCE || third_weight < -EDGE_TOLERANCE {
                             continue;
@@ -113,7 +123,7 @@ impl EyeDepth {
                             && distance < *slot
                         {
                             *slot = distance;
-                            if let Some(nearest) = band_triangles.get_mut(at) {
+                            if let Some(nearest) = band_triangles.as_deref_mut().and_then(|triangles| triangles.get_mut(at)) {
                                 *nearest = candidate;
                             }
                         }

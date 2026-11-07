@@ -502,7 +502,8 @@ impl Session {
             return self.paint_fill(ts, canvas);
         }
 
-        self.edit(label, |session| session.paint_fill(ts, canvas))
+        // Each fill is its own step, never merged into a box drag's step of the same label
+        self.edit_merging(label, false, |session| session.paint_fill(ts, canvas))
     }
 
     /// Paint a one-shot fill with the tool's material into the paint target, or into the quick mask while it is edited (no undo step)

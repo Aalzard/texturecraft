@@ -27,8 +27,9 @@ fn drag(harness: &mut Harness<'_, TextureCraftApp>, from: Pos2, to: Pos2) {
         harness.run_steps(1);
     }
 
+    // Only the release frame runs, so the release itself must finish the drag
     harness.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-    harness.run_steps(3);
+    harness.run_steps(1);
 }
 
 /// Press and release the primary button at `at`

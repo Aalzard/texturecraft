@@ -1,6 +1,7 @@
 //! Triangles of one material grouped into the pieces polygon fill selects and fills.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
+use std::hash::Hash;
 
 use texturecraft_geom::Mesh;
 
@@ -14,12 +15,15 @@ pub struct TrianglePartition {
 
 impl TrianglePartition {
     /// Group `material`'s triangles of `mesh`: two triangles join when `edges` names a key for both
-    pub fn new<K: Ord>(mesh: &Mesh, material: usize, edges: impl Fn(&Mesh, usize) -> Vec<K>) -> TrianglePartition {
+    pub fn new<K: Eq + Hash + Clone>(mesh: &Mesh, material: usize, edges: impl Fn(&Mesh, usize) -> Vec<K>) -> TrianglePartition {
+        // Each triangle's edges once, in mesh order so the groups come out the same every time
         let triangles: Vec<u32> = mesh.triangles_of(material).map(|triangle| triangle as u32).collect();
-        let mut by_edge: BTreeMap<K, Vec<u32>> = BTreeMap::new();
-        for &triangle in &triangles {
-            for edge in edges(mesh, triangle as usize) {
-                by_edge.entry(edge).or_default().push(triangle);
+        let position_of: HashMap<u32, usize> = triangles.iter().enumerate().map(|(position, triangle)| (*triangle, position)).collect();
+        let mut edge_lists: Vec<Vec<K>> = triangles.iter().map(|triangle| edges(mesh, *triangle as usize)).collect();
+        let mut by_edge: HashMap<K, Vec<u32>> = HashMap::new();
+        for (triangle, triangle_edges) in triangles.iter().zip(&edge_lists) {
+            for edge in triangle_edges {
+                by_edge.entry(edge.clone()).or_default().push(*triangle);
             }
         }
 
@@ -29,12 +33,14 @@ impl TrianglePartition {
             if group_of.contains_key(&start) {
                 continue;
             }
+
             let mut members = Vec::new();
             let mut stack = vec![start];
             group_of.insert(start, groups.len());
             while let Some(triangle) = stack.pop() {
                 members.push(triangle);
-                for neighbour in edges(mesh, triangle as usize).iter().flat_map(|edge| by_edge.get(edge).into_iter().flatten()) {
+                let triangle_edges = position_of.get(&triangle).and_then(|position| edge_lists.get_mut(*position)).map(std::mem::take).unwrap_or_default();
+                for neighbour in triangle_edges.iter().flat_map(|edge| by_edge.get(edge).into_iter().flatten()) {
                     if !group_of.contains_key(neighbour) {
                         group_of.insert(*neighbour, groups.len());
                         stack.push(*neighbour);

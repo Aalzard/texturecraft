@@ -25,17 +25,17 @@ impl FillHitTest {
 
 /// Area-weighted center of the triangles (their corners' mean when they have no area)
 fn center(triangles: &[[Vec2; 3]]) -> Option<Vec2> {
-    let area = |corners: &[Vec2; 3]| (corners[1] - corners[0]).perp_dot(corners[2] - corners[0]).abs();
-    let centroid = |corners: &[Vec2; 3]| (corners[0] + corners[1] + corners[2]) / 3.0;
-    let total: f32 = triangles.iter().map(area).sum();
-    let weighted: Vec2 = triangles.iter().map(|corners| centroid(corners) * area(corners)).sum();
-    let centroids: Vec2 = triangles.iter().map(centroid).sum();
-
-    match triangles.len() {
-        0 => None,
-        count if total <= f32::EPSILON => Some(centroids / count as f32),
-        _ => Some(weighted / total),
+    if triangles.is_empty() {
+        return None;
     }
+
+    // One pass: total area, area-weighted centroids and plain centroids
+    let (total_area, weighted, centroids) = triangles.iter().fold((0.0, Vec2::ZERO, Vec2::ZERO), |(total_area, weighted, centroids), corners| {
+        let area = (corners[1] - corners[0]).perp_dot(corners[2] - corners[0]).abs();
+        let centroid = (corners[0] + corners[1] + corners[2]) / 3.0;
+        (total_area + area, weighted + centroid * area, centroids + centroid)
+    });
+    Some(if total_area > 0.0 { weighted / total_area } else { centroids / triangles.len() as f32 })
 }
 
 /// Separating axis test of a triangle against an axis-aligned box
@@ -63,11 +63,14 @@ mod tests {
     const TRIANGLE: [Vec2; 3] = [Vec2::new(0.0, 0.0), Vec2::new(4.0, 0.0), Vec2::new(0.0, 4.0)];
 
     #[test]
-    fn intersection_needs_any_overlap_and_contained_center_the_center() {
-        let (low, high) = (Vec2::new(2.0, 2.0), Vec2::new(6.0, 6.0));
-        assert!(FillHitTest::Intersection.selects(&[TRIANGLE], Vec2::new(1.0, 1.0), high), "a box cutting the triangle");
-        assert!(!FillHitTest::Intersection.selects(&[TRIANGLE], Vec2::new(3.0, 3.0), Vec2::new(5.0, 5.0)), "inside the bounds, past the long edge");
-        assert!(!FillHitTest::ContainedCenter.selects(&[TRIANGLE], low, high), "the center (4/3, 4/3) lies outside");
+    fn intersection_selects_any_overlap() {
+        assert!(FillHitTest::Intersection.selects(&[TRIANGLE], Vec2::splat(1.0), Vec2::splat(6.0)), "a box cutting the triangle");
+        assert!(!FillHitTest::Intersection.selects(&[TRIANGLE], Vec2::splat(3.0), Vec2::splat(5.0)), "inside the bounds, past the long edge");
+    }
+
+    #[test]
+    fn contained_center_selects_only_by_the_center() {
+        assert!(!FillHitTest::ContainedCenter.selects(&[TRIANGLE], Vec2::splat(2.0), Vec2::splat(6.0)), "the center (4/3, 4/3) lies outside");
         assert!(FillHitTest::ContainedCenter.selects(&[TRIANGLE], Vec2::splat(1.0), Vec2::splat(2.0)));
     }
 

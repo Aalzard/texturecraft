@@ -11,6 +11,7 @@ use texturecraft_geom::{Bvh, Mesh, OrbitCamera, UvGBuffer};
 use texturecraft_paint::{BrushSettings, EyeDepth, Stroke, StrokeCanvas};
 use texturecraft_texel::DilationMap;
 
+use crate::fill_mode::FillMode;
 use crate::{EngineError, Result};
 
 /// Padding (texels) applied to composites for display.
@@ -158,17 +159,6 @@ impl ViewMode {
             ViewMode::Mask(_) => "Layer mask".into(),
         }
     }
-}
-
-/// Polygon fill granularity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum FillMode {
-    #[default]
-    Triangle,
-    /// The source polygon (quad or n-gon) the importer split into triangles
-    Polygon,
-    UvIsland,
-    Mesh,
 }
 
 /// A screen-pinned image for the Projection tool (a stencil).
@@ -506,22 +496,24 @@ impl Session {
         self.edit_merging(label, self.merge_edits, f)
     }
 
-    /// [`Session::edit`] that, with `merge`, continues the previous undo step when it has the
-    /// same label (a drag in the viewport is one step however many updates it makes).
-    pub fn edit_merging<T>(&mut self, label: &str, merge: bool, f: impl FnOnce(&mut Session) -> Result<T>) -> Result<T> {
+    /// [`Session::edit`] that, with `merge`, continues the previous undo step when it has the same label (a viewport drag is one step however many updates it makes).
+    pub fn edit_merging<T>(&mut self, label: &str, merge: bool, change: impl FnOnce(&mut Session) -> Result<T>) -> Result<T> {
+        // A box fill under way becomes its own step first, so this edit isn't written over or folded into it
+        self.end_polygon_fill_box();
+
         let before = self.doc.clone();
-        let result = f(self).and_then(|v| match self.doc.project.instance_cycle() {
+        let result = change(self).and_then(|value| match self.doc.project.instance_cycle() {
             Some(id) => Err(EngineError::Other(format!("instance layer {} would draw itself", id.0))),
-            None => Ok(v),
+            None => Ok(value),
         });
         match result {
-            Ok(v) => {
+            Ok(value) => {
                 self.record(label, before, merge);
-                Ok(v)
+                Ok(value)
             }
-            Err(e) => {
+            Err(error) => {
                 self.doc = before;
-                Err(e)
+                Err(error)
             }
         }
     }
@@ -642,25 +634,29 @@ impl Session {
     }
 
     pub fn undo(&mut self) -> Result<String> {
+        // A stroke, a box fill or an edited path under way would otherwise write over the restored document
         self.cancel_stroke();
-        // An edited path would otherwise repaint over the restored document.
+        self.end_polygon_fill_box();
         self.stop_path_edit();
-        let (label, doc) = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
-        let now = std::mem::replace(&mut self.doc, doc);
-        self.after_history(&now);
-        self.redo.push((label.clone(), now));
+
+        let (label, restored) = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
+        let current = std::mem::replace(&mut self.doc, restored);
+        self.after_history(&current);
+        self.redo.push((label.clone(), current));
         self.sync_images();
         Ok(label)
     }
 
     pub fn redo(&mut self) -> Result<String> {
+        // A stroke, a box fill or an edited path under way would otherwise write over the restored document
         self.cancel_stroke();
-        // An edited path would otherwise repaint over the restored document.
+        self.end_polygon_fill_box();
         self.stop_path_edit();
-        let (label, doc) = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
-        let now = std::mem::replace(&mut self.doc, doc);
-        self.after_history(&now);
-        self.undo.push((label.clone(), now));
+
+        let (label, restored) = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
+        let current = std::mem::replace(&mut self.doc, restored);
+        self.after_history(&current);
+        self.undo.push((label.clone(), current));
         self.sync_images();
         Ok(label)
     }
