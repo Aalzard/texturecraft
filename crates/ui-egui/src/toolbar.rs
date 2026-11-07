@@ -202,11 +202,14 @@ fn scrolling_tool_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui, tokens:
     });
 }
 
+/// Largest brush radius as a fraction of the mesh diagonal; size sliders show it as 100
+pub(crate) const MAX_BRUSH_SIZE: f32 = 0.25;
+
+/// Smallest brush radius as a fraction of the mesh diagonal
+pub(crate) const MIN_BRUSH_SIZE: f32 = 0.0005;
+
 /// The selected tool's icon and its settings
 fn tool_controls(app: &mut TextureCraftApp, ui: &mut egui::Ui, tokens: &Tokens) {
-    // Brush radius limits as a fraction of the mesh diagonal; the slider shows the maximum as 100
-    const MAX_BRUSH_SIZE: f32 = 0.25;
-    const MIN_BRUSH_SIZE: f32 = 0.0005;
     const DEFAULT_LAZY_DISTANCE_PX: f32 = 20.0;
     const TOOL_ICON_SIZE: f32 = 15.0;
 

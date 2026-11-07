@@ -4,10 +4,10 @@
 use std::sync::Mutex;
 
 use egui::emath::GuiRounding as _;
-use egui::{Color32, PointerButton, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Color32, PointerButton, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 use texturecraft_engine::camera_cmds::DEFAULT_CAMERA;
-use texturecraft_engine::core::{BakedMap, Channel};
+use texturecraft_engine::core::BakedMap;
 use texturecraft_engine::geom::glam::{Vec2, Vec3};
 use texturecraft_engine::{Tool, ViewMode};
 use texturecraft_render::{Frame, SetHighlight, Shade, ViewKind};
@@ -17,6 +17,7 @@ use crate::gpu::ViewCallback;
 use crate::i18n::{tr, trf};
 use crate::state::ViewLayout;
 use crate::theme::Tokens;
+use crate::toolbar::{MAX_BRUSH_SIZE, MIN_BRUSH_SIZE};
 
 pub const VIEW_3D: u64 = 1;
 pub const VIEW_2D: u64 = 2;
@@ -51,13 +52,13 @@ pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
     }
 
     let tokens = Tokens::get(ui.ctx());
-    let aux = match app.session.view {
+    let aux_view = match app.session.view {
         _ if mode == crate::state::Mode::Painting && app.session.quick_mask.editing => Some(crate::gpu::AuxView::QuickMask),
         ViewMode::MeshMap(map) => Some(crate::gpu::AuxView::MeshMap(map)),
         ViewMode::Mask(id) => Some(crate::gpu::AuxView::Mask(id)),
         _ => None,
     };
-    let mut sync = PendingSync(Some(aux));
+    let mut sync = PendingSync(Some(aux_view));
     let full = ui.available_rect_before_wrap();
     path_keys(app, ui);
 
@@ -85,6 +86,8 @@ pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
             ui.painter().line_segment([pos2(divider_x, full.top()), pos2(divider_x, full.bottom())], line);
         }
     }
+
+    crate::properties_popup::show(app, ui.ctx());
 
     if mode == crate::state::Mode::Rendering {
         crate::render_mode::show(app, ui, full);
@@ -158,6 +161,9 @@ const UV_VIEW_MIN_ZOOM: f32 = 0.1;
 
 /// Highest 2D zoom, for the wheel and the divider (inside the renderer's own limit of 64)
 const UV_VIEW_MAX_ZOOM: f32 = 40.0;
+
+/// UV zoom change per point of mouse wheel, as a fraction of the zoom
+const UV_WHEEL_ZOOM_PER_POINT: f32 = 0.002;
 
 /// The 2D view's width when the split divider is at `divider_x`
 fn uv_view_width(full: Rect, divider_x: f32) -> f32 {
@@ -407,119 +413,157 @@ fn axis_gizmo(ui: &Ui, rect: Rect, app: &TextureCraftApp, uv: bool) {
     }
 }
 
+/// Camera turn per point of a drag (radians)
+const ORBIT_RADIANS_PER_POINT: f32 = 0.008;
+
+/// Camera zoom per point of an Alt+right drag
+const DRAG_ZOOM_PER_POINT: f32 = 0.01;
+
+/// Camera zoom per point of mouse wheel
+const WHEEL_ZOOM_PER_POINT: f32 = 0.0025;
+
+/// Environment light turn per point of a Shift+right drag (degrees)
+const LIGHT_DEGREES_PER_POINT: f32 = 0.5;
+
+/// Brush size change per point of Shift+wheel, as a fraction of the size
+const WHEEL_BRUSH_SIZE_PER_POINT: f32 = 0.002;
+
+/// Stencil turn per point of an S+left drag (degrees)
+const STENCIL_DEGREES_PER_POINT: f32 = 0.4;
+
+/// Stencil scale change per point of an S+right drag, as a fraction of the scale
+const STENCIL_SCALE_PER_POINT: f32 = 0.005;
+
+/// Smallest stencil scale an S+right drag reaches
+const MIN_STENCIL_SCALE: f32 = 0.05;
+
+/// Largest stencil scale an S+right drag reaches
+const MAX_STENCIL_SCALE: f32 = 10.0;
+
+/// Smallest viewport the camera projects into, so a collapsed view keeps a usable aspect (points)
+const MIN_CAMERA_VIEWPORT: f32 = 16.0;
+
 fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut PendingSync) {
-    let resp = ui.interact(rect, ui.scope_id().with("view3d"), Sense::click_and_drag());
+    let response = ui.interact(rect, ui.scope_id().with("view3d"), Sense::click_and_drag());
     app.viewport_rect = rect;
     let size = rect.size();
-    app.session.viewport = Vec2::new(size.x.max(16.0), size.y.max(16.0));
-    let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
-    let local = |p: egui::Pos2| Vec2::new(p.x - rect.left(), p.y - rect.top());
-    let adjusting = brush_drag(app, ui, &resp);
-    let navigating = !adjusting && (alt || ui.input(|i| i.pointer.middle_down() || i.pointer.secondary_down()));
+    app.session.viewport = Vec2::new(size.x.max(MIN_CAMERA_VIEWPORT), size.y.max(MIN_CAMERA_VIEWPORT));
+    let (alt, shift) = ui.input(|input| (input.modifiers.alt, input.modifiers.shift));
+    let local = |pointer: egui::Pos2| Vec2::new(pointer.x - rect.left(), pointer.y - rect.top());
+    let adjusting = brush_drag(app, ui, &response);
+    let navigating = !adjusting && (alt || ui.input(|input| input.pointer.middle_down() || input.pointer.secondary_down()));
 
-    // Navigation (S + drag manipulates the projection stencil instead, below).
-    let delta = ui.input(|i| i.pointer.delta());
-    let s_held = app.ui.mode == crate::state::Mode::Painting && ui.input(|i| i.key_down(egui::Key::S)) && !ui.ctx().egui_wants_keyboard_input();
+    // Navigation; S + drag moves the projection stencil instead, below
+    let delta = ui.input(|input| input.pointer.delta());
+    let s_held = app.ui.mode == crate::state::Mode::Painting && ui.input(|input| input.key_down(egui::Key::S)) && !ui.ctx().egui_wants_keyboard_input();
     let stencil_drag = s_held && app.session.tool.stencil.is_some();
     if stencil_drag || adjusting {
-        // The stencil moves, turns and scales instead of the camera (handled below), or the
-        // brush changes.
-    } else if resp.dragged_by(PointerButton::Middle) {
+        // The stencil or the brush changes instead of the camera
+    } else if response.dragged_by(PointerButton::Middle) {
         app.session.camera.pan(delta.x / size.y, delta.y / size.y);
-    } else if alt && resp.dragged_by(PointerButton::Primary) {
-        app.session.camera.orbit(delta.x * 0.008, delta.y * 0.008);
-    } else if resp.dragged_by(PointerButton::Secondary) {
+    } else if alt && response.dragged_by(PointerButton::Primary) {
+        app.session.camera.orbit(delta.x * ORBIT_RADIANS_PER_POINT, delta.y * ORBIT_RADIANS_PER_POINT);
+    } else if response.dragged_by(PointerButton::Secondary) {
         if alt {
-            app.session.camera.zoom(-delta.y * 0.01);
+            app.session.camera.zoom(-delta.y * DRAG_ZOOM_PER_POINT);
         } else if shift {
-            // Shift + right drag turns the environment light.
-            let d = &mut app.session.doc.project.display;
-            d.env_rotation = (d.env_rotation + delta.x * 0.5).rem_euclid(360.0);
+            let display = &mut app.session.doc.project.display;
+            display.env_rotation = (display.env_rotation + delta.x * LIGHT_DEGREES_PER_POINT).rem_euclid(360.0);
         } else {
-            app.session.camera.orbit(delta.x * 0.008, delta.y * 0.008);
+            app.session.camera.orbit(delta.x * ORBIT_RADIANS_PER_POINT, delta.y * ORBIT_RADIANS_PER_POINT);
         }
     }
-    if resp.hovered() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+
+    if response.hovered() {
+        let scroll = ui.input(|input| input.smooth_scroll_delta.y);
         if scroll != 0.0 {
             if shift && app.ui.mode == crate::state::Mode::Painting {
                 let brush = &mut app.session.tool.brush;
-                brush.size = (brush.size * (1.0 + scroll * 0.002)).clamp(0.0005, 0.25);
+                brush.size = (brush.size * (1.0 + scroll * WHEEL_BRUSH_SIZE_PER_POINT)).clamp(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE);
             } else {
-                app.session.camera.zoom(scroll * 0.0025);
+                app.session.camera.zoom(scroll * WHEEL_ZOOM_PER_POINT);
             }
         }
     }
 
-    // Touch screens: two fingers orbit and pinch zooms, three fingers pan. A second finger
-    // cancels the stroke the first one started, so navigating leaves no paint behind.
-    let touch = ui.input(|i| i.multi_touch()).filter(|_| resp.contains_pointer() || resp.dragged());
-    if let Some(t) = touch {
+    // Touch: two fingers orbit and pinch zooms, three pan; a second finger cancels the first one's stroke
+    let touch = ui.input(|input| input.multi_touch()).filter(|_| response.contains_pointer() || response.dragged());
+    if let Some(gesture) = touch {
         if app.session.stroke_active() {
             app.session.cancel_stroke();
         }
-        let d = t.translation_delta;
-        if t.num_touches >= 3 {
-            app.session.camera.pan(d.x / size.y, d.y / size.y);
+
+        let moved = gesture.translation_delta;
+        if gesture.num_touches >= 3 {
+            app.session.camera.pan(moved.x / size.y, moved.y / size.y);
         } else {
-            app.session.camera.orbit(d.x * 0.008, d.y * 0.008);
+            app.session.camera.orbit(moved.x * ORBIT_RADIANS_PER_POINT, moved.y * ORBIT_RADIANS_PER_POINT);
         }
-        if t.zoom_delta.is_finite() && t.zoom_delta > 0.0 {
-            app.session.camera.zoom(t.zoom_delta.ln());
+        if gesture.zoom_delta.is_finite() && gesture.zoom_delta > 0.0 {
+            app.session.camera.zoom(gesture.zoom_delta.ln());
         }
     }
 
-    // Stencil: S + left drag rotates, S + right drag scales, S + middle drag moves.
-    if s_held && let Some(st) = app.session.tool.stencil.as_mut() {
-        if resp.dragged_by(PointerButton::Primary) {
-            st.rotation = (st.rotation + delta.x * 0.4).rem_euclid(360.0);
-        } else if resp.dragged_by(PointerButton::Secondary) {
-            st.scale = (st.scale * (1.0 + delta.x * 0.005)).clamp(0.05, 10.0);
-        } else if resp.dragged_by(PointerButton::Middle) {
-            st.center[0] += delta.x / size.x * 2.0;
-            st.center[1] -= delta.y / size.y * 2.0;
+    // Stencil: S + left drag turns it, S + right drag scales it, S + middle drag moves it
+    if s_held && let Some(stencil) = app.session.tool.stencil.as_mut() {
+        if response.dragged_by(PointerButton::Primary) {
+            stencil.rotation = (stencil.rotation + delta.x * STENCIL_DEGREES_PER_POINT).rem_euclid(360.0);
+        } else if response.dragged_by(PointerButton::Secondary) {
+            stencil.scale = (stencil.scale * (1.0 + delta.x * STENCIL_SCALE_PER_POINT)).clamp(MIN_STENCIL_SCALE, MAX_STENCIL_SCALE);
+        } else if response.dragged_by(PointerButton::Middle) {
+            stencil.center[0] += delta.x / size.x * 2.0;
+            stencil.center[1] -= delta.y / size.y * 2.0;
         }
     }
-    // Clone source: V + click.
+
+    // Clone source: V + click
     let v_held = clone_source_key(app, ui);
     if v_held
         && !alt
-        && (resp.clicked_by(PointerButton::Primary) || resp.drag_started_by(PointerButton::Primary))
-        && let Some(p) = resp.interact_pointer_pos()
+        && (response.clicked_by(PointerButton::Primary) || response.drag_started_by(PointerButton::Primary))
+        && let Some(pointer) = response.interact_pointer_pos()
     {
-        let (q, vp) = (local(p), app.session.viewport);
-        app.run("tool.cloneSource", json!({"x": q.x, "y": q.y, "viewport": [vp.x, vp.y]}));
+        let (at, viewport) = (local(pointer), app.session.viewport);
+        app.run("tool.cloneSource", json!({"x": at.x, "y": at.y, "viewport": [viewport.x, viewport.y]}));
     }
-    // Depth of field focus pick: a click focuses there instead of painting.
+
+    // Depth of field focus pick: a click focuses there instead of painting
     let focus_pick = focus_picking(ui.ctx());
     if focus_pick {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         if !alt
-            && resp.clicked_by(PointerButton::Primary)
-            && let Some(p) = resp.interact_pointer_pos()
+            && response.clicked_by(PointerButton::Primary)
+            && let Some(pointer) = response.interact_pointer_pos()
         {
-            let (q, vp) = (local(p), app.session.viewport);
-            app.run("viewport.focusAt", json!({"x": q.x, "y": q.y, "viewport": [vp.x, vp.y]}));
+            let (at, viewport) = (local(pointer), app.session.viewport);
+            app.run("viewport.focusAt", json!({"x": at.x, "y": at.y, "viewport": [viewport.x, viewport.y]}));
             set_focus_picking(ui.ctx(), false);
         }
     }
-    // Decal placement: a click moves the decal being placed there.
+
+    // Decal placement: a click moves the decal being placed there
     let placing = app.placing_decal.filter(|_| app.ui.mode == crate::state::Mode::Painting);
     if let Some(layer) = placing {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         if !alt
-            && resp.clicked_by(PointerButton::Primary)
-            && let Some(p) = resp.interact_pointer_pos()
+            && response.clicked_by(PointerButton::Primary)
+            && let Some(pointer) = response.interact_pointer_pos()
         {
-            let (q, vp) = (local(p), app.session.viewport);
-            app.run("layer.decal.set", json!({"layer": layer.0, "x": q.x, "y": q.y, "viewport": [vp.x, vp.y]}));
+            let (at, viewport) = (local(pointer), app.session.viewport);
+            app.run("layer.decal.set", json!({"layer": layer.0, "x": at.x, "y": at.y, "viewport": [viewport.x, viewport.y]}));
             app.placing_decal = None;
         }
     }
-    // The selected decal's frame and handles: drag to move, scale or turn it.
-    let decal_drag = !alt && !s_held && !v_held && !focus_pick && placing.is_none() && touch.is_none() && decal_input(app, ui, &resp, rect);
-    // Painting.
+
+    crate::properties_popup::open_on_right_click(app, ui, &response, rect, s_held || v_held);
+    let popup = app.properties_popup.is_some();
+
+    // The selected decal's frame and handles: drag to move, scale or turn it
+    let decal_drag = !alt && !s_held && !v_held && !focus_pick && !popup && placing.is_none() && touch.is_none() && decal_input(app, ui, &response, rect);
+
+    // Painting
     let painting = app.ui.mode == crate::state::Mode::Painting
+        && !popup
         && !alt
         && !adjusting
         && !s_held
@@ -529,42 +573,42 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         && touch.is_none()
         && !decal_drag;
     let path_tool = app.session.tool.tool == Tool::Path;
-    let vp = app.session.viewport;
-    let show = |app: &TextureCraftApp, p: Vec3| project(app, rect, p);
+    let viewport = app.session.viewport;
+    let show = |app: &TextureCraftApp, point: Vec3| project(app, rect, point);
     if painting && path_tool {
-        path_input(app, ui, &resp, false, |app, p| app.session.pick(local(p), vp).map(|h| h.pos), show);
+        path_input(app, ui, &response, false, |app, pointer| app.session.pick(local(pointer), viewport).map(|hit| hit.pos), show);
     } else if painting {
         let pressure = pen_pressure(ui);
-        if resp.drag_started_by(PointerButton::Primary) || resp.clicked_by(PointerButton::Primary) {
-            // Shift+click paints a straight line from where the last stroke ended.
+        if response.drag_started_by(PointerButton::Primary) || response.clicked_by(PointerButton::Primary) {
+            // Shift+click paints a straight line from where the last stroke ended
             let line_from = if shift { app.last_paint_point } else { None };
-            if let Some(p) = resp.interact_pointer_pos() {
-                match app.session.begin_stroke(line_from.unwrap_or(local(p)), app.session.viewport, pressure) {
+            if let Some(pointer) = response.interact_pointer_pos() {
+                match app.session.begin_stroke(line_from.unwrap_or(local(pointer)), app.session.viewport, pressure) {
                     Ok(_) => {
                         if line_from.is_some() {
-                            app.session.continue_stroke(local(p), pressure);
+                            app.session.continue_stroke(local(pointer), pressure);
                         }
-                        app.last_paint_point = Some(local(p));
+                        app.last_paint_point = Some(local(pointer));
                     }
-                    Err(e) => app.toast(e.to_string(), true),
+                    Err(error) => app.toast(error.to_string(), true),
                 }
             }
-            if resp.clicked_by(PointerButton::Primary)
-                && let Err(e) = app.session.end_stroke()
+            if response.clicked_by(PointerButton::Primary)
+                && let Err(error) = app.session.end_stroke()
             {
-                app.toast(e.to_string(), true);
+                app.toast(error.to_string(), true);
             }
-        } else if resp.dragged_by(PointerButton::Primary)
+        } else if response.dragged_by(PointerButton::Primary)
             && app.session.stroke_active()
-            && let Some(p) = resp.interact_pointer_pos()
+            && let Some(pointer) = response.interact_pointer_pos()
         {
-            app.session.continue_stroke(local(p), pressure);
-            app.last_paint_point = Some(local(p));
+            app.session.continue_stroke(local(pointer), pressure);
+            app.last_paint_point = Some(local(pointer));
         }
-        if resp.drag_stopped_by(PointerButton::Primary)
-            && let Err(e) = app.session.end_stroke()
+        if response.drag_stopped_by(PointerButton::Primary)
+            && let Err(error) = app.session.end_stroke()
         {
-            app.toast(e.to_string(), true);
+            app.toast(error.to_string(), true);
         }
     }
 
@@ -573,43 +617,45 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         size: frame_size_in_pixels(ui, rect),
         kind: ViewKind::Scene,
         camera: app.session.camera,
-        shade: Shade { highlight: drop_highlight(app, ui, &resp), ..shade(app) },
-        visible: app.session.doc.project.texture_sets.iter().map(|t| t.visible).collect(),
+        shade: Shade { highlight: drop_highlight(app, ui, &response), ..shade(app) },
+        visible: app.session.doc.project.texture_sets.iter().map(|texture_set| texture_set.visible).collect(),
     };
     add_callback(app, ui, rect, frame, sync);
-    // Shelf drops: a material goes above the selection of the set under the pointer, an alpha on the brush
-    crate::shelf::drop_target(app, ui, &resp, crate::shelf::DropZone::View3d);
 
-    // Brush cursor.
+    // Shelf drops: a material goes above the selection of the set under the pointer, an alpha on the brush
+    crate::shelf::drop_target(app, ui, &response, crate::shelf::DropZone::View3d);
+
+    // Brush cursor; while a Ctrl+drag changes the brush it stays where the drag began
     if app.ui.mode == crate::state::Mode::Painting
         && !navigating
-        && resp.hovered()
+        && response.hovered()
         && brush_tool(app.session.tool.tool)
-        // While a Ctrl+drag changes the brush, its cursor stays where the drag began.
-        && let Some(hp) = if adjusting { ui.input(|i| i.pointer.press_origin()) } else { resp.hover_pos() }
-        && let Some(hit) = app.session.pick(local(hp), app.session.viewport)
+        && let Some(hover_pos) = if adjusting { ui.input(|input| input.pointer.press_origin()) } else { response.hover_pos() }
+        && let Some(hit) = app.session.pick(local(hover_pos), app.session.viewport)
     {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         brush_cursor(app, ui, rect, hit.pos, hit.nrm);
         if app.session.tool.tool == Tool::Clone
-            && let Some(src) = app.session.clone_source_point(Some(hit.uv))
+            && let Some(source) = app.session.clone_source_point(Some(hit.uv))
         {
-            clone_marker(app, ui, rect, src);
+            clone_marker(app, ui, rect, source);
         }
-        // Shift: preview the straight line Shift+click paints from the last stroke.
+
+        // Shift: preview the straight line Shift+click paints from the last stroke
         if shift
             && !path_tool
             && let Some(from) = app.last_paint_point
         {
-            rubber_band(ui, rect, pos2(rect.left() + from.x, rect.top() + from.y), hp);
+            rubber_band(ui, rect, pos2(rect.left() + from.x, rect.top() + from.y), hover_pos);
         }
     }
+
     if app.ui.mode == crate::state::Mode::Painting && path_tool {
-        path_overlay(app, ui, rect, &resp, false, show);
+        path_overlay(app, ui, rect, &response, false, show);
     }
     stencil_overlay(app, ui, rect);
     decal_overlay(app, ui, rect);
-    brush_readout(app, ui, &resp, adjusting);
+    brush_readout(app, ui, &response, adjusting);
     if app.session.quick_mask.editing {
         ui.painter_at(rect).text(
             rect.left_top() + vec2(12.0, 40.0),
@@ -1021,15 +1067,23 @@ fn brush_readout(app: &TextureCraftApp, ui: &Ui, resp: &egui::Response, adjustin
     p.galley(r.min + vec2(6.0, 3.0), g, tk.text_strong);
 }
 
-/// Brush change for a Ctrl+drag by `d` points: `right` sets the size (x) and hardness (y), else
-/// the flow (x) and angle (y); dragging up raises hardness and angle.
-fn adjust_brush(b: &mut texturecraft_engine::paint::BrushSettings, right: bool, d: egui::Vec2) {
+/// Size fraction, hardness and flow change per point of a Ctrl+drag
+const CTRL_DRAG_RATE_PER_POINT: f32 = 0.005;
+
+/// Brush angle change per point of a Ctrl+left drag (degrees)
+const CTRL_DRAG_DEGREES_PER_POINT: f32 = 0.5;
+
+/// Highest hardness a Ctrl+right drag sets
+const CTRL_DRAG_MAX_HARDNESS: f32 = 0.999;
+
+/// Brush change for a Ctrl+drag by `drag` points: a right drag sets the size (x) and hardness (y), a left drag the flow (x) and angle (y); up raises hardness and angle
+fn adjust_brush(brush: &mut texturecraft_engine::paint::BrushSettings, right: bool, drag: egui::Vec2) {
     if right {
-        b.size = (b.size * (1.0 + d.x * 0.005)).clamp(0.0005, 0.25);
-        b.hardness = (b.hardness - d.y * 0.005).clamp(0.0, 0.999);
+        brush.size = (brush.size * (1.0 + drag.x * CTRL_DRAG_RATE_PER_POINT)).clamp(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE);
+        brush.hardness = (brush.hardness - drag.y * CTRL_DRAG_RATE_PER_POINT).clamp(0.0, CTRL_DRAG_MAX_HARDNESS);
     } else {
-        b.flow = (b.flow + d.x * 0.005).clamp(0.0, 1.0);
-        b.angle = (b.angle - d.y * 0.5 + 180.0).rem_euclid(360.0) - 180.0;
+        brush.flow = (brush.flow + drag.x * CTRL_DRAG_RATE_PER_POINT).clamp(0.0, 1.0);
+        brush.angle = (brush.angle - drag.y * CTRL_DRAG_DEGREES_PER_POINT + 180.0).rem_euclid(360.0) - 180.0;
     }
 }
 
@@ -1095,136 +1149,155 @@ fn pen_pressure(ui: &Ui) -> f32 {
 }
 
 fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut PendingSync) {
-    let tk = Tokens::get(ui.ctx());
-    let resp = ui.interact(rect, ui.scope_id().with("view2d"), Sense::click_and_drag());
+    let tokens = Tokens::get(ui.ctx());
+    let response = ui.interact(rect, ui.scope_id().with("view2d"), Sense::click_and_drag());
     let size = rect.size();
-    let alt = ui.input(|i| i.modifiers.alt);
-    let adjusting = brush_drag(app, ui, &resp);
-    let delta = ui.input(|i| i.pointer.delta());
-    if resp.dragged_by(PointerButton::Middle) || (alt && resp.dragged_by(PointerButton::Primary)) {
+    let alt = ui.input(|input| input.modifiers.alt);
+    let adjusting = brush_drag(app, ui, &response);
+
+    // Pan with a middle drag or Alt+left drag, zoom with the wheel about the cursor
+    let delta = ui.input(|input| input.pointer.delta());
+    if response.dragged_by(PointerButton::Middle) || (alt && response.dragged_by(PointerButton::Primary)) {
         app.ui.uv_pan[0] += delta.x / size.x * 2.0;
         app.ui.uv_pan[1] -= delta.y / size.y * 2.0;
     }
-    if resp.hovered() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+    if response.hovered() {
+        let scroll = ui.input(|input| input.smooth_scroll_delta.y);
         if scroll != 0.0 {
-            let old = app.ui.uv_zoom;
-            let new = (old * (1.0 + scroll * 0.002)).clamp(UV_VIEW_MIN_ZOOM, UV_VIEW_MAX_ZOOM);
-            // Zoom about the cursor.
-            if let Some(hp) = resp.hover_pos() {
-                let c = [(hp.x - rect.left()) / size.x * 2.0 - 1.0, 1.0 - (hp.y - rect.top()) / size.y * 2.0];
-                for k in 0..2 {
-                    app.ui.uv_pan[k] = c[k] - (c[k] - app.ui.uv_pan[k]) * new / old;
+            let old_zoom = app.ui.uv_zoom;
+            let new_zoom = (old_zoom * (1.0 + scroll * UV_WHEEL_ZOOM_PER_POINT)).clamp(UV_VIEW_MIN_ZOOM, UV_VIEW_MAX_ZOOM);
+            if let Some(hover_pos) = response.hover_pos() {
+                let cursor = [(hover_pos.x - rect.left()) / size.x * 2.0 - 1.0, 1.0 - (hover_pos.y - rect.top()) / size.y * 2.0];
+                for axis in 0..2 {
+                    app.ui.uv_pan[axis] = cursor[axis] - (cursor[axis] - app.ui.uv_pan[axis]) * new_zoom / old_zoom;
                 }
             }
-            app.ui.uv_zoom = new;
+            app.ui.uv_zoom = new_zoom;
         }
     }
+
+    // Conversions between the view's points and the texture set's UV space
     let ts = app.session.ts();
     let set = app.session.doc.project.texture_sets.get(ts);
-    let [sx, sy] = texturecraft_render::uv_view_scale(size.x / size.y.max(1.0), app.ui.uv_zoom, set.map_or((1, 1), |t| t.size()));
+    let [scale_x, scale_y] = texturecraft_render::uv_view_scale(size.x / size.y.max(1.0), app.ui.uv_zoom, set.map_or((1, 1), |texture_set| texture_set.size()));
     let pan = app.ui.uv_pan;
-    let to_uv = |p: egui::Pos2| {
-        let xc = (p.x - rect.left()) / size.x * 2.0 - 1.0;
-        let yc = 1.0 - (p.y - rect.top()) / size.y * 2.0;
-        Vec2::new(((xc - pan[0]) / sx + 1.0) * 0.5, (1.0 - (yc - pan[1]) / sy) * 0.5)
+    let to_uv = |pointer: egui::Pos2| {
+        let clip_x = (pointer.x - rect.left()) / size.x * 2.0 - 1.0;
+        let clip_y = 1.0 - (pointer.y - rect.top()) / size.y * 2.0;
+        Vec2::new(((clip_x - pan[0]) / scale_x + 1.0) * 0.5, (1.0 - (clip_y - pan[1]) / scale_y) * 0.5)
     };
-    let to = |u: f32, v: f32| {
-        let x = (u * 2.0 - 1.0) * sx + pan[0];
-        let y = (1.0 - v * 2.0) * sy + pan[1];
-        pos2(rect.left() + (x * 0.5 + 0.5) * size.x, rect.top() + (0.5 - y * 0.5) * size.y)
+    let to_screen = |u: f32, v: f32| {
+        let clip_x = (u * 2.0 - 1.0) * scale_x + pan[0];
+        let clip_y = (1.0 - v * 2.0) * scale_y + pan[1];
+        pos2(rect.left() + (clip_x * 0.5 + 0.5) * size.x, rect.top() + (0.5 - clip_y * 0.5) * size.y)
     };
-    let show = |_: &TextureCraftApp, p: Vec3| Some(to(p.x, p.y));
+    let show = |_: &TextureCraftApp, point: Vec3| Some(to_screen(point.x, point.y));
     let path_tool = app.session.tool.tool == Tool::Path;
-    // Clone source (V + click) and painting in UV space.
+
+    // Clone source: V + click
     let v_held = clone_source_key(app, ui);
     if v_held
-        && (resp.clicked_by(PointerButton::Primary) || resp.drag_started_by(PointerButton::Primary))
-        && let Some(p) = resp.interact_pointer_pos()
+        && (response.clicked_by(PointerButton::Primary) || response.drag_started_by(PointerButton::Primary))
+        && let Some(pointer) = response.interact_pointer_pos()
     {
-        let uv = to_uv(p);
+        let uv = to_uv(pointer);
         app.run("tool.cloneSource", json!({"uv": [uv.x, uv.y]}));
     }
+
     let bake_paint_on = app.ui.mode == crate::state::Mode::Baking && app.ui.bake_paint_brush.on && !alt;
     if bake_paint_on {
-        bake_paint_input(app, ui, &resp, &to_uv);
+        bake_paint_input(app, ui, &response, &to_uv);
     }
-    let painting = app.ui.mode == crate::state::Mode::Painting && !alt && !adjusting && !v_held;
+
+    crate::properties_popup::open_on_right_click(app, ui, &response, rect, v_held);
+
+    // Painting in UV space
+    let painting = app.ui.mode == crate::state::Mode::Painting && app.properties_popup.is_none() && !alt && !adjusting && !v_held;
     if painting && path_tool {
-        path_input(app, ui, &resp, true, |_, p| Some(to_uv(p).extend(0.0)), show);
+        path_input(app, ui, &response, true, |_, pointer| Some(to_uv(pointer).extend(0.0)), show);
     } else if painting {
         let pressure = pen_pressure(ui);
-        if resp.drag_started_by(PointerButton::Primary) || resp.clicked_by(PointerButton::Primary) {
-            if let Some(p) = resp.interact_pointer_pos()
-                && let Err(e) = app.session.begin_stroke_uv(to_uv(p), pressure)
+        if response.drag_started_by(PointerButton::Primary) || response.clicked_by(PointerButton::Primary) {
+            if let Some(pointer) = response.interact_pointer_pos()
+                && let Err(error) = app.session.begin_stroke_uv(to_uv(pointer), pressure)
             {
-                app.toast(e.to_string(), true);
+                app.toast(error.to_string(), true);
             }
-            if resp.clicked_by(PointerButton::Primary)
-                && let Err(e) = app.session.end_stroke()
+            if response.clicked_by(PointerButton::Primary)
+                && let Err(error) = app.session.end_stroke()
             {
-                app.toast(e.to_string(), true);
+                app.toast(error.to_string(), true);
             }
-        } else if resp.dragged_by(PointerButton::Primary)
+        } else if response.dragged_by(PointerButton::Primary)
             && app.session.stroke_active()
-            && let Some(p) = resp.interact_pointer_pos()
+            && let Some(pointer) = response.interact_pointer_pos()
         {
-            app.session.continue_stroke_uv(to_uv(p), pressure);
+            app.session.continue_stroke_uv(to_uv(pointer), pressure);
         }
-        if resp.drag_stopped_by(PointerButton::Primary)
-            && let Err(e) = app.session.end_stroke()
+        if response.drag_stopped_by(PointerButton::Primary)
+            && let Err(error) = app.session.end_stroke()
         {
-            app.toast(e.to_string(), true);
+            app.toast(error.to_string(), true);
         }
     }
-    if resp.double_clicked() && !(painting && path_tool) {
+    if response.double_clicked() && !(painting && path_tool) {
         app.ui.uv_zoom = 1.0;
         app.ui.uv_pan = [0.0, 0.0];
     }
+
     let frame = Frame {
         view_id: VIEW_2D,
         size: frame_size_in_pixels(ui, rect),
         kind: ViewKind::Uv { ts, zoom: app.ui.uv_zoom, pan: app.ui.uv_pan },
         camera: app.session.camera,
         shade: shade(app),
-        visible: app.session.doc.project.texture_sets.iter().map(|t| t.visible).collect(),
+        visible: app.session.doc.project.texture_sets.iter().map(|texture_set| texture_set.visible).collect(),
     };
     add_callback(app, ui, rect, frame, sync);
-    crate::shelf::drop_target(app, ui, &resp, crate::shelf::DropZone::View2d);
-    // The UV tile outlines (numbered for UDIM sets) and the path being edited.
+    crate::shelf::drop_target(app, ui, &response, crate::shelf::DropZone::View2d);
+
+    // The UV tile outlines (numbered for UDIM sets) and the path being edited
     let painter = ui.painter_at(rect);
     let set = app.session.doc.project.texture_sets.get(ts);
-    let outline = |r: Rect| painter.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_white_alpha(40)), egui::StrokeKind::Outside);
-    match set.and_then(|t| Some((t, t.tile_grid()?))) {
-        Some((t, g)) => {
-            for (udim, (bx, by)) in t.uv_tiles.iter().filter_map(|u| Some((*u, g.block(*u)?))) {
-                // A tile smaller than its block fills the block's top-left corner.
-                let (u0, v0, k) = (bx as f32 / g.cols as f32, by as f32 / g.rows as f32, t.tile_scale(udim));
-                let r = Rect::from_two_pos(to(u0, v0), to(u0 + k / g.cols as f32, v0 + k / g.rows as f32));
-                outline(r);
-                painter.text(r.left_top() + vec2(6.0, 4.0), egui::Align2::LEFT_TOP, udim.to_string(), egui::FontId::proportional(11.0), tk.viewport_text);
+    let outline = |tile: Rect| painter.rect_stroke(tile, 0.0, Stroke::new(1.0, Color32::from_white_alpha(40)), egui::StrokeKind::Outside);
+    match set.and_then(|texture_set| Some((texture_set, texture_set.tile_grid()?))) {
+        Some((texture_set, grid)) => {
+            for (udim, (block_x, block_y)) in texture_set.uv_tiles.iter().filter_map(|udim| Some((*udim, grid.block(*udim)?))) {
+                // A tile smaller than its block fills the block's top-left corner
+                let (u0, v0) = (block_x as f32 / grid.cols as f32, block_y as f32 / grid.rows as f32);
+                let tile_scale = texture_set.tile_scale(udim);
+                let tile = Rect::from_two_pos(to_screen(u0, v0), to_screen(u0 + tile_scale / grid.cols as f32, v0 + tile_scale / grid.rows as f32));
+                outline(tile);
+                painter.text(
+                    tile.left_top() + vec2(6.0, 4.0),
+                    egui::Align2::LEFT_TOP,
+                    udim.to_string(),
+                    egui::FontId::proportional(11.0),
+                    tokens.viewport_text,
+                );
             }
         }
         None => {
-            outline(Rect::from_two_pos(to(0.0, 0.0), to(1.0, 1.0)));
+            outline(Rect::from_two_pos(to_screen(0.0, 0.0), to_screen(1.0, 1.0)));
         }
     }
     if app.ui.mode == crate::state::Mode::Painting && path_tool {
-        path_overlay(app, ui, rect, &resp, true, show);
+        path_overlay(app, ui, rect, &response, true, show);
     }
+
     if app.ui.mode == crate::state::Mode::Baking {
-        bake_paint_overlay(app, ui, &painter, to(0.0, 1.0), to(1.0, 0.0));
-        if bake_paint_on && let Some(hover) = resp.hover_pos() {
-            let r = (to(app.ui.bake_paint_brush.radius, 0.0).x - to(0.0, 0.0).x).abs().max(2.0);
-            painter.circle_stroke(hover, r, Stroke::new(1.0, Color32::from_white_alpha(200)));
+        bake_paint_overlay(app, ui, &painter, to_screen(0.0, 1.0), to_screen(1.0, 0.0));
+        if bake_paint_on && let Some(hover) = response.hover_pos() {
+            let radius = (to_screen(app.ui.bake_paint_brush.radius, 0.0).x - to_screen(0.0, 0.0).x).abs().max(2.0);
+            painter.circle_stroke(hover, radius, Stroke::new(1.0, Color32::from_white_alpha(200)));
         }
     }
-    brush_readout(app, ui, &resp, adjusting);
+
+    brush_readout(app, ui, &response, adjusting);
     view_header(app, ui, rect, "v2d");
     axis_gizmo(ui, rect, app, true);
-    let name = app.session.doc.project.texture_sets.get(ts).map(|t| t.name.clone()).unwrap_or_default();
-    ui.painter().text(rect.right_bottom() + vec2(-10.0, -10.0), egui::Align2::RIGHT_BOTTOM, name, egui::FontId::proportional(11.0), tk.viewport_text);
-    let _ = (RichText::new(""), Channel::BaseColor);
+    let name = app.session.doc.project.texture_sets.get(ts).map(|texture_set| texture_set.name.clone()).unwrap_or_default();
+    ui.painter().text(rect.right_bottom() + vec2(-10.0, -10.0), egui::Align2::RIGHT_BOTTOM, name, egui::FontId::proportional(11.0), tokens.viewport_text);
 }
 
 /// Paint the skew map under the pointer in the 2D view (a click is one dab, a drag a stroke).
