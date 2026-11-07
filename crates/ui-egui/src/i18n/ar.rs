@@ -1039,6 +1039,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Import baked maps", "استيراد خرائط مخبوزة"),
     ("Name each file after its texture set, like Body_normal.png", "سمِّ كل ملف باسم مجموعة الخامات الخاصة به، مثل Body_normal.png"),
     ("Add...", "إضافة..."),
-    ("Imported {count} baked maps", "تم استيراد {count} من الخرائط المخبوزة"),
+    ("Baked maps imported: {count}", "الخرائط المخبوزة المستوردة: {count}"),
     ("Not imported: {files}", "لم يتم استيرادها: {files}"),
 ];

@@ -1064,6 +1064,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Import baked maps", "Importar mapas com bake"),
     ("Name each file after its texture set, like Body_normal.png", "Nomeie cada arquivo com o nome do seu conjunto de texturas, como Body_normal.png"),
     ("Add...", "Adicionar..."),
-    ("Imported {count} baked maps", "{count} mapas com bake importados"),
+    ("Baked maps imported: {count}", "Mapas com bake importados: {count}"),
     ("Not imported: {files}", "Não importados: {files}"),
 ];

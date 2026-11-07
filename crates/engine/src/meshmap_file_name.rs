@@ -5,13 +5,14 @@ use std::path::Path;
 use texturecraft_core::{BakedMap, UDIM_RANGE};
 
 /// Mesh maps named by two words anywhere in the file name; they win over the one-word names
-const TWO_WORD_NAMES: [(&str, &[&str], BakedMap); 3] = [
+const TWO_WORD_NAMES: &[(&str, &[&str], BakedMap)] = &[
     ("world", &["normal", "normals"], BakedMap::WorldNormal),
     ("bent", &["normal", "normals"], BakedMap::BentNormal),
     ("ambient", &["occlusion"], BakedMap::AmbientOcclusion),
 ];
 
-const ONE_WORD_NAMES: [(&str, BakedMap); 20] = [
+/// Mesh maps named by one word, including the two-word names written as one
+const ONE_WORD_NAMES: &[(&str, BakedMap)] = &[
     ("worldnormal", BakedMap::WorldNormal),
     ("worldnormals", BakedMap::WorldNormal),
     ("bentnormal", BakedMap::BentNormal),
@@ -38,29 +39,33 @@ fn is_separator(c: char) -> bool {
     matches!(c, '_' | '-' | '.' | ' ')
 }
 
-/// The file name without its folder and extension
-fn stem(path: &str) -> &str {
-    Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or_default()
+/// The lowercase file name without its folder and extension
+fn lowercase_stem(path: &str) -> String {
+    Path::new(path).file_stem().and_then(|stem| stem.to_str()).unwrap_or_default().to_lowercase()
 }
 
-/// The lowercase words of a file name, without UV tile numbers (`Body_AO.1001` → body, ao)
-fn words(path: &str) -> Vec<String> {
-    stem(path)
-        .split(is_separator)
-        .filter(|w| !w.is_empty() && !w.parse::<u32>().is_ok_and(|n| w.len() == 4 && UDIM_RANGE.contains(&n)))
-        .map(str::to_lowercase)
-        .collect()
+/// What follows `set_name` at the start of a lowercase stem, when a separator follows it
+fn after_set_name<'a>(stem: &'a str, set_name: &str) -> Option<&'a str> {
+    if set_name.is_empty() {
+        return None;
+    }
+
+    stem.strip_prefix(&set_name.to_lowercase()).filter(|rest| rest.starts_with(is_separator))
 }
 
-/// The mesh map a file holds, from the words of its name; the last recognised word wins
-pub(crate) fn baked_map_from_file_name(path: &str) -> Option<BakedMap> {
-    let words = words(path);
-    let has = |word: &str| words.iter().any(|w| w == word);
+/// The mesh map a file holds, from the words of its name after `set_name`; the last recognised word wins
+pub(crate) fn baked_map_from_file_name(path: &str, set_name: &str) -> Option<BakedMap> {
+    let stem = lowercase_stem(path);
+    let rest = after_set_name(&stem, set_name).unwrap_or(&stem);
+    let is_tile_number = |word: &str| word.len() == 4 && word.parse::<u32>().is_ok_and(|number| UDIM_RANGE.contains(&number));
+    let words: Vec<&str> = rest.split(is_separator).filter(|word| !word.is_empty() && !is_tile_number(word)).collect();
+
+    let has = |name: &str| words.contains(&name);
     TWO_WORD_NAMES
         .iter()
-        .find(|(first, seconds, _)| has(first) && seconds.iter().any(|s| has(s)))
+        .find(|(first, seconds, _)| has(first) && seconds.iter().any(|second| has(second)))
         .map(|(_, _, map)| *map)
-        .or_else(|| words.iter().rev().find_map(|w| ONE_WORD_NAMES.iter().find(|(name, _)| name == w).map(|(_, map)| *map)))
+        .or_else(|| words.iter().rev().find_map(|word| ONE_WORD_NAMES.iter().find(|(name, _)| name == word).map(|(_, map)| *map)))
 }
 
 /// The set a file is for: the longest set name its name starts with before a separator (any name with one set)
@@ -69,14 +74,8 @@ pub(crate) fn texture_set_from_file_name(path: &str, set_names: &[&str]) -> Opti
         return Some(0);
     }
 
-    let stem = stem(path).to_lowercase();
-    set_names
-        .iter()
-        .enumerate()
-        .filter(|(_, name)| !name.is_empty())
-        .filter(|(_, name)| stem.strip_prefix(&name.to_lowercase()).and_then(|rest| rest.chars().next()).is_some_and(is_separator))
-        .max_by_key(|(_, name)| name.chars().count())
-        .map(|(ts, _)| ts)
+    let stem = lowercase_stem(path);
+    set_names.iter().enumerate().filter(|(_, name)| after_set_name(&stem, name).is_some()).max_by_key(|(_, name)| name.chars().count()).map(|(ts, _)| ts)
 }
 
 #[cfg(test)]
@@ -109,23 +108,30 @@ mod tests {
             ("Body_alpha.png", BakedMap::Opacity),
         ];
         for (file, map) in cases {
-            assert_eq!(baked_map_from_file_name(file), Some(map), "{file}");
+            assert_eq!(baked_map_from_file_name(file, "Body"), Some(map), "{file}");
         }
     }
 
     #[test]
     fn tile_numbers_and_folders_are_ignored() {
-        assert_eq!(baked_map_from_file_name("/bakes/Body_ao.1001.png"), Some(BakedMap::AmbientOcclusion));
-        assert_eq!(baked_map_from_file_name("Body_normal_1002.tga"), Some(BakedMap::Normal));
+        assert_eq!(baked_map_from_file_name("/bakes/Body_ao.1001.png", "Body"), Some(BakedMap::AmbientOcclusion));
+        assert_eq!(baked_map_from_file_name("Body_normal_1002.tga", "Body"), Some(BakedMap::Normal));
         assert_eq!(texture_set_from_file_name("/bakes/Body_ao.1001.png", &["Head", "Body"]), Some(1));
     }
 
     #[test]
     fn unknown_words_match_no_map() {
-        assert_eq!(baked_map_from_file_name("Body_diffuse.png"), None);
-        assert_eq!(baked_map_from_file_name("Body_1001.png"), None);
-        assert_eq!(baked_map_from_file_name("ambient.png"), None);
-        assert_eq!(baked_map_from_file_name(""), None);
+        assert_eq!(baked_map_from_file_name("Body_diffuse.png", "Body"), None);
+        assert_eq!(baked_map_from_file_name("Body_1001.png", "Body"), None);
+        assert_eq!(baked_map_from_file_name("ambient.png", "Body"), None);
+        assert_eq!(baked_map_from_file_name("", "Body"), None);
+    }
+
+    #[test]
+    fn the_set_name_is_not_read_as_a_map() {
+        assert_eq!(baked_map_from_file_name("World_normal.png", "World"), Some(BakedMap::Normal));
+        assert_eq!(baked_map_from_file_name("ID_diffuse.png", "ID"), None);
+        assert_eq!(baked_map_from_file_name("Body_ao.png", ""), Some(BakedMap::AmbientOcclusion));
     }
 
     #[test]

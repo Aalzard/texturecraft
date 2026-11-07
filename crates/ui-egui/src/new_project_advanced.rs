@@ -1,5 +1,7 @@
 //! New project ▸ Advanced settings: the normal map format, and baked map files imported at creation
 
+use std::collections::BTreeSet;
+
 use egui::{RichText, Sense, Ui, vec2};
 use serde_json::{Value, json};
 use texturecraft_engine::core::NormalFormat;
@@ -19,7 +21,7 @@ const FORM_LABELS: [&str; 6] = ["3D mesh", "Project template", "Document resolut
 const NORMAL_FORMATS: [(NormalFormat, &str, &str); 2] = [(NormalFormat::OpenGl, "openGl", "OpenGL"), (NormalFormat::DirectX, "directX", "DirectX")];
 
 /// Width of the dialog's dropdowns
-const COMBO_WIDTH: f32 = 200.0;
+pub(crate) const COMBO_WIDTH: f32 = 200.0;
 
 /// Width of the Add... and Clear buttons
 const FILE_BUTTON_WIDTH: f32 = 96.0;
@@ -64,8 +66,12 @@ pub(crate) fn advanced_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
 fn normal_format_combo(app: &mut TextureCraftApp, ui: &mut Ui) {
     let new_project = &mut app.ui.new_project;
     let user_templates = app.session.templates.list.iter().cloned();
-    let template_format =
-        builtin_templates().into_iter().chain(user_templates).find(|t| t.name == new_project.template).map(|t| t.normal_format).unwrap_or_default();
+    let template_format = builtin_templates()
+        .into_iter()
+        .chain(user_templates)
+        .find(|template| template.name == new_project.template)
+        .map(|template| template.normal_format)
+        .unwrap_or_default();
     let current = new_project.normal_format.unwrap_or(template_format);
     let current_label = NORMAL_FORMATS.iter().find(|(format, _, _)| *format == current).map_or("", |(_, _, label)| label);
     egui::ComboBox::from_id_salt("np_normal_format").width(COMBO_WIDTH).selected_text(current_label).show_ui(ui, |ui| {
@@ -114,7 +120,7 @@ pub fn add_baked_map_files(new_project: &mut NewProject, paths: Vec<String>) {
     }
 }
 
-/// After creation: set the normal format, import the listed baked maps (one undo step), toast the outcome
+/// After creation: set the normal format, import the listed baked maps (one undo step), toast the outcome; a failed import keeps the list
 pub(crate) fn apply_after_create(app: &mut TextureCraftApp, new_project: &NewProject) {
     let chosen_format = new_project.normal_format.filter(|format| *format != app.session.doc.project.normal_format);
     if let Some((_, id, _)) = chosen_format.and_then(|chosen| NORMAL_FORMATS.iter().find(|(format, _, _)| *format == chosen)) {
@@ -129,14 +135,16 @@ pub(crate) fn apply_after_create(app: &mut TextureCraftApp, new_project: &NewPro
         return;
     };
 
-    let assigned = result["assigned"].as_array().map_or(0, Vec::len);
+    let assigned = result["assigned"].as_array().into_iter().flatten();
+    let maps: BTreeSet<(u64, &str)> = assigned.filter_map(|entry| Some((entry["ts"].as_u64()?, entry["map"].as_str()?))).collect();
     let not_imported: Vec<String> = result["unmatched"].as_array().into_iter().flatten().filter_map(Value::as_str).map(file_name).collect();
-    let mut text = trf("Imported {count} baked maps", &[("count", &assigned)]);
+    let mut text = trf("Baked maps imported: {count}", &[("count", &maps.len())]);
     if !not_imported.is_empty() {
         text.push('\n');
         text.push_str(&trf("Not imported: {files}", &[("files", &not_imported.join(", "))]));
     }
     app.toast(text, !not_imported.is_empty());
+    app.ui.new_project.baked_maps.clear();
 }
 
 fn file_name(path: &str) -> String {

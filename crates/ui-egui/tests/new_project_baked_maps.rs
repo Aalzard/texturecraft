@@ -21,7 +21,7 @@ fn harness() -> Harness<'static, TextureCraftApp> {
     h
 }
 
-/// 4×4 PNGs named `files` in a fresh folder, as their full paths
+/// 4×4 PNGs named `files` in a fresh folder, as their full paths; green 0.2 shows which way a normal map was read
 fn bake_files(test: &str, files: &[&str]) -> Vec<String> {
     let dir = std::env::temp_dir().join(format!("texturecraft-np-baked-maps-{test}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -29,7 +29,7 @@ fn bake_files(test: &str, files: &[&str]) -> Vec<String> {
         .iter()
         .map(|file| {
             let path: PathBuf = dir.join(file);
-            image::RgbaImage::from_pixel(4, 4, image::Rgba([128, 128, 255, 255])).save(&path).unwrap();
+            image::RgbaImage::from_pixel(4, 4, image::Rgba([128, 51, 255, 255])).save(&path).unwrap();
             path.display().to_string()
         })
         .collect()
@@ -70,11 +70,13 @@ fn create_imports_the_listed_maps_in_the_chosen_normal_format() {
     assert!(!state.ui.windows.new_project, "the dialog closes");
     let project = &state.session.doc.project;
     assert_eq!(project.normal_format, NormalFormat::DirectX);
-    let baked = |ts: usize, map: BakedMap| state.session.doc.baked.get(&ts).is_some_and(|b| b.maps.contains_key(&map));
+    let baked = |ts: usize, map: BakedMap| state.session.doc.baked.get(&ts).is_some_and(|baked| baked.maps.contains_key(&map));
     assert!(baked(0, BakedMap::Normal) && baked(1, BakedMap::AmbientOcclusion));
+    let normal_green = state.session.doc.baked[&0].maps[&BakedMap::Normal][1];
+    assert!(normal_green > 0.75, "the normal map is read as DirectX (green flipped): {normal_green}");
     assert_eq!(state.session.doc.resources.len(), 2, "the file naming no map is not imported");
     let toast = &state.toasts.last().unwrap().text;
-    assert!(toast.contains("Imported 2 baked maps") && toast.contains("Ball_notes.png"), "{toast}");
+    assert!(toast.contains("Baked maps imported: 2") && toast.contains("Ball_notes.png"), "{toast}");
     assert!(state.ui.new_project.baked_maps.is_empty(), "the next new project starts with no files");
     assert_eq!(state.session.undo_label(), Some("Import baked maps"));
 }

@@ -1076,6 +1076,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Import baked maps", "Importa mappe bake"),
     ("Name each file after its texture set, like Body_normal.png", "Dai a ogni file il nome del suo set di texture, ad es. Body_normal.png"),
     ("Add...", "Aggiungi..."),
-    ("Imported {count} baked maps", "{count} mappe bake importate"),
+    ("Baked maps imported: {count}", "Mappe bake importate: {count}"),
     ("Not imported: {files}", "Non importati: {files}"),
 ];

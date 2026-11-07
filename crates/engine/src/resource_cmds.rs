@@ -36,7 +36,7 @@ pub(crate) fn decoded(d: texturecraft_formats::DecodedImage) -> Arc<ImageRes> {
 }
 
 impl Session {
-    /// Add an image resource from bytes (one undo step); returns its unique, sanitized name.
+    /// Add an image resource from bytes (one undo step); returns its unique, sanitized name
     pub fn import_resource_bytes(&mut self, file_name: &str, bytes: Vec<u8>) -> Result<String> {
         self.edit("Import resource", |s| s.add_image_resource(file_name, bytes))
     }

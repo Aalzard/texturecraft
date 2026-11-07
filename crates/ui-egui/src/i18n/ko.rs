@@ -1049,6 +1049,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Import baked maps", "베이크된 맵 가져오기"),
     ("Name each file after its texture set, like Body_normal.png", "각 파일 이름을 텍스처 세트 이름으로 시작하세요(예: Body_normal.png)"),
     ("Add...", "추가..."),
-    ("Imported {count} baked maps", "베이크된 맵 {count}개를 가져왔습니다"),
+    ("Baked maps imported: {count}", "가져온 베이크된 맵: {count}"),
     ("Not imported: {files}", "가져오지 않음: {files}"),
 ];
