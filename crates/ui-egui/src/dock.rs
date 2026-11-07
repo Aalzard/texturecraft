@@ -1603,6 +1603,15 @@ fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value
     }
 }
 
+/// Slider range of a fill's scale or tiling
+const FILL_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.01..=20.0;
+
+/// Slider range of a UV fill's rotation, a full turn
+const FILL_ROTATION_DEGREES_RANGE: std::ops::RangeInclusive<f32> = 0.0..=360.0;
+
+/// Tri-planar hardness: the exponent on the normal that weights the three projections, clamped to the same range by `layer.fill.projection`
+const TRIPLANAR_HARDNESS_RANGE: std::ops::RangeInclusive<f32> = 1.0..=64.0;
+
 /// A fill's projection kind, axis and tri-planar hardness, then its collapsible UV transformations; each edit sends only its field
 fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value) {
     let projection_label = fill.projection.label();
@@ -1630,7 +1639,7 @@ fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: 
     }
     if let Projection::Triplanar { sharpness, .. } = &fill.projection {
         let mut sharpness = *sharpness;
-        if let Some(merge) = slider_edit(ui, tr("Hardness"), &mut sharpness, 1.0..=64.0, 1) {
+        if let Some(merge) = slider_edit(ui, tr("Hardness"), &mut sharpness, TRIPLANAR_HARDNESS_RANGE, 1) {
             edit(json!({"sharpness": sharpness, "merge": merge}));
         }
     }
@@ -1650,14 +1659,14 @@ fn projection_transform(ui: &mut Ui, projection: &Projection, edit: &mut impl Fn
         }
         Projection::Decal(_) => return,
     };
-    if let Some(merge) = slider_edit(ui, tr("Scale / tiling"), &mut scale, 0.01..=20.0, 2) {
+    if let Some(merge) = slider_edit(ui, tr("Scale / tiling"), &mut scale, FILL_SCALE_RANGE, 2) {
         edit(json!({"scale": scale, "merge": merge}));
     }
 
     match projection {
         Projection::Uv { rotation, offset, .. } => {
             let mut rotation_degrees = *rotation;
-            if let Some(merge) = slider_edit(ui, tr("Rotation"), &mut rotation_degrees, 0.0..=360.0, 0) {
+            if let Some(merge) = slider_edit(ui, tr("Rotation"), &mut rotation_degrees, FILL_ROTATION_DEGREES_RANGE, 0) {
                 edit(json!({"rotation": rotation_degrees, "merge": merge}));
             }
             if let Some((offset, merge)) = offset_sliders(ui, ["U", "V"], *offset) {
