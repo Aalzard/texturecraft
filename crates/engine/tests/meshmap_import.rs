@@ -1,6 +1,6 @@
 //! Importing baked map files at once: each lands in the texture set and mesh map its name names
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use texturecraft_engine::core::BakedMap;
@@ -23,7 +23,7 @@ fn bake_folder(test: &str, files: &[&str]) -> PathBuf {
     dir
 }
 
-fn import(s: &mut Session, dir: &PathBuf, files: &[(&str, Option<&str>)]) -> Value {
+fn import(s: &mut Session, dir: &Path, files: &[(&str, Option<&str>)]) -> Value {
     let files: Vec<Value> = files
         .iter()
         .map(|(file, map)| {
