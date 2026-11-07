@@ -392,7 +392,7 @@ fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
     let mut create = false;
     dialog("new_project", tr("New project"), &mut open).show(ctx, |ui| {
         ui.label(caption(tr("Basic settings")));
-        egui::Grid::new("np").num_columns(2).spacing(vec2(12.0, 8.0)).show(ui, |ui| {
+        egui::Grid::new("np").num_columns(2).spacing(vec2(12.0, 8.0)).min_col_width(crate::new_project_advanced::form_label_width(ui)).show(ui, |ui| {
             ui.label(tr("3D mesh"));
             ui.horizontal(|ui| {
                 let label = app.ui.new_project.file.clone().unwrap_or_else(|| {
@@ -429,6 +429,7 @@ fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
                     if ui.selectable_label(t.name == np.template, &t.name).clicked() {
                         np.template = t.name.clone();
                         np.resolution = t.resolution;
+                        np.normal_format = None;
                     }
                 }
             });
@@ -469,6 +470,8 @@ fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
             ui.end_row();
         });
         ui.add_space(8.0);
+        crate::new_project_advanced::advanced_settings(app, ui);
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add(primary_button(ui, tr("Create"))).clicked() {
@@ -490,6 +493,8 @@ fn new_project(app: &mut TextureCraftApp, ctx: &egui::Context) {
         if r.is_some() {
             app.ui.windows.new_project = false;
             app.ui.mode = Mode::Painting;
+            app.ui.new_project.baked_maps.clear();
+            crate::new_project_advanced::apply_after_create(app, &np);
         }
     }
     if !open {

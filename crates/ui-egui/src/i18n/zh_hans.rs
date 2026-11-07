@@ -1003,4 +1003,10 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Remove resolution override", "移除分辨率覆盖"),
     ("Texture set resolution", "纹理集分辨率"),
     ("UV tile {tile} resolution", "UV 图块 {tile} 的分辨率"),
+    ("Advanced settings", "高级设置"),
+    ("Import baked maps", "导入已烘焙贴图"),
+    ("Name each file after its texture set, like Body_normal.png", "以纹理集名称为每个文件命名，例如 Body_normal.png"),
+    ("Add...", "添加..."),
+    ("Imported {count} baked maps", "已导入 {count} 张烘焙贴图"),
+    ("Not imported: {files}", "未导入：{files}"),
 ];

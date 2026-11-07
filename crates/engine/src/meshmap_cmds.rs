@@ -38,11 +38,17 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let ts = ts_param(s, p, CMD)?;
     let map = map_param(p, CMD)?;
     let name = strp(p, "image").ok_or_else(|| bad(CMD, "`image` (an image resource name) is required"))?;
-    let img = s.images.get(name).cloned().ok_or_else(|| bad(CMD, format!("no image resource `{name}`")))?;
+    let resolution = s.edit("Use image as mesh map", |s| use_image(s, CMD, ts, map, name))?;
+    Ok(json!({ "map": map.id(), "resolution": resolution }))
+}
+
+/// Use image resource `name` as mesh map `map` of set `ts` inside the caller's edit; returns the map width
+pub(crate) fn use_image(s: &mut Session, cmd: &str, ts: usize, map: BakedMap, name: &str) -> Result<u32> {
+    let img = s.images.get(name).cloned().ok_or_else(|| bad(cmd, format!("no image resource `{name}`")))?;
     let set = s.doc.project.texture_set(ts)?.clone();
-    let tiles = set.tile_grid().map(|grid| tile_images(&s.images, name, &set.uv_tiles).map(|imgs| (grid, imgs))).transpose()?;
-    // Every mesh map of a set shares one size: the other maps', or what a bake would make (a
-    // block of the bake resolution per tile of the atlas).
+    let tiles = set.tile_grid().map(|grid| tile_images(&s.images, cmd, name, &set.uv_tiles).map(|imgs| (grid, imgs))).transpose()?;
+
+    // Every mesh map of a set shares one size: the other maps', or a bake's (a bake-size block per atlas tile)
     let (cols, rows) = tiles.as_ref().map_or((1, 1), |(g, _)| (g.cols, g.rows));
     let (res, height) = match s.doc.baked.get(&ts).filter(|b| !b.maps.is_empty()) {
         Some(b) => (b.resolution, b.maps.keys().next().map_or(b.resolution, |m| b.height(*m))),
@@ -52,37 +58,34 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     if res == 0 || height == 0 || u64::from(res) * u64::from(height) > texturecraft_bake::MAX_TEXELS || (tiles.is_none() && res > MAX_RESOLUTION) {
-        return Err(bad(CMD, format!("mesh map size {res} × {height} is too large or empty")));
+        return Err(bad(cmd, format!("mesh map size {res} × {height} is too large or empty")));
     }
+
     let directx = map == BakedMap::Normal && s.doc.project.normal_format == NormalFormat::DirectX;
     let data = match &tiles {
         None => resample(map.components(), (res, height), directx, |u, v| img.sample(u, v)),
-        // An atlas texel reads the image of the tile its mesh UV falls in.
+        // An atlas texel reads the image of the tile its mesh UV falls in
         Some((grid, imgs)) => resample(map.components(), (res, height), directx, |u, v| {
             let uv = grid.from_atlas([u, v]);
             udim_at(uv).and_then(|t| imgs.get(&t)).map_or([0.0; 4], |img| img.sample(uv[0] - uv[0].floor(), uv[1] - uv[1].floor()))
         }),
     };
-    s.edit("Use image as mesh map", |s| {
-        let entry = s.doc.baked.entry(ts).or_default();
-        entry.resolution = res;
-        entry.maps.insert(map, Arc::new(data));
-        s.doc.project.texture_set_mut(ts)?.baked.insert(map);
-        Ok(())
-    })?;
-    Ok(json!({ "map": map.id(), "resolution": res }))
+
+    let entry = s.doc.baked.entry(ts).or_default();
+    entry.resolution = res;
+    entry.maps.insert(map, Arc::new(data));
+    s.doc.project.texture_set_mut(ts)?.baked.insert(map);
+    Ok(res)
 }
 
-/// The image of every UV tile of a set: `name` with its tile number (`ao.1001.png`) swapped for
-/// each tile's.
-fn tile_images(images: &ImageStore, name: &str, tiles: &[u32]) -> Result<BTreeMap<u32, Arc<ImageRes>>> {
-    const CMD: &str = "textureSet.meshMap.set";
-    let at = udim_in(name).ok_or_else(|| bad(CMD, format!("`{name}` names no UV tile: a UV-tiled set takes one image per tile, named like ao.1001.png")))?;
+/// The image of every UV tile of a set: `name` with its tile number (`ao.1001.png`) swapped for each tile's
+fn tile_images(images: &ImageStore, cmd: &str, name: &str, tiles: &[u32]) -> Result<BTreeMap<u32, Arc<ImageRes>>> {
+    let at = udim_in(name).ok_or_else(|| bad(cmd, format!("`{name}` names no UV tile: a UV-tiled set takes one image per tile, named like ao.1001.png")))?;
     tiles
         .iter()
         .map(|&t| {
             let tile_name = format!("{}{t}{}", name.get(..at).unwrap_or_default(), name.get(at + 4..).unwrap_or_default());
-            images.get(&tile_name).cloned().map(|img| (t, img)).ok_or_else(|| bad(CMD, format!("no image `{tile_name}` for UV tile {t}")))
+            images.get(&tile_name).cloned().map(|img| (t, img)).ok_or_else(|| bad(cmd, format!("no image `{tile_name}` for UV tile {t}")))
         })
         .collect()
 }
