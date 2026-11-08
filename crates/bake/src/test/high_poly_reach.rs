@@ -196,3 +196,27 @@ fn matching_by_mesh_name_misses_the_parts_with_another_name() {
         );
     }
 }
+
+#[test]
+fn without_a_high_poly_no_vertex_has_a_reach() {
+    let low = primitives::plane(1.0, 4);
+    let low_bvh = Bvh::new(&low);
+    let bake_settings = settings(16, &[BakedMap::Normal]);
+    let request = BakeRequest {
+        low_base_color: &[],
+        mesh: &low,
+        bvh: &low_bvh,
+        material: 0,
+        settings: &bake_settings,
+        high: None,
+        cage: None,
+        skew: None,
+        cage_paint: None,
+        tiles: (1, 1),
+    };
+
+    let reach = HighPolyReach::new(&request).unwrap();
+    assert!(reach.vertices.is_empty());
+    // Any cage distances: there is no vertex to miss
+    assert_eq!(reach.missed(0, 0.02, 0.01), None);
+}
