@@ -9,6 +9,7 @@ use crate::TextureCraftApp;
 use crate::i18n::tr;
 use crate::state::{Mode, ViewLayout};
 use crate::theme::Tokens;
+use crate::toolbar::{MAX_BRUSH_SIZE, MIN_BRUSH_SIZE};
 
 /// One menu entry. `label == "-"` is a separator; `sub` names a submenu group.
 #[derive(Clone, Copy, Debug)]
@@ -61,12 +62,13 @@ pub const CATALOG: &[Item] = &[
     it("Mode", "Painting", "ui.mode.paint", Some("F9")),
     it("Mode", "Rendering (path traced)", "ui.mode.render", Some("F10")),
     sub("Window", "Views", "Assets", "ui.view.assets", None),
-    sub("Window", "Views", "Bake Maps", "ui.view.bakeMaps", None),
-    sub("Window", "Views", "Settings", "ui.view.bakeSettings", None),
+    sub("Window", "Views", "Common Settings", "ui.view.bakeSettings", None),
     sub("Window", "Views", "Display Settings", "ui.view.display", None),
     sub("Window", "Views", "History", "ui.view.history", None),
     sub("Window", "Views", "Layers", "ui.view.layers", None),
     sub("Window", "Views", "Log", "ui.view.log", None),
+    sub("Window", "Views", "Mesh Map Bakers", "ui.view.meshMapBakers", None),
+    sub("Window", "Views", "Mesh Map Settings", "ui.view.bakeMaps", None),
     sub("Window", "Views", "Properties", "ui.view.properties", None),
     sub("Window", "Views", "Shader Settings", "ui.view.shader", None),
     sub("Window", "Views", "Texture Sets", "ui.view.textureSetList", None),
@@ -304,7 +306,7 @@ fn effect_command<'a>(app: &TextureCraftApp, id: &'a str) -> &'a str {
 }
 
 pub fn shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context) {
-    if crate::keymap::capturing(ctx) || (ctx.memory(|m| m.focused().is_some()) && ctx.egui_wants_keyboard_input()) {
+    if crate::keymap::capturing(ctx) || (ctx.memory(|memory| memory.focused().is_some()) && ctx.egui_wants_keyboard_input()) {
         return;
     }
 
@@ -326,14 +328,18 @@ pub fn shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context) {
             }
         }
 
+        // [ and ] shrink and grow the brush by this factor per press
+        const BRACKET_SIZE_STEP: f32 = 1.15;
         let size_down = input.consume_key(Modifiers::NONE, Key::OpenBracket);
         let size_up = input.consume_key(Modifiers::NONE, Key::CloseBracket);
         if app.ui.mode == Mode::Painting && (size_down || size_up) {
-            let scale = if size_up { 1.15 } else { 1.0 / 1.15 };
-            app.session.tool.brush.size = (app.session.tool.brush.size * scale).clamp(0.0005, 0.25);
+            let scale = if size_up { BRACKET_SIZE_STEP } else { 1.0 / BRACKET_SIZE_STEP };
+            app.session.tool.brush.size = (app.session.tool.brush.size * scale).clamp(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE);
         }
 
-        if app.ui.mode == Mode::Painting && input.consume_key(Modifiers::NONE, Key::Escape) {
+        if app.properties_popup.is_some() && input.consume_key(Modifiers::NONE, Key::Escape) {
+            app.properties_popup = None;
+        } else if app.ui.mode == Mode::Painting && input.consume_key(Modifiers::NONE, Key::Escape) {
             app.session.cancel_stroke();
             app.session.tool.path.points.clear();
             app.session.tool.path.editing = None;

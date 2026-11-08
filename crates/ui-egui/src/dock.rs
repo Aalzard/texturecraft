@@ -6,7 +6,7 @@ use egui_phosphor::regular as ic;
 use serde_json::{Value, json};
 use texturecraft_engine::core::{
     BakedMap, BlendMode, Channel, Decal, Effect, EffectKind, Fill, Filter, GeneratorKind, Layer, LayerId, LayerKind, LinkParam, MaterialLink, ProceduralKind,
-    Source,
+    Projection, Source,
 };
 use texturecraft_engine::filter_lib::{FILTERS, scalar_params};
 use texturecraft_engine::paint::{BrushAlpha, alphas};
@@ -924,23 +924,28 @@ pub(crate) fn properties_title(app: &TextureCraftApp) -> String {
 }
 
 pub(crate) fn properties(app: &mut TextureCraftApp, ui: &mut Ui) {
-    let tk = Tokens::get(ui.ctx());
-    let sel = app.session.selected_layer().and_then(|id| app.session.doc.project.layers.get(&id).cloned());
-    let target = app.session.target;
-    egui::ScrollArea::vertical().id_salt("props").auto_shrink([false, false]).show(ui, |ui| match (&sel, target) {
-        (Some(l), StackTarget::Effect(e)) => effect_properties(app, ui, l, e),
-        (Some(l), StackTarget::Content) if matches!(l.kind, LayerKind::Fill(_)) => fill_properties(app, ui, l),
-        (Some(l), StackTarget::Content) if l.is_group() => {
-            ui.label(RichText::new(tr("A folder blends its children (pass-through). Set per-channel opacity in the layer rows.")).color(tk.text_dim));
+    egui::ScrollArea::vertical().id_salt("props").auto_shrink([false, false]).show(ui, |ui| properties_contents(app, ui));
+}
+
+/// What the Properties panel edits: the selected effect, fill, folder or instance, else the tool
+pub(crate) fn properties_contents(app: &mut TextureCraftApp, ui: &mut Ui) {
+    let tokens = Tokens::get(ui.ctx());
+    let selected = app.session.selected_layer().and_then(|id| app.session.doc.project.layers.get(&id).cloned());
+
+    match (&selected, app.session.target) {
+        (Some(layer), StackTarget::Effect(effect)) => effect_properties(app, ui, layer, effect),
+        (Some(layer), StackTarget::Content) if matches!(layer.kind, LayerKind::Fill(_)) => fill_properties(app, ui, layer),
+        (Some(layer), StackTarget::Content) if layer.is_group() => {
+            ui.label(RichText::new(tr("A folder blends its children (pass-through). Set per-channel opacity in the layer rows.")).color(tokens.text_dim));
         }
-        (Some(l), StackTarget::Content) if l.instance_source().is_some() => instance_properties(app, ui, l),
-        (Some(l), StackTarget::Mask) => {
-            height_mask_section(app, ui, l);
+        (Some(layer), StackTarget::Content) if layer.instance_source().is_some() => instance_properties(app, ui, layer),
+        (Some(layer), StackTarget::Mask) => {
+            height_mask_section(app, ui, layer);
             ui.separator();
             tool_properties(app, ui);
         }
         _ => tool_properties(app, ui),
-    });
+    }
 }
 
 /// An instance draws its source: point there for edits.
@@ -990,38 +995,43 @@ fn height_mask_section(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
 }
 
 fn tool_properties(app: &mut TextureCraftApp, ui: &mut Ui) {
-    let tk = Tokens::get(ui.ctx());
-    // Brush preview: a stroke and a sphere with the tool's material.
+    let tokens = Tokens::get(ui.ctx());
+    // Brush preview: a stroke and a sphere with the tool's material
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 88.0), Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(rect, 2.0, tk.viewport);
-    let half = rect.width() * 0.5;
-    let b = &app.session.tool.brush;
-    let mut pts = Vec::new();
-    for k in 0..=40 {
-        let t = k as f32 / 40.0;
-        pts.push(pos2(rect.left() + 14.0 + t * (half - 28.0), rect.center().y + (t * 9.0).sin() * 18.0));
+    let painter = ui.painter();
+    painter.rect_filled(rect, 2.0, tokens.viewport);
+    let half_width = rect.width() * 0.5;
+    let brush = &app.session.tool.brush;
+    let mut points = Vec::new();
+    for step in 0..=40 {
+        let fraction = step as f32 / 40.0;
+        points.push(pos2(rect.left() + 14.0 + fraction * (half_width - 28.0), rect.center().y + (fraction * 9.0).sin() * 18.0));
     }
-    let w = (b.size / 0.25 * 60.0).clamp(2.0, 30.0);
-    let a = (b.flow * b.opacity * 255.0) as u8;
-    p.add(egui::Shape::line(pts, Stroke::new(w, Color32::from_white_alpha(a.max(30)))));
-    let base = app.session.tool.values.get(&Channel::BaseColor).copied().unwrap_or([0.8; 3]);
-    crate::thumbs::paint_sphere(p, pos2(rect.left() + half * 1.5, rect.center().y), 36.0, base);
+
+    let stroke_width = (brush.size / 0.25 * 60.0).clamp(2.0, 30.0);
+    let alpha = (brush.flow * brush.opacity * 255.0) as u8;
+    painter.add(egui::Shape::line(points, Stroke::new(stroke_width, Color32::from_white_alpha(alpha.max(30)))));
+    let base_color = app.session.tool.values.get(&Channel::BaseColor).copied().unwrap_or([0.8; 3]);
+    crate::thumbs::paint_sphere(painter, pos2(rect.left() + half_width * 1.5, rect.center().y), 36.0, base_color);
     ui.add_space(4.0);
+
     ui.horizontal(|ui| {
+        let button_size = ui.spacing().interact_size.y;
         for (tab, icon, tip) in
             [(PropsTab::Brush, ic::PAINT_BRUSH, tr("Brush")), (PropsTab::Alpha, ic::CIRCLE_HALF, tr("Alpha")), (PropsTab::Material, ic::SPHERE, tr("Material"))]
         {
-            if icon_button(ui, icon, tip, app.ui.props_tab == tab, 24.0).clicked() {
+            if icon_button(ui, icon, tip, app.ui.props_tab == tab, button_size).clicked() {
                 app.ui.props_tab = tab;
             }
         }
     });
     ui.separator();
+
     if app.session.quick_mask.editing {
-        ui.label(RichText::new(tr("Editing the quick mask: strokes paint where painting is allowed. Press U to finish.")).color(tk.text_dim));
+        ui.label(RichText::new(tr("Editing the quick mask: strokes paint where painting is allowed. Press U to finish.")).color(tokens.text_dim));
         ui.separator();
     }
+
     let tool_section: Option<fn(&mut TextureCraftApp, &mut Ui)> = match app.session.tool.tool {
         Tool::Projection => Some(stencil_section),
         Tool::Clone => Some(clone_section),
@@ -1034,6 +1044,7 @@ fn tool_properties(app: &mut TextureCraftApp, ui: &mut Ui) {
         section(app, ui);
         ui.separator();
     }
+
     match app.ui.props_tab {
         PropsTab::Brush => brush_section(app, ui),
         PropsTab::Alpha => alpha_section(app, ui),
@@ -1566,46 +1577,56 @@ fn anchor_label(app: &TextureCraftApp, anchor: LayerId, channel: Channel) -> Str
     trf("Anchor: {name} ({channel})", &[("name", &name), ("channel", &tr(channel.label()))])
 }
 
-/// Projection and per-channel sources of a fill: a fill layer's (`base` = {"layer"}, `on` =
-/// its enabled channels) or a content fill effect's (`base` = {"effect"}, `on` = the channels
-/// it has a source for). `reader` is the layer owning the fill (for anchor sources).
+/// Space above a fill's Material caption, setting it apart from the projection
+const FILL_MATERIAL_GAP: f32 = 6.0;
+
+/// Space between a fill's channel chips and its channel sources
+const FILL_CHANNELS_GAP: f32 = 4.0;
+
+/// Projection and sources of a fill layer or fill effect (`base`) for its channels `on`; `reader` owns it
 fn fill_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value, on: &[Channel], reader: LayerId) {
-    use texturecraft_engine::core::Projection;
     let salt = base.to_string();
-    if let Projection::Decal(d) = &fill.projection {
-        decal_editor(app, ui, d, reader);
+    if let Projection::Decal(decal) = &fill.projection {
+        decal_editor(app, ui, decal, reader);
     } else {
-        projection_editor(app, ui, fill, base);
+        projection_editor(app, ui, fill, base, &salt);
     }
-    ui.add_space(6.0);
+
+    ui.add_space(FILL_MATERIAL_GAP);
     ui.label(caption(tr("Material")));
-    let chans = app.session.doc.project.texture_set(app.session.ts()).map(|t| t.channel_list()).unwrap_or_default();
+    let channels = app.session.doc.project.texture_set(app.session.ts()).map(|texture_set| texture_set.channel_list()).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
-        for c in &chans {
-            let enabled = on.contains(c);
-            if chip(ui, tr(c.short()), enabled).on_hover_text(tr(SOLO_HINT)).clicked() {
-                let solo = ui.input(|i| i.modifiers.alt);
-                app.run("layer.fill.set", with(base, json!({"channel": c.id(), "enabled": solo || !enabled, "solo": solo})));
+        for channel in &channels {
+            let enabled = on.contains(channel);
+            if chip(ui, tr(channel.short()), enabled).on_hover_text(tr(SOLO_HINT)).clicked() {
+                let solo = ui.input(|input| input.modifiers.alt);
+                app.run("layer.fill.set", with(base, json!({"channel": channel.id(), "enabled": solo || !enabled, "solo": solo})));
             }
         }
     });
-    ui.add_space(4.0);
+
+    ui.add_space(FILL_CHANNELS_GAP);
     let anchors = anchors_below(app, reader);
-    for c in chans {
-        if !on.contains(&c) {
-            continue;
+    for channel in channels {
+        if on.contains(&channel) {
+            fill_channel(app, ui, fill, base, channel, &anchors, &salt);
         }
-        fill_channel(app, ui, fill, base, c, &anchors, &salt);
     }
 }
 
-/// The projection of a fill (other than a decal): kind, scale, and what the kind adds (UV
-/// rotation and offset, tri-planar sharpness, an axis, a world offset). Each edit sends only the
-/// field it changed; the command keeps the others.
-fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value) {
-    use texturecraft_engine::core::Projection;
-    let proj_label = fill.projection.label();
-    combo(ui, tr("Projection"), tr(proj_label), |ui| {
+/// Slider range of a fill's scale or tiling
+const FILL_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.01..=20.0;
+
+/// Slider range of a UV fill's rotation, a full turn
+const FILL_ROTATION_DEGREES_RANGE: std::ops::RangeInclusive<f32> = 0.0..=360.0;
+
+/// Tri-planar hardness, the exponent weighting the three projections; `layer.fill.projection` clamps to the same range
+const TRIPLANAR_HARDNESS_RANGE: std::ops::RangeInclusive<f32> = 1.0..=64.0;
+
+/// A fill's projection kind, axis and hardness, then its collapsible UV transformations
+fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Value, salt: &str) {
+    let projection_label = fill.projection.label();
+    combo(ui, tr("Projection"), tr(projection_label), |ui| {
         for (id, label) in [
             ("uv", n_("UV projection")),
             ("triplanar", n_("Tri-planar projection")),
@@ -1613,55 +1634,63 @@ fn projection_editor(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: 
             ("spherical", n_("Spherical projection")),
             ("cylindrical", n_("Cylindrical projection")),
         ] {
-            if ui.selectable_label(proj_label == label, tr(label)).clicked() {
+            if ui.selectable_label(projection_label == label, tr(label)).clicked() {
                 app.run("layer.fill.projection", with(base, json!({"projection": id})));
             }
         }
     });
-    let mut scale = match &fill.projection {
+
+    // Each edit sends only the fields it changed; the command keeps the others
+    let mut edit = |fields: Value| {
+        app.run("layer.fill.projection", with(base, fields));
+    };
+    if let Projection::Planar { axis, .. } | Projection::Cylindrical { axis, .. } = &fill.projection
+        && let Some(picked_axis) = axis_combo(ui, *axis)
+    {
+        edit(json!({"axis": picked_axis}));
+    }
+    if let Projection::Triplanar { sharpness, .. } = &fill.projection {
+        let mut hardness = *sharpness;
+        if let Some(merge) = slider_edit(ui, tr("Hardness"), &mut hardness, TRIPLANAR_HARDNESS_RANGE, 1) {
+            edit(json!({"sharpness": hardness, "merge": merge}));
+        }
+    }
+
+    // One id per fill so each keeps its own open or closed state
+    section(ui, &format!("sec_fill_transform{salt}"), tr("UV transformations"), true, |ui| {
+        projection_transform(ui, &fill.projection, &mut edit);
+    });
+}
+
+/// Scale plus what the projection kind adds: UV rotation and offset, or a world offset
+fn projection_transform(ui: &mut Ui, projection: &Projection, edit: &mut impl FnMut(Value)) {
+    let mut scale = match projection {
         Projection::Uv { scale, .. } => scale[0],
         Projection::Triplanar { scale, .. } | Projection::Planar { scale, .. } | Projection::Spherical { scale } | Projection::Cylindrical { scale, .. } => {
             *scale
         }
         Projection::Decal(_) => return,
     };
-    let mut edit = |extra: Value| app.run("layer.fill.projection", with(base, extra));
-    if let Some(merge) = slider_edit(ui, tr("Scale / tiling"), &mut scale, 0.01..=20.0, 2) {
+    if let Some(merge) = slider_edit(ui, tr("Scale / tiling"), &mut scale, FILL_SCALE_RANGE, 2) {
         edit(json!({"scale": scale, "merge": merge}));
     }
-    match &fill.projection {
+
+    match projection {
         Projection::Uv { rotation, offset, .. } => {
-            let mut r = *rotation;
-            if let Some(merge) = slider_edit(ui, tr("Rotation"), &mut r, 0.0..=360.0, 0) {
-                edit(json!({"rotation": r, "merge": merge}));
+            let mut rotation_degrees = *rotation;
+            if let Some(merge) = slider_edit(ui, tr("Rotation"), &mut rotation_degrees, FILL_ROTATION_DEGREES_RANGE, 0) {
+                edit(json!({"rotation": rotation_degrees, "merge": merge}));
             }
-            if let Some((o, merge)) = offset_sliders(ui, ["U", "V"], *offset) {
-                edit(json!({"offset": o, "merge": merge}));
-            }
-        }
-        Projection::Triplanar { sharpness, offset, .. } => {
-            let mut s = *sharpness;
-            if let Some(merge) = slider_edit(ui, tr("Blend sharpness"), &mut s, 1.0..=64.0, 1) {
-                edit(json!({"sharpness": s, "merge": merge}));
-            }
-            if let Some((o, merge)) = offset_sliders(ui, ["X", "Y", "Z"], *offset) {
-                edit(json!({"offset": o, "merge": merge}));
+            if let Some((edited_offset, merge)) = offset_sliders(ui, ["U", "V"], *offset) {
+                edit(json!({"offset": edited_offset, "merge": merge}));
             }
         }
-        Projection::Planar { axis, offset, .. } => {
-            if let Some(a) = axis_combo(ui, *axis) {
-                edit(json!({"axis": a}));
-            }
-            if let Some((o, merge)) = offset_sliders(ui, ["X", "Y", "Z"], *offset) {
-                edit(json!({"offset": o, "merge": merge}));
+        Projection::Triplanar { offset, .. } | Projection::Planar { offset, .. } => {
+            if let Some((edited_offset, merge)) = offset_sliders(ui, ["X", "Y", "Z"], *offset) {
+                edit(json!({"offset": edited_offset, "merge": merge}));
             }
         }
-        Projection::Cylindrical { axis, .. } => {
-            if let Some(a) = axis_combo(ui, *axis) {
-                edit(json!({"axis": a}));
-            }
-        }
-        Projection::Spherical { .. } | Projection::Decal(_) => {}
+        Projection::Spherical { .. } | Projection::Cylindrical { .. } | Projection::Decal(_) => {}
     }
 }
 
