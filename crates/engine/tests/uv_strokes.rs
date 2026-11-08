@@ -42,7 +42,7 @@ fn a_segment_longer_than_one_stamp_batch_paints_to_its_end() {
 
 #[test]
 fn a_segment_cut_at_the_stamp_limit_does_not_stamp_the_next_one_backwards() {
-    // 1e-4 UV between stamps: the 20.5 UV first segment needs 205k stamps and is cut off the texture, near u = -6.9
+    // 1e-4 UV between stamps: the 20.5 UV first segment needs 205k stamps and is cut off before reaching the texture
     let mut session = red_brush_session(json!({"size": 1.0, "spacing": 1.0, "hardness": 90}));
 
     execute(&mut session, "tool.strokeUv", &json!({"points": [[-20.0, 0.5], [0.5, 0.5], [0.6, 0.5]]})).unwrap();
@@ -74,4 +74,32 @@ fn a_hostile_segment_stays_bounded() {
     let result = execute(&mut session, "tool.strokeUv", &json!({"points": [[0.0, 0.0], [1e9, 1e9]]}));
 
     assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn a_light_pressure_diagonal_reaches_the_far_corner() {
+    let mut session = red_brush_session(json!({"size": 0.2, "minSize": 0.0, "spacing": 1.0, "hardness": 90}));
+
+    // Half pressure reaches the minimum stamp step: a diagonal needs about 142k stamps
+    session.begin_stroke_uv([0.0, 0.0].into(), 0.5).unwrap();
+    session.continue_stroke_uv([1.0, 1.0].into(), 0.5);
+    session.end_stroke().unwrap();
+    session.update();
+
+    assert!(red_at(&session, 0.5, 0.5), "the diagonal paints through its midpoint");
+    assert!(red_at(&session, 0.97, 0.97), "the diagonal reaches the far corner");
+}
+
+#[test]
+fn decreasing_pressure_does_not_stamp_behind_a_turn() {
+    let mut session = red_brush_session(json!({"size": 10.0, "minSize": 0.0, "spacing": 100.0, "hardness": 90}));
+
+    session.begin_stroke_uv([0.25, 0.5].into(), 1.0).unwrap();
+    session.continue_stroke_uv([0.33, 0.5].into(), 1.0);
+    session.continue_stroke_uv([0.33, 0.6].into(), 0.1);
+    session.end_stroke().unwrap();
+    session.update();
+
+    assert!(red_at(&session, 0.33, 0.55), "the new segment is painted");
+    assert!(!red_at(&session, 0.33, 0.45), "a smaller step must not stamp behind the turn");
 }

@@ -1313,8 +1313,7 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         && shift
         && !path_tool
         && brush_tool(app.session.tool.tool)
-        && let Some((last_set, from)) = app.last_paint_uv
-        && last_set == ts
+        && let Some(from) = app.last_paint_uv.and_then(|point| point.uv_for(&app.session))
         && let Some(hover) = response.hover_pos()
     {
         rubber_band(ui, rect, to_screen(from.x, from.y), hover);
@@ -1336,41 +1335,37 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
 }
 
 /// Paint in the 2D view: a press starts a stroke, a drag continues it, Shift+click draws a line from the last stroke.
-fn paint_2d_input(app: &mut TextureCraftApp, ui: &Ui, resp: &egui::Response, shift: bool, to_uv: &dyn Fn(egui::Pos2) -> Vec2) {
+fn paint_2d_input(app: &mut TextureCraftApp, ui: &Ui, response: &egui::Response, shift: bool, to_uv: &dyn Fn(egui::Pos2) -> Vec2) {
     let pressure = pen_pressure(ui);
-    let set = app.session.ts();
+
     // Where the stroke under way is; it becomes the line start only when the stroke finishes
     let stroke_end = ui.scope_id().with("paint_2d_stroke_end");
 
-    if resp.drag_started_by(PointerButton::Primary) || resp.clicked_by(PointerButton::Primary) {
-        // A line starts only from a point on the same texture set
-        let line_start = match app.last_paint_uv {
-            Some((last_set, last_uv)) if shift && last_set == set => Some(last_uv),
-            _ => None,
-        };
-        if let Some(pointer) = resp.interact_pointer_pos() {
+    if response.drag_started_by(PointerButton::Primary) || response.clicked_by(PointerButton::Primary) {
+        let line_start = app.last_paint_uv.filter(|_| shift).and_then(|point| point.uv_for(&app.session));
+        if let Some(pointer) = response.interact_pointer_pos() {
             let uv = to_uv(pointer);
             match app.session.begin_stroke_uv(line_start.unwrap_or(uv), pressure) {
                 Ok(()) => {
                     if line_start.is_some() {
                         app.session.continue_stroke_uv(uv, pressure);
                     }
-                    ui.data_mut(|data| data.insert_temp(stroke_end, (set, uv)));
+                    ui.data_mut(|data| data.insert_temp(stroke_end, crate::uv_paint_point::UvPaintPoint::new(&app.session, uv)));
                 }
                 Err(error) => app.toast(error.to_string(), true),
             }
         }
-    } else if resp.dragged_by(PointerButton::Primary)
+    } else if response.dragged_by(PointerButton::Primary)
         && app.session.stroke_active()
-        && let Some(pointer) = resp.interact_pointer_pos()
+        && let Some(pointer) = response.interact_pointer_pos()
     {
         let uv = to_uv(pointer);
         app.session.continue_stroke_uv(uv, pressure);
-        ui.data_mut(|data| data.insert_temp(stroke_end, (set, uv)));
+        ui.data_mut(|data| data.insert_temp(stroke_end, crate::uv_paint_point::UvPaintPoint::new(&app.session, uv)));
     }
 
     // Escape cancels the stroke and ends the drag without a primary release, so a cancelled stroke never gets here
-    if resp.clicked_by(PointerButton::Primary) || resp.drag_stopped_by(PointerButton::Primary) {
+    if response.clicked_by(PointerButton::Primary) || response.drag_stopped_by(PointerButton::Primary) {
         let finishing = app.session.stroke_active();
         match app.session.end_stroke() {
             Ok(()) if finishing => app.last_paint_uv = ui.data(|data| data.get_temp(stroke_end)),

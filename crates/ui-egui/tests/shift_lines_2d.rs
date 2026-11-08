@@ -178,3 +178,70 @@ fn a_line_does_not_start_from_a_point_on_another_texture_set() {
 fn a_stroke_cancelled_with_escape_leaves_the_line_start_where_it_was() {
     assert_shift_click_draws_a_line(|harness| cancelled_drag(harness, CANCELLED_DRAG_FROM, CANCELLED_DRAG_TO));
 }
+
+#[test]
+fn a_new_project_does_not_reuse_the_previous_projects_line_start() {
+    let mut harness = uv_view_app();
+    click(&mut harness, FIRST_CLICK, false);
+    harness.state_mut().run("project.new", json!({"mesh": "sphere", "resolution": 256})).unwrap();
+    harness.run_steps(2);
+
+    assert_shift_click_paints_only_a_dot(&mut harness);
+}
+
+#[test]
+fn a_project_opened_through_control_does_not_reuse_the_line_start() {
+    let mut harness = uv_view_app();
+    click(&mut harness, FIRST_CLICK, false);
+    let context = harness.ctx.clone();
+    let result = texturecraft_ui_egui::control::handle(
+        harness.state_mut(),
+        &context,
+        "command.run",
+        &json!({"id": "project.new", "params": {"mesh": "sphere", "resolution": 256}}),
+    );
+    assert_eq!(result["ok"], true);
+    harness.run_steps(2);
+
+    assert_shift_click_paints_only_a_dot(&mut harness);
+}
+
+#[test]
+#[ignore = "requires a GPU adapter and TC_UI_SNAPSHOTS"]
+fn shift_line_snapshots() {
+    let output_dir = std::path::PathBuf::from(std::env::var_os("TC_UI_SNAPSHOTS").expect("set TC_UI_SNAPSHOTS to the output directory"));
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let session = texturecraft_engine::sample_session(256, 64).unwrap();
+    let mut harness = Harness::builder().with_size(egui::vec2(1600.0, 960.0)).with_pixels_per_point(1.0).wgpu().build_eframe(|context| {
+        let adapter = &context.wgpu_render_state.as_ref().expect("wgpu render state").adapter;
+        eprintln!("Shift-line snapshot adapter: {:?}", adapter.get_info());
+        TextureCraftApp::new(context, session)
+    });
+    harness.state_mut().ui.layout = ViewLayout::Only2D;
+    harness.run_steps(4);
+    click(&mut harness, FIRST_CLICK, false);
+
+    let save = |harness: &mut Harness<'_, TextureCraftApp>, name: &str| {
+        harness.run_steps(4);
+        let path = output_dir.join(format!("{name}.png"));
+        harness.render().unwrap().save(&path).unwrap();
+        eprintln!("wrote {}", path.display());
+    };
+
+    harness.event(Event::ModifiersChanged(Modifiers::SHIFT));
+    harness.hover_at(SECOND_CLICK);
+    save(&mut harness, "shift-line-preview");
+    click(&mut harness, SECOND_CLICK, true);
+    save(&mut harness, "shift-line-painted");
+
+    harness.state_mut().ui.uv_zoom = 1.5;
+    harness.state_mut().ui.uv_pan = [0.2, -0.1];
+    harness.event(Event::ModifiersChanged(Modifiers::SHIFT));
+    harness.hover_at(FIRST_CLICK);
+    save(&mut harness, "shift-line-zoom-pan-preview");
+
+    harness.state_mut().run("project.new", json!({"mesh": "sphere", "resolution": 256})).unwrap();
+    save(&mut harness, "shift-line-new-project");
+    harness.event(Event::ModifiersChanged(Modifiers::NONE));
+    assert_shift_click_paints_only_a_dot(&mut harness);
+}

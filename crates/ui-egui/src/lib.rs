@@ -33,6 +33,7 @@ pub mod theme;
 pub mod thumbs;
 pub mod titlebar;
 pub mod toolbar;
+pub mod uv_paint_point;
 pub mod viewport;
 pub mod web_files;
 pub mod widgets;
@@ -110,8 +111,8 @@ pub struct TextureCraftApp {
     pub profiler: profile::Profiler,
     /// Where the last 3D stroke ended (viewport pixels), for Shift+click straight lines.
     pub last_paint_point: Option<texturecraft_engine::geom::glam::Vec2>,
-    /// Where the last finished 2D view stroke ended: its texture set and texture coordinates (so zoom and pan keep it), for Shift+click straight lines.
-    pub last_paint_uv: Option<(usize, texturecraft_engine::geom::glam::Vec2)>,
+    /// The last finished 2D stroke's endpoint, scoped to its mesh and texture set for Shift+click lines
+    pub last_paint_uv: Option<uv_paint_point::UvPaintPoint>,
     /// The decal layer the next click in the 3D view places.
     pub placing_decal: Option<texturecraft_engine::core::LayerId>,
     /// The Properties popup a right click in a view opens.

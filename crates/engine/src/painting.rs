@@ -21,8 +21,8 @@ const MIN_UV_STAMP_STEP: f32 = 1e-5;
 /// 2D view stamps rasterized together, bounding the memory of one batch.
 const UV_STAMP_BATCH: usize = 4096;
 
-/// Most stamps one 2D view sample adds: a line across the texture at the finest brush (about 71k) fits, a hostile coordinate stays bounded.
-const MAX_UV_STAMPS_PER_SAMPLE: usize = 1 << 17;
+/// Covers a UV diagonal at the minimum step (about 142k stamps), including light pen pressure, while bounding hostile coordinates
+const MAX_UV_STAMPS_PER_SAMPLE: usize = 150_000;
 
 impl Session {
     /// Camera visibility for a stroke at `viewport` (cached until the camera, size or mesh change).
@@ -327,6 +327,7 @@ impl Session {
         let Some(active) = self.stroke.as_mut() else { return };
         let Some(progress) = active.uv.as_mut() else { return };
         let Some(cache) = self.caches.get_mut(active.ts) else { return };
+
         let settings = &active.stroke.settings;
         let pressure = pressure.clamp(0.0, 1.0);
         let size_scale = if pressure < 1.0 { settings.min_size + (1.0 - settings.min_size) * pressure } else { 1.0 };
@@ -342,20 +343,23 @@ impl Session {
         // The first sample is one stamp; a later one stamps every `step` along the segment from the previous
         let (start, segment, mut distance) = match progress.last.replace(uv) {
             None => (uv, Vec2::ZERO, 0.0),
-            Some(previous) => (previous, uv - previous, step - progress.carry),
+            // Pressure can shrink the step below the carry from the preceding sample
+            Some(previous) => (previous, uv - previous, (step - progress.carry).max(0.0)),
         };
         let length = segment.length();
         let shape = Self::shape(&self.images, settings);
+        let mut batch = Vec::new();
         let mut stamped = 0;
         while distance <= length && stamped < MAX_UV_STAMPS_PER_SAMPLE {
             let batch_size = UV_STAMP_BATCH.min(MAX_UV_STAMPS_PER_SAMPLE - stamped);
-            let mut batch = Vec::new();
+            batch.clear();
             while distance <= length && batch.len() < batch_size {
                 let center = start + segment * (distance / length.max(f32::MIN_POSITIVE));
                 let seed = progress.stamps.wrapping_add((stamped + batch.len()) as u32);
                 batch.push(texturecraft_paint::UvStamp { center, radius, angle, flow: settings.flow, hardness: settings.hardness, seed });
                 distance += step;
             }
+
             stamped += batch.len();
             texturecraft_paint::rasterize_uv(&mut active.canvas, &cache.gbuf, shape, &batch);
         }
