@@ -1059,6 +1059,15 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Remove resolution override", "解像度の上書きを解除"),
     ("Texture set resolution", "テクスチャセットの解像度"),
     ("UV tile {tile} resolution", "UVタイル {tile} の解像度"),
+    ("Edges", "エッジ"),
+    ("Cavities", "くぼみ"),
+    ("Edges and cavities", "エッジとくぼみ"),
+    ("Raw curvature", "生の曲率"),
+    ("Detail sizes", "ディテールサイズ"),
+    (
+        "Reads the curvature map as baked: changing the mode or a size turns detail sizes on.",
+        "曲率マップをベイクされたまま読み取ります。モードやサイズを変更するとディテールサイズが有効になります。",
+    ),
     (
         "A click fills what is under it; a dragged rectangle fills what it selects as it grows",
         "クリックでその下を塗りつぶし、ドラッグした矩形は広げるにつれて選択した範囲を塗りつぶします",

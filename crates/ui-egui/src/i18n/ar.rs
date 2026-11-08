@@ -1037,6 +1037,15 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Remove resolution override", "إزالة تجاوز الدقة"),
     ("Texture set resolution", "دقة مجموعة الخامات"),
     ("UV tile {tile} resolution", "دقة بلاطة UV {tile}"),
+    ("Edges", "الحواف"),
+    ("Cavities", "التجاويف"),
+    ("Edges and cavities", "الحواف والتجاويف"),
+    ("Raw curvature", "الانحناء الخام"),
+    ("Detail sizes", "أحجام التفاصيل"),
+    (
+        "Reads the curvature map as baked: changing the mode or a size turns detail sizes on.",
+        "يقرأ خريطة الانحناء كما خُبزت: تغيير الوضع أو أحد الأحجام يفعّل أحجام التفاصيل.",
+    ),
     (
         "A click fills what is under it; a dragged rectangle fills what it selects as it grows",
         "النقرة تملأ ما تحتها، والمستطيل المسحوب يملأ ما يحدده أثناء اتساعه",

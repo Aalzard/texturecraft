@@ -403,3 +403,28 @@ fn background_resizes_match_the_command_and_keep_later_edits() {
     b.update();
     assert_eq!(b.caches[0].size, (512, 512));
 }
+
+#[test]
+fn curvature_generators_take_a_mode_and_detail_sizes() {
+    let mut state = session();
+    execute(&mut state, "layer.add.fill", &json!({})).unwrap();
+    execute(&mut state, "mask.add.black", &Value::Null).unwrap();
+    let added = execute(&mut state, "effect.add.generator", &json!({"generator": "curvature", "mode": "cavities"})).unwrap();
+    let effect = added["effect"].clone();
+
+    execute(&mut state, "effect.set", &json!({"effect": effect, "sizes": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.5]})).unwrap();
+    let inspect = execute(&mut state, "project.inspect", &Value::Null).unwrap().to_string();
+    assert!(inspect.contains(r#""mode":"Cavities""#) && inspect.contains(r#""sizes":[0.0,0.0,0.0,1.0,0.0,0.0,0.5]"#), "{inspect}");
+
+    let too_few = execute(&mut state, "effect.set", &json!({"effect": effect, "sizes": [1.0, 0.5]}));
+    assert!(too_few.is_err(), "sizes takes one weight per detail size");
+    let not_numbers = execute(&mut state, "effect.set", &json!({"effect": effect, "sizes": [1.0, "a", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}));
+    assert!(not_numbers.is_err(), "a size that isn't a number is rejected, not skipped");
+    let unknown = execute(&mut state, "effect.set", &json!({"effect": effect, "mode": "ridges"}));
+    assert!(unknown.is_err(), "unknown modes are rejected");
+    let wrong_type = execute(&mut state, "effect.set", &json!({"effect": effect, "mode": 1, "level": 0.1}));
+    assert!(wrong_type.is_err(), "a mode must be a string and an invalid edit must be rejected");
+    let dirt = execute(&mut state, "effect.add.generator", &json!({"generator": "dirt", "mode": "edges"}));
+    assert!(dirt.is_err(), "only curvature generators have a mode");
+    assert_eq!(execute(&mut state, "project.inspect", &Value::Null).unwrap().to_string(), inspect, "failed commands leave the project unchanged");
+}

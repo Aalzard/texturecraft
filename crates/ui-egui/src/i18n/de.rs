@@ -1080,6 +1080,15 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Remove resolution override", "Auflösungsüberschreibung entfernen"),
     ("Texture set resolution", "Auflösung des Textursets"),
     ("UV tile {tile} resolution", "Auflösung der UV-Kachel {tile}"),
+    ("Edges", "Kanten"),
+    ("Cavities", "Vertiefungen"),
+    ("Edges and cavities", "Kanten und Vertiefungen"),
+    ("Raw curvature", "Rohe Krümmung"),
+    ("Detail sizes", "Detailgrößen"),
+    (
+        "Reads the curvature map as baked: changing the mode or a size turns detail sizes on.",
+        "Liest die Krümmungskarte wie gebacken: Eine Änderung des Modus oder einer Größe schaltet die Detailgrößen ein.",
+    ),
     (
         "A click fills what is under it; a dragged rectangle fills what it selects as it grows",
         "Ein Klick füllt, was darunter liegt; ein aufgezogenes Rechteck füllt, was es beim Aufziehen erfasst",
