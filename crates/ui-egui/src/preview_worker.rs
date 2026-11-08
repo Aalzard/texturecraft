@@ -1,7 +1,7 @@
 //! Native preview rendering uses a separate thread pool
 //! Web requests render synchronously on the UI thread
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 use crate::orb_shape::OrbShape;
 use crate::preview_request::PreviewRequest;
 
@@ -17,7 +17,7 @@ pub enum PreviewWorker {
     #[cfg(not(target_arch = "wasm32"))]
     Running { requests: std::sync::mpsc::Sender<PreviewRequest>, results: std::sync::mpsc::Receiver<PreviewResult> },
     /// The web: requests render as they are made
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     Inline { shape: OrbShape, results: Vec<PreviewResult> },
     /// The worker could not start or stopped; requests are refused
     // The web has no thread to stop
@@ -27,10 +27,10 @@ pub enum PreviewWorker {
 
 impl PreviewWorker {
     /// Submit work, starting the worker on first use; false if it has stopped
-    /// Native results request a repaint
-    pub fn request(&mut self, ctx: &egui::Context, request: PreviewRequest) -> bool {
+    /// Completed results request a repaint so the UI polls them on the next pass
+    pub fn request(&mut self, context: &egui::Context, request: PreviewRequest) -> bool {
         if matches!(self, PreviewWorker::NotStarted) {
-            *self = PreviewWorker::start(ctx);
+            *self = PreviewWorker::start(context);
         }
 
         match self {
@@ -39,12 +39,14 @@ impl PreviewWorker {
                 if requests.send(request).is_ok() {
                     return true;
                 }
+
                 *self = PreviewWorker::Stopped;
                 false
             }
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(any(target_arch = "wasm32", test))]
             PreviewWorker::Inline { shape, results } => {
                 results.push((request.key.clone(), request.render(shape)));
+                context.request_repaint();
                 true
             }
             PreviewWorker::NotStarted | PreviewWorker::Stopped => false,
@@ -72,7 +74,7 @@ impl PreviewWorker {
                 }
                 ready
             }
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(any(target_arch = "wasm32", test))]
             PreviewWorker::Inline { results, .. } => std::mem::take(results),
             PreviewWorker::NotStarted | PreviewWorker::Stopped => Vec::new(),
         }
@@ -159,6 +161,27 @@ mod tests {
 
     use super::*;
     use crate::shelf_preview::ShelfPreview;
+
+    #[test]
+    fn inline_results_schedule_a_frame_to_display_them() {
+        for id in ["steel", "nope"] {
+            let context = egui::Context::default();
+            for _ in 0..3 {
+                let _ = context.run_pass(Default::default(), |_| {});
+            }
+            assert!(!context.has_requested_repaint(), "the UI is idle before the request");
+
+            let mut worker = PreviewWorker::Inline { shape: OrbShape::default(), results: Vec::new() };
+            assert!(worker.poll().is_empty(), "the UI polls before submitting work");
+            let request = PreviewRequest { key: id.into(), preview: ShelfPreview::Material(id), size_px: 8, hover: false };
+            assert!(worker.request(&context, request));
+
+            let results = worker.poll();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].1.is_some(), id == "steel");
+            assert!(context.has_requested_repaint(), "the result needs another frame even when this is the only request");
+        }
+    }
 
     #[test]
     fn requests_are_answered_and_unknown_assets_get_none() {
