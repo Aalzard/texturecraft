@@ -511,16 +511,19 @@ fn swapped_filter(s: &Session, effect: LayerId, id: &str, p: &Value) -> Result<(
     }
 
     let def = crate::filter_lib::find(id).ok_or_else(|| bad(CMD, format!("unknown filter `{id}` (see filter.list)")))?;
-    if !def.is_filter_effect() {
+    let mut kind = crate::filter_lib::build(def.id, &Value::Null)?;
+    let EffectKind::Filter(filter) = &mut kind else {
         return Err(bad(CMD, format!("{} is its own effect type: add it with effect.add.filter", def.label)));
-    }
+    };
 
     let mask = s.doc.project.layer(owner)?.mask.as_ref();
     let on_mask = mask.is_some_and(|mask| mask.effects.iter().any(|masked| masked.id == effect));
     if on_mask && !def.mask {
         return Err(bad(CMD, format!("{} goes on layer content, not on masks", def.label)));
     }
-    Ok((crate::filter_lib::build(def.id, p)?, def.label))
+
+    crate::filter_lib::apply(p, filter, CMD)?;
+    Ok((kind, def.label))
 }
 
 /// The stack (a mask's or a layer's content effects) holding effect `eid`, and its position there.

@@ -156,3 +156,17 @@ fn only_filter_effects_swap_and_only_to_filters() {
     assert!(execute(&mut s, "effect.set", &json!({"effect": filter.0, "filter": "nope"})).is_err());
     assert!(matches!(effect(&s, filter).kind, EffectKind::Filter(Filter::Invert)));
 }
+
+#[test]
+fn invalid_swap_parameters_report_effect_set_and_preserve_history() {
+    let mut s = session();
+    let id = add(&mut s, "effect.add.filter", json!({"filter": "invert", "target": "content"}));
+    let before = effect(&s, id);
+    let history = s.history_labels();
+
+    let error = execute(&mut s, "effect.set", &json!({"effect": id.0, "filter": "colorBalance", "shadows": "invalid", "name": "Changed"})).unwrap_err();
+
+    assert!(matches!(error, texturecraft_engine::EngineError::BadParams { ref cmd, .. } if cmd == "effect.set"), "{error}");
+    assert_eq!(effect(&s, id), before);
+    assert_eq!(s.history_labels(), history);
+}

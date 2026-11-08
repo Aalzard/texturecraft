@@ -246,6 +246,7 @@ fn effect_menu(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
         if command == "effect.add.filter"
             && let Some(effect) = added.as_ref().and_then(|result| result["effect"].as_u64())
         {
+            app.ui.dock.focus(crate::docking::Panel::Properties);
             crate::filter_slot::open_picker_when_shown(ui.ctx(), effect);
         }
 

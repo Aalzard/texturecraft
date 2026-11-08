@@ -127,3 +127,73 @@ fn add_filter_on_a_mask_adds_it_to_the_mask() {
     assert!(harness.query_by_label("Sharpen").is_some(), "the mask filter's picker is open");
     assert!(harness.query_by_label("Grayscale").is_none(), "the picker leaves out content-only filters");
 }
+
+#[test]
+fn add_filter_reopens_closed_properties_to_show_its_picker() {
+    let (mut harness, _) = app_with_invert();
+    harness.state_mut().ui.dock.close(texturecraft_ui_egui::docking::Panel::Properties);
+    harness.run_steps(3);
+    assert!(harness.query_by_role_and_label(Role::ComboBox, "Invert").is_none());
+
+    add_filter_from_the_wand(&mut harness);
+
+    assert!(harness.query_by_role_and_label(Role::ComboBox, "HSL Perceptive").is_some(), "Add filter reveals Properties");
+    assert!(harness.query_by_label("Sharpen").is_some(), "the picker opens immediately");
+}
+
+#[test]
+fn keyboard_opens_the_slot_and_outside_click_closes_it() {
+    let (mut harness, effect) = app_with_invert();
+    for key in [egui::Key::Enter, egui::Key::Space] {
+        harness.get_by_role_and_label(Role::ComboBox, "Invert").focus();
+        harness.key_press(key);
+        harness.run_steps(3);
+        assert!(egui::Popup::is_any_open(&harness.ctx));
+
+        let position = harness.state().viewport_rect.center();
+        harness.hover_at(position);
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton { pos: position, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            harness.run_steps(1);
+        }
+        harness.run_steps(3);
+        assert!(!egui::Popup::is_any_open(&harness.ctx));
+        assert!(matches!(kind(&harness, effect), EffectKind::Filter(Filter::Invert)));
+    }
+}
+
+#[test]
+#[ignore = "requires an offscreen GPU adapter and TC_UI_SNAPSHOTS"]
+fn filter_picker_snapshots_and_frame_timings() {
+    let output = std::path::PathBuf::from(std::env::var_os("TC_UI_SNAPSHOTS").expect("set TC_UI_SNAPSHOTS"));
+    std::fs::create_dir_all(&output).unwrap();
+    let mut session = texturecraft_engine::sample_session(256, 64).unwrap();
+    execute(&mut session, "layer.add.fill", &Value::Null).unwrap();
+    execute(&mut session, "effect.add.filter", &json!({"target": "content", "filter": "invert"})).unwrap();
+    let mut harness = Harness::builder().with_size(egui::vec2(1600.0, 960.0)).wgpu().build_eframe(|cc| {
+        eprintln!("selected graphics adapter: {:?}", cc.wgpu_render_state.as_ref().unwrap().adapter.get_info());
+        TextureCraftApp::new(cc, session)
+    });
+    harness.run_steps(20);
+    let start = std::time::Instant::now();
+    open_picker(&mut harness);
+    eprintln!("picker open and first 3 UI frames: {:.3} ms", start.elapsed().as_secs_f64() * 1000.0);
+    harness.run_steps(20);
+    for (brightness, name) in
+        [(texturecraft_ui_egui::theme::Brightness::MediumDark, "filter-picker"), (texturecraft_ui_egui::theme::Brightness::Light, "filter-picker-light")]
+    {
+        harness.state_mut().ui.prefs.brightness = brightness;
+        harness.run_steps(3);
+        harness.render().unwrap().save(output.join(format!("{name}.png"))).unwrap();
+    }
+    let start = std::time::Instant::now();
+    harness.run_steps(120);
+    eprintln!("warm open picker: {:.3} ms/UI frame (120 frames, excluding GPU readback)", start.elapsed().as_secs_f64() * 1000.0 / 120.0);
+
+    harness.event(egui::Event::Text("sharp".into()));
+    harness.run_steps(3);
+    harness.render().unwrap().save(output.join("filter-picker-search.png")).unwrap();
+    harness.get_by_label("Sharpen").click();
+    harness.run_steps(3);
+    harness.render().unwrap().save(output.join("filter-picker-selected.png")).unwrap();
+}
