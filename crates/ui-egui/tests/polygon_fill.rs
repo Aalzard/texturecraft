@@ -84,3 +84,60 @@ fn a_box_drag_in_the_2d_view_is_one_fill() {
     assert_eq!(history(&harness).len(), before + 1);
     assert_eq!(history(&harness).last().map(String::as_str), Some("Polygon fill"));
 }
+
+#[test]
+fn a_new_press_after_release_does_not_resume_the_previous_box() {
+    let mut harness = polygon_fill_app();
+    let center = harness.state().viewport_rect.center();
+    drag(&mut harness, center - vec2(40.0, 40.0), center + vec2(40.0, 40.0));
+    let history_after_drag = history(&harness);
+    let tiles_after_drag = painted_tiles(&harness);
+
+    // Start the next gesture on the frame immediately after release
+    let point = center - vec2(80.0, 80.0);
+    harness
+        .input_mut()
+        .events
+        .extend([Event::PointerMoved(point), Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+    harness.run_steps(1);
+    assert_eq!(painted_tiles(&harness), tiles_after_drag, "a press alone must not refill the old rectangle");
+
+    harness.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    harness.run_steps(1);
+    assert_eq!(history(&harness).len(), history_after_drag.len() + 1, "only the new click records a step");
+}
+
+#[test]
+#[ignore = "requires an offscreen GPU adapter and TC_UI_SNAPSHOTS"]
+fn polygon_fill_snapshots() {
+    let Some(directory) = std::env::var_os("TC_UI_SNAPSHOTS").map(std::path::PathBuf::from) else { return };
+
+    std::fs::create_dir_all(&directory).unwrap();
+    let session = texturecraft_engine::sample_session(256, 64).unwrap();
+    let mut harness = Harness::builder().with_size(vec2(1600.0, 960.0)).wgpu().build_eframe(|context| TextureCraftApp::new(context, session));
+    let adapter = harness.state().render_state.as_ref().unwrap().adapter.get_info();
+    eprintln!("Offscreen adapter: {} ({:?}), driver {} {}", adapter.name, adapter.backend, adapter.driver, adapter.driver_info);
+    harness.state_mut().session.tool.tool = Tool::PolygonFill;
+    harness.run_steps(6);
+    harness.render().unwrap().save(directory.join("polygon-fill-properties.png")).unwrap();
+
+    let center = harness.state().viewport_rect.center();
+    let origin = center - vec2(85.0, 70.0);
+    let opposite = center + vec2(85.0, 70.0);
+    harness.hover_at(origin);
+    harness.event(Event::PointerButton { pos: origin, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    harness.run_steps(1);
+    harness.hover_at(opposite);
+    harness.run_steps(6);
+    harness.render().unwrap().save(directory.join("polygon-fill-drag-3d.png")).unwrap();
+    harness.event(Event::PointerButton { pos: opposite, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    harness.run_steps(6);
+    harness.render().unwrap().save(directory.join("polygon-fill-complete-3d.png")).unwrap();
+
+    texturecraft_engine::execute(&mut harness.state_mut().session, "mask.add.black", &serde_json::Value::Null).unwrap();
+    let view = harness.state().viewport_rect;
+    let center = pos2(view.right() + view.width() * 0.5, view.center().y);
+    drag(&mut harness, center - vec2(80.0, 20.0), center + vec2(80.0, 20.0));
+    harness.run_steps(6);
+    harness.render().unwrap().save(directory.join("polygon-fill-mask-2d.png")).unwrap();
+}

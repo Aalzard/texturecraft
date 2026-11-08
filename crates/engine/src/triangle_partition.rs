@@ -40,10 +40,11 @@ impl TrianglePartition {
             while let Some(triangle) = stack.pop() {
                 members.push(triangle);
                 let triangle_edges = position_of.get(&triangle).and_then(|position| edge_lists.get_mut(*position)).map(std::mem::take).unwrap_or_default();
-                for neighbour in triangle_edges.iter().flat_map(|edge| by_edge.get(edge).into_iter().flatten()) {
-                    if !group_of.contains_key(neighbour) {
-                        group_of.insert(*neighbour, groups.len());
-                        stack.push(*neighbour);
+                // Visit a shared edge once, including when many collapsed faces share the same key
+                for neighbour in triangle_edges.iter().flat_map(|edge| by_edge.remove(edge).into_iter().flatten()) {
+                    if let std::collections::hash_map::Entry::Vacant(entry) = group_of.entry(neighbour) {
+                        entry.insert(groups.len());
+                        stack.push(neighbour);
                     }
                 }
             }
@@ -79,5 +80,44 @@ mod tests {
         assert_eq!(pairs.groups.len(), mesh.triangle_count() / 2);
         assert_eq!(pairs.group(3).map(<[u32]>::len), Some(2));
         assert_eq!(pairs.group(99), None);
+    }
+
+    #[test]
+    fn shared_edges_keep_transitive_neighbors() {
+        let mesh = primitives::plane(2.0, 4);
+        let groups = TrianglePartition::new(&mesh, 0, |_, triangle| vec![triangle / 4, (triangle + 1) / 4]);
+
+        assert_eq!(groups.groups.len(), 1);
+        assert_eq!(groups.group(0).unwrap().len(), mesh.triangle_count());
+    }
+
+    #[test]
+    #[ignore = "release performance measurement"]
+    fn benchmark_shared_edges() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        for subdivisions in [32, 64] {
+            let mesh = primitives::plane(2.0, subdivisions);
+            for collapsed in [false, true] {
+                let mut times = Vec::new();
+                for _ in 0..5 {
+                    let start = Instant::now();
+                    let groups = TrianglePartition::new(&mesh, 0, |mesh, triangle| {
+                        if collapsed {
+                            vec![(0, 0); 3]
+                        } else {
+                            let [first, second, third] = mesh.tri(triangle).unwrap();
+                            [(first, second), (second, third), (third, first)].map(|(from, to)| (from.min(to), from.max(to))).to_vec()
+                        }
+                    });
+                    assert_eq!(groups.groups.len(), 1);
+                    black_box(groups);
+                    times.push(start.elapsed().as_secs_f64() * 1000.0);
+                }
+                times.sort_by(f64::total_cmp);
+                eprintln!("{} triangles, collapsed={collapsed}, median={:.3} ms, range={:.3}..{:.3} ms", mesh.triangle_count(), times[2], times[0], times[4]);
+            }
+        }
     }
 }

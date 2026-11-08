@@ -2,7 +2,7 @@
 //! rendered once at the start of a stroke.
 
 use rayon::prelude::*;
-use texturecraft_geom::glam::{Mat4, Vec2, Vec3};
+use texturecraft_geom::glam::{Mat4, Vec2, Vec3, Vec4};
 use texturecraft_geom::{Mesh, NO_TRI, OrbitCamera};
 
 const BAND: usize = 16;
@@ -55,14 +55,26 @@ impl EyeDepth {
 
     /// The eye-distance buffer, plus the nearest triangle per pixel when `record_triangles` is set.
     fn rasterize(mesh: &Mesh, camera: &OrbitCamera, width: u32, height: u32, record_triangles: bool) -> EyeDepth {
+        // Capping storage dimensions must not change the camera's projection
+        let projection = camera.proj(width.max(1) as f32 / height.max(1) as f32);
+        let view = camera.view();
+        let view_proj = projection * view;
+        let depth_key = |view_depth: f32| if camera.ortho { view_depth } else { -view_depth.recip() };
+        let inverse_projection = projection.inverse();
+        let clip_depth = |z: f32| {
+            let point = inverse_projection * Vec4::new(0.0, 0.0, z, 1.0);
+            depth_key(-point.z / point.w)
+        };
+        let depth_range = clip_depth(0.0)..=clip_depth(1.0);
         let (width, height) = (width.clamp(1, MAX_SIZE), height.clamp(1, MAX_SIZE));
         let size = Vec2::new(width as f32, height as f32);
-        let view_proj = camera.view_proj(size.x / size.y);
         let eye = camera.eye();
+        // Brush depth closes seams, but expanding triangle IDs can expose hidden faces at silhouettes
+        let edge_tolerance = if record_triangles { 0.0 } else { EDGE_TOLERANCE };
 
-        // Project every vertex once
         let screen: Vec<Option<Vec2>> = mesh.positions.iter().map(|position| screen_point(view_proj, *position, size)).collect();
-        let vertex_distance: Vec<f32> = mesh.positions.iter().map(|position| position.distance(eye)).collect();
+        // Inverse view depth is affine in perspective and avoids the precision loss of normalized clip depth
+        let vertex_depth: Vec<f32> = mesh.positions.iter().map(|position| depth_key(-(view * position.extend(1.0)).z)).collect();
 
         // Bin each triangle into the bands of rows it covers
         let mut bands: Vec<Vec<u32>> = vec![Vec::new(); (height as usize).div_ceil(BAND)];
@@ -75,6 +87,7 @@ impl EyeDepth {
             if bottom <= top || !top.is_finite() || !bottom.is_finite() {
                 continue;
             }
+
             let (first_band, last_band) = (top as usize / BAND, (bottom as usize).saturating_sub(1) / BAND);
             for band in bands.iter_mut().take(last_band + 1).skip(first_band) {
                 band.push(triangle as u32);
@@ -97,7 +110,7 @@ impl EyeDepth {
                     continue;
                 };
 
-                let corner_distance = corners.map(|vertex| vertex_distance.get(vertex).copied().unwrap_or(f32::MAX));
+                let corner_depth = corners.map(|vertex| vertex_depth.get(vertex).copied().unwrap_or(f32::MAX));
                 let area = (*second_point - *first_point).perp_dot(*third_point - *first_point);
                 if area.abs() < MIN_SCREEN_AREA {
                     continue;
@@ -113,21 +126,32 @@ impl EyeDepth {
                         let first_weight = (*third_point - *second_point).perp_dot(sample - *second_point) / area;
                         let second_weight = (*first_point - *third_point).perp_dot(sample - *third_point) / area;
                         let third_weight = 1.0 - first_weight - second_weight;
-                        if first_weight < -EDGE_TOLERANCE || second_weight < -EDGE_TOLERANCE || third_weight < -EDGE_TOLERANCE {
+                        if first_weight < -edge_tolerance || second_weight < -edge_tolerance || third_weight < -edge_tolerance {
                             continue;
                         }
 
-                        let distance = first_weight * corner_distance[0] + second_weight * corner_distance[1] + third_weight * corner_distance[2];
+                        let depth = first_weight * corner_depth[0] + second_weight * corner_depth[1] + third_weight * corner_depth[2];
                         let at = (row - first_row) * width as usize + column;
                         if let Some(slot) = band_dist.get_mut(at)
-                            && distance < *slot
+                            && depth_range.contains(&depth)
+                            && depth < *slot
                         {
-                            *slot = distance;
+                            *slot = depth;
                             if let Some(nearest) = band_triangles.as_deref_mut().and_then(|triangles| triangles.get_mut(at)) {
                                 *nearest = candidate;
                             }
                         }
                     }
+                }
+            }
+
+            // Convert only the winning depths to eye distances for brush visibility queries
+            for (row, distances) in band_dist.chunks_mut(width as usize).enumerate() {
+                let view_y = (1.0 - (first_row as f32 + row as f32 + 0.5) / size.y * 2.0) / projection.y_axis.y;
+                for (column, distance) in distances.iter_mut().enumerate().filter(|(_, distance)| **distance != f32::MAX) {
+                    let view_x = ((column as f32 + 0.5) / size.x * 2.0 - 1.0) / projection.x_axis.x;
+                    let radial_squared = view_x * view_x + view_y * view_y;
+                    *distance = if camera.ortho { (radial_squared + *distance * *distance).sqrt() } else { (radial_squared + 1.0).sqrt() / -*distance };
                 }
             }
         });

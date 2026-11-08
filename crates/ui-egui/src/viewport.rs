@@ -1036,7 +1036,8 @@ fn polygon_fill_input(
         ui.data_mut(|data| data.insert_temp(origin_id, press));
     }
 
-    let origin = ui.data(|data| data.get_temp::<Pos2>(origin_id));
+    // Consume the origin on release so a new press cannot resume the previous rectangle
+    let origin = if released { ui.data_mut(|data| data.remove_temp::<Pos2>(origin_id)) } else { ui.data(|data| data.get_temp::<Pos2>(origin_id)) };
     let pointer = ui.input(|input| input.pointer.latest_pos());
     let (filled, dragged_box) = match (origin, pointer) {
         _ if response.clicked_by(PointerButton::Primary) => (response.interact_pointer_pos().map(|point| fill_at(&mut app.session, point)), None),
@@ -1046,12 +1047,18 @@ fn polygon_fill_input(
             let filled = app.session.end_polygon_fill_box();
             (Some(shown.map(|_| filled)), None)
         }
+        _ if released => {
+            app.session.end_polygon_fill_box();
+            (None, None)
+        }
         (Some(origin), Some(pointer)) => (Some(drag_box(&mut app.session, origin, pointer)), Some(Rect::from_two_pos(origin, pointer))),
         _ => (None, None),
     };
+
     if let Some(Err(error)) = filled {
         app.toast(error.to_string(), true);
     }
+
     dragged_box
 }
 

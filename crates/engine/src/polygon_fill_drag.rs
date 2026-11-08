@@ -2,18 +2,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use texturecraft_core::LayerId;
 use texturecraft_geom::OrbitCamera;
 use texturecraft_geom::glam::Vec2;
 use texturecraft_paint::EyeDepth;
 use texturecraft_texel::TileImage;
 
-use crate::session::Document;
+use crate::session::{Document, StackTarget};
 use crate::triangle_partition::TrianglePartition;
 
 /// A polygon fill box being dragged: the fill shows live and becomes one undo step when the drag ends
 pub(crate) struct PolygonFillDrag {
     /// The texture set it fills
     pub ts: usize,
+    /// The selected layer and content, mask or effect being filled
+    pub target: (Option<LayerId>, StackTarget),
     /// The 3D view's size in pixels, or None for a drag in the 2D view
     pub viewport: Option<Vec2>,
     /// The camera [`PolygonFillDrag::points`] and [`PolygonFillDrag::depth`] were made with

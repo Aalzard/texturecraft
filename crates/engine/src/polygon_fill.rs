@@ -100,13 +100,14 @@ impl Session {
         self.show_box_fill(selected)
     }
 
-    /// Begin a box drag unless one is under way in the same view, texture set and quick mask state; a drag from another one ends first
+    /// Continue a box drag only while its view, paint target and quick mask state still match
     fn start_polygon_fill_drag(&mut self, viewport: Option<Vec2>) -> Result<()> {
         let ts = self.ts();
+        let target = (self.selected_layer(), self.target);
         let quick_mask = self.quick_mask.editing;
-        // A different view size, set or quick mask state starts a new drag; the old one keeps its fill as one step
+        // Finish the old target before another preview can restore its earlier document snapshot
         if let Some(drag) = &self.polygon_fill_drag {
-            if drag.ts == ts && drag.viewport == viewport && drag.quick_mask_before.is_some() == quick_mask {
+            if drag.ts == ts && drag.target == target && drag.viewport == viewport && drag.quick_mask_before.is_some() == quick_mask {
                 // A camera move (a wheel zoom mid-drag) keeps the drag, which then sees the mesh from the new camera
                 if drag.camera != self.camera {
                     let (points, depth) = self.box_space(viewport);
@@ -114,8 +115,10 @@ impl Session {
                         (drag.points, drag.depth, drag.camera, drag.last_box) = (points, depth, self.camera, None);
                     }
                 }
+
                 return Ok(());
             }
+
             self.end_polygon_fill_box();
         }
 
@@ -127,6 +130,7 @@ impl Session {
         };
         self.polygon_fill_drag = Some(PolygonFillDrag {
             ts,
+            target,
             viewport,
             camera: self.camera,
             before: self.doc.clone(),
