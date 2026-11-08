@@ -190,6 +190,7 @@ impl TextureCraftApp {
         app.ui.rename = None;
         app.ui.windows.new_project = false;
         i18n::set_language(&app.ui.prefs.language);
+        app.report_ui_storage_warning();
         export_templates::load_library(&mut app, cc.storage);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -221,6 +222,13 @@ impl TextureCraftApp {
                 self.toast(e.to_string(), true);
                 None
             }
+        }
+    }
+
+    fn report_ui_storage_warning(&mut self) {
+        if let Some(warning) = self.ui_store.take_warning() {
+            self.session.log.push(warning.clone());
+            self.toast_sticky(warning);
         }
     }
 
@@ -492,6 +500,7 @@ impl eframe::App for TextureCraftApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.ui_store.save(&self.ui, storage);
+        self.report_ui_storage_warning();
         export_templates::save_library(self, storage);
     }
 
