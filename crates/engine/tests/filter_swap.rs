@@ -129,7 +129,12 @@ fn a_refused_swap_changes_nothing_and_adds_no_undo_step() {
     execute(&mut s, "effect.set", &json!({"effect": id.0, "blend": "Multiply", "opacity": 0.4, "name": "Flip"})).unwrap();
     let before = effect(&s, id);
 
-    for refused in [json!({"effect": id.0, "filter": "grayscale"}), json!({"effect": id.0, "filter": "nope"}), json!({"effect": id.0, "filter": "levels"})] {
+    for refused in [
+        json!({"effect": id.0, "filter": "grayscale"}),
+        json!({"effect": id.0, "filter": "nope"}),
+        json!({"effect": id.0, "filter": "levels"}),
+        json!({"effect": id.0, "filter": "colorBalance", "shadows": "not a color"}),
+    ] {
         assert!(execute(&mut s, "effect.set", &refused).is_err(), "{refused}");
     }
 
