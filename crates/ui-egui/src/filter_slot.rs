@@ -80,7 +80,7 @@ fn take_open_request(ctx: &egui::Context, effect: u64) -> bool {
 
 /// Where the effect whose slot should open its picker waits
 fn open_request_id() -> egui::Id {
-    egui::Id::new("filter_slot_open_request")
+    egui::Id::unique("filter_slot_open_request")
 }
 
 /// Whether filter effect `effect` sits in a mask rather than the layer content
