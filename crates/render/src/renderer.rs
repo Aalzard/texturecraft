@@ -1239,13 +1239,28 @@ impl Renderer {
         self.content_rev += 1;
     }
 
-    /// Upload the high poly bake mode draws when `id` changed; `None` removes it
-    pub fn set_bake_high(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, mesh: Option<&Mesh>, id: u64) {
+    /// Upload the high poly when `id` changes; remove it on `None` or when its buffers exceed the device limit
+    pub fn set_bake_high(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, mesh: Option<&Mesh>, id: u64) -> Result<(), String> {
         if self.bake_high.as_ref().map(|high| high.id) == mesh.map(|_| id) {
-            return;
+            return Ok(());
         }
 
-        self.bake_high = mesh.map(|mesh| HighPolyGpu {
+        self.bake_high = None;
+        self.content_rev += 1;
+        let Some(mesh) = mesh else { return Ok(()) };
+
+        // Imported high polys can outgrow a viewport buffer even when the CPU baker accepts them
+        let limit = device.limits().max_buffer_size;
+        let buffers = [
+            (mesh.positions.len(), std::mem::size_of::<Vertex>()),
+            (mesh.indices.len(), std::mem::size_of::<u32>()),
+            (mesh.positions.len(), std::mem::size_of::<f32>()),
+        ];
+        if mesh.indices.len() > u32::MAX as usize || buffers.iter().any(|&(count, stride)| count.checked_mul(stride).is_none_or(|bytes| bytes as u64 > limit)) {
+            return Err(format!("High-poly visualization exceeds the GPU buffer limit ({limit} bytes). Use a smaller preview mesh or hide the high poly."));
+        }
+
+        self.bake_high = Some(HighPolyGpu {
             id,
             vertices: upload_buffer(device, queue, "tc_bake_high_vb", bytemuck::cast_slice(&subdivide::vertices(mesh)), wgpu::BufferUsages::VERTEX),
             vertex_count: mesh.positions.len(),
@@ -1253,7 +1268,7 @@ impl Renderer {
             index_count: mesh.indices.len() as u32,
             missed: upload_buffer(device, queue, "tc_bake_high_missed", bytemuck::cast_slice(&vec![0f32; mesh.positions.len()]), wgpu::BufferUsages::VERTEX),
         });
-        self.content_rev += 1;
+        Ok(())
     }
 
     /// Which vertices of high poly `id` the bake's rays miss (1) or reach (0); ignored for another mesh or vertex count
@@ -2119,14 +2134,15 @@ impl Renderer {
         };
         pass.set_bind_group(2, refraction_source, &[]);
         let geometry = self.geometry(mesh, frame);
-        let (highlight, highlight_set) = highlight.unzip();
         let bake = frame.shade.bake.filter(|_| uv_set.is_none());
         let low_poly_shown = bake.is_none_or(|bake| bake.low_poly);
         let low_poly_set = bake.and_then(|bake| bake.only_set).or(uv_set);
+        let (highlight, highlight_set) = highlight.filter(|(_, set)| low_poly_shown && low_poly_set.is_none_or(|only| only == *set)).unzip();
+
         // The wireframe and the highlight draw the mesh's own edges (displaced in the vertex shader too)
         let passes = [
             (Some(mesh_pipeline).filter(|_| low_poly_shown), &geometry.vb, &geometry.ib, &geometry.draws, low_poly_set, 1),
-            (wire, &mesh.geo.vb, &mesh.lines, &mesh.line_draws, uv_set, 1),
+            (wire.filter(|_| low_poly_shown), &mesh.geo.vb, &mesh.lines, &mesh.line_draws, low_poly_set, 1),
             (highlight, &mesh.geo.vb, &mesh.lines, &mesh.line_draws, highlight_set, HIGHLIGHT_SHIFTS),
         ];
         for (pipeline, vertices, indices, ranges, only_set, instances) in passes {

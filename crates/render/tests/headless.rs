@@ -52,6 +52,7 @@ fn setup() -> Option<(Headless, Frame)> {
         eprintln!("skipping: no GPU adapter");
         return None;
     };
+    eprintln!("headless adapter: {:?}", h.device.adapter_info());
     let mesh = primitives::material_ball();
     h.renderer.set_mesh(&h.device, &h.queue, &mesh, MESH_ID);
     h.renderer.set_texture_sets(&h.device, &h.queue, &[((256, 256), 0), ((256, 256), 1)], 2);
@@ -242,7 +243,7 @@ fn bake_visualization_draws_the_high_poly_and_the_cage() {
     for position in &mut high.positions {
         *position += ball_center;
     }
-    h.renderer.set_bake_high(&h.device, &h.queue, Some(&high), HIGH_POLY_ID);
+    h.renderer.set_bake_high(&h.device, &h.queue, Some(&high), HIGH_POLY_ID).unwrap();
     let corners: Vec<Vec3> = high.indices.iter().map(|index| (high.positions[*index as usize] - ball_center) * CAGE_SCALE + ball_center).collect();
     h.renderer.set_bake_cage(&h.device, &h.queue, 0, Some((&corners, &CAGE_EDGES)), CAGE_TOPOLOGY);
     let bake = BakeVisualization { high_poly: false, cage: false, uv_seams: false, low_poly: true, only_set: None };
@@ -289,6 +290,55 @@ fn bake_visualization_draws_the_high_poly_and_the_cage() {
     h.renderer.set_bake_cage(&h.device, &h.queue, 0, Some((&grown, &CAGE_EDGES)), CAGE_TOPOLOGY);
     let bigger = only(&mut h, BakeVisualization { cage: true, ..bake }, "bake_cage_grown");
     assert_ne!(caged.px, bigger.px, "the cage grew");
+}
+
+#[test]
+fn oversized_bake_high_poly_leaves_the_view_renderable() {
+    let Some((mut headless, frame)) = setup() else { return };
+
+    let high = primitives::sphere(0.5, 16, 8);
+    headless.renderer.set_bake_high(&headless.device, &headless.queue, Some(&high), 1).unwrap();
+    let limit = headless.device.limits().max_buffer_size;
+    // The viewport vertex contains position, normal, tangent and UV: twelve f32 values
+    let vertex_count = limit as usize / (12 * std::mem::size_of::<f32>()) + 1;
+    let oversized = texturecraft_geom::Mesh { positions: vec![Vec3::ZERO; vertex_count], ..Default::default() };
+    let error = headless.renderer.set_bake_high(&headless.device, &headless.queue, Some(&oversized), 2).unwrap_err();
+    assert!(error.contains("GPU buffer limit"), "{error}");
+
+    headless.renderer.set_bake_high_missed(&headless.queue, 2, &[]);
+    let bake = BakeVisualization { high_poly: true, cage: false, uv_seams: false, low_poly: false, only_set: None };
+    let cleared = render(&mut headless, &shaded(&frame, |shade| shade.bake = Some(bake)), "bake_oversized_cleared");
+    let background = render(&mut headless, &Frame { visible: vec![false, false], ..frame.clone() }, "bake_oversized_background");
+    assert_same(&cleared, &background, "an oversized replacement must not leave the previous high poly visible");
+    headless.renderer.set_bake_high(&headless.device, &headless.queue, Some(&high), 3).unwrap();
+    let recovered = render(&mut headless, &shaded(&frame, |shade| shade.bake = Some(bake)), "bake_oversized_recovered");
+    assert_ne!(recovered.px, background.px, "a later valid high poly still draws");
+}
+
+#[test]
+fn bake_low_poly_visibility_also_filters_its_wireframe() {
+    let Some((mut headless, frame)) = setup() else { return };
+
+    let bake = BakeVisualization { high_poly: false, cage: false, uv_seams: false, low_poly: false, only_set: None };
+    let hidden = shaded(&frame, |shade| {
+        shade.bake = Some(bake);
+        shade.wireframe_3d = true;
+        shade.highlight = Some(texturecraft_render::SetHighlight { set: 0, color: [1.0, 0.5, 0.0] });
+    });
+    let background = render(&mut headless, &Frame { visible: vec![false, false], ..frame.clone() }, "bake_wire_background");
+    let hidden_wire = render(&mut headless, &hidden, "bake_wire_hidden");
+    assert_same(&hidden_wire, &background, "hiding the project mesh also hides its wireframe and highlight");
+
+    for texture_set in [0, 1] {
+        let selected = shaded(&hidden, |shade| {
+            shade.bake = Some(BakeVisualization { low_poly: true, only_set: Some(texture_set), ..bake });
+            shade.highlight = Some(texturecraft_render::SetHighlight { set: 1 - texture_set, color: [1.0, 0.5, 0.0] });
+        });
+        let expected = Frame { visible: vec![texture_set == 0, texture_set == 1], ..selected.clone() };
+        let actual = render(&mut headless, &selected, &format!("bake_wire_selected_{texture_set}"));
+        let expected = render(&mut headless, &expected, &format!("bake_wire_expected_{texture_set}"));
+        assert_same(&actual, &expected, "the wireframe and highlight respect the selected texture set");
+    }
 }
 
 #[test]

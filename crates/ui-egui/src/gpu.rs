@@ -351,8 +351,14 @@ impl CallbackTrait for ViewCallback {
             for (texture_set, size, bytes) in &sync.aux {
                 gpu.renderer.upload_aux(device, queue, *texture_set, *size, bytes);
             }
-            if let Some((high, id)) = &sync.bake_high {
-                gpu.renderer.set_bake_high(device, queue, high.as_deref(), *id);
+            if let Some((high, id)) = &sync.bake_high
+                && let Err(error) = gpu.renderer.set_bake_high(device, queue, high.as_deref(), *id)
+            {
+                let mut reports = gpu.reports.lock().unwrap_or_else(PoisonError::into_inner);
+                if reports.errors.len() < MAX_GPU_ERRORS && !reports.errors.contains(&error) {
+                    reports.errors.push(error);
+                }
+                gpu.ctx.request_repaint();
             }
             if let Some((id, missed)) = &sync.bake_high_missed {
                 gpu.renderer.set_bake_high_missed(queue, *id, missed);
