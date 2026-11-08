@@ -167,7 +167,10 @@ mod tests {
         for id in ["steel", "nope"] {
             let context = egui::Context::default();
             for _ in 0..3 {
-                let _ = context.run_pass(Default::default(), |_| {});
+                let mut output = context.run_pass(Default::default(), |_| {});
+
+                // No renderer consumes the texture updates in this scheduling test
+                output.textures_delta.clear();
             }
             assert!(!context.has_requested_repaint(), "the UI is idle before the request");
 
