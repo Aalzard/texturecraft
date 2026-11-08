@@ -5,7 +5,7 @@ use texturecraft_core::{BakedMap, EffectKind, LayerId};
 use texturecraft_geom::glam::Vec2;
 use texturecraft_geom::surface_at;
 
-use crate::commands::{CommandSpec, bad, f32p, has_layer, u64p};
+use crate::commands::{CommandSpec, bad, f32p, has_layer};
 use crate::mask_cmds::effect_id;
 use crate::tool_cmds::viewport_of;
 use crate::{Result, Session, cmd};
@@ -46,8 +46,8 @@ fn colors_param(list: &Value) -> Result<Vec<[f32; 3]>> {
 
     items
         .iter()
-        .map(|item| match finite_numbers(item).as_deref() {
-            Some([red, green, blue]) => Ok([*red, *green, *blue].map(|value| (value as f32).clamp(0.0, 1.0))),
+        .map(|item| match finite_numbers::<3>(item) {
+            Some(color) => Ok(color.map(|value| value.clamp(0.0, 1.0) as f32)),
             _ => Err(bad(CMD, "each color must be [r, g, b] with finite numbers")),
         })
         .collect()
@@ -65,7 +65,12 @@ fn pick(session: &mut Session, params: &Value) -> Result<Value> {
         None => return Err(bad(CMD, format!("no effect {}", effect.0))),
     };
 
-    let index = match u64p(params, "index") {
+    let index = params
+        .get("index")
+        .filter(|index| !index.is_null())
+        .map(|index| index.as_u64().ok_or_else(|| bad(CMD, "`index` must be a non-negative integer")))
+        .transpose()?;
+    let index = match index {
         Some(index) => Some(usize::try_from(index).ok().filter(|index| *index < color_count).ok_or_else(|| bad(CMD, format!("no color {index} to replace")))?),
         None if color_count >= MAX_SELECTED_COLORS => return Err(bad(CMD, format!("a color selection holds at most {MAX_SELECTED_COLORS} colors"))),
         None => None,
@@ -138,13 +143,18 @@ fn visible_surface(session: &Session, screen: Vec2, viewport: Vec2) -> Option<(V
 
 /// A `[u, v]` param of finite numbers
 fn uv_param(uv: &Value) -> Result<Vec2> {
-    match finite_numbers(uv).as_deref() {
-        Some([u, v]) => Ok(Vec2::new(*u as f32, *v as f32)),
+    match finite_numbers::<2>(uv) {
+        Some([u, v]) => Ok(Vec2::new(u as f32, v as f32)),
         _ => Err(bad("effect.colorSelection.pick", "`uv` must be [u, v] with finite numbers")),
     }
 }
 
-/// The numbers of a list param, or None when any entry is not a finite number
-fn finite_numbers(list: &Value) -> Option<Vec<f64>> {
-    list.as_array()?.iter().map(|value| value.as_f64().filter(|number| number.is_finite())).collect()
+/// Validate the shape before reading components, without allocating for oversized input
+fn finite_numbers<const N: usize>(list: &Value) -> Option<[f64; N]> {
+    let items: &[Value; N] = list.as_array()?.as_slice().try_into().ok()?;
+    let mut numbers = [0.0; N];
+    for (number, item) in numbers.iter_mut().zip(items) {
+        *number = item.as_f64().filter(|value| value.is_finite())?;
+    }
+    Some(numbers)
 }

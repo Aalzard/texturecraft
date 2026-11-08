@@ -22,8 +22,8 @@ fn id_map_png() -> Vec<u8> {
     bytes
 }
 
-/// The app with a selected color selection of three colors on a fill layer's mask
-fn app_with_color_selection(with_id_map: bool) -> (Harness<'static, TextureCraftApp>, LayerId) {
+/// A selected color selection of three colors on a fill layer's mask
+fn color_selection_session(with_id_map: bool) -> (texturecraft_engine::Session, LayerId) {
     let mut session = texturecraft_engine::sample_session(256, 64).unwrap();
     if with_id_map {
         let image = session.import_resource_bytes("id.png", id_map_png()).unwrap();
@@ -38,7 +38,11 @@ fn app_with_color_selection(with_id_map: bool) -> (Harness<'static, TextureCraft
     let effect = session.doc.project.layer(layer).unwrap().mask.as_ref().unwrap().effects[0].id;
     execute(&mut session, "effect.set", &json!({"effect": effect.0, "colors": [FIRST, SECOND, THIRD]})).unwrap();
     session.target = StackTarget::Effect(effect);
+    (session, effect)
+}
 
+fn app_with_color_selection(with_id_map: bool) -> (Harness<'static, TextureCraftApp>, LayerId) {
+    let (session, effect) = color_selection_session(with_id_map);
     let mut harness = Harness::builder().with_size(egui::vec2(1600.0, 1400.0)).build_eframe(|cc| TextureCraftApp::new(cc, session));
     harness.run_steps(4);
     (harness, effect)
@@ -122,4 +126,144 @@ fn without_an_id_map_picking_is_off_and_a_warning_says_why() {
     harness.get_by_label(&pick_color_label()).click();
     harness.run_steps(3);
     assert!(harness.state().picking_id_color.is_none());
+}
+
+fn row_button(harness: &Harness<'_, TextureCraftApp>, readout: &str, label: &str) -> Pos2 {
+    let row_y = harness.get_by_label(readout).rect().center().y;
+    harness.query_all_by_label(label).find(|button| (button.rect().center().y - row_y).abs() < 8.0).unwrap().rect().center()
+}
+
+#[test]
+fn removing_a_row_cancels_a_pending_replacement() {
+    let (mut harness, effect) = app_with_color_selection(true);
+    let repick = row_button(&harness, "R: 10", "Pick color");
+    click_at(&mut harness, repick);
+    assert_eq!(harness.state().picking_id_color.unwrap().index, Some(1));
+
+    let remove = row_button(&harness, "R: 200", "Remove");
+    click_at(&mut harness, remove);
+
+    assert_eq!(colors(&harness, effect), vec![SECOND, THIRD]);
+    assert!(harness.state().picking_id_color.is_none(), "removing a row must not leave a replacement targeting a different color");
+    assert_eq!(harness.state().session.view, ViewMode::Material);
+}
+
+#[test]
+fn escape_cancels_the_pick_without_editing_colors() {
+    let (mut harness, effect) = app_with_color_selection(true);
+    harness.get_by_label(&pick_color_label()).click();
+    harness.run_steps(3);
+    let history = harness.state().session.history_labels();
+
+    harness.key_press(egui::Key::Escape);
+    harness.run_steps(3);
+
+    assert!(harness.state().picking_id_color.is_none());
+    assert_eq!(harness.state().session.view, ViewMode::Material);
+    assert_eq!(colors(&harness, effect), vec![FIRST, SECOND, THIRD]);
+    assert_eq!(harness.state().session.history_labels(), history);
+}
+
+#[test]
+fn picking_from_the_popup_closes_it_before_the_viewport_click() {
+    use texturecraft_ui_egui::properties_popup::{self, PropertiesPopup};
+
+    let (mut harness, effect) = app_with_color_selection(true);
+    let bounds = harness.state().viewport_rect;
+    harness.state_mut().properties_popup = Some(PropertiesPopup::Open { at: bounds.center() - egui::vec2(100.0, 100.0), bounds });
+    harness.run_steps(4);
+    let popup = harness.ctx.memory(|memory| memory.area_rect(properties_popup::area_id())).unwrap();
+    let pick = harness.query_all_by_label(&pick_color_label()).find(|button| popup.contains_rect(button.rect())).unwrap().rect().center();
+    click_at(&mut harness, pick);
+
+    assert!(harness.state().picking_id_color.is_some());
+    let center = harness.state().viewport_rect.center();
+    assert!(popup.contains(center), "pick a point the popup would otherwise cover");
+    click_at(&mut harness, center);
+    assert_eq!(colors(&harness, effect).len(), 4, "the next viewport click must pick, even under the former popup");
+    assert_eq!(harness.state().properties_popup, None);
+}
+
+#[test]
+fn a_2d_pick_replaces_the_chosen_row_and_undo_restores_it() {
+    use texturecraft_ui_egui::state::ViewLayout;
+
+    let (mut harness, effect) = app_with_color_selection(true);
+    harness.state_mut().ui.layout = ViewLayout::Only3D;
+    harness.run_steps(3);
+    let center = harness.state().viewport_rect.center();
+    harness.state_mut().ui.layout = ViewLayout::Only2D;
+    harness.run_steps(3);
+    let repick = row_button(&harness, "R: 10", "Pick color");
+    click_at(&mut harness, repick);
+    click_at(&mut harness, center);
+
+    assert_eq!(colors(&harness, effect), vec![FIRST, ID_PART.map(|channel| channel as f32 / 255.0), THIRD]);
+    assert_eq!(harness.state().session.view, ViewMode::Material);
+    assert!(!harness.state().session.stroke_active());
+    harness.state_mut().session.undo().unwrap();
+    assert_eq!(colors(&harness, effect), vec![FIRST, SECOND, THIRD]);
+}
+
+#[test]
+fn deselection_cancels_picking_and_preserves_a_view_chosen_meanwhile() {
+    let (mut harness, effect) = app_with_color_selection(true);
+    harness.get_by_label(&pick_color_label()).click();
+    harness.run_steps(3);
+    execute(&mut harness.state_mut().session, "viewport.view", &json!({"mode": "uvChecker"})).unwrap();
+    harness.state_mut().session.target = StackTarget::Content;
+    harness.run_steps(3);
+
+    assert!(harness.state().picking_id_color.is_none());
+    assert_eq!(harness.state().session.view, ViewMode::UvChecker);
+    assert_eq!(colors(&harness, effect), vec![FIRST, SECOND, THIRD]);
+}
+
+#[test]
+#[ignore = "requires a GPU adapter; set TC_UI_SNAPSHOTS to save the rendered views"]
+fn color_selection_snapshots_and_quick_mask_pick() {
+    let (session, _) = color_selection_session(true);
+    let mut harness = Harness::builder().with_size(egui::vec2(1600.0, 960.0)).with_pixels_per_point(1.0).wgpu().build_eframe(|context| {
+        let mut app = TextureCraftApp::new(context, session);
+        app.ui.layout = texturecraft_ui_egui::state::ViewLayout::Only3D;
+        app
+    });
+    let adapter = harness.state().render_state.as_ref().unwrap().adapter.get_info();
+    eprintln!("Offscreen adapter: {adapter:?}");
+
+    let save = |harness: &mut Harness<'_, TextureCraftApp>, name: &str| {
+        harness.run_steps(8);
+        let image = harness.render().unwrap();
+        if let Some(directory) = std::env::var_os("TC_UI_SNAPSHOTS") {
+            let path = std::path::Path::new(&directory).join(format!("{name}.png"));
+            image.save(&path).unwrap();
+            eprintln!("wrote {}", path.display());
+        }
+        image
+    };
+
+    save(&mut harness, "color-selection-editor");
+    harness.get_by_label(&pick_color_label()).click();
+    let center = harness.state().viewport_rect.center();
+    harness.hover_at(center + egui::vec2(80.0, 0.0));
+    let expected = save(&mut harness, "color-selection-picking");
+    execute(&mut harness.state_mut().session, "viewport.quickMask.edit", &json!({"editing": true})).unwrap();
+    let with_quick_mask = save(&mut harness, "color-selection-picking-quick-mask");
+    assert_eq!(
+        with_quick_mask.get_pixel(center.x as u32, center.y as u32),
+        expected.get_pixel(center.x as u32, center.y as u32),
+        "picking must display the ID map while quick-mask editing is enabled"
+    );
+
+    click_at(&mut harness, center);
+    assert!(harness.state().session.quick_mask.editing, "picking preserves quick-mask editing");
+    save(&mut harness, "color-selection-quick-mask-restored");
+    execute(&mut harness.state_mut().session, "viewport.quickMask.edit", &json!({"editing": false})).unwrap();
+    harness.state_mut().ui.layout = texturecraft_ui_egui::state::ViewLayout::Only2D;
+    harness.get_by_label(&pick_color_label()).click();
+    save(&mut harness, "color-selection-picking-2d");
+    click_at(&mut harness, center);
+    assert!(harness.state().picking_id_color.is_none());
+    execute(&mut harness.state_mut().session, "textureSet.meshMap.clear", &json!({"map": "id"})).unwrap();
+    save(&mut harness, "color-selection-no-id-map");
 }

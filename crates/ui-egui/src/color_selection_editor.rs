@@ -67,6 +67,8 @@ pub fn color_selection_properties(app: &mut TextureCraftApp, ui: &mut Ui, effect
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let remove = ui.add_enabled_ui(colors.len() > 1, |ui| icon_button(ui, ic::MINUS, tr("Remove"), false, ROW_BUTTON_SIZE)).inner;
                     if remove.clicked() {
+                        // Removing a row changes the indices of pending replacements
+                        IdColorPick::end(app);
                         let remaining: Vec<[f32; 3]> = colors.iter().enumerate().filter(|(kept, _)| *kept != index).map(|(_, kept)| *kept).collect();
                         app.run("effect.set", json!({"effect": effect.0, "colors": remaining}));
                     }

@@ -27,6 +27,7 @@ impl IdColorPick {
             None => app.session.view,
         };
 
+        app.properties_popup = None;
         app.picking_id_color = Some(IdColorPick { effect, index, previous_view });
         app.run("viewport.view", json!({"mode": format!("map:{}", BakedMap::Id.id())}));
     }
@@ -34,6 +35,7 @@ impl IdColorPick {
     /// Leaves pick mode, returning to the earlier view unless the user chose another meanwhile
     pub fn end(app: &mut TextureCraftApp) {
         let Some(pick) = app.picking_id_color.take() else { return };
+
         if app.session.view == ViewMode::MeshMap(BakedMap::Id) {
             app.run("viewport.view", view_params(pick.previous_view));
         }
@@ -42,6 +44,7 @@ impl IdColorPick {
     /// Picks at `point` (`x`/`y`/`viewport` or `uv` params) and leaves pick mode
     pub fn pick_at(app: &mut TextureCraftApp, point: Value) {
         let Some(pick) = app.picking_id_color else { return };
+
         let mut params = json!({"effect": pick.effect.0, "index": pick.index});
         if let (Some(target), Some(source)) = (params.as_object_mut(), point.as_object()) {
             target.extend(source.clone());
@@ -54,6 +57,7 @@ impl IdColorPick {
     /// An eyedropper in place of the pointer while it is over `rect`, its tip on the hotspot
     pub fn draw_cursor(ui: &egui::Ui, rect: egui::Rect) {
         let Some(pointer) = ui.ctx().pointer_hover_pos().filter(|pointer| rect.contains(*pointer)) else { return };
+
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
 
         // The glyph's tip is its bottom-left corner; a dark outline keeps it readable on any ID color
@@ -69,6 +73,7 @@ impl IdColorPick {
     /// Ends pick mode once its effect is no longer selected or painting mode is left
     pub fn end_when_stale(app: &mut TextureCraftApp) {
         let Some(pick) = app.picking_id_color else { return };
+
         if app.session.target != StackTarget::Effect(pick.effect) || app.ui.mode != Mode::Painting {
             IdColorPick::end(app);
         }

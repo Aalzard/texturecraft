@@ -195,3 +195,115 @@ fn a_hidden_texture_set_does_not_block_a_pick_behind_it() {
     execute(&mut session, "textureSet.visible", &json!({"ts": ball, "visible": true})).unwrap();
     assert!(pick_at(&mut session, y).unwrap_err().to_string().contains("another texture set"), "a shown ball still blocks it");
 }
+
+#[test]
+fn malformed_replacement_indices_are_rejected_without_editing() {
+    let mut session = session();
+    let (_, effect) = masked_layer(&mut session, true);
+    let history = session.history_labels();
+
+    for index in [json!(-1), json!(0.4), json!("0"), json!(true), json!([])] {
+        let result = execute(&mut session, "effect.colorSelection.pick", &json!({"effect": effect.0, "uv": [0.25, 0.25], "index": index}));
+        assert!(result.is_err(), "invalid index {index} was accepted: {result:?}");
+        assert_eq!(colors(&session, effect), vec![NO_PART]);
+        assert_eq!(session.history_labels(), history);
+    }
+}
+
+#[test]
+fn the_color_limit_rejects_additions_but_allows_replacement() {
+    let mut session = session();
+    let (_, effect) = masked_layer(&mut session, true);
+    let full = vec![NO_PART; 256];
+    execute(&mut session, "effect.set", &json!({"effect": effect.0, "colors": full})).unwrap();
+    let history = session.history_labels();
+    let project = session.doc.project.clone();
+
+    for params in [json!({"effect": effect.0, "uv": [0.25, 0.25]}), json!({"effect": effect.0, "uv": [0.25, 0.25], "index": 256})] {
+        assert!(execute(&mut session, "effect.colorSelection.pick", &params).is_err());
+        assert_eq!(colors(&session, effect), full);
+        assert_eq!(session.history_labels(), history);
+    }
+    assert!(execute(&mut session, "effect.set", &json!({"effect": effect.0, "colors": vec![NO_PART; 257], "name": "Invalid edit"})).is_err());
+    assert_eq!(session.history_labels(), history);
+    assert_eq!(session.doc.project, project, "invalid colors also roll back edits to other fields");
+
+    execute(&mut session, "effect.colorSelection.pick", &json!({"effect": effect.0, "uv": [0.25, 0.25], "index": 255})).unwrap();
+    assert_eq!(colors(&session, effect).len(), 256);
+    assert_close(colors(&session, effect)[255], stored(TOP_LEFT_ID));
+}
+
+#[test]
+fn inspect_exposes_the_selected_colors_and_tolerance() {
+    let mut session = session();
+    let (layer, effect) = masked_layer(&mut session, true);
+    execute(&mut session, "effect.colorSelection.pick", &json!({"effect": effect.0, "uv": [0.25, 0.25]})).unwrap();
+    execute(&mut session, "effect.set", &json!({"effect": effect.0, "tolerance": 0.25})).unwrap();
+
+    let inspected = execute(&mut session, "project.inspect", &Value::Null).unwrap();
+    let layer = inspected["layers"].as_array().unwrap().iter().find(|found| found["id"] == layer.0).unwrap();
+    let found = &layer["mask"]["effects"][0];
+    assert_eq!(found["colors"], json!(colors(&session, effect)));
+    assert_eq!(found["tolerance"], json!(0.25));
+}
+
+#[test]
+fn picks_use_the_working_texel_on_a_smaller_uv_tile() {
+    let mut session = Session::new_project("UV tiles", primitives::udim_plane(), "builtin:udim_plane", None, 256).unwrap();
+    for tile in [1001, 1002] {
+        session.import_resource_bytes(&format!("id.{tile}.png"), id_map_png()).unwrap();
+    }
+    execute(&mut session, "textureSet.meshMap.set", &json!({"map": "id", "image": "id.1001.png"})).unwrap();
+    let (layer, effect) = masked_layer(&mut session, false);
+    execute(&mut session, "textureSet.tile.resolution", &json!({"tile": 1002, "resolution": 128})).unwrap();
+    execute(&mut session, "effect.set", &json!({"effect": effect.0, "tolerance": 0.0})).unwrap();
+    let size = session.doc.project.texture_sets[0].size();
+    let uv = [0.625, 0.25];
+    let texel = ((uv[0] * size.0 as f32) as u32, (uv[1] * size.1 as f32) as u32);
+    assert_eq!(session.mask_at(layer, &[texel]).unwrap(), vec![0.0]);
+
+    execute(&mut session, "effect.colorSelection.pick", &json!({"effect": effect.0, "uv": uv})).unwrap();
+    assert_eq!(session.mask_at(layer, &[texel]).unwrap(), vec![1.0]);
+    let before = colors(&session, effect);
+    let result = execute(&mut session, "effect.colorSelection.pick", &json!({"effect": effect.0, "uv": [0.9, 0.8]}));
+    assert!(result.unwrap_err().to_string().contains("no ID color"), "unused tile space has no sample");
+    assert_eq!(colors(&session, effect), before);
+}
+
+#[test]
+#[ignore = "release benchmark; run with --ignored --nocapture --test-threads=1"]
+fn benchmark_color_selection_edits() {
+    use std::time::{Duration, Instant};
+
+    const SAMPLES: u32 = 10;
+    for resolution in [256, 1024] {
+        let started = Instant::now();
+        let mut session = Session::new_project("benchmark", primitives::sphere(1.0, 48, 24), "builtin:sphere", None, resolution).unwrap();
+        let (_, effect) = masked_layer(&mut session, true);
+        session.update();
+        let construction = started.elapsed();
+
+        for count in [1, 256] {
+            execute(&mut session, "effect.set", &json!({"effect": effect.0, "colors": vec![NO_PART; count]})).unwrap();
+            session.update();
+            let params = json!({"effect": effect.0, "uv": [0.25, 0.25], "index": count - 1});
+            let (mut command_time, mut composite_time) = (Duration::ZERO, Duration::ZERO);
+            for _ in 0..SAMPLES {
+                let started = Instant::now();
+                execute(&mut session, "effect.colorSelection.pick", &params).unwrap();
+                command_time += started.elapsed();
+                let started = Instant::now();
+                session.update();
+                composite_time += started.elapsed();
+                execute(&mut session, "edit.undo", &Value::Null).unwrap();
+                session.update();
+            }
+            println!(
+                "{resolution}x{resolution}, {count} colors, {SAMPLES} samples: construction {construction:.3?}; pick {:.3?}; composite {:.3?}; session memory {} bytes",
+                command_time / SAMPLES,
+                composite_time / SAMPLES,
+                session.memory().total()
+            );
+        }
+    }
+}

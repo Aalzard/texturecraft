@@ -343,6 +343,8 @@ pub fn shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context) {
 
         if !popup_open && app.properties_popup.is_some() && input.consume_key(Modifiers::NONE, Key::Escape) {
             app.properties_popup = None;
+        } else if !popup_open && app.picking_id_color.is_some() && input.consume_key(Modifiers::NONE, Key::Escape) {
+            crate::id_color_pick::IdColorPick::end(app);
         } else if app.ui.mode == Mode::Painting && !popup_open && input.consume_key(Modifiers::NONE, Key::Escape) {
             app.session.cancel_stroke();
             app.session.tool.path.points.clear();
