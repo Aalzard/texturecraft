@@ -5,7 +5,6 @@ use std::collections::BTreeSet;
 use egui::{RichText, Sense, Ui, vec2};
 use serde_json::{Value, json};
 use texturecraft_engine::core::NormalFormat;
-use texturecraft_engine::template_cmds::builtin_templates;
 
 use crate::TextureCraftApp;
 use crate::i18n::{tr, trf};
@@ -65,13 +64,7 @@ pub(crate) fn advanced_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
 
 fn normal_format_combo(app: &mut TextureCraftApp, ui: &mut Ui) {
     let new_project = &mut app.ui.new_project;
-    let user_templates = app.session.templates.list.iter().cloned();
-    let template_format = builtin_templates()
-        .into_iter()
-        .chain(user_templates)
-        .find(|template| template.name == new_project.template)
-        .map(|template| template.normal_format)
-        .unwrap_or_default();
+    let template_format = app.session.template(&new_project.template).map(|template| template.normal_format).unwrap_or_default();
     let current = new_project.normal_format.unwrap_or(template_format);
     let current_label = NORMAL_FORMATS.iter().find(|(format, _, _)| *format == current).map_or("", |(_, _, label)| label);
     egui::ComboBox::from_id_salt("np_normal_format").width(COMBO_WIDTH).selected_text(current_label).show_ui(ui, |ui| {

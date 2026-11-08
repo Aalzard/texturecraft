@@ -80,3 +80,74 @@ fn create_imports_the_listed_maps_in_the_chosen_normal_format() {
     assert!(state.ui.new_project.baked_maps.is_empty(), "the next new project starts with no files");
     assert_eq!(state.session.undo_label(), Some("Import baked maps"));
 }
+
+#[test]
+fn a_failed_import_keeps_the_file_list_and_created_project() {
+    let mut h = harness();
+    let paths = bake_files("failure", &["Ball_normal.png", "Base_ao.png"]);
+    std::fs::write(&paths[1], b"not an image").unwrap();
+    add_baked_map_files(&mut h.state_mut().ui.new_project, paths.clone());
+    h.state_mut().ui.new_project.name = "Import failure".to_string();
+    h.run_steps(3);
+
+    h.get_by_label("Create").click();
+    h.run_steps(3);
+
+    let app = h.state();
+    assert!(!app.ui.windows.new_project);
+    assert_eq!(app.session.doc.project.name, "Import failure");
+    assert_eq!(app.ui.new_project.baked_maps, paths);
+    assert!(app.session.doc.resources.is_empty() && app.session.images.is_empty());
+    assert!(app.session.doc.baked.values().all(|baked| baked.maps.is_empty()));
+    let toast = app.toasts.last().unwrap();
+    assert!(toast.error && toast.text.contains("Base_ao.png"), "{}", toast.text);
+}
+
+#[test]
+#[ignore = "offscreen GPU snapshots; set TC_UI_SNAPSHOTS to an output directory"]
+fn new_project_baked_maps_snapshots() {
+    let output_dir = PathBuf::from(std::env::var_os("TC_UI_SNAPSHOTS").expect("set TC_UI_SNAPSHOTS"));
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let session = texturecraft_engine::sample_session(256, 64).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 960.0)).with_pixels_per_point(1.0).wgpu().build_eframe(|cc| {
+        let adapter = cc.wgpu_render_state.as_ref().unwrap().adapter.get_info();
+        eprintln!("snapshot adapter: {adapter:?}");
+        TextureCraftApp::new(cc, session)
+    });
+    h.state_mut().ui.windows.new_project = true;
+    h.state_mut().ui.new_project.resolution = 256;
+    h.run_steps(6);
+    h.get_by_label("Advanced settings").click();
+    h.run_steps(6);
+    h.get_by_label("Import baked maps").click();
+    h.run_steps(6);
+    let paths = bake_files("snapshots", &["Ball_normal.png", "Base_ao.png", "Ball_notes.png"]);
+    add_baked_map_files(&mut h.state_mut().ui.new_project, paths);
+    h.state_mut().ui.new_project.normal_format = Some(NormalFormat::DirectX);
+    h.run_steps(6);
+    h.render().unwrap().save(output_dir.join("new-project-baked-maps.png")).unwrap();
+    h.set_size(egui::vec2(1024.0, 768.0));
+    h.run_steps(6);
+    h.render().unwrap().save(output_dir.join("new-project-baked-maps-small.png")).unwrap();
+    h.set_size(egui::vec2(1600.0, 960.0));
+    h.run_steps(6);
+    h.get_by_label("Create").click();
+    h.run_steps(3);
+    assert!(h.state().session.doc.baked[&0].maps.contains_key(&BakedMap::Normal));
+    h.render().unwrap().save(output_dir.join("new-project-imported.png")).unwrap();
+}
+
+#[test]
+fn normal_format_preview_uses_the_same_template_lookup_as_creation() {
+    let mut h = harness();
+    h.state_mut().session.templates.dir = None;
+    h.state_mut().run("textureSet.settings", serde_json::json!({"normalFormat": "directX"})).unwrap();
+    h.state_mut().run("project.template.save", serde_json::json!({"name": "Custom DirectX"})).unwrap();
+    h.state_mut().ui.new_project.template = "custom directx".to_string();
+    h.run_steps(3);
+
+    h.get_by_value("DirectX");
+    h.get_by_label("Create").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc.project.normal_format, NormalFormat::DirectX);
+}

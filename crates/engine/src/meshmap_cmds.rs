@@ -60,21 +60,7 @@ pub(crate) fn use_images(s: &mut Session, cmd: &str, ts: usize, map: BakedMap, i
         return Err(bad(cmd, format!("no image for UV tile {tile}")));
     }
 
-    // Every mesh map of a set shares one size: the other maps', or a bake's (a bake-size block per atlas tile)
-    let (columns, rows) = grid.map_or((1, 1), |grid| (grid.cols, grid.rows));
-    let (width, height) = match s.doc.baked.get(&ts).filter(|baked| !baked.maps.is_empty()) {
-        Some(baked) => (baked.resolution, baked.maps.keys().next().map_or(baked.resolution, |other| baked.height(*other))),
-        None => {
-            let (width, height) = texture_set.bake.common.output_size();
-            (width.saturating_mul(columns), height.saturating_mul(rows))
-        }
-    };
-    let empty = width == 0 || height == 0;
-    let too_many_texels = u64::from(width) * u64::from(height) > texturecraft_bake::MAX_TEXELS;
-    let too_wide = grid.is_none() && width > MAX_RESOLUTION;
-    if empty || too_many_texels || too_wide {
-        return Err(bad(cmd, format!("mesh map size {width} × {height} is too large or empty")));
-    }
+    let (width, height) = image_map_size(s, cmd, ts)?;
 
     let flip_green = map == BakedMap::Normal && s.doc.project.normal_format == NormalFormat::DirectX;
     let data = match (grid, images.values().next()) {
@@ -92,6 +78,30 @@ pub(crate) fn use_images(s: &mut Session, cmd: &str, ts: usize, map: BakedMap, i
     entry.maps.insert(map, Arc::new(data));
     s.doc.project.texture_set_mut(ts)?.baked.insert(map);
     Ok(width)
+}
+
+/// Dimensions shared by imported mesh maps, checked before allocating the resampled pixels
+pub(crate) fn image_map_size(s: &Session, cmd: &str, ts: usize) -> Result<(u32, u32)> {
+    let texture_set = s.doc.project.texture_set(ts)?;
+    let grid = texture_set.tile_grid();
+
+    // Every mesh map of a set shares one size: the other maps', or a bake's (a bake-size block per atlas tile)
+    let (columns, rows) = grid.map_or((1, 1), |grid| (grid.cols, grid.rows));
+    let (width, height) = match s.doc.baked.get(&ts).filter(|baked| !baked.maps.is_empty()) {
+        Some(baked) => (baked.resolution, baked.maps.keys().next().map_or(baked.resolution, |other| baked.height(*other))),
+        None => {
+            let (width, height) = texture_set.bake.common.output_size();
+            (width.saturating_mul(columns), height.saturating_mul(rows))
+        }
+    };
+    let empty = width == 0 || height == 0;
+    let too_many_texels = u64::from(width) * u64::from(height) > texturecraft_bake::MAX_TEXELS;
+    let too_wide = grid.is_none() && width > MAX_RESOLUTION;
+    if empty || too_many_texels || too_wide {
+        return Err(bad(cmd, format!("mesh map size {width} × {height} is too large or empty")));
+    }
+
+    Ok((width, height))
 }
 
 /// The image of every UV tile of a set: `name` with its tile number (`ao.1001.png`) swapped for each tile's
