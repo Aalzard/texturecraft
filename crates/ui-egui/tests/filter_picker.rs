@@ -66,16 +66,64 @@ fn escape_closes_the_picker_without_changes() {
     assert!(matches!(kind(&harness, effect), EffectKind::Filter(Filter::Invert)));
 }
 
-#[test]
-fn add_filter_adds_a_filter_and_selects_it() {
-    let (mut harness, _) = app_with_invert();
+/// Opens the wand's Add effect menu and clicks Add filter
+fn add_filter_from_the_wand(harness: &mut Harness<'_, TextureCraftApp>) {
     harness.get_by_label(egui_phosphor::regular::MAGIC_WAND).click();
     harness.run_steps(3);
 
     harness.get_by_label("Add filter").click();
     harness.run_steps(3);
+}
+
+#[test]
+fn add_filter_adds_a_filter_selects_it_and_opens_its_picker() {
+    let (mut harness, _) = app_with_invert();
+    add_filter_from_the_wand(&mut harness);
 
     let StackTarget::Effect(added) = harness.state().session.target else { panic!("the new filter is selected") };
     assert!(matches!(kind(&harness, added), EffectKind::Filter(Filter::Hsl { .. })), "{:?}", kind(&harness, added));
     assert!(harness.query_by_role_and_label(Role::ComboBox, "HSL Perceptive").is_some(), "Properties shows the new filter's slot");
+    assert!(egui::Popup::is_any_open(&harness.ctx), "the new filter's picker is open to choose the real filter");
+
+    // The search field has the focus, and a search brings Sharpen into view
+    harness.event(egui::Event::Text("sharp".into()));
+    harness.run_steps(3);
+    harness.get_by_label("Sharpen").click();
+    harness.run_steps(3);
+    assert!(matches!(kind(&harness, added), EffectKind::Filter(Filter::Sharpen { .. })), "{:?}", kind(&harness, added));
+}
+
+#[test]
+fn escape_after_add_filter_keeps_the_neutral_filter() {
+    let (mut harness, _) = app_with_invert();
+    add_filter_from_the_wand(&mut harness);
+    assert!(harness.query_by_label("Sharpen").is_some(), "Add filter opened the picker");
+
+    harness.key_press(egui::Key::Escape);
+    harness.run_steps(3);
+
+    let StackTarget::Effect(added) = harness.state().session.target else { panic!("the new filter stays selected") };
+    assert!(!egui::Popup::is_any_open(&harness.ctx));
+    assert!(matches!(kind(&harness, added), EffectKind::Filter(Filter::Hsl { .. })), "{:?}", kind(&harness, added));
+
+    harness.state_mut().run("edit.undo", Value::Null);
+    assert!(harness.state().session.doc.project.effect(added).is_none(), "one undo removes the neutral filter");
+}
+
+#[test]
+fn add_filter_on_a_mask_adds_it_to_the_mask() {
+    let (mut harness, _) = app_with_invert();
+    let layer = harness.state().session.selected_layer().unwrap();
+    // A new mask becomes the selected target, so the wand adds to it
+    harness.state_mut().run("mask.add.white", json!({"layer": layer.0}));
+    harness.run_steps(3);
+
+    add_filter_from_the_wand(&mut harness);
+
+    let StackTarget::Effect(added) = harness.state().session.target else { panic!("the new filter is selected") };
+    let mask = harness.state().session.doc.project.layer(layer).unwrap().mask.clone().unwrap();
+    assert!(mask.effects.iter().any(|effect| effect.id == added), "the filter went on the mask");
+    assert!(matches!(kind(&harness, added), EffectKind::Filter(Filter::Hsl { .. })), "{:?}", kind(&harness, added));
+    assert!(harness.query_by_label("Sharpen").is_some(), "the mask filter's picker is open");
+    assert!(harness.query_by_label("Grayscale").is_none(), "the picker leaves out content-only filters");
 }

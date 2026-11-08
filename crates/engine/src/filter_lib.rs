@@ -26,6 +26,13 @@ impl FilterDef {
     }
 }
 
+/// The library entries that build filter effects, in shelf order, worked out once
+pub fn filter_effects() -> &'static [&'static FilterDef] {
+    static FILTER_EFFECTS: std::sync::LazyLock<Vec<&'static FilterDef>> =
+        std::sync::LazyLock::new(|| FILTERS.iter().filter(|def| def.is_filter_effect()).collect());
+    &FILTER_EFFECTS
+}
+
 const fn def(id: &'static str, label: &'static str, group: &'static str, mask: bool) -> FilterDef {
     FilterDef { id, label, group, mask }
 }

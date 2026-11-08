@@ -94,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit effect",
             [],
             None,
-            "{effect, visible?, blend?, opacity?, name?, filter?: id from filter.list (a filter effect only: swaps its type, keeping position, blend and opacity), level?, softness?, noise?, noiseScale?, invert?, value?, anchor?, anchorChannel?, inLow?, inHigh?, gamma?, outLow?, outHigh?, tolerance?, filter parameters (see effect.add.filter)}",
+            "{effect, visible?, blend?, opacity?, name?, filter?: id from filter.list (a filter effect only: swaps its type, keeping position, blend and opacity; its current id edits it in place), level?, softness?, noise?, noiseScale?, invert?, value?, anchor?, anchorChannel?, inLow?, inHigh?, gamma?, outLow?, outHigh?, tolerance?, filter parameters (see effect.add.filter)}",
             has_layer,
             set
         ),
@@ -435,7 +435,9 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         _ => None,
     };
 
+    // Naming the filter the effect already is edits its parameters like a plain effect.set
     let swapped = match strp(p, "filter") {
+        Some(filter) if crate::filter_lib::find(filter).is_some_and(|def| current_filter_id(s, effect) == Some(def.id)) => None,
         Some(filter) => Some(swapped_filter(s, effect, filter, p)?),
         None => None,
     };
@@ -490,6 +492,14 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(Value::Null)
+}
+
+/// The library id of the filter effect `effect` is, if it is one
+fn current_filter_id(s: &Session, effect: LayerId) -> Option<&'static str> {
+    match &s.doc.project.effect(effect)?.1.kind {
+        EffectKind::Filter(filter) => crate::filter_lib::find(filter.label()).map(|def| def.id),
+        _ => None,
+    }
 }
 
 /// Filter `id` built with `p` and its label, to replace filter effect `effect`

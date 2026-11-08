@@ -19,7 +19,7 @@ use crate::state::PropsTab;
 use crate::theme::{Tokens, caption};
 use crate::widgets::{chip, color_swatch, combo, dnd_release, elided, histogram, icon_button, section, slider, slider_edit};
 
-/// The filter Add filter adds: at its defaults it changes nothing until the slot swaps it
+/// The filter Add filter adds: at its defaults it changes nothing, and its slot opens the picker to swap it
 const NEW_FILTER: &str = "hsl";
 const FILTER_SWATCH_WIDTH: f32 = 36.0;
 const FILTER_HINT_SIZE: f32 = 10.5;
@@ -240,7 +240,15 @@ fn effect_menu(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer) {
         if app.session.selected_layer() != Some(layer.id) {
             app.run("layer.select", json!({"layer": layer.id.0}));
         }
-        app.run(command, with(&params, json!({"layer": layer.id.0})));
+
+        let added = app.run(command, with(&params, json!({"layer": layer.id.0})));
+        // The neutral filter is a placeholder: its slot opens the picker to choose the real one
+        if command == "effect.add.filter"
+            && let Some(effect) = added.as_ref().and_then(|result| result["effect"].as_u64())
+        {
+            crate::filter_slot::open_picker_when_shown(ui.ctx(), effect);
+        }
+
         ui.close();
     }
 }

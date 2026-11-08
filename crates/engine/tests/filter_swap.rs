@@ -78,7 +78,65 @@ fn a_mask_refuses_a_content_only_filter() {
 
     assert!(err.to_string().contains("not on masks"), "{err}");
     assert!(matches!(effect(&s, id).kind, EffectKind::Filter(Filter::Invert)));
-    execute(&mut s, "effect.set", &json!({"effect": id.0, "filter": "blur"})).expect("a mask takes a filter that works on masks");
+}
+
+#[test]
+fn a_mask_filter_swaps_in_place_on_the_mask() {
+    let mut s = session();
+    let below = add(&mut s, "effect.add.filter", json!({"filter": "invert", "target": "mask"}));
+    let swapped = add(&mut s, "effect.add.filter", json!({"filter": "invert", "target": "mask"}));
+    let above = add(&mut s, "effect.add.filter", json!({"filter": "invert", "target": "mask"}));
+    execute(&mut s, "effect.set", &json!({"effect": swapped.0, "blend": "Multiply", "opacity": 0.4})).unwrap();
+
+    execute(&mut s, "effect.set", &json!({"effect": swapped.0, "filter": "blur"})).unwrap();
+
+    let blur = effect(&s, swapped);
+    assert!(matches!(blur.kind, EffectKind::Filter(Filter::Blur { .. })), "{:?}", blur.kind);
+    assert_eq!((blur.name.as_str(), blur.blend, blur.opacity), ("Blur", BlendMode::Multiply, 0.4));
+    let layer = s.selected_layer().unwrap();
+    let mask_order: Vec<LayerId> = s.doc.project.layer(layer).unwrap().mask.as_ref().unwrap().effects.iter().map(|effect| effect.id).collect();
+    assert_eq!(mask_order, vec![below, swapped, above]);
+}
+
+#[test]
+fn naming_the_current_filter_edits_it_in_place() {
+    let mut s = session();
+    let id = add(&mut s, "effect.add.filter", json!({"filter": "blur", "target": "content", "radius": 5.0}));
+
+    execute(&mut s, "effect.set", &json!({"effect": id.0, "filter": "blur", "radius": 9.0})).unwrap();
+    execute(&mut s, "effect.set", &json!({"effect": id.0, "filter": "blur"})).unwrap();
+
+    let blur = effect(&s, id);
+    assert!(matches!(blur.kind, EffectKind::Filter(Filter::Blur { radius }) if radius == 9.0), "the radius is kept, not reset: {:?}", blur.kind);
+}
+
+#[test]
+fn a_name_given_with_the_swap_wins() {
+    let mut s = session();
+    let id = add(&mut s, "effect.add.filter", json!({"filter": "invert", "target": "content"}));
+
+    execute(&mut s, "effect.set", &json!({"effect": id.0, "filter": "threshold", "name": "Edges"})).unwrap();
+
+    let swapped = effect(&s, id);
+    assert!(matches!(swapped.kind, EffectKind::Filter(Filter::Threshold { .. })), "{:?}", swapped.kind);
+    assert_eq!(swapped.name, "Edges");
+}
+
+#[test]
+fn a_refused_swap_changes_nothing_and_adds_no_undo_step() {
+    let mut s = session();
+    let id = add(&mut s, "effect.add.filter", json!({"filter": "invert", "target": "mask"}));
+    execute(&mut s, "effect.set", &json!({"effect": id.0, "blend": "Multiply", "opacity": 0.4, "name": "Flip"})).unwrap();
+    let before = effect(&s, id);
+
+    for refused in [json!({"effect": id.0, "filter": "grayscale"}), json!({"effect": id.0, "filter": "nope"}), json!({"effect": id.0, "filter": "levels"})] {
+        assert!(execute(&mut s, "effect.set", &refused).is_err(), "{refused}");
+    }
+
+    assert_eq!(effect(&s, id), before);
+    // The last step is still the blend, opacity and name edit
+    execute(&mut s, "edit.undo", &Value::Null).unwrap();
+    assert_eq!(effect(&s, id).name, "Invert");
 }
 
 #[test]
@@ -88,6 +146,7 @@ fn only_filter_effects_swap_and_only_to_filters() {
     let filter = add(&mut s, "effect.add.filter", json!({"filter": "invert", "target": "content"}));
 
     assert!(execute(&mut s, "effect.set", &json!({"effect": levels.0, "filter": "blur"})).is_err(), "levels is not a filter effect");
+    assert!(execute(&mut s, "effect.set", &json!({"effect": levels.0, "filter": "nope"})).is_err(), "an unknown filter on levels");
     assert!(execute(&mut s, "effect.set", &json!({"effect": filter.0, "filter": "matFinishGrind"})).is_err(), "a material finish is a fill");
     assert!(execute(&mut s, "effect.set", &json!({"effect": filter.0, "filter": "nope"})).is_err());
     assert!(matches!(effect(&s, filter).kind, EffectKind::Filter(Filter::Invert)));
