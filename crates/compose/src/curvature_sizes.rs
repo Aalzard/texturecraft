@@ -24,6 +24,10 @@ type CacheEntry = (Weak<Vec<f32>>, CacheKey, BlockScales, Arc<CurvatureSizes>);
 
 static CACHE: Mutex<Vec<CacheEntry>> = Mutex::new(Vec::new());
 
+// Undo snapshots keep old maps alive; their derived levels must not grow with the history
+const CACHE_BYTES: usize = 256 << 20;
+const CACHE_MAPS: usize = 16;
+
 impl CurvatureSizes {
     /// The sizes of the texture set `inp` composites, holding at least those `needed` marks (one flag per blurred size); None without a baked curvature map or a needed size.
     pub fn of(inp: &Inputs, needed: &[bool]) -> Option<Arc<CurvatureSizes>> {
@@ -52,7 +56,7 @@ impl CurvatureSizes {
         needed.iter().zip(&self.levels).all(|(needs, level)| !needs || level.is_some())
     }
 
-    /// Pad `curvature` from its `covered` texels within each UV tile `block`, then blur each block at the sizes `needed` marks; sizes already in `built` are kept as they are.
+    /// Pad and blur each UV tile at the requested sizes, reusing levels already in `built`
     fn build(
         curvature: &[f32],
         (width, height): (u32, u32),
@@ -80,7 +84,11 @@ impl CurvatureSizes {
 
                 // Sizes are texels at 2K; a blur this wide holds nothing finer than half its radius, so it is stored that much coarser
                 let radius = (size * block_width as f32 / 2048.0).round().max(1.0) as u32;
-                let step = (radius / 2).max(1).next_power_of_two();
+                let mut step = (radius / 2).max(1).next_power_of_two();
+                // A coarse cell must not average curvature from different UV tiles
+                while !block_width.is_multiple_of(step) || !block_height.is_multiple_of(step) {
+                    step /= 2;
+                }
 
                 let mut blurred = deviation.clone();
                 for block_y in (0..height).step_by(block_height as usize) {
@@ -89,34 +97,56 @@ impl CurvatureSizes {
                         blur_block(&mut blurred, width, region, radius);
                     }
                 }
-                Some(Arc::new(coarsen(&blurred, (width, height), step)))
+                Some(Arc::new(coarsen(&blurred, (width, height), step, (block_width, block_height))))
             })
             .collect();
         CurvatureSizes { levels }
     }
 }
 
-/// The cached sizes of `curvature` for layout `key` and tile `scales`, if any.
+/// The cached sizes of `curvature` for layout `key` and tile `scales`, if any
 fn cached(curvature: &Arc<Vec<f32>>, key: CacheKey, scales: &BlockScales) -> Option<Arc<CurvatureSizes>> {
     let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     cache.retain(|(source, ..)| source.strong_count() > 0);
-    cache.iter().find(|entry| is_entry_for(entry, curvature, key, scales)).map(|(.., sizes)| sizes.clone())
+    let index = cache.iter().position(|entry| is_entry_for(entry, curvature, key, scales))?;
+    let entry = cache.remove(index);
+    let sizes = entry.3.clone();
+    cache.push(entry);
+    Some(sizes)
 }
 
-/// Cache `sizes`, keeping the sizes another thread cached meanwhile, and return what the cache holds now.
+/// Cache `sizes`, merging any levels another thread stored meanwhile
 fn store(curvature: &Arc<Vec<f32>>, key: CacheKey, scales: &BlockScales, sizes: CurvatureSizes) -> Arc<CurvatureSizes> {
     let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let Some((.., cached_sizes)) = cache.iter_mut().find(|entry| is_entry_for(entry, curvature, key, scales)) else {
-        // One layout per curvature map: sizes built for an earlier tile layout or working size are dropped with it
-        cache.retain(|(source, ..)| source.strong_count() > 0 && !std::ptr::eq(source.as_ptr(), Arc::as_ptr(curvature)));
-        let sizes = Arc::new(sizes);
-        cache.push((Arc::downgrade(curvature), key, scales.clone(), sizes.clone()));
-        return sizes;
+    let sizes = if let Some((.., cached_sizes)) = cache.iter().find(|entry| is_entry_for(entry, curvature, key, scales)) {
+        let levels = cached_sizes.levels.iter().zip(sizes.levels).map(|(cached, built)| cached.clone().or(built)).collect();
+        CurvatureSizes { levels }
+    } else {
+        sizes
     };
 
-    let levels = cached_sizes.levels.iter().zip(sizes.levels).map(|(cached, built)| cached.clone().or(built)).collect();
-    *cached_sizes = Arc::new(CurvatureSizes { levels });
-    cached_sizes.clone()
+    // One layout per curvature map, with the most recently used map at the end
+    cache.retain(|(source, ..)| source.strong_count() > 0 && !std::ptr::eq(source.as_ptr(), Arc::as_ptr(curvature)));
+    let sizes = Arc::new(sizes);
+    cache.push((Arc::downgrade(curvature), key, scales.clone(), sizes.clone()));
+    trim_cache(&mut cache, CACHE_BYTES);
+    sizes
+}
+
+/// Evict the least recently used maps, retaining the newest even if it alone exceeds the budget
+fn trim_cache(cache: &mut Vec<CacheEntry>, budget: usize) {
+    // Keeping the newest prevents a large atlas from rebuilding its levels for every tile
+    let mut bytes = 0usize;
+    let mut keep = 0;
+    for (.., sizes) in cache.iter().rev() {
+        let size = sizes.levels.iter().flatten().map(|level| level.deviation.len().saturating_mul(size_of::<i16>())).fold(0usize, usize::saturating_add);
+        bytes = bytes.saturating_add(size);
+        if keep > 0 && (bytes > budget || keep == CACHE_MAPS) {
+            break;
+        }
+        keep += 1;
+    }
+    cache.drain(..cache.len() - keep);
 }
 
 /// Whether cache `entry` holds the sizes of `curvature` for layout `key` and tile `scales`.
@@ -124,16 +154,32 @@ fn is_entry_for((source, cached_key, cached_scales, _): &CacheEntry, curvature: 
     source.upgrade().is_some_and(|data| Arc::ptr_eq(&data, curvature)) && *cached_key == key && cached_scales == scales
 }
 
-/// The bake atlas texels (`width × height`) that the covered working texels of `inp` land on.
+/// The bake atlas texels (`width × height`) overlapped by covered working texels of `inp`
 fn covered_texels(inp: &Inputs, (width, height): (u32, u32)) -> Vec<bool> {
     let working_size = (inp.gbuf.width, inp.gbuf.height);
+    if working_size == (width, height) && inp.block_scales == BlockScales::default() {
+        return (0..width * height).into_par_iter().map(|texel| inp.gbuf.covered(texel as usize)).collect();
+    }
+
     let covered: Vec<AtomicBool> = (0..width * height).map(|_| AtomicBool::new(false)).collect();
     (0..working_size.0 * working_size.1).into_par_iter().filter(|texel| inp.gbuf.covered(*texel as usize)).for_each(|texel| {
-        let uv = [((texel % working_size.0) as f32 + 0.5) / working_size.0 as f32, ((texel / working_size.0) as f32 + 0.5) / working_size.1 as f32];
+        let (x, y) = (texel % working_size.0, texel / working_size.0);
+        let uv = [(x as f32 + 0.5) / working_size.0 as f32, (y as f32 + 0.5) / working_size.1 as f32];
         if let Some(baked_uv) = inp.block_scales.bake_uv(uv, working_size) {
-            let (baked_x, baked_y) = ((baked_uv[0] * width as f32) as u32, (baked_uv[1] * height as f32) as u32);
-            if let Some(slot) = covered.get((baked_y.min(height - 1) * width + baked_x.min(width - 1)) as usize) {
-                slot.store(true, Ordering::Relaxed);
+            // A lower-resolution working texel covers a whole rectangle in the bake, not just its center
+            let scale = inp.block_scales.at(x, y);
+            let footprint = |center: f32, baked: u32, working: u32| {
+                let half_width = 0.5 * baked as f32 / (working as f32 * scale);
+                let center = center * baked as f32;
+                ((center - half_width).floor().max(0.0) as u32)..((center + half_width).ceil() as u32).min(baked)
+            };
+            let columns = footprint(baked_uv[0], width, working_size.0);
+            for baked_y in footprint(baked_uv[1], height, working_size.1) {
+                for baked_x in columns.clone() {
+                    if let Some(slot) = covered.get((baked_y * width + baked_x) as usize) {
+                        slot.store(true, Ordering::Relaxed);
+                    }
+                }
             }
         }
     });
@@ -181,8 +227,8 @@ fn window_inside(length: usize, radius: usize) -> Vec<f32> {
     weights.into_iter().map(|weight| weight as f32).collect()
 }
 
-/// `data` averaged over `step × step` squares (the last ones clipped to the map).
-fn coarsen(data: &[f32], (width, height): (u32, u32), step: u32) -> CurvatureSizeLevel {
+/// `data` averaged over `step × step` squares, clipping the last cells to the map
+fn coarsen(data: &[f32], (width, height): (u32, u32), step: u32, block: (u32, u32)) -> CurvatureSizeLevel {
     let (coarse_width, coarse_height) = (width.div_ceil(step), height.div_ceil(step));
     let deviation = (0..coarse_width * coarse_height)
         .into_par_iter()
@@ -196,12 +242,135 @@ fn coarsen(data: &[f32], (width, height): (u32, u32), step: u32) -> CurvatureSiz
             (mean * DEVIATION_SCALE).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
         })
         .collect();
-    CurvatureSizeLevel { step, width: coarse_width, height: coarse_height, deviation }
+    CurvatureSizeLevel { step, width: coarse_width, height: coarse_height, block: (block.0.div_ceil(step), block.1.div_ceil(step)), deviation }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coarse_sizes_do_not_blend_between_uv_tiles() {
+        let (width, height) = (512, 512);
+        let block = (256, 256);
+        let curvature: Vec<f32> = (0..width * height).map(|texel| if (texel % width) / block.0 == (texel / width) / block.1 { 0.8 } else { 0.2 }).collect();
+        let covered = vec![true; curvature.len()];
+        let sizes = CurvatureSizes::build(&curvature, (width, height), &covered, block, &[true; CurvatureDetail::BLURRED_SIZES], None);
+
+        for level in sizes.levels.iter().flatten() {
+            for (x, y) in [(255, 128), (256, 128), (128, 255), (128, 256), (255, 255), (256, 256)] {
+                let expected = curvature[(y * width + x) as usize] - 0.5;
+                assert!((level.sample(x, y) - expected).abs() < 0.001, "step {} at ({x}, {y}): {} instead of {expected}", level.step, level.sample(x, y));
+            }
+        }
+    }
+
+    #[test]
+    fn coverage_preserves_bake_texels_above_the_working_resolution() {
+        use texturecraft_core::{Project, TextureSet};
+        use texturecraft_geom::{UvGBuffer, primitives};
+
+        let mesh = primitives::plane(2.0, 1);
+        let mut project = Project::new("Coverage", "builtin:plane");
+        project.texture_sets.push(TextureSet::new("Plane", 0, 64));
+        let gbuf = UvGBuffer::new(&mesh, 0, 64, 64);
+        let pixels = Default::default();
+        let images = Default::default();
+        let baked = Default::default();
+        let inputs = Inputs {
+            project: &project,
+            ts: 0,
+            mesh: &mesh,
+            gbuf: &gbuf,
+            pixels: &pixels,
+            baked: &baked,
+            block_scales: BlockScales::default(),
+            preview: None,
+            images: &images,
+            bounds: mesh.bounds(),
+        };
+
+        for size in [(32, 32), (64, 64), (128, 128), (128, 32)] {
+            let coverage = covered_texels(&inputs, size);
+            assert!(coverage.iter().all(|covered| *covered), "the plane covers the entire {size:?} bake, including between working texel centers");
+        }
+    }
+
+    #[test]
+    fn coverage_expands_scaled_tiles_without_crossing_block_borders() {
+        use texturecraft_core::{Project, TextureSet};
+        use texturecraft_geom::{NO_TRI, UvGBuffer, primitives};
+
+        let mesh = primitives::plane(2.0, 1);
+        let mut project = Project::new("Tile coverage", "builtin:plane");
+        let mut set = TextureSet::new("Tiles", 0, 64);
+        set.uv_tiles = vec![1001, 1002, 1003];
+        set.tile_resolutions.insert(1002, 32);
+        let scales = set.block_scales();
+        project.texture_sets.push(set);
+        let mut gbuf = UvGBuffer::new(&mesh, 0, 192, 64);
+        for (index, triangle) in gbuf.tri.iter_mut().enumerate() {
+            if !(64..96).contains(&(index % 192)) || index / 192 >= 32 {
+                *triangle = NO_TRI;
+            }
+        }
+        let pixels = Default::default();
+        let images = Default::default();
+        let baked = Default::default();
+        let inputs = Inputs {
+            project: &project,
+            ts: 0,
+            mesh: &mesh,
+            gbuf: &gbuf,
+            pixels: &pixels,
+            baked: &baked,
+            block_scales: scales,
+            preview: None,
+            images: &images,
+            bounds: mesh.bounds(),
+        };
+
+        let covered = covered_texels(&inputs, (384, 128));
+        for (index, covered) in covered.iter().enumerate() {
+            assert_eq!(*covered, (128..256).contains(&(index % 384)), "bake texel ({}, {})", index % 384, index / 384);
+        }
+    }
+
+    #[test]
+    fn unused_maps_are_evicted_even_while_undo_keeps_the_sources_alive() {
+        let sources: Vec<_> = (0..=CACHE_MAPS).map(|_| Arc::new(vec![0.5; 16])).collect();
+        let scales = BlockScales::default();
+        let key = ((4, 4), (4, 4), (4, 4));
+        let sizes = store(&sources[0], key, &scales, CurvatureSizes { levels: Vec::new() });
+        let first = Arc::downgrade(&sizes);
+        drop(sizes);
+        for source in sources.iter().skip(1) {
+            store(source, key, &scales, CurvatureSizes { levels: Vec::new() });
+        }
+
+        assert!(first.upgrade().is_none(), "undo history may retain the bake, but not an unlimited number of derived maps");
+    }
+
+    #[test]
+    fn cache_budget_evicts_old_levels_but_keeps_one_large_map() {
+        let source = Arc::new(vec![0.5]);
+        let key = ((1, 1), (1, 1), (1, 1));
+        let entry = || {
+            let level = CurvatureSizeLevel { step: 1, width: 4, height: 1, block: (4, 1), deviation: vec![0; 4] };
+            let sizes = CurvatureSizes { levels: vec![Some(Arc::new(level))] };
+            (Arc::downgrade(&source), key, BlockScales::default(), Arc::new(sizes))
+        };
+        let mut cache = vec![entry(), entry(), entry()];
+        let oldest = Arc::downgrade(&cache[0].3);
+        let newest = cache[2].3.clone();
+
+        trim_cache(&mut cache, 16);
+        assert_eq!(cache.len(), 2);
+        assert!(oldest.upgrade().is_none());
+        trim_cache(&mut cache, 1);
+        assert_eq!(cache.len(), 1, "the active map must not rebuild once per composite tile");
+        assert!(Arc::ptr_eq(&cache[0].3, &newest));
+    }
 
     #[test]
     fn padding_keeps_an_island_border_from_reading_flat() {

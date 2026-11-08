@@ -94,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit effect",
             [],
             None,
-            "{effect, visible?, blend?, opacity?, name?, level?, softness?, noise?, noiseScale?, invert?, mode?, sizes?, value?, anchor?, anchorChannel?, inLow?, inHigh?, gamma?, outLow?, outHigh?, tolerance?, filter parameters (see effect.add.filter)}",
+            "{effect, visible?, blend?, opacity?, name?, filter?: id from filter.list (a filter effect only: swaps its type, keeping position, blend and opacity; its current id edits it in place), level?, softness?, noise?, noiseScale?, invert?, mode?, sizes?, value?, anchor?, anchorChannel?, inLow?, inHigh?, gamma?, outLow?, outHigh?, tolerance?, filter parameters (see effect.add.filter)}",
             has_layer,
             set
         ),
@@ -314,7 +314,7 @@ fn add_fill(s: &mut Session, p: &Value) -> Result<Value> {
     push_effect(s, p, EffectKind::Fill { source, projection }, blend)
 }
 
-/// Apply the generator parameters in `params` to `generator` (`command` names it in errors).
+/// Apply `params` to `generator`, using `command` in errors
 fn generator_from(command: &str, params: &Value, generator: &mut Generator) -> Result<()> {
     if let Some(level) = f32p(params, "level") {
         generator.level = level.clamp(0.0, 1.0);
@@ -339,8 +339,13 @@ fn generator_from(command: &str, params: &Value, generator: &mut Generator) -> R
     }
 
     // A mode or sizes also give a curvature generator saved before detail sizes its detail
-    let mode =
-        strp(params, "mode").map(|name| CurvatureMode::parse(name).ok_or_else(|| bad(command, format!("unknown curvature mode `{name}`")))).transpose()?;
+    let mode = params
+        .get("mode")
+        .map(|value| {
+            let name = value.as_str().ok_or_else(|| bad(command, "`mode` must be a string"))?;
+            CurvatureMode::parse(name).ok_or_else(|| bad(command, format!("unknown curvature mode `{name}`")))
+        })
+        .transpose()?;
     let weights = params.get("sizes").map(|value| size_weights(command, value)).transpose()?;
     if mode.is_none() && weights.is_none() {
         return Ok(());
@@ -359,13 +364,15 @@ fn generator_from(command: &str, params: &Value, generator: &mut Generator) -> R
     Ok(())
 }
 
-/// The detail size weights in `value`: one number (0..1) per size of [`CurvatureDetail::SIZES`], finest first.
+/// Read one weight (0..1) per size of [`CurvatureDetail::SIZES`], finest first
 fn size_weights(command: &str, value: &Value) -> Result<[f32; CurvatureDetail::SIZES.len()]> {
-    let weights: Option<Vec<f32>> =
-        value.as_array().and_then(|items| items.iter().map(|item| item.as_f64().map(|weight| (weight as f32).clamp(0.0, 1.0))).collect());
-    weights
-        .and_then(|weights| weights.try_into().ok())
-        .ok_or_else(|| bad(command, format!("`sizes` takes {} numbers, finest first", CurvatureDetail::SIZES.len())))
+    let invalid = || bad(command, format!("`sizes` takes {} numbers, finest first", CurvatureDetail::SIZES.len()));
+    let items = value.as_array().filter(|items| items.len() == CurvatureDetail::SIZES.len()).ok_or_else(invalid)?;
+    let mut weights = [0.0; CurvatureDetail::SIZES.len()];
+    for (weight, item) in weights.iter_mut().zip(items) {
+        *weight = item.as_f64().ok_or_else(invalid)?.clamp(0.0, 1.0) as f32;
+    }
+    Ok(weights)
 }
 
 fn add_generator(session: &mut Session, params: &Value) -> Result<Value> {
@@ -443,45 +450,66 @@ fn histogram(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(if content { json!({"target": "content", "channel": channel.id(), "bins": counts}) } else { json!({"target": "mask", "bins": counts}) })
 }
 
+/// Edit visibility, blending, name, effect parameters, or a filter's type
 fn set(session: &mut Session, params: &Value) -> Result<Value> {
-    let target = effect_id(session, params, "effect.set")?;
-    let blend = blend_param("effect.set", params, "blend")?;
+    const CMD: &str = "effect.set";
+    let effect = effect_id(session, params, CMD)?;
+    let blend = blend_param(CMD, params, "blend")?;
 
-    // A fill reading an anchor: `anchor` picks the anchor point, `anchorChannel` alone re-targets the current one
-    let anchor = match session.doc.project.effect(target) {
+    // `anchor` picks a fill's anchor point, `anchorChannel` alone re-targets the current one
+    let anchor = match session.doc.project.effect(effect) {
         Some((owner, Effect { kind: EffectKind::Fill { source, .. }, .. })) => {
             let (current, channel) = match source {
                 Source::Anchor { anchor, channel } => (Some(*anchor), *channel),
                 _ => (None, Channel::Height),
             };
-            let channel_param = channel_param("effect.set", params, "anchorChannel")?;
+            let channel_param = channel_param(CMD, params, "anchorChannel")?;
             match u64p(params, "anchor").map(LayerId).or(current.filter(|_| channel_param.is_some())) {
-                Some(anchor) => Some(anchor_source(session, "effect.set", owner, anchor, channel_param.unwrap_or(channel))?),
+                Some(anchor) => Some(anchor_source(session, CMD, owner, anchor, channel_param.unwrap_or(channel))?),
                 None => None,
             }
         }
         _ => None,
     };
 
+    // Naming the filter the effect already is edits its parameters like a plain effect.set
+    let swapped = match strp(params, "filter") {
+        Some(filter) if crate::filter_lib::find(filter).is_some_and(|def| current_filter_id(session, effect) == Some(def.id)) => None,
+        Some(filter) => Some(swapped_filter(session, effect, filter, params)?),
+        None => None,
+    };
+    let swaps_filter = swapped.is_some();
+
     session.edit("Edit effect", |session| {
-        let effect = session.doc.project.effect_mut(target).ok_or_else(|| bad("effect.set", format!("no effect {}", target.0)))?;
-        if let Some(visible) = boolp(params, "visible") {
-            effect.visible = visible;
-        }
-        if let Some(blend) = blend {
-            effect.blend = blend;
-        }
-        if let Some(opacity) = f32p(params, "opacity") {
-            effect.opacity = opacity.clamp(0.0, 1.0);
-        }
-        if let Some(name) = name_param(params) {
-            effect.name = name.to_string();
+        let edited = session.doc.project.effect_mut(effect).ok_or_else(|| bad(CMD, format!("no effect {}", effect.0)))?;
+        if let Some((kind, label)) = swapped {
+            if let EffectKind::Filter(old) = &edited.kind
+                && edited.name == old.label()
+            {
+                edited.name = label.to_string();
+            }
+            edited.kind = kind;
         }
 
-        match &mut effect.kind {
-            EffectKind::Generator(generator) => generator_from("effect.set", params, generator)?,
+        if let Some(visible) = boolp(params, "visible") {
+            edited.visible = visible;
+        }
+        if let Some(blend) = blend {
+            edited.blend = blend;
+        }
+        if let Some(opacity) = f32p(params, "opacity") {
+            edited.opacity = opacity.clamp(0.0, 1.0);
+        }
+        if let Some(name) = name_param(params) {
+            edited.name = name.to_string();
+        }
+
+        match &mut edited.kind {
+            EffectKind::Generator(generator) => generator_from(CMD, params, generator)?,
             EffectKind::Levels(levels) => levels_from(params, levels),
-            EffectKind::Filter(filter) => crate::filter_lib::apply(params, filter, "effect.set")?,
+            // The swapped filter was built with the parameters already
+            EffectKind::Filter(_) if swaps_filter => {}
+            EffectKind::Filter(filter) => crate::filter_lib::apply(params, filter, CMD)?,
             EffectKind::Fill { source, .. } => {
                 if let Some(anchor) = anchor {
                     *source = anchor;
@@ -501,6 +529,38 @@ fn set(session: &mut Session, params: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(Value::Null)
+}
+
+/// The library id of the filter effect `effect` is, if it is one
+fn current_filter_id(s: &Session, effect: LayerId) -> Option<&'static str> {
+    match &s.doc.project.effect(effect)?.1.kind {
+        EffectKind::Filter(filter) => crate::filter_lib::find(filter.label()).map(|def| def.id),
+        _ => None,
+    }
+}
+
+/// Filter `id` built with `p` and its label, to replace filter effect `effect`
+fn swapped_filter(s: &Session, effect: LayerId, id: &str, p: &Value) -> Result<(EffectKind, &'static str)> {
+    const CMD: &str = "effect.set";
+    let (owner, current) = s.doc.project.effect(effect).ok_or_else(|| bad(CMD, format!("no effect {}", effect.0)))?;
+    if !matches!(current.kind, EffectKind::Filter(_)) {
+        return Err(bad(CMD, format!("`filter` changes filter effects only, not {}", current.kind.name().to_ascii_lowercase())));
+    }
+
+    let def = crate::filter_lib::find(id).ok_or_else(|| bad(CMD, format!("unknown filter `{id}` (see filter.list)")))?;
+    let mut kind = crate::filter_lib::build(def.id, &Value::Null)?;
+    let EffectKind::Filter(filter) = &mut kind else {
+        return Err(bad(CMD, format!("{} is its own effect type: add it with effect.add.filter", def.label)));
+    };
+
+    let mask = s.doc.project.layer(owner)?.mask.as_ref();
+    let on_mask = mask.is_some_and(|mask| mask.effects.iter().any(|masked| masked.id == effect));
+    if on_mask && !def.mask {
+        return Err(bad(CMD, format!("{} goes on layer content, not on masks", def.label)));
+    }
+
+    crate::filter_lib::apply(p, filter, CMD)?;
+    Ok((kind, def.label))
 }
 
 /// The stack (a mask's or a layer's content effects) holding effect `eid`, and its position there.

@@ -399,6 +399,9 @@ fn curvature_generators_take_a_mode_and_detail_sizes() {
     assert!(not_numbers.is_err(), "a size that isn't a number is rejected, not skipped");
     let unknown = execute(&mut state, "effect.set", &json!({"effect": effect, "mode": "ridges"}));
     assert!(unknown.is_err(), "unknown modes are rejected");
+    let wrong_type = execute(&mut state, "effect.set", &json!({"effect": effect, "mode": 1, "level": 0.1}));
+    assert!(wrong_type.is_err(), "a mode must be a string and an invalid edit must be rejected");
     let dirt = execute(&mut state, "effect.add.generator", &json!({"generator": "dirt", "mode": "edges"}));
     assert!(dirt.is_err(), "only curvature generators have a mode");
+    assert_eq!(execute(&mut state, "project.inspect", &Value::Null).unwrap().to_string(), inspect, "failed commands leave the project unchanged");
 }

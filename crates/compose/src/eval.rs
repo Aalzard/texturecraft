@@ -1223,7 +1223,14 @@ impl<'a, 'b> Texel<'a, 'b> {
             (GeneratorKind::Direction, _) => coords.nrm.dot(Vec3::from(generator.direction).try_normalize().unwrap_or(Vec3::Y)) * 0.5 + 0.5,
         };
         let signal = if generator.noise_amount > 0.0 {
-            signal + (world_noise(coords.pos, generator.noise_scale, generator.seed) - 0.5) * generator.noise_amount
+            let noise = world_noise(coords.pos, generator.noise_scale, generator.seed);
+            if let (GeneratorKind::Curvature | GeneratorKind::EdgeWear, Some(detail)) = (generator.kind, &generator.detail) {
+                // Break up curvature without inventing edges or cavities on a flat surface
+                let neutral = if detail.mode == CurvatureMode::Raw { 0.5 } else { 0.0 };
+                neutral + (signal - neutral) * (1.0 - noise * generator.noise_amount).max(0.0)
+            } else {
+                signal + (noise - 0.5) * generator.noise_amount
+            }
         } else {
             signal
         };
@@ -2584,6 +2591,28 @@ mod tests {
         let largest = row_with(&mut fixture, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
         assert!(finest[ridge] > 0.99 && finest[five_texels_away] < 0.01, "the map itself marks only the ridge: {finest:?}");
         assert!(largest[ridge] > 0.99 && largest[five_texels_away] > 0.5, "the largest size reaches texels away from it: {largest:?}");
+    }
+
+    #[test]
+    fn curvature_detail_noise_keeps_flat_areas_neutral() {
+        let mut fixture = fixture();
+        fixture.baked = BakedMaps { resolution: 64, maps: [(BakedMap::Curvature, Arc::new(vec![0.5; 64 * 64]))].into() };
+        let layer = fill_layer(&mut fixture.project, [1.0; 3], 1.0);
+        let texels: Vec<_> = (0..64).map(|x| (x, 32)).collect();
+
+        for kind in [GeneratorKind::Curvature, GeneratorKind::EdgeWear] {
+            for mode in CurvatureMode::ALL {
+                let detail = CurvatureDetail { mode, weights: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
+                let generator = Generator { level: 0.5, softness: 0.5, noise_amount: 2.0, detail: Some(detail), ..Generator::new(kind) };
+                let mut mask = Mask::new(MaskBackground::Black);
+                mask.effects.push(Effect::new(fixture.project.alloc_id(), EffectKind::Generator(generator)));
+                fixture.project.layer_mut(layer).unwrap().mask = Some(mask);
+
+                let values = assert_sparse_mask_matches_image(&fixture, layer, &texels).unwrap();
+                let expected = if mode == CurvatureMode::Raw { 0.5 } else { 0.0 };
+                assert!(values.iter().all(|value| (value - expected).abs() < 0.001), "{kind:?} {mode:?} paints noise on flat curvature: {values:?}");
+            }
+        }
     }
 
     #[test]
