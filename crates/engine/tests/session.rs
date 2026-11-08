@@ -395,6 +395,8 @@ fn curvature_generators_take_a_mode_and_detail_sizes() {
 
     let too_few = execute(&mut state, "effect.set", &json!({"effect": effect, "sizes": [1.0, 0.5]}));
     assert!(too_few.is_err(), "sizes takes one weight per detail size");
+    let not_numbers = execute(&mut state, "effect.set", &json!({"effect": effect, "sizes": [1.0, "a", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}));
+    assert!(not_numbers.is_err(), "a size that isn't a number is rejected, not skipped");
     let unknown = execute(&mut state, "effect.set", &json!({"effect": effect, "mode": "ridges"}));
     assert!(unknown.is_err(), "unknown modes are rejected");
     let dirt = execute(&mut state, "effect.add.generator", &json!({"generator": "dirt", "mode": "edges"}));

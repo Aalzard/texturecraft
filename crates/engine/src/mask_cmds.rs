@@ -361,9 +361,11 @@ fn generator_from(command: &str, params: &Value, generator: &mut Generator) -> R
 
 /// The detail size weights in `value`: one number (0..1) per size of [`CurvatureDetail::SIZES`], finest first.
 fn size_weights(command: &str, value: &Value) -> Result<[f32; CurvatureDetail::SIZES.len()]> {
-    let weights: Vec<f32> =
-        value.as_array().map(|items| items.iter().filter_map(Value::as_f64).map(|weight| (weight as f32).clamp(0.0, 1.0)).collect()).unwrap_or_default();
-    weights.try_into().map_err(|_| bad(command, format!("`sizes` takes {} numbers, finest first", CurvatureDetail::SIZES.len())))
+    let weights: Option<Vec<f32>> =
+        value.as_array().and_then(|items| items.iter().map(|item| item.as_f64().map(|weight| (weight as f32).clamp(0.0, 1.0))).collect());
+    weights
+        .and_then(|weights| weights.try_into().ok())
+        .ok_or_else(|| bad(command, format!("`sizes` takes {} numbers, finest first", CurvatureDetail::SIZES.len())))
 }
 
 fn add_generator(session: &mut Session, params: &Value) -> Result<Value> {

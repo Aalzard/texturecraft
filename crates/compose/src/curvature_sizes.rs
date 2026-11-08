@@ -8,7 +8,7 @@ use texturecraft_core::{BakedMap, BlockScales, CurvatureDetail};
 use texturecraft_texel::dilate::{DilationMap, NONE};
 
 use crate::curvature_size_level::{CurvatureSizeLevel, DEVIATION_SCALE};
-use crate::eval::{Inputs, blur};
+use crate::eval::{BLUR_BOX_PASSES, Inputs, blur};
 
 /// The curvature map padded past its UV islands and blurred at each size of [`CurvatureDetail::SIZES`] after the first.
 pub struct CurvatureSizes {
@@ -107,6 +107,8 @@ fn cached(curvature: &Arc<Vec<f32>>, key: CacheKey, scales: &BlockScales) -> Opt
 fn store(curvature: &Arc<Vec<f32>>, key: CacheKey, scales: &BlockScales, sizes: CurvatureSizes) -> Arc<CurvatureSizes> {
     let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some((.., cached_sizes)) = cache.iter_mut().find(|entry| is_entry_for(entry, curvature, key, scales)) else {
+        // One layout per curvature map: sizes built for an earlier tile layout or working size are dropped with it
+        cache.retain(|(source, ..)| source.strong_count() > 0 && !std::ptr::eq(source.as_ptr(), Arc::as_ptr(curvature)));
         let sizes = Arc::new(sizes);
         cache.push((Arc::downgrade(curvature), key, scales.clone(), sizes.clone()));
         return sizes;
@@ -138,18 +140,45 @@ fn covered_texels(inp: &Inputs, (width, height): (u32, u32)) -> Vec<bool> {
     covered.into_iter().map(AtomicBool::into_inner).collect()
 }
 
-/// Blur the `(x0, y0, w, h)` block of `data` (`width` texels per row) in place, reading nothing outside it.
-fn blur_block(data: &mut [f32], width: u32, (x0, y0, w, h): (u32, u32, u32, u32), radius: u32) {
+/// Blur the `(left, top, region_width, region_height)` block of `data` (`width` texels per row) in place, reading nothing outside it.
+fn blur_block(data: &mut [f32], width: u32, (left, top, region_width, region_height): (u32, u32, u32, u32), radius: u32) {
+    let rows = top..top + region_height;
     let mut block: Vec<f32> =
-        (y0..y0 + h).flat_map(|y| (x0..x0 + w).map(move |x| (y * width + x) as usize)).map(|index| data.get(index).copied().unwrap_or(0.0)).collect();
-    blur(&mut block, w as usize, h as usize, radius as usize);
+        rows.flat_map(|y| (left..left + region_width).map(move |x| (y * width + x) as usize)).map(|index| data.get(index).copied().unwrap_or(0.0)).collect();
+    blur(&mut block, region_width as usize, region_height as usize, radius as usize);
 
-    for (row, values) in block.chunks(w as usize).enumerate() {
-        let start = ((y0 + row as u32) * width + x0) as usize;
+    // The blur reads zero past the block's edges; dividing by the share of its window inside the block keeps the edges at full strength
+    let column_weights = window_inside(region_width as usize, radius as usize);
+    let row_weights = window_inside(region_height as usize, radius as usize);
+    for (values, row_weight) in block.chunks_mut(region_width as usize).zip(&row_weights) {
+        for (value, column_weight) in values.iter_mut().zip(&column_weights) {
+            *value /= row_weight * column_weight;
+        }
+    }
+
+    for (row, values) in block.chunks(region_width as usize).enumerate() {
+        let start = ((top + row as u32) * width + left) as usize;
         if let Some(target) = data.get_mut(start..start + values.len()) {
             target.copy_from_slice(values);
         }
     }
+}
+
+/// The share of the [`blur`] window at each texel of a line `length` long that falls inside it: 1 from three radii in.
+fn window_inside(length: usize, radius: usize) -> Vec<f32> {
+    let window = (2 * radius + 1) as f64;
+    let mut weights = vec![1.0f64; length];
+    for _ in 0..BLUR_BOX_PASSES {
+        let running_totals: Vec<f64> = std::iter::once(0.0)
+            .chain(weights.iter().scan(0.0, |total, weight| {
+                *total += weight;
+                Some(*total)
+            }))
+            .collect();
+        let total_at = |end: usize| running_totals.get(end.min(length)).copied().unwrap_or(0.0);
+        weights = (0..length).map(|texel| (total_at(texel + radius + 1) - total_at(texel.saturating_sub(radius))) / window).collect();
+    }
+    weights.into_iter().map(|weight| weight as f32).collect()
 }
 
 /// `data` averaged over `step × step` squares (the last ones clipped to the map).
@@ -188,6 +217,40 @@ mod tests {
         for level in sizes.levels.iter().flatten() {
             assert!((level.sample(border_x, border_y) - 0.5).abs() < 0.01, "the border keeps the island's curvature, not the empty texels beside it");
         }
+    }
+
+    #[test]
+    fn uniform_curvature_keeps_its_strength_at_block_borders() {
+        let (map_width, map_height): (u32, u32) = (256, 256);
+        // Curvature 0.8 reads 0.3 above the neutral 0.5 at every size
+        const CURVATURE: f32 = 0.8;
+        let expected = CURVATURE - 0.5;
+        let curvature = vec![CURVATURE; (map_width * map_height) as usize];
+        let covered = vec![true; curvature.len()];
+        let block = (map_width / 2, map_height);
+        let sizes = CurvatureSizes::build(&curvature, (map_width, map_height), &covered, block, &[true; CurvatureDetail::BLURRED_SIZES], None);
+
+        // The map's corner, then the last texel of the left block and the first of the right one, halfway down
+        let border_texels = [(0, 0), (block.0 - 1, map_height / 2), (block.0, map_height / 2)];
+        for level in sizes.levels.iter().flatten() {
+            for (x, y) in border_texels {
+                assert!((level.sample(x, y) - expected).abs() < 0.01, "texel ({x}, {y}) reads {} instead of the uniform {expected}", level.sample(x, y));
+            }
+        }
+    }
+
+    #[test]
+    fn a_new_layout_replaces_the_sizes_of_the_old_one() {
+        let curvature = Arc::new(vec![0.5; 16]);
+        let scales = BlockScales::default();
+        let entries_for_curvature = || {
+            let cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            cache.iter().filter(|(source, ..)| std::ptr::eq(source.as_ptr(), Arc::as_ptr(&curvature))).count()
+        };
+
+        store(&curvature, ((4, 4), (4, 4), (4, 4)), &scales, CurvatureSizes { levels: Vec::new() });
+        store(&curvature, ((4, 4), (2, 2), (8, 8)), &scales, CurvatureSizes { levels: Vec::new() });
+        assert_eq!(entries_for_curvature(), 1, "only the latest layout of a curvature map stays cached");
     }
 
     #[test]
