@@ -34,6 +34,21 @@ impl ReachLink {
         self.shown = None;
     }
 
+    /// Pick up the reach once the worker finishes; runs every frame, even when nothing is drawn, so `busy` clears
+    pub(super) fn poll(&mut self) {
+        let Some(job) = &self.job else { return };
+
+        match job.try_recv() {
+            Ok(reach) => {
+                self.reach = reach;
+                self.shown = None;
+                self.job = None;
+            }
+            Err(TryRecvError::Disconnected) => self.job = None,
+            Err(TryRecvError::Empty) => {}
+        }
+    }
+
     /// Start a new reach when the high poly (sent under `high_id`) or a set's inputs changed, and color the high poly when the reach or the distances changed
     pub(super) fn sync(&mut self, session: &Session, high_id: u64, only_set: Option<usize>, out: &mut SceneSync) {
         let set_count = session.doc.project.texture_sets.len();
@@ -51,18 +66,6 @@ impl ReachLink {
                 inputs.iter().map(|inputs| inputs.as_ref().and_then(|inputs| inputs.high_poly_reach().ok())).collect()
             }));
             (self.keys, self.high_id) = (keys, high_id);
-        }
-
-        if let Some(job) = &self.job {
-            match job.try_recv() {
-                Ok(reach) => {
-                    self.reach = reach;
-                    self.shown = None;
-                    self.job = None;
-                }
-                Err(TryRecvError::Disconnected) => self.job = None,
-                Err(TryRecvError::Empty) => {}
-            }
         }
 
         // Colors wait for the reach being worked out: the old ones stay until it arrives

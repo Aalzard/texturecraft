@@ -47,6 +47,8 @@ impl BakeSceneLink {
 
     /// Add to `out` what the GPU needs to draw `visualization` this frame
     pub fn sync(&mut self, session: &Session, visualization: Option<BakeVisualization>, out: &mut SceneSync) {
+        self.reach.poll();
+
         let Some(visualization) = visualization else { return };
 
         if visualization.high_poly {
@@ -117,6 +119,10 @@ mod tests {
 
     const EVERYTHING: BakeVisualization = BakeVisualization { high_poly: true, cage: true, uv_seams: true, low_poly: true, only_set: None };
 
+    /// How long a test waits for the reach worker: frames, and the pause between them
+    const WAIT_FRAMES: usize = 2000;
+    const WAIT_FRAME_PAUSE: std::time::Duration = std::time::Duration::from_millis(5);
+
     /// The sample project with a high poly a little outside its low poly
     fn session() -> Session {
         const HIGH_POLY_OFFSET: f32 = 0.02;
@@ -143,11 +149,11 @@ mod tests {
 
     /// Sync until the reach worked out on the worker thread colors the high poly; the share of vertices drawn red
     fn red_share(link: &mut BakeSceneLink, session: &Session, visualization: BakeVisualization) -> f32 {
-        for _ in 0..2000 {
+        for _ in 0..WAIT_FRAMES {
             if let Some((_, missed)) = sync(link, session, visualization).bake_high_missed {
                 return missed.iter().sum::<f32>() / missed.len().max(1) as f32;
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            std::thread::sleep(WAIT_FRAME_PAUSE);
         }
         panic!("the reach never arrived");
     }
@@ -175,6 +181,8 @@ mod tests {
         texturecraft_engine::execute(&mut session, "bake.settings", &json!({"ts": "all", "averageNormals": false})).unwrap();
         let rebuilt = sync(&mut link, &session, EVERYTHING);
         assert_ne!(rebuilt.bake_cages.first().unwrap().2, *topology, "new settings rebuild the cage");
+        // The rebuilt cage starts a new reach: let it finish so the last check sees only what the resend starts
+        red_share(&mut link, &session, EVERYTHING);
 
         link.resend();
         let resent = sync(&mut link, &session, EVERYTHING);
@@ -183,6 +191,24 @@ mod tests {
         assert_eq!(resent.bake_cages.first().unwrap().2, rebuilt.bake_cages.first().unwrap().2, "the cages are not rebuilt for a lost frame");
         assert_eq!(resent.bake_high.unwrap().1, first.bake_high.unwrap().1, "the high poly goes again under the same id");
         assert!(!link.busy(), "a lost frame doesn't work out the reach again");
+    }
+
+    #[test]
+    fn a_reach_finishes_while_nothing_is_drawn() {
+        let session = session();
+        let no_high_poly = BakeVisualization { high_poly: false, ..EVERYTHING };
+        for hidden in [None, Some(no_high_poly)] {
+            let mut link = BakeSceneLink::default();
+            sync(&mut link, &session, EVERYTHING);
+            assert!(link.busy(), "the first frame starts working out the reach");
+
+            let finished = (0..WAIT_FRAMES).any(|_| {
+                std::thread::sleep(WAIT_FRAME_PAUSE);
+                link.sync(&session, hidden, &mut SceneSync::default());
+                !link.busy()
+            });
+            assert!(finished, "the view stops redrawing for a reach once it is done: {hidden:?}");
+        }
     }
 
     #[test]
