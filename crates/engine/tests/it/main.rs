@@ -15,6 +15,7 @@ mod instances;
 mod materialcraft_link;
 mod materialx;
 mod materialx_import;
+mod meshmap_import;
 mod painter_gaps;
 mod path_tool;
 mod perf;

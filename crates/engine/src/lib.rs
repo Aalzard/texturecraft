@@ -31,6 +31,8 @@ mod material_preview_pixel;
 pub mod materials;
 pub mod materialx_cmds;
 pub mod meshmap_cmds;
+mod meshmap_file_name;
+pub mod meshmap_import_cmds;
 mod orb_camera;
 pub mod orb_preview;
 pub mod painting;

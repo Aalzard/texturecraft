@@ -23,6 +23,7 @@ pub mod keymap;
 mod mask_preview_image;
 mod material_preview_image;
 pub mod menus;
+pub mod new_project_advanced;
 mod orb_shape;
 pub mod parity;
 mod preview_image;

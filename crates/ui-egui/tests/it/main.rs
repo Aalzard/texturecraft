@@ -15,6 +15,7 @@ mod filter_picker;
 mod history_panel;
 mod layer_clipboard;
 mod layer_rename;
+mod new_project_baked_maps;
 mod path_list;
 mod pen_pressure;
 mod polygon_fill;
