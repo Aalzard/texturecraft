@@ -4,15 +4,18 @@ use crate::i18n::tr;
 use crate::widgets::icon_button;
 use egui::Ui;
 use egui_phosphor::regular as icon;
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use texturecraft_engine::core::{
     BakeAntialiasing, BakePaintTarget, BakeResolution, BakeSettings, CageType, CommonBakeSettings, MeshMatchMode, SkewCorrectionMethod,
 };
 
-pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSettings) {
+/// The output and high-poly sections, then cage (needs a high poly) and skew (needs a distance cage)
+pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSettings) -> Option<Value> {
+    let mut reset = Map::new();
     ui.push_id("common", |ui| {
+        // Restore Defaults keeps whether the texture set is included in the bake
         let is_enabled = settings.common.is_enabled;
-        if section(ui, tr("Common Parameters"), None, |ui| {
+        if section(ui, tr("Common Parameters"), |ui| {
             output_size(ui, &mut settings.common);
             choice(
                 ui,
@@ -29,11 +32,17 @@ pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSe
             ui.checkbox(&mut settings.common.apply_diffusion, tr("Apply Diffusion"));
         }) {
             settings.common = CommonBakeSettings { is_enabled, ..CommonBakeSettings::default() };
+            let mut defaults = json!(settings.common);
+            if let Some(fields) = defaults.as_object_mut() {
+                fields.remove("is_enabled");
+            }
+            reset.insert("common".into(), defaults);
         }
     });
+
     ui.add_space(8.0);
     ui.push_id("high_poly", |ui| {
-        if section(ui, tr("High-Poly Parameters"), None, |ui| {
+        if section(ui, tr("High-Poly Parameters"), |ui| {
             ui.checkbox(&mut settings.high_poly.use_low_as_high, tr("Use Low Poly Mesh as High Poly Mesh"));
             high_poly_files(app, ui);
             if !app.session.bake_meshes.high.is_empty() {
@@ -50,12 +59,14 @@ pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSe
             }
         }) {
             settings.high_poly = Default::default();
+            reset.insert("high_poly".into(), json!(settings.high_poly));
         }
     });
+
     if !app.session.bake_meshes.high.is_empty() {
         ui.add_space(8.0);
         ui.push_id("cage", |ui| {
-            if section(ui, tr("Cage"), None, |ui| {
+            if section(ui, tr("Cage"), |ui| {
                 choice(
                     ui,
                     tr("Cage Type"),
@@ -74,12 +85,14 @@ pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSe
                 }
             }) {
                 settings.cage = Default::default();
+                reset.insert("cage".into(), json!(settings.cage));
             }
         });
+
         if settings.cage.kind == CageType::DistanceBased {
             ui.add_space(8.0);
             ui.push_id("skew", |ui| {
-                if section(ui, tr("Skew Correction"), None, |ui| {
+                if section(ui, tr("Skew Correction"), |ui| {
                     choice(
                         ui,
                         tr("Skew Correction Method"),
@@ -95,10 +108,13 @@ pub(super) fn show(app: &mut TextureCraftApp, ui: &mut Ui, settings: &mut BakeSe
                     number(ui, tr("Edge Contrast"), &mut settings.skew.edge_contrast, 0.0..=1.0, 2);
                 }) {
                     settings.skew = Default::default();
+                    reset.insert("skew".into(), json!(settings.skew));
                 }
             });
         }
     }
+
+    (!reset.is_empty()).then_some(Value::Object(reset))
 }
 
 fn output_size(ui: &mut Ui, settings: &mut CommonBakeSettings) {

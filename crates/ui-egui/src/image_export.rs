@@ -72,11 +72,14 @@ pub(crate) fn save_png(app: &mut TextureCraftApp, name: String, w: u32, h: u32, 
     };
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let Some(path) = rfd::FileDialog::new().add_filter(tr("PNG image"), &["png"]).set_file_name(name).save_file() else { return };
-        match std::fs::write(&path, png) {
-            Ok(()) => app.toast(trf("Saved {path}", &[("path", &path.display())]), false),
-            Err(e) => app.toast(trf("Couldn't save the render: {error}", &[("error", &e)]), true),
-        }
+        use crate::file_dialogs::{Bound, FileDialog};
+        app.ask_file(FileDialog::save().filter(tr("PNG image"), &["png"]).file_name(name), Bound::App, move |app, paths| {
+            let Some(path) = paths.first() else { return };
+            match std::fs::write(path, &png) {
+                Ok(()) => app.toast(trf("Saved {path}", &[("path", &path.display())]), false),
+                Err(e) => app.toast(trf("Couldn't save the render: {error}", &[("error", &e)]), true),
+            }
+        });
     }
     #[cfg(target_arch = "wasm32")]
     match crate::web_files::download(&name, &png) {
