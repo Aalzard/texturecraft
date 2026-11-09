@@ -39,6 +39,7 @@ pub mod theme;
 pub mod thumbs;
 pub mod titlebar;
 pub mod toolbar;
+pub mod ui_state_store;
 pub mod uv_paint_point;
 pub mod viewport;
 pub mod web_files;
@@ -93,6 +94,8 @@ pub struct TextureCraftApp {
     /// A smooth move to a saved camera in progress.
     camera_glide: Option<CameraGlide>,
     pub ui: UiState,
+    /// Where `ui` is saved between runs
+    ui_store: ui_state_store::UiStateStore,
     pub gpu: Option<gpu::GpuLink>,
     pub control: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     pub toasts: Vec<Toast>,
@@ -152,7 +155,8 @@ impl TextureCraftApp {
         let gpu = cc.wgpu_render_state.as_ref().map(|render_state| gpu::init(render_state, &cc.egui_ctx));
 
         // The first run speaks the OS (or browser) language
-        let ui = cc.storage.and_then(|storage| eframe::get_value::<UiState>(storage, "ui")).unwrap_or_else(|| {
+        let mut ui_store = ui_state_store::UiStateStore::new(ui_state_store::FILE.get().cloned());
+        let ui = ui_store.load(cc.storage).unwrap_or_else(|| {
             let mut ui = UiState::default();
             ui.prefs.language = i18n::os_language().into();
             ui
@@ -163,6 +167,7 @@ impl TextureCraftApp {
             camera_glide: None,
             session,
             ui,
+            ui_store,
             gpu,
             control: None,
             toasts: Vec::new(),
@@ -194,6 +199,7 @@ impl TextureCraftApp {
         app.ui.rename = None;
         app.ui.windows.new_project = false;
         i18n::set_language(&app.ui.prefs.language);
+        app.report_ui_storage_warning();
         export_templates::load_library(&mut app, cc.storage);
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -229,6 +235,13 @@ impl TextureCraftApp {
                 self.toast(e.to_string(), true);
                 None
             }
+        }
+    }
+
+    fn report_ui_storage_warning(&mut self) {
+        if let Some(warning) = self.ui_store.take_warning() {
+            self.session.log.push(warning.clone());
+            self.toast_sticky(warning);
         }
     }
 
@@ -499,7 +512,8 @@ impl eframe::App for TextureCraftApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, "ui", &self.ui);
+        self.ui_store.save(&self.ui, storage);
+        self.report_ui_storage_warning();
         export_templates::save_library(self, storage);
     }
 
