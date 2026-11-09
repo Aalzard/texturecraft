@@ -9,6 +9,7 @@ mod content_effects;
 mod export_colour_space;
 mod filter_swap;
 mod filters;
+mod high_poly_missed;
 mod instances;
 mod materialcraft_link;
 mod materialx;
