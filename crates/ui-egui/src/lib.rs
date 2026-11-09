@@ -43,6 +43,8 @@ pub mod thumbs;
 pub mod titlebar;
 pub mod toolbar;
 pub mod ui_state_store;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod updates_ui;
 pub mod uv_paint_point;
 pub mod viewport;
 pub mod web_files;
@@ -59,6 +61,14 @@ use texturecraft_engine::bake::Progress;
 
 pub use control::ControlRequest;
 pub use state::UiState;
+
+/// The app as the updater knows it: its releases, and the icon and color of its update prompt.
+#[cfg(not(target_arch = "wasm32"))]
+pub const UPDATE_APP: craft_update::App = craft_update::App {
+    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.texturecraft.png")),
+    accent: Some([0xc2, 0x67, 0x2b]),
+    ..craft_update::App::new("texturecraft", "TextureCraft", "3D texture painting", "storytold/texturecraft")
+};
 
 /// A texture set resize running on a worker thread (`Session::resize_task`).
 pub struct ResizeJob {
@@ -147,6 +157,9 @@ pub struct TextureCraftApp {
     styled: Option<(theme::Brightness, theme::Accent)>,
     /// Whether the window had focus last frame.
     focused: bool,
+    /// The update check and prompt (desktop only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) updates_rt: updates_ui::Runtime,
 }
 
 impl TextureCraftApp {
@@ -201,6 +214,8 @@ impl TextureCraftApp {
             next_autosave,
             styled: None,
             focused: true,
+            #[cfg(not(target_arch = "wasm32"))]
+            updates_rt: updates_ui::Runtime::default(),
         };
         app.ui.rename = None;
         app.ui.windows.new_project = false;
@@ -565,6 +580,8 @@ impl eframe::App for TextureCraftApp {
             web_files::sync_unsaved(self);
         }
         self.fonts.update(ctx, i18n::current().code, self.ui.windows.settings);
+        #[cfg(not(target_arch = "wasm32"))]
+        updates_ui::tick(self, ctx);
         menus::shortcuts(self, ctx);
         // A stored path being edited repaints its sublayer as its points, brush or material change.
         if let Err(e) = self.session.path_live() {
@@ -595,6 +612,8 @@ impl eframe::App for TextureCraftApp {
         let frame = if hide { egui::Frame::NONE.fill(tk.viewport) } else { egui::Frame::NONE.fill(tk.chrome).inner_margin(theme::GUTTER) };
         egui::CentralPanel::default().frame(frame).show(ui, |ui| if hide { viewport::central(self, ui) } else { docking::show(self, ui) });
         windows::show(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        updates_ui::show(self, &ctx);
         toasts(self, &ctx);
         let end = now_ms();
         let dt = (end - t0) as f32;

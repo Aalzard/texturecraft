@@ -146,6 +146,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Channel", "チャンネル"),
     ("Channel source: uniform value, procedural, image or anchor", "チャンネルのソース: 均一値、プロシージャル、画像、アンカー"),
     ("Channels", "チャンネル"),
+    ("Check for Updates...", "アップデートを確認..."),
     ("Checker", "チェッカー"),
     ("Clamp", "クランプ"),
     ("Clear", "クリア"),
