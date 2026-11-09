@@ -8,18 +8,23 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod bake_mode;
+mod bake_scene;
+mod color_selection_editor;
 pub mod control;
 pub mod dock;
 pub mod docking;
 pub mod export_templates;
+mod filter_slot;
 pub mod fonts;
 pub mod gpu;
 pub mod i18n;
+pub mod id_color_pick;
 pub mod keymap;
 mod mask_preview_image;
-mod mask_shape;
+mod material_preview_image;
 pub mod menus;
 pub mod new_project_advanced;
+mod orb_shape;
 pub mod parity;
 mod preview_image;
 mod preview_request;
@@ -27,13 +32,18 @@ mod preview_worker;
 pub mod profile;
 pub mod properties_popup;
 pub mod render_mode;
+mod resource_picker;
+mod resource_picker_item;
 pub mod shelf;
 pub mod shelf_preview;
+mod soft_box;
 pub mod state;
 pub mod theme;
 pub mod thumbs;
 pub mod titlebar;
 pub mod toolbar;
+pub mod ui_state_store;
+pub mod uv_paint_point;
 pub mod viewport;
 pub mod web_files;
 pub mod widgets;
@@ -87,6 +97,8 @@ pub struct TextureCraftApp {
     /// A smooth move to a saved camera in progress.
     camera_glide: Option<CameraGlide>,
     pub ui: UiState,
+    /// Where `ui` is saved between runs
+    ui_store: ui_state_store::UiStateStore,
     pub gpu: Option<gpu::GpuLink>,
     pub control: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     pub toasts: Vec<Toast>,
@@ -111,10 +123,14 @@ pub struct TextureCraftApp {
     pub profiler: profile::Profiler,
     /// Where the last 3D stroke ended (viewport pixels), for Shift+click straight lines.
     pub last_paint_point: Option<texturecraft_engine::geom::glam::Vec2>,
+    /// The last finished 2D stroke's endpoint, scoped to its mesh and texture set for Shift+click lines
+    pub last_paint_uv: Option<uv_paint_point::UvPaintPoint>,
     /// The decal layer the next click in the 3D view places.
     pub placing_decal: Option<texturecraft_engine::core::LayerId>,
     /// The Properties popup a right click in a view opens.
     pub properties_popup: Option<properties_popup::PropertiesPopup>,
+    /// The color selection the next click in the 3D or 2D view picks an ID color for
+    pub picking_id_color: Option<id_color_pick::IdColorPick>,
     /// The wgpu state (screenshots read the renderer's targets).
     pub render_state: Option<eframe::egui_wgpu::RenderState>,
     /// CJK fallback fonts for the UI language.
@@ -134,23 +150,29 @@ pub struct TextureCraftApp {
 }
 
 impl TextureCraftApp {
+    /// The app around `session`, with the saved UI state (or defaults in the OS language) and the GPU viewport.
     pub fn new(cc: &eframe::CreationContext<'_>, session: Session) -> TextureCraftApp {
         theme::install(&cc.egui_ctx);
-        // Bakes cast their rays on a GPU device of their own (created on the first bake).
+
+        // Bakes cast their rays on a GPU device of their own (created on the first bake)
         #[cfg(not(target_arch = "wasm32"))]
         texturecraft_engine::bake::install_gpu_tracer(Arc::new(texturecraft_render::gpu_bake::GpuBaker::new()));
-        let gpu = cc.wgpu_render_state.as_ref().map(|rs| gpu::init(rs, &cc.egui_ctx));
-        // The first run speaks the OS (or browser) language.
-        let ui = cc.storage.and_then(|s| eframe::get_value::<UiState>(s, "ui")).unwrap_or_else(|| {
+        let gpu = cc.wgpu_render_state.as_ref().map(|render_state| gpu::init(render_state, &cc.egui_ctx));
+
+        // The first run speaks the OS (or browser) language
+        let mut ui_store = ui_state_store::UiStateStore::new(ui_state_store::FILE.get().cloned());
+        let ui = ui_store.load(cc.storage).unwrap_or_else(|| {
             let mut ui = UiState::default();
             ui.prefs.language = i18n::os_language().into();
             ui
         });
         let next_autosave = ui.prefs.autosave_minutes as f64 * 60.0;
+
         let mut app = TextureCraftApp {
             camera_glide: None,
             session,
             ui,
+            ui_store,
             gpu,
             control: None,
             toasts: Vec::new(),
@@ -167,8 +189,10 @@ impl TextureCraftApp {
             brushes: None,
             render: render_mode::RenderView::default(),
             last_paint_point: None,
+            last_paint_uv: None,
             placing_decal: None,
             properties_popup: None,
+            picking_id_color: None,
             render_state: cc.wgpu_render_state.clone(),
             fonts: fonts::UiFonts::default(),
             banner: None,
@@ -181,18 +205,23 @@ impl TextureCraftApp {
         app.ui.rename = None;
         app.ui.windows.new_project = false;
         i18n::set_language(&app.ui.prefs.language);
+        app.report_ui_storage_warning();
         export_templates::load_library(&mut app, cc.storage);
+
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // The first window of the process fixes it; a new folder applies on restart.
+            // The first window of the process fixes it; a new folder applies on restart
             let _ = DATA_FOLDER.set(data_folder(&app.ui.prefs.data_folder));
-            // An export folder still at the default follows the data folder.
+
+            // An export folder still at the default follows the data folder
             if app.ui.export.dir == data_folder("").join("export").display().to_string() {
                 app.ui.export.dir = user_dir("export").display().to_string();
             }
+
             let skipped = app.session.load_templates(user_dir("templates"));
-            app.session.log.extend(skipped.into_iter().map(|w| format!("Project template skipped: {w}")));
+            app.session.log.extend(skipped.into_iter().map(|warning| format!("Project template skipped: {warning}")));
         }
+
         app
     }
 
@@ -212,6 +241,13 @@ impl TextureCraftApp {
                 self.toast(e.to_string(), true);
                 None
             }
+        }
+    }
+
+    fn report_ui_storage_warning(&mut self) {
+        if let Some(warning) = self.ui_store.take_warning() {
+            self.session.log.push(warning.clone());
+            self.toast_sticky(warning);
         }
     }
 
@@ -482,7 +518,8 @@ impl eframe::App for TextureCraftApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, "ui", &self.ui);
+        self.ui_store.save(&self.ui, storage);
+        self.report_ui_storage_warning();
         export_templates::save_library(self, storage);
     }
 

@@ -304,6 +304,9 @@ pub struct UiState {
     /// The brush that paints the skew correction map in the 2D view of bake mode.
     #[serde(default)]
     pub bake_paint_brush: crate::bake_mode::BakePaintBrush,
+    /// What bake mode's 3D view draws besides the low poly (the Baking Visualization panel)
+    #[serde(default)]
+    pub bake_visualization: crate::bake_mode::BakeVisualizationToggles,
 }
 
 impl UiState {
@@ -373,6 +376,7 @@ impl Default for UiState {
             recent: Vec::new(),
             keymap: Keymap::new(),
             bake_paint_brush: crate::bake_mode::BakePaintBrush::default(),
+            bake_visualization: crate::bake_mode::BakeVisualizationToggles::default(),
         }
     }
 }
@@ -437,35 +441,13 @@ mod tests {
         }
     }
 
-    /// The app's own settings store: eframe keeps `UiState` as RON text under a key
-    #[derive(Default)]
-    struct MemoryStorage(std::collections::HashMap<String, String>);
-
-    impl eframe::Storage for MemoryStorage {
-        fn get_string(&self, key: &str) -> Option<String> {
-            self.0.get(key).cloned()
-        }
-
-        fn set_string(&mut self, key: &str, value: String) {
-            self.0.insert(key.to_string(), value);
-        }
-
-        fn remove_string(&mut self, key: &str) {
-            self.0.remove(key);
-        }
-
-        fn flush(&mut self) {}
-    }
-
     #[test]
     fn the_bake_layout_survives_a_restart_whichever_mode_was_open() {
         for mode in [Mode::Painting, Mode::Baking] {
             let mut ui = UiState { mode, ..UiState::default() };
             ui.sync_mode_dock();
-            let mut storage = MemoryStorage::default();
-            eframe::set_value(&mut storage, "ui", &ui);
 
-            let mut restarted: UiState = eframe::get_value(&storage, "ui").unwrap();
+            let mut restarted = crate::ui_state_store::tests::restart(&ui);
             restarted.sync_mode_dock();
             let bake_dock = if mode == Mode::Baking { &restarted.dock } else { &restarted.inactive_mode_dock };
             assert_eq!(*bake_dock, Dock::for_baking(), "{mode:?}");
