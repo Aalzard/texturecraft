@@ -837,6 +837,9 @@ pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) ->
         }
         "file.importResources" | "resource.import" => {
             app.ask_file(FileDialog::open_many().filter(tr("Images"), crate::web_files::IMAGE_EXTS), Bound::Project, |app, paths| {
+                if paths.is_empty() {
+                    return;
+                }
                 for p in paths {
                     if let Some(r) = app.run("resource.import", json!({"path": p.display().to_string()})) {
                         let name = r.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();

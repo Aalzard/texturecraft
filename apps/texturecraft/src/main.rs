@@ -17,6 +17,11 @@ use texturecraft_ui_egui::{TextureCraftApp, UiState};
 /// The app name eframe keeps the settings under (`eframe::storage_dir`).
 const APP_NAME: &str = "TextureCraft";
 
+/// The window's size when it opens, in points.
+const DEFAULT_SIZE: [f32; 2] = [1600.0, 960.0];
+/// The smallest size the window can be resized to, in points.
+const MIN_SIZE: [f32; 2] = [960.0, 600.0];
+
 const ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.texturecraft.png");
 
 fn version() -> String {
@@ -202,7 +207,7 @@ fn main() {
         let _ = ui_state_store::FILE.set(file.clone());
     }
     let title_bar = TitleBar::decide(saved_system_title_bar(ui_file.as_deref(), persistence_path.as_deref()));
-    let mut viewport = egui::ViewportBuilder::default().with_title(APP_NAME).with_inner_size([1600.0, 960.0]).with_min_inner_size([960.0, 600.0]);
+    let mut viewport = egui::ViewportBuilder::default().with_title(APP_NAME).with_inner_size(DEFAULT_SIZE).with_min_inner_size(MIN_SIZE);
     if let Some(i) = icon() {
         viewport = viewport.with_icon(i);
     }
