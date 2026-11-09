@@ -90,6 +90,7 @@ impl ThumbSnapshot {
             gbuf: &self.gbuf,
             pixels: &self.pixels,
             baked: &self.baked,
+            block_scales: self.project.texture_set(self.ts).map(|set| set.block_scales()).unwrap_or_default(),
             preview: None,
             images: &self.images,
             bounds: self.bounds,

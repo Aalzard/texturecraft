@@ -100,7 +100,7 @@ fn content(inp: &Inputs, layer: LayerId, channel: Channel, upto: Option<LayerId>
     {
         return None;
     }
-    let cut_inp = Inputs { project: &cut, preview: None, ..*inp };
+    let cut_inp = Inputs { project: &cut, preview: None, block_scales: inp.block_scales.clone(), ..*inp };
     let (w, h) = (inp.gbuf.width, inp.gbuf.height);
     // A paint or fill layer shows its own coverage (transparent where nothing is painted); a
     // folder shows its children composited over the channel's default.
@@ -163,7 +163,7 @@ fn mask(inp: &Inputs, layer: LayerId, upto: Option<LayerId>) -> Option<ThumbImag
     {
         return None;
     }
-    let cut_inp = Inputs { project: &cut, preview: None, ..*inp };
+    let cut_inp = Inputs { project: &cut, preview: None, block_scales: inp.block_scales.clone(), ..*inp };
     let (w, h) = (inp.gbuf.width, inp.gbuf.height);
     let gray = mask_image(&cut_inp, layer, w)?;
     let mut rgba = Vec::with_capacity((w * h) as usize * 4);
