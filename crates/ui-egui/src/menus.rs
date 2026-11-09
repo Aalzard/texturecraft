@@ -100,6 +100,8 @@ pub const CATALOG: &[Item] = &[
     it("Help", "Report a bug...", "ui.help.bug", None),
     sep("Help"),
     it("Help", "Show log...", "ui.view.log", None),
+    #[cfg(not(target_arch = "wasm32"))]
+    it("Help", "Check for Updates...", "ui.help.checkForUpdates", None),
     it("Help", "About TextureCraft...", "ui.about", None),
 ];
 
@@ -165,6 +167,8 @@ pub fn invoke(app: &mut TextureCraftApp, ctx: &egui::Context, id: &str) {
         "ui.layout.2d" => app.ui.layout = ViewLayout::Only2D,
         "ui.help.shortcuts" => app.ui.windows.shortcuts = true,
         "ui.about" => app.ui.windows.about = true,
+        #[cfg(not(target_arch = "wasm32"))]
+        "ui.help.checkForUpdates" => crate::updates_ui::request_check(app, ctx),
         "ui.help.discord" => ctx.open_url(egui::OpenUrl::new_tab("https://discord.gg/artcraft")),
         "ui.help.website" => ctx.open_url(egui::OpenUrl::new_tab("https://getartcraft.com/apps/texturecraft")),
         "ui.help.docs" => ctx.open_url(egui::OpenUrl::new_tab("https://github.com/storytold/texturecraft#readme")),
@@ -279,7 +283,7 @@ fn menu_item(app: &mut TextureCraftApp, ctx: &egui::Context, ui: &mut egui::Ui, 
 /// Keys pressed in a floating panel's own OS window run the shortcuts the main window's keys do.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn forwarded_shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context, events: Vec<egui::Event>, held: Modifiers) {
-    if crate::keymap::capturing(ctx) {
+    if crate::keymap::capturing(ctx) || crate::updates_ui::blocks_input(app) {
         return;
     }
     let active = crate::keymap::active(&app.ui.keymap);
@@ -308,6 +312,10 @@ fn effect_command<'a>(app: &TextureCraftApp, id: &'a str) -> &'a str {
 /// Runs the commands bound to the keys pressed this frame, outside text fields and key capture
 pub fn shortcuts(app: &mut TextureCraftApp, ctx: &egui::Context) {
     if crate::keymap::capturing(ctx) || (ctx.memory(|memory| memory.focused().is_some()) && ctx.egui_wants_keyboard_input()) {
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::updates_ui::blocks_input(app) {
         return;
     }
 

@@ -30,6 +30,8 @@ zip = { workspace = true }
 sys-locale = "0.3"
 # Floating panels open as OS windows.
 craft-ui = { workspace = true, features = ["native-windows"] }
+# Help > Check for Updates and the check at start (updates_ui.rs).
+craft-update = { workspace = true }
 
 # build.rs: the interface faces lose their Private Use Area, where the icon font draws (the
 # versions craft-libs' craft-fonts-build subsets with).

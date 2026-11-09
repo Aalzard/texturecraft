@@ -140,6 +140,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Channel", "القناة"),
     ("Channel source: uniform value, procedural, image or anchor", "مصدر القناة: قيمة موحدة، إجرائي، صورة أو نقطة ارتكاز"),
     ("Channels", "القنوات"),
+    ("Check for Updates...", "التحقق من وجود تحديثات..."),
     ("Checker", "رقعة شطرنج"),
     ("Clamp", "تقييد القيم"),
     ("Clear", "مسح"),

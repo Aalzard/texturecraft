@@ -165,7 +165,17 @@ impl eframe::App for Shell {
     }
 }
 
+/// A script driving the app gets no network check and no update prompt over its window.
+fn checks_for_updates_at_start(control: Option<u16>) -> bool {
+    control.is_none()
+}
+
 fn main() {
+    // Windows: the update helper is a copy of this program started with `--finish-update`.
+    #[cfg(windows)]
+    if let Some(result) = craft_update::self_update::finish(&texturecraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        std::process::exit(i32::from(result.is_err()));
+    }
     let args = match parse_args() {
         Ok(Some(a)) => a,
         Ok(None) => return,
@@ -217,6 +227,7 @@ fn main() {
             let mut app = TextureCraftApp::new(cc, session);
             app.title_bar = title_bar;
             app.ui.windows.start = start && app.ui.prefs.start_window;
+            app.set_startup_update_check(checks_for_updates_at_start(control));
             if let Some(port) = control {
                 app.control = Some(control_server::start(port, cc.egui_ctx.clone()));
             }
@@ -280,6 +291,12 @@ mod tests {
         let args = parse_args_from(["--power-pref".to_string(), "low".to_string(), "--gpu".to_string(), "3080".to_string()]).unwrap().unwrap();
         assert_eq!(args.power_pref, Some(eframe::wgpu::PowerPreference::LowPower));
         assert_eq!(args.gpu.as_deref(), Some("3080"));
+    }
+
+    #[test]
+    fn only_a_run_without_a_control_port_checks_for_updates_at_start() {
+        assert!(checks_for_updates_at_start(None));
+        assert!(!checks_for_updates_at_start(Some(9000)));
     }
 
     #[test]

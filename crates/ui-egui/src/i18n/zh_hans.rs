@@ -131,6 +131,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Channel", "通道"),
     ("Channel source: uniform value, procedural, image or anchor", "通道来源：统一值、程序纹理、图像或锚点"),
     ("Channels", "通道"),
+    ("Check for Updates...", "检查更新..."),
     ("Checker", "棋盘格"),
     ("Clamp", "钳制"),
     ("Clear", "清除"),

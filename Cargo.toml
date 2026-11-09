@@ -66,6 +66,8 @@ rustix = { version = "1", default-features = false, features = ["std", "fs", "pr
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "f8f8829cc7be65d466d687dae381d1ca60e31242", features = ["serde"] }
 # Who draws the window frame, and the app-drawn strip as the title bar (crates/ui-egui/src/titlebar.rs).
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "f8f8829cc7be65d466d687dae381d1ca60e31242", features = ["egui"] }
+# Release checks, the update prompt and the update helper (crates/ui-egui/src/updates_ui.rs).
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d", features = ["egui"] }
 
 # egui 0.37 and winit: the suite's forks (storytold/egui, storytold/winit), as craft-libs pins them.
 [patch.crates-io]

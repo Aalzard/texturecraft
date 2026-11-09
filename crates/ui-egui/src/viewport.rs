@@ -978,6 +978,10 @@ const HANDLE_GRAB: f32 = 8.0;
 /// Path tool keys: Enter applies the path, Backspace removes its last point (Esc, handled with
 /// the global shortcuts, cancels it).
 fn path_keys(app: &mut TextureCraftApp, ui: &Ui) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::updates_ui::blocks_input(app) {
+        return;
+    }
     if app.ui.mode != crate::state::Mode::Painting
         || app.session.tool.tool != Tool::Path
         || app.session.tool.path.points.is_empty()
