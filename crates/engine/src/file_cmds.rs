@@ -331,13 +331,13 @@ mod native {
         strp(p, key).filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(cmd, format!("`{key}` is required")))
     }
 
-    /// Mesh file `path` with the files it references next to it folded in (a `.gltf`'s buffers
-    /// and images, a loose USD layer's textures), ready to import and store in the project.
     /// `path` made absolute (as given when that fails), for [`Project::mesh_path`].
     pub fn absolute(path: &str) -> String {
         std::path::absolute(Path::new(path)).map_or_else(|_| path.to_string(), |p| p.display().to_string())
     }
 
+    /// Mesh file `path` with the files it references next to it folded in (a `.gltf`'s buffers
+    /// and images, a loose USD layer's textures), ready to import and store in the project.
     pub fn read_mesh(cmd: &str, path: &str) -> Result<texturecraft_formats::MeshFile> {
         texturecraft_formats::read_mesh_file(Path::new(path)).map_err(|e| bad(cmd, format!("cannot read {path}: {e}")))
     }
@@ -375,6 +375,8 @@ mod native {
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{absolute, open_path, read_mesh};
 
+/// `file.new {mesh, name?, resolution?, uvTiles?, template?}`: a new project from the mesh file `mesh`,
+/// remembering its path for Reimport mesh.
 #[cfg(not(target_arch = "wasm32"))]
 fn new_from_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let path = native::path_param(p, "mesh", "file.new")?;
@@ -421,22 +423,28 @@ fn save_copy(s: &mut Session, p: &Value) -> Result<Value> {
     native::save_to(s, &path, false)
 }
 
+/// `file.reimportMesh {path?, preserveStrokes?}`: reimport from `path`, or from the project's own
+/// copy of the mesh when there is none. A path given is remembered as the project's mesh path.
+/// The remembered path is never read implicitly (a project file could point it anywhere on the
+/// host); callers that may read host files pass [`Session::remembered_mesh_path`] as `path`.
 #[cfg(not(target_arch = "wasm32"))]
 fn reimport(s: &mut Session, p: &Value) -> Result<Value> {
-    // No path given: read the file the project's mesh came from, as it is on disk now. Only when
-    // that file is gone does it fall back to the project's own copy of the mesh.
-    let remembered = Some(s.doc.project.mesh_path.as_str()).filter(|m| !m.is_empty() && std::path::Path::new(m).is_file());
-    let path = strp(p, "path").or(remembered).map(str::to_string);
-    let file = path.as_deref().map(|path| native::read_mesh("file.reimportMesh", path)).transpose()?;
+    let path = strp(p, "path");
+    let file = path.map(|path| native::read_mesh("file.reimportMesh", path)).transpose()?;
     let reply = s.reimport_mesh(file, crate::commands::boolp(p, "preserveStrokes").unwrap_or(false))?;
     if let Some(path) = path {
-        s.doc.project.mesh_path = native::absolute(&path);
+        s.doc.project.mesh_path = native::absolute(path);
     }
     Ok(reply)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Session {
+    /// The file the mesh was imported from, when it is still there: what Reimport mesh reads again.
+    pub fn remembered_mesh_path(&self) -> Option<&str> {
+        Some(self.doc.project.mesh_path.as_str()).filter(|m| !m.is_empty() && std::path::Path::new(m).is_file())
+    }
+
     /// Replace the mesh with `file` (or re-read the project's own copy) and keep the project:
     /// texture sets map by material index. Nothing changes unless the new mesh fits the project.
     /// With `preserve_strokes`, painted pixels follow the surface where the UVs changed. Replies
@@ -655,11 +663,15 @@ f 1/1 2/2 3/3
         std::fs::write(&file, obj(0.5)).unwrap();
         let mut reopened = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
         assert_eq!(low(&reopened), 0.0, "the project still holds the old copy");
+        // A command without a path never reads the remembered host path (automation allows it).
         crate::execute(&mut reopened, "file.reimportMesh", &Value::Null).unwrap();
+        assert_eq!(low(&reopened), 0.0, "no path: the project's own copy");
+        let remembered = reopened.remembered_mesh_path().map(str::to_string).expect("the imported file is remembered");
+        crate::execute(&mut reopened, "file.reimportMesh", &json!({ "path": remembered })).unwrap();
         assert!(low(&reopened) > 0.0, "the edited file must be read again");
-        // The file gone: the project's own copy is used instead of failing.
+        // The file gone: nothing is remembered, so the UI asks for one.
         std::fs::remove_file(&file).unwrap();
-        crate::execute(&mut reopened, "file.reimportMesh", &Value::Null).unwrap();
+        assert!(reopened.remembered_mesh_path().is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
