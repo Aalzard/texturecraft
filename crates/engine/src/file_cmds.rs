@@ -333,6 +333,11 @@ mod native {
 
     /// Mesh file `path` with the files it references next to it folded in (a `.gltf`'s buffers
     /// and images, a loose USD layer's textures), ready to import and store in the project.
+    /// `path` made absolute (as given when that fails), for [`Project::mesh_path`].
+    pub fn absolute(path: &str) -> String {
+        std::path::absolute(Path::new(path)).map_or_else(|_| path.to_string(), |p| p.display().to_string())
+    }
+
     pub fn read_mesh(cmd: &str, path: &str) -> Result<texturecraft_formats::MeshFile> {
         texturecraft_formats::read_mesh_file(Path::new(path)).map_err(|e| bad(cmd, format!("cannot read {path}: {e}")))
     }
@@ -349,6 +354,7 @@ mod native {
         } else {
             let f = read_mesh("file.open", path)?;
             let mut s = Session::from_mesh_bytes(&f.name, &f.bytes, 2048, &stem_of(path))?;
+            s.doc.project.mesh_path = absolute(path);
             s.log.extend(f.warnings);
             Ok(s)
         }
@@ -367,7 +373,7 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{open_path, read_mesh};
+pub use native::{absolute, open_path, read_mesh};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn new_from_mesh(s: &mut Session, p: &Value) -> Result<Value> {
@@ -377,6 +383,7 @@ fn new_from_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let res = u64p(p, "resolution").or(template.as_ref().map(|t| u64::from(t.resolution))).unwrap_or(2048);
     let name = strp(p, "name").map(str::to_string).unwrap_or_else(|| stem_of(path));
     let mut next = Session::from_mesh_bytes_tiled(&f.name, &f.bytes, u32::try_from(res).unwrap_or(0), &name, crate::commands::boolp(p, "uvTiles"))?;
+    next.doc.project.mesh_path = native::absolute(path);
     next.log.extend(f.warnings);
     if let Some(t) = &template {
         next.apply_template(t);
@@ -416,8 +423,16 @@ fn save_copy(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn reimport(s: &mut Session, p: &Value) -> Result<Value> {
-    let file = strp(p, "path").map(|path| native::read_mesh("file.reimportMesh", path)).transpose()?;
-    s.reimport_mesh(file, crate::commands::boolp(p, "preserveStrokes").unwrap_or(false))
+    // No path given: read the file the project's mesh came from, as it is on disk now. Only when
+    // that file is gone does it fall back to the project's own copy of the mesh.
+    let remembered = Some(s.doc.project.mesh_path.as_str()).filter(|m| !m.is_empty() && std::path::Path::new(m).is_file());
+    let path = strp(p, "path").or(remembered).map(str::to_string);
+    let file = path.as_deref().map(|path| native::read_mesh("file.reimportMesh", path)).transpose()?;
+    let reply = s.reimport_mesh(file, crate::commands::boolp(p, "preserveStrokes").unwrap_or(false))?;
+    if let Some(path) = path {
+        s.doc.project.mesh_path = native::absolute(&path);
+    }
+    Ok(reply)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -610,6 +625,43 @@ fn close(s: &mut Session, _: &Value) -> Result<Value> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    /// Reimport mesh reads the mesh file again from where it was imported, so a change saved to
+    /// the file since shows up (it used to re-read the project's own copy and change nothing).
+    #[test]
+    fn reimport_picks_up_changes_saved_to_the_mesh_file() {
+        let dir = std::env::temp_dir().join(format!("tc_reimport_disk_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("tri.obj");
+        let obj = |z: f32| {
+            format!(
+                "v -1 -1 {z}
+v 1 -1 0
+v 1 1 0
+vt 0 0
+vt 1 0
+vt 1 1
+f 1/1 2/2 3/3
+"
+            )
+        };
+        std::fs::write(&file, obj(0.0)).unwrap();
+        let path = file.display().to_string();
+        let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
+        crate::execute(&mut s, "file.new", &json!({"mesh": path, "resolution": 128})).unwrap();
+        let low = |s: &Session| s.mesh.positions.iter().map(|p| p.z.abs()).fold(0.0_f32, f32::max);
+        assert_eq!(low(&s), 0.0);
+        // Edit the file, save the project, reopen it, then reimport with no path.
+        std::fs::write(&file, obj(0.5)).unwrap();
+        let mut reopened = Session::from_project_bytes(&s.to_project_bytes().unwrap()).unwrap();
+        assert_eq!(low(&reopened), 0.0, "the project still holds the old copy");
+        crate::execute(&mut reopened, "file.reimportMesh", &Value::Null).unwrap();
+        assert!(low(&reopened) > 0.0, "the edited file must be read again");
+        // The file gone: the project's own copy is used instead of failing.
+        std::fs::remove_file(&file).unwrap();
+        crate::execute(&mut reopened, "file.reimportMesh", &Value::Null).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn reimporting_a_saved_project_marks_it_modified() {

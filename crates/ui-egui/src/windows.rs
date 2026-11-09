@@ -833,7 +833,9 @@ pub fn file_action(app: &mut TextureCraftApp, _ctx: &egui::Context, id: &str) ->
         }
         "file.reimportMesh" => {
             // Painted strokes follow the surface when the new mesh's UVs differ.
-            let path = match app.session.mesh_source {
+            // The file the mesh came from is read again from disk; ask only when it's gone.
+            let remembered = Some(app.session.doc.project.mesh_path.as_str()).filter(|m| !m.is_empty() && std::path::Path::new(m).is_file());
+            let path = match remembered {
                 Some(_) => None,
                 None => match rfd::FileDialog::new().add_filter(tr("3D meshes"), &texturecraft_engine::formats::mesh_import::MESH_EXTENSIONS).pick_file() {
                     Some(p) => Some(p.display().to_string()),
