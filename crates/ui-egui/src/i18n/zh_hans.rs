@@ -1043,4 +1043,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Visible polygons only", "仅可见多边形"),
     ("\"{layer}\" can't be filled: select a paint layer or a layer's mask", "“{layer}”无法填充：请选择绘画图层或图层遮罩"),
+    ("The file dialog couldn't be shown: {error}", "无法显示文件对话框：{error}"),
+    ("The project changed while the dialog was open, so nothing was done", "对话框打开期间项目已更改，因此未执行任何操作"),
 ];

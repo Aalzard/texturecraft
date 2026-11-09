@@ -223,6 +223,11 @@ fn main() {
             if let Some(w) = cc.winit_window() {
                 set_taskbar_icon(w);
             }
+            // winit's Quit ends the process without asking; this menu's asks like the close button.
+            #[cfg(target_os = "macos")]
+            if let Err(e) = craft_menu::mac::install_app_menu(&cc.egui_ctx, APP_NAME) {
+                log::warn!("the app menu could not be installed: {e}");
+            }
             let window_frame = window_frame::service(cc, matches!(title_bar, TitleBar::App(_)));
             let mut app = TextureCraftApp::new(cc, session);
             app.title_bar = title_bar;

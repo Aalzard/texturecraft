@@ -1109,4 +1109,6 @@ pub const TABLE: &[(&str, &str)] = &[
         "\"{layer}\" can't be filled: select a paint layer or a layer's mask",
         "「{layer}」は塗りつぶせません: ペイントレイヤーまたはレイヤーマスクを選択してください",
     ),
+    ("The file dialog couldn't be shown: {error}", "ファイルダイアログを表示できませんでした: {error}"),
+    ("The project changed while the dialog was open, so nothing was done", "ダイアログを開いている間にプロジェクトが変更されたため、何も実行されませんでした"),
 ];
