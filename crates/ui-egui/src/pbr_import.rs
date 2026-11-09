@@ -53,9 +53,12 @@ pub fn begin(app: &mut TextureCraftApp, source: Value) {
 /// File › Import PBR texture folder: choose the folder.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn pick(app: &mut TextureCraftApp) {
-    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-        begin(app, json!({ "path": dir.display().to_string() }));
-    }
+    use crate::file_dialogs::{Bound, FileDialog};
+    app.ask_file(FileDialog::folder(), Bound::Project, |app, paths| {
+        if let Some(dir) = paths.first() {
+            begin(app, json!({ "path": dir.display().to_string() }));
+        }
+    });
 }
 
 /// Dropped paths: a folder, a zip, or two or more image files that name PBR maps open the
