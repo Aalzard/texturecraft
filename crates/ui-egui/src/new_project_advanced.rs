@@ -57,7 +57,11 @@ pub(crate) fn advanced_settings(app: &mut TextureCraftApp, ui: &mut Ui) {
         });
         if file_dialogs_available() {
             ui.add_space(4.0);
-            section(ui, "np_baked_maps", tr("Import baked maps"), false, |ui| baked_maps(&mut app.ui.new_project, ui));
+            section(ui, "np_baked_maps", tr("Import baked maps"), false, |ui| {
+                if baked_maps(&mut app.ui.new_project, ui) {
+                    ask_baked_map_files(app);
+                }
+            });
         }
     });
 }
@@ -76,8 +80,10 @@ fn normal_format_combo(app: &mut TextureCraftApp, ui: &mut Ui) {
     });
 }
 
-fn baked_maps(new_project: &mut NewProject, ui: &mut Ui) {
+/// The baked map list and its buttons; true when Add was clicked.
+fn baked_maps(new_project: &mut NewProject, ui: &mut Ui) -> bool {
     let tokens = Tokens::get(ui.ctx());
+    let mut add = false;
     ui.horizontal(|ui| {
         let buttons_width = 2.0 * FILE_BUTTON_WIDTH + ui.spacing().item_spacing.x;
         let hint_width = (ui.available_width() - buttons_width - ui.spacing().item_spacing.x).max(0.0);
@@ -86,14 +92,14 @@ fn baked_maps(new_project: &mut NewProject, ui: &mut Ui) {
             ui.add(egui::Label::new(RichText::new(tr("Name each file after its texture set, like Body_normal.png")).color(tokens.text_dim)).wrap());
         });
         if ui.add(egui::Button::new(tr("Add...")).min_size(vec2(FILE_BUTTON_WIDTH, 0.0))).clicked() {
-            add_baked_map_files(new_project, pick_baked_map_files());
+            add = true;
         }
         if ui.add_enabled(!new_project.baked_maps.is_empty(), egui::Button::new(tr("Clear")).min_size(vec2(FILE_BUTTON_WIDTH, 0.0))).clicked() {
             new_project.baked_maps.clear();
         }
     });
     if new_project.baked_maps.is_empty() {
-        return;
+        return add;
     }
 
     ui.add_space(4.0);
@@ -102,6 +108,7 @@ fn baked_maps(new_project: &mut NewProject, ui: &mut Ui) {
             ui.add(egui::Label::new(file_name(path)).truncate()).on_hover_text(path.as_str());
         }
     });
+    add
 }
 
 /// List picked baked map files (files already listed are skipped)
@@ -145,12 +152,12 @@ fn file_name(path: &str) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn pick_baked_map_files() -> Vec<String> {
-    let files = rfd::FileDialog::new().add_filter(tr("Images"), crate::web_files::IMAGE_EXTS).pick_files();
-    files.unwrap_or_default().into_iter().map(|path| path.display().to_string()).collect()
+fn ask_baked_map_files(app: &mut TextureCraftApp) {
+    use crate::file_dialogs::{Bound, FileDialog};
+    app.ask_file(FileDialog::open_many().filter(tr("Images"), crate::web_files::IMAGE_EXTS), Bound::App, |app, files| {
+        add_baked_map_files(&mut app.ui.new_project, files.into_iter().map(|path| path.display().to_string()).collect());
+    });
 }
 
 #[cfg(target_arch = "wasm32")]
-fn pick_baked_map_files() -> Vec<String> {
-    Vec::new()
-}
+fn ask_baked_map_files(_app: &mut TextureCraftApp) {}

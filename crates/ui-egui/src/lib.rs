@@ -14,6 +14,8 @@ pub mod control;
 pub mod dock;
 pub mod docking;
 pub mod export_templates;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod file_dialogs;
 mod filter_slot;
 pub mod fonts;
 pub mod gpu;
@@ -160,6 +162,17 @@ pub struct TextureCraftApp {
     /// The update check and prompt (desktop only).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// Native file dialogs and their continuations (desktop only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub file_dialogs: file_dialogs::FileDialogs,
+    /// The unsaved-changes dialog's Save is waiting on the Save dialog's answer.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) saving_for_prompt: bool,
+    /// That Save dialog saved the project; the prompt goes on at its next frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) prompt_saved: bool,
+    /// The resolved keymap and its key dispatcher.
+    pub(crate) bindings: keymap::Bindings,
 }
 
 impl TextureCraftApp {
@@ -216,6 +229,13 @@ impl TextureCraftApp {
             focused: true,
             #[cfg(not(target_arch = "wasm32"))]
             updates_rt: updates_ui::Runtime::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            file_dialogs: file_dialogs::FileDialogs::new(cc.egui_ctx.clone()),
+            #[cfg(not(target_arch = "wasm32"))]
+            saving_for_prompt: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            prompt_saved: false,
+            bindings: keymap::Bindings::default(),
         };
         app.ui.rename = None;
         app.ui.windows.new_project = false;
@@ -553,6 +573,8 @@ impl eframe::App for TextureCraftApp {
         }
         self.step_camera_glide(ctx);
         control::poll(self, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.run_file_dialog_answers();
         web_files::poll(self);
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         for f in &dropped {
@@ -582,6 +604,7 @@ impl eframe::App for TextureCraftApp {
         self.fonts.update(ctx, i18n::current().code, self.ui.windows.settings);
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::tick(self, ctx);
+        self.bindings.sync(&self.ui.keymap, craft_keymap::egui::platform(ctx));
         menus::shortcuts(self, ctx);
         // A stored path being edited repaints its sublayer as its points, brush or material change.
         if let Err(e) = self.session.path_live() {
@@ -591,9 +614,12 @@ impl eframe::App for TextureCraftApp {
         profile::drive(self, ctx);
         self.toasts.retain(|t| t.until > now);
         self.profiler.logic_ms = (now_ms() - t0) as f32;
+        // Last, so it sees every close request this frame's work made.
+        windows::close_request(self, ctx);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let t0 = now_ms();
         if !self.ui.hide_ui {
@@ -609,12 +635,14 @@ impl eframe::App for TextureCraftApp {
         let hide = self.ui.hide_ui;
         let tk = theme::Tokens::get(&ctx);
         // The dock keeps the cards' gutter from the bars and rails around it.
-        let frame = if hide { egui::Frame::NONE.fill(tk.viewport) } else { egui::Frame::NONE.fill(tk.chrome).inner_margin(theme::GUTTER) };
-        egui::CentralPanel::default().frame(frame).show(ui, |ui| if hide { viewport::central(self, ui) } else { docking::show(self, ui) });
+        let panel_frame = if hide { egui::Frame::NONE.fill(tk.viewport) } else { egui::Frame::NONE.fill(tk.chrome).inner_margin(theme::GUTTER) };
+        egui::CentralPanel::default().frame(panel_frame).show(ui, |ui| if hide { viewport::central(self, ui) } else { docking::show(self, ui) });
         windows::show(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::show(self, &ctx);
         toasts(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.file_dialogs.show_pending(frame);
         let end = now_ms();
         let dt = (end - t0) as f32;
         self.ui_ms = if self.ui_ms == 0.0 { dt } else { self.ui_ms * 0.9 + dt * 0.1 };

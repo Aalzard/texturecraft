@@ -1081,4 +1081,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Visible polygons only", "المضلعات المرئية فقط"),
     ("\"{layer}\" can't be filled: select a paint layer or a layer's mask", "\"{layer}\" لا يمكن تعبئتها: حدد طبقة رسم أو قناع طبقة"),
+    ("The file dialog couldn't be shown: {error}", "تعذر عرض نافذة الملفات: {error}"),
+    ("The project changed while the dialog was open, so nothing was done", "تغيّر المشروع أثناء فتح النافذة، لذا لم يُنفَّذ أي إجراء"),
 ];

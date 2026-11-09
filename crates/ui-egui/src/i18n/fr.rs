@@ -1139,4 +1139,9 @@ pub const TABLE: &[(&str, &str)] = &[
         "\"{layer}\" can't be filled: select a paint layer or a layer's mask",
         "« {layer} » ne peut pas être rempli : sélectionnez un calque de peinture ou un masque de calque",
     ),
+    ("The file dialog couldn't be shown: {error}", "Impossible d'afficher la boîte de dialogue de fichiers : {error}"),
+    (
+        "The project changed while the dialog was open, so nothing was done",
+        "Le projet a changé pendant que la boîte de dialogue était ouverte ; rien n'a été fait",
+    ),
 ];

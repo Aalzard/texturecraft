@@ -1127,4 +1127,9 @@ pub const TABLE: &[(&str, &str)] = &[
     ),
     ("Visible polygons only", "Nur sichtbare Polygone"),
     ("\"{layer}\" can't be filled: select a paint layer or a layer's mask", "\"{layer}\" kann nicht gefüllt werden: Wähle eine Malebene oder eine Ebenenmaske"),
+    ("The file dialog couldn't be shown: {error}", "Der Dateidialog konnte nicht angezeigt werden: {error}"),
+    (
+        "The project changed while the dialog was open, so nothing was done",
+        "Das Projekt hat sich geändert, während der Dialog geöffnet war, daher wurde nichts ausgeführt",
+    ),
 ];

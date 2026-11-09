@@ -472,6 +472,7 @@ impl Session {
         next.log.extend(warnings);
         next.path = self.path.clone();
         next.modified = true;
+        next.project_id = self.project_id;
         let preserved = preserve_strokes.then(|| crate::preserve::preserve_strokes(self, &mut next));
         self.switch_to(next);
         Ok(preserved.map_or(Value::Null, |n| json!({ "preserved": n })))
@@ -681,8 +682,10 @@ f 1/1 2/2 3/3
         let original = Session::from_mesh_bytes("mesh.obj", obj, 128, "mesh").unwrap();
         let mut saved = Session::from_project_bytes(&original.to_project_bytes().unwrap()).unwrap();
         assert!(!saved.modified);
+        let project = saved.project_id;
         crate::execute(&mut saved, "file.reimportMesh", &Value::Null).unwrap();
         assert!(saved.modified, "reimport must trigger the unsaved-changes prompt");
+        assert_eq!(saved.project_id, project, "a reimport stays the same project");
     }
 
     #[test]
