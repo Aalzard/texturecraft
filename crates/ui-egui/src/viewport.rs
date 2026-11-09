@@ -51,9 +51,10 @@ pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
         crate::toolbar::paint_bar(app, ui);
     }
 
+    crate::id_color_pick::IdColorPick::end_when_stale(app);
     let tokens = Tokens::get(ui.ctx());
     let aux_view = match app.session.view {
-        _ if mode == crate::state::Mode::Painting && app.session.quick_mask.editing => Some(crate::gpu::AuxView::QuickMask),
+        _ if mode == crate::state::Mode::Painting && app.session.quick_mask.editing && app.picking_id_color.is_none() => Some(crate::gpu::AuxView::QuickMask),
         ViewMode::MeshMap(map) => Some(crate::gpu::AuxView::MeshMap(map)),
         ViewMode::Mask(id) => Some(crate::gpu::AuxView::Mask(id)),
         _ => None,
@@ -217,7 +218,7 @@ fn split_divider_grab(ui: &Ui, full: Rect, divider_x: f32) {
 
 fn shade(app: &TextureCraftApp) -> Shade {
     let (view_mode, channel) = match app.session.view {
-        _ if app.ui.mode == crate::state::Mode::Painting && app.session.quick_mask.editing => (2, 0),
+        _ if app.ui.mode == crate::state::Mode::Painting && app.session.quick_mask.editing && app.picking_id_color.is_none() => (2, 0),
         ViewMode::Material => (0, 0),
         ViewMode::Channel(selected_channel) => (1, selected_channel.index() as u32),
         ViewMode::MeshMap(_) | ViewMode::Mask(_) => (2, 0),
@@ -586,8 +587,29 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     crate::properties_popup::open_on_right_click(app, ui, &response, rect, s_held || v_held);
     let popup = app.properties_popup.is_some();
 
+    // A pending ID color pick takes the next click instead of the brush
+    let picking_id_color = app.picking_id_color.is_some();
+    if picking_id_color {
+        crate::id_color_pick::IdColorPick::draw_cursor(ui, rect);
+        if !alt
+            && response.clicked_by(PointerButton::Primary)
+            && let Some(position) = response.interact_pointer_pos()
+        {
+            let (pixel, viewport) = (local(position), app.session.viewport);
+            crate::id_color_pick::IdColorPick::pick_at(app, json!({"x": pixel.x, "y": pixel.y, "viewport": [viewport.x, viewport.y]}));
+        }
+    }
+
     // The selected decal's frame and handles: drag to move, scale or turn it
-    let decal_drag = !alt && !s_held && !v_held && !focus_pick && !popup && placing.is_none() && touch.is_none() && decal_input(app, ui, &response, rect);
+    let decal_drag = !alt
+        && !s_held
+        && !v_held
+        && !focus_pick
+        && !popup
+        && placing.is_none()
+        && !picking_id_color
+        && touch.is_none()
+        && decal_input(app, ui, &response, rect);
 
     // Painting
     let painting = app.ui.mode == crate::state::Mode::Painting
@@ -598,6 +620,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         && !v_held
         && !focus_pick
         && placing.is_none()
+        && !picking_id_color
         && touch.is_none()
         && !decal_drag;
     let path_tool = app.session.tool.tool == Tool::Path;
@@ -668,6 +691,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         && !navigating
         && response.hovered()
         && brush_tool(app.session.tool.tool)
+        && app.picking_id_color.is_none()
         && let Some(hover_pos) = if adjusting { ui.input(|input| input.pointer.press_origin()) } else { response.hover_pos() }
         && let Some(hit) = app.session.pick(local(hover_pos), app.session.viewport)
     {
@@ -694,7 +718,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
     stencil_overlay(app, ui, rect);
     decal_overlay(app, ui, rect);
     brush_readout(app, ui, &response, adjusting);
-    if app.session.quick_mask.editing {
+    if app.session.quick_mask.editing && app.picking_id_color.is_none() {
         ui.painter_at(rect).text(
             rect.left_top() + QUICK_MASK_NOTICE_OFFSET,
             egui::Align2::LEFT_TOP,
@@ -1353,8 +1377,21 @@ fn view_2d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
 
     crate::properties_popup::open_on_right_click(app, ui, &response, rect, v_held);
 
+    // A pending ID color pick takes the next click instead of the brush
+    let picking_id_color = app.picking_id_color.is_some();
+    if picking_id_color {
+        crate::id_color_pick::IdColorPick::draw_cursor(ui, rect);
+        if !alt
+            && response.clicked_by(PointerButton::Primary)
+            && let Some(position) = response.interact_pointer_pos()
+        {
+            let uv = to_uv(position);
+            crate::id_color_pick::IdColorPick::pick_at(app, json!({"uv": [uv.x, uv.y]}));
+        }
+    }
+
     // Painting in UV space
-    let painting = app.ui.mode == crate::state::Mode::Painting && app.properties_popup.is_none() && !alt && !adjusting && !v_held;
+    let painting = app.ui.mode == crate::state::Mode::Painting && app.properties_popup.is_none() && !alt && !adjusting && !v_held && !picking_id_color;
     let mut fill_box = None;
     if painting && path_tool {
         path_input(app, ui, &response, true, |_, pointer| Some(to_uv(pointer).extend(0.0)), show);

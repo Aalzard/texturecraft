@@ -5,6 +5,7 @@ mod bake_mode;
 mod brush_drag;
 mod close_unsaved;
 mod color_picker;
+mod color_selection_editor;
 mod curvature_generator;
 mod effect_rows;
 mod effect_sliders;
