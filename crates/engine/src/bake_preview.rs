@@ -1,7 +1,8 @@
 //! Live bake preview: while the app bakes, the 3D view shows each mesh map on the model as soon
 //! as it is finished ([`crate::BakeTask::run_streaming`]). The streamed maps live here, not in
 //! the document: nothing enters the undo history until a texture set's bake is applied
-//! ([`Session::apply_bake`]), and a cancelled bake leaves the document as it was. The preview
+//! ([`Session::apply_bake`]), and a cancelled bake leaves the set it was baking as it was (a set finished before the cancel
+//! stays applied: each set is its own undo step). The preview
 //! shows one map at a time, raw on the model; maps and texture sets not baked yet show their
 //! neutral value.
 
@@ -11,7 +12,7 @@ use serde_json::{Value, json};
 use texturecraft_compose::BakedMaps;
 use texturecraft_core::BakedMap;
 
-use crate::bake_data::StreamedMap;
+use crate::bake::StreamedMap;
 use crate::commands::{CommandSpec, always, bad, strp};
 use crate::session::ViewMode;
 use crate::{Result, Session, cmd};

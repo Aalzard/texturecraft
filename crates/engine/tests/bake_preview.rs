@@ -1,6 +1,7 @@
 //! Live bake preview: maps stream into the view while a bake runs, the view mode comes back,
-//! painting is paused, a cancelled bake leaves the document alone, and the streamed pixels are
-//! the ones a single bake makes.
+//! painting is paused, a cancelled bake leaves the set it was baking alone (sets finished before it
+//! stay applied), the streamed pixels are the ones a single bake makes, and the preview and the
+//! document share each map's buffer instead of holding two copies.
 
 use serde_json::{Value, json};
 use texturecraft_engine::bake::Progress;
@@ -43,7 +44,7 @@ fn streamed_maps_are_the_pixels_of_one_bake() {
     assert_eq!((combined.resolution, combined.height), (whole.resolution, whole.height));
     assert_eq!(combined.maps.keys().collect::<Vec<_>>(), whole.maps.keys().collect::<Vec<_>>());
     for (map, pixels) in &whole.maps {
-        assert!(combined.maps[map] == *pixels, "{map:?} differs between a streamed and a single bake");
+        assert!(*combined.maps[map] == *pixels, "{map:?} differs between a streamed and a single bake");
     }
     for map in &streamed {
         assert!(*map.data == whole.maps[&map.map], "{:?} handed over differs from the bake", map.map);
@@ -78,7 +79,7 @@ fn the_view_follows_each_map_and_the_previous_mode_comes_back() {
     assert_eq!(session.doc.baked.get(&0).cloned(), baked_before, "the document is untouched until the bake is applied");
     let undo_before = session.undo_label().map(str::to_owned);
 
-    session.apply_bake(0, output).unwrap();
+    session.apply_streamed_bake(0, output).unwrap();
     assert_ne!(session.undo_label().map(str::to_owned), undo_before, "applying the bake is one undo step");
     session.bake_preview_end();
     assert_eq!(session.view, before, "the previous view mode is restored");
@@ -180,4 +181,51 @@ fn cancelling_mid_bake_leaves_the_document_and_the_shown_maps_whole() {
     session.bake_preview_end();
     assert_eq!(session.doc.baked.get(&0).cloned(), before);
     assert!(session.bake_preview_baked(0).is_none());
+}
+
+#[test]
+fn the_preview_and_the_applied_document_share_each_map_buffer() {
+    let mut session = session();
+    let maps = order(&session);
+    session.bake_preview_begin(vec![(0, maps)]);
+    session.bake_preview_set_current(0);
+    let mut handed_over = Vec::new();
+    let output = task(&session)
+        .run_streaming(&Progress::new(), &mut |map| {
+            handed_over.push((map.map, map.data.clone()));
+            session.bake_preview_map(0, map);
+        })
+        .unwrap();
+    // The returned maps are the handed-over buffers, not copies of them
+    for (map, data) in &handed_over {
+        assert!(std::sync::Arc::ptr_eq(data, &output.maps[map]), "{map:?} was copied on the way out of the bake");
+        let shown = &session.bake_preview_baked(0).unwrap().maps[map];
+        assert!(std::sync::Arc::ptr_eq(data, shown), "{map:?} is held twice by the preview");
+    }
+    // Applying keeps sharing them: the document holds the buffers the preview shows
+    session.apply_streamed_bake(0, output).unwrap();
+    for (map, data) in &handed_over {
+        assert!(std::sync::Arc::ptr_eq(data, &session.doc.baked[&0].maps[map]), "{map:?} was copied into the document");
+    }
+    session.bake_preview_end();
+}
+
+#[test]
+fn cancelling_keeps_a_set_that_was_already_applied_as_one_undo_step() {
+    let mut session = session();
+    let before = session.doc.baked.get(&0).cloned();
+    let maps = order(&session);
+    // A multi-set bake applies each set when it finishes; a later cancel does not undo it
+    session.bake_preview_begin(vec![(0, maps)]);
+    session.bake_preview_set_current(0);
+    let output = task(&session)
+        .run_streaming(&Progress::new(), &mut |map| {
+            session.bake_preview_map(0, map);
+        })
+        .unwrap();
+    session.apply_streamed_bake(0, output).unwrap();
+    session.bake_preview_end();
+    assert!(MAPS.iter().all(|map| session.doc.baked[&0].maps.contains_key(map)), "the finished set stays baked after the cancel");
+    session.undo().unwrap();
+    assert_eq!(session.doc.baked.get(&0).cloned(), before, "applying the set was one undo step");
 }

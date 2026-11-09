@@ -19,10 +19,52 @@ index}` reorders an effect within its stack (0 = bottom) and `effect.duplicate {
 one just above itself. `effect.copy {effect?}` and `effect.cut {effect?}` put an effect on the
 layer clipboard, and `effect.paste {layer?, target?}` adds it to another layer's content or mask.
 
+`effect.set {effect, filter: "blur", radius: 5}` replaces a filter in place, preserving its
+stack position, blend, opacity and visibility. Replacement filters start from defaults plus
+the supplied parameters; naming the current filter instead edits it without resetting omitted
+parameters. Default effect names follow the new filter, custom names remain, and an explicit
+`name` overrides either. Only filter effects can be replaced this way, and masks reject
+content-only filters. `filter.list` lists the available IDs; levels and material finishes
+must be added separately with `effect.add.filter`. A successful replacement is one undo step;
+a rejected replacement changes nothing.
+
 `edit.undo {steps?}` and `edit.redo {steps?}` go back or forward several steps at once (as far
 as the history reaches); `edit.history` lists the steps done and the undone ones, next first.
 Any command takes `merge: true` to fold its edit into the previous undo step when that step has
 the same label: a drag that applies a value on every frame stays one step.
+
+Bake mode applies edits in Common Settings and Mesh Map Settings to every texture set. Each
+set keeps its own enabled mesh-map checkboxes and Include in Bake flag. Edits update only the
+changed fields; Restore Defaults resets the whole parameter section across all sets.
+
+`bake.settings {ts: "all", patch: {maps: {ao: {parameters: {rays: {rays: 128}}}}}}` changes
+only AO secondary rays. A `patch` uses the nested `BakeSettings` field names and named enum
+values returned in the command's `model` result; omitted fields retain each set's values, and
+`null` clears optional fields such as `common.resolution_height`. All targeted sets are validated
+before the edit is applied as one undo step. `model` still replaces the complete settings;
+when combined, `patch` follows `model`, then the flat command parameters apply. Omitting `ts`
+still targets the active set for scripts that need individual control.
+
+The bake texture-set list shows visibility eyes and expandable UV tile rows. Visibility affects
+the viewport independently of bake inclusion. Its resolution menus edit the texture-set size
+(`textureSet.resolution`) and individual tile overrides (`textureSet.tile.resolution`), independently
+of Common Settings' bake Output Size. Overridden tiles display a resolution marked with an asterisk;
+inherited tile resolutions appear only on hover or while their menu is open. Remove resolution
+override hides the number and restores inheritance from the set, including when their current
+sizes happen to match.
+
+Baked maps use a uniform UV tile atlas: every selected tile receives the full bake Output Size,
+including rectangular output sizes. Changing a texture-set or tile working resolution preserves
+the stored bake pixels. Materials, mesh-map previews, and exports sample those pixels through
+the working tile layout. Older project files load their baked pixels as-is without layout
+conversion; rebaking restores correct mapping and detail.
+
+`bake.tile.set {ts?, tile: 1002, enabled: false}`
+excludes one UV tile; `textureSet.inspect` / `session.inspect` expose each tile's `bakeEnabled`.
+Tile choices are saved and undoable. Unchecked tiles retain their previous baked pixels, resampled
+if output size changes, or neutral values when no previous map exists. A running bake uses the
+tile selection captured when its worker started. Sets with no checked tiles are skipped; their
+geometry still contributes to occlusion when baking other tiles.
 
 ## Control channel (desktop app)
 
@@ -66,7 +108,7 @@ keeps its state in a throwaway file.
 | `ui.menu.list` | | the menu catalog: `{menu, submenu, label, id, shortcut, implemented, enabled}` |
 | `ui.menu.invoke` | `{id}` | behaves like a menu click (may open a window) |
 | `ui.bake.start` | `{ts?: index \| [indices]}` (default: the sets ticked in Bake mode) | Opens Bake mode and bakes in the background like the Bake button: the 3D view shows the maps landing on the model as they finish (see *Live bake preview*). → the `bake.preview` state. Errors when a bake is already running |
-| `ui.bake.cancel` | | Stops the running bake; the document keeps the maps it had and the previous view mode comes back |
+| `ui.bake.cancel` | | Stops the running bake; the set being baked keeps the maps it had, sets already finished stay applied, and the previous view mode comes back |
 | `ui.set` | fields of the UI state, e.g. `{"layout": "Only3D"}`; `dock` is the panel layout, a craft-ui docking `Workspace` (`{version, layout: {root, floating}, hidden}`; `root` is a tree of `Split`, `Tabs` and `Stack` nodes over the panels `Viewport`, `Assets`, `TextureSetList`, `Layers`, `TextureSetSettings`, `Properties`, `Display`, `Shader`, `History` and `Log`; `hidden` lists where each closed panel was, so reopening it puts it back; a layout that does not read or has no docked `Viewport` becomes the default), `prefs` the settings (`{"language": "ja", "viewport_texture": 1, "brightness": "light", "accent": "blue"}`; missing fields take their defaults; `brightness` is `dark`, `mediumDark` (default), `mediumLight` or `light`, `accent` `copper` (default), `coral`, `blue`, `violet`, `green`, `amber` or `pink`, applied on the next frame; `system_title_bar` `true` has the system draw the title bar from the next start), `keymap` the custom shortcuts (`{"file.save": "F5"}`, `""` unbinds) | `null` |
 | `viewport.screenshot` | `{view?: "3d" \| "2d"}` | `{width, height, png}` (PNG, base64) |
 | `ui.screenshot` | | `{width, height, png}` of the whole window, after the next frame |
@@ -98,7 +140,8 @@ bake of its own, so with a high poly the transfer rays are cast once per map; th
 same as a single bake's. `bake.run` and the CLI bake all maps at once and never show a preview.
 
 The streamed maps are held by the session, not the document: nothing enters the undo history
-until a texture set's bake is applied (one undo step), and a cancelled bake changes nothing. When
+until a texture set's bake is applied (one undo step); a cancelled bake leaves the set it was baking
+as it was, while sets that finished before the cancel stay applied. When
 the bake ends, is cancelled or Bake mode is left, the view mode that was in use comes back.
 **Painting is paused while a bake is shown**: strokes fail with "Painting is paused while a bake
 is shown. Cancel the bake or wait for it to finish."
@@ -154,8 +197,8 @@ print(call("command.run", {"id": "layer.add.fill", "params": {"color": [0.8, 0.1
   File › Save.
 
 Through `command_run`, every `file.*` command but `file.close` and `file.removeUnused` (and
-`file.reimportMesh` without a `path`) is refused, and so is any command given a `path` or `dir` (`resource.import`,
-`material.save`, `material.load`, …), in both modes: use the workspace tools below. `resource.text`
+`file.reimportMesh` without a `path`) is refused, and so is any command given a `path` or `dir`, at the top level or in
+a `files` entry (`resource.import`, `material.save`, `material.load`, `textureSet.meshMap.import`, …), in both modes: use the workspace tools below. `resource.text`
 takes a font family, not a path: it reads only the system's font folders.
 
 | Tool | Params | Notes |
@@ -171,7 +214,7 @@ takes a font family, not a path: it reads only the system's font folders.
 | `mesh_reimport` | `{path?, preserveStrokes?}` | Reimport the mesh from a file, or (no path) from the project's own copy; bridge mode supports only the latter |
 | `mesh_export` | `{path, format?}` | The mesh as obj, glb, usda, usdc or usdz below the write root (obj: its .mtl and textures, usda / usdc: textures next to it) → `{path, textures?}` |
 | `bake_mesh_add` | `{path, cage?}` | Add a high-definition mesh for baking, or set the cage → `{name, meshes}` |
-| `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil`, or as a mesh map instead of baking it: `textureSet.meshMap.set {ts?, map, image}` (`textureSet.meshMap.clear {ts?, map}` empties the slot) |
+| `resource_import` | `{path}` | Image resource (png, jpg, tga, tif, bmp, webp, exr, hdr) → its name, for `layer.add.image` / `tool.stencil`, or as a mesh map instead of baking it: `textureSet.meshMap.set {ts?, map, image}` (`textureSet.meshMap.clear {ts?, map}` empties the slot); call it once per baked map file (the desktop app's `textureSet.meshMap.import`, which takes host paths, is refused through `command_run`) |
 | `material_save` | `{path, layer?, name?}` | A layer or folder as a `.tcmat` smart material below the write root |
 | `material_load` | `{path}` | Add a `.tcmat` smart material, a MaterialCraft `.mcmat` material or a `.mcraft` package above the selection |
 | `textures_export` | `{dir, preset?, ts?, format?, padding?, size?}` | Writes files below the write root |
@@ -256,6 +299,15 @@ File access follows `--read-root` / `--write-root` as for MCP.
 printf '%s\n' '{"id":1,"method":"command.run","params":{"id":"project.new","params":{"mesh":"torus"}}}' \
               '{"id":2,"method":"render","params":{"width":512,"height":512}}' | texturecraft-cli serve
 ```
+
+## Camera bookmarks
+
+Saved cameras (`Project.cameras`, stored in the `.tcraft` file) are the camera bookmarks.
+`camera.add {name?}` saves the current view, `camera.list` lists them (`current` is the one the view
+is at), `camera.select {index? | name?}` restores one, `camera.rename {index? | name?, to}` and
+`camera.remove {index? | name?}` edit them. `camera.bookmark1` … `camera.bookmark9` (Ctrl+1 … Ctrl+9)
+go to the first nine. Commands jump straight to the view; the desktop UI glides there over about a third
+of a second.
 
 ## MaterialCraft materials
 

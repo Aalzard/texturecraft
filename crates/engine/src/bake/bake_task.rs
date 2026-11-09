@@ -1,7 +1,8 @@
 use super::MergedHigh;
 use crate::{EngineError, Result};
 use std::sync::Arc;
-use texturecraft_bake::{BakeOutput, BakePaintMap, BakeRequest, HighPoly, Progress, bake, bake_on, tracing::Tracer};
+use texturecraft_bake::{BakeOutput, BakePaintMap, BakeRequest, HighPoly, Progress, bake_tiles, tracing::Tracer};
+use texturecraft_compose::BakedMaps;
 use texturecraft_core::{BakeSettings, BakedMap};
 use texturecraft_geom::{Bvh, Mesh};
 
@@ -20,6 +21,9 @@ pub struct BakeTask {
     pub cage_paint: Option<Arc<BakePaintMap>>,
     /// UV tile grid (columns, rows) of the set; (1, 1) without UV tiles.
     pub tiles: (u32, u32),
+    /// Snapshot of tile selection and pixels to retain while the worker runs
+    pub excluded_tiles: Vec<(u32, u32)>,
+    pub previous_maps: BakedMaps,
     /// The GPU ray tracer, if installed and not turned off (`bake.run {cpu: true}`).
     pub tracer: Option<Arc<dyn Tracer>>,
 }
@@ -38,8 +42,18 @@ pub struct StreamedMap {
     pub data: Arc<Vec<f32>>,
 }
 
+/// The result of a streamed bake: the finished maps stay shared (`Arc`) with whoever was shown them,
+/// so the preview and the document hold one buffer per map, never two
+#[derive(Clone, Debug)]
+pub struct StreamedBake {
+    pub resolution: u32,
+    pub height: u32,
+    pub maps: std::collections::BTreeMap<BakedMap, Arc<Vec<f32>>>,
+    pub tracer: String,
+}
+
 impl BakeTask {
-    /// The maps this task makes, in the order [`BakeTask::run_streaming`] finishes them.
+    /// The maps this task makes, in the order [`BakeTask::run_streaming`] finishes them
     pub fn maps(&self) -> Vec<BakedMap> {
         self.settings.maps.enabled().collect()
     }
@@ -48,11 +62,13 @@ impl BakeTask {
     /// and return all of them together. Each map is a bake of its own, so with a high poly
     /// the transfer rays are cast once per map: slower than [`BakeTask::run`] with several
     /// maps, in exchange for showing them as they land. The pixels are the same as `run`'s.
-    /// A cancel or an error leaves the maps already handed over whole.
-    pub fn run_streaming(&self, progress: &Progress, on_map: &mut dyn FnMut(StreamedMap)) -> Result<BakeOutput> {
+    /// The handed-over buffers are the returned ones too (no copy is made), so a preview that
+    /// keeps them costs no second set of maps. A cancel or an error leaves the maps already
+    /// handed over whole.
+    pub fn run_streaming(&self, progress: &Progress, on_map: &mut dyn FnMut(StreamedMap)) -> Result<StreamedBake> {
         let maps = self.maps();
         let total = maps.len();
-        let mut combined: Option<BakeOutput> = None;
+        let mut combined: Option<StreamedBake> = None;
         for (index, map) in maps.into_iter().enumerate() {
             let mut settings = self.settings.clone();
             settings.maps.select([map]);
@@ -60,21 +76,26 @@ impl BakeTask {
             let Some(data) = output.maps.remove(&map) else { continue };
             let data = Arc::new(data);
             on_map(StreamedMap { map, index, total, resolution: output.resolution, height: output.height, data: data.clone() });
-            let pixels = Arc::try_unwrap(data).unwrap_or_else(|shared| shared.as_ref().clone());
             match &mut combined {
                 Some(all) => {
-                    all.maps.insert(map, pixels);
+                    all.maps.insert(map, data);
                 }
                 None => {
-                    output.maps.clear();
-                    output.maps.insert(map, pixels);
-                    combined = Some(output);
+                    combined = Some(StreamedBake { resolution: output.resolution, height: output.height, maps: [(map, data)].into(), tracer: output.tracer });
                 }
             }
         }
         match combined {
             Some(output) => Ok(output),
-            None => self.run(progress),
+            None => {
+                let output = self.run(progress)?;
+                Ok(StreamedBake {
+                    resolution: output.resolution,
+                    height: output.height,
+                    maps: output.maps.into_iter().map(|(map, pixels)| (map, Arc::new(pixels))).collect(),
+                    tracer: output.tracer,
+                })
+            }
         }
     }
 
@@ -97,10 +118,9 @@ impl BakeTask {
             cage_paint: self.cage_paint.as_deref(),
             tiles: self.tiles,
         };
-        match &self.tracer {
-            Some(tracer) => bake_on(&request, progress, tracer.as_ref()),
-            None => bake(&request, progress),
-        }
-        .map_err(|e| EngineError::Other(format!("bake failed: {e}")))
+        let mut output = bake_tiles(&request, progress, &self.excluded_tiles, self.tracer.as_deref())
+            .map_err(|error| EngineError::Other(format!("bake failed: {error}")))?;
+        super::preserve_tiles::restore(&mut output, &self.previous_maps, &self.excluded_tiles, self.tiles)?;
+        Ok(output)
     }
 }
