@@ -1,8 +1,7 @@
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use rayon::prelude::*;
 use texturecraft_engine::Session;
-use texturecraft_engine::bake::HighPolyReach;
+use texturecraft_engine::bake::{HighPolyReach, high_poly_missed};
 use texturecraft_engine::core::HighPolySettings;
 
 use super::cage_shell_key::CageShellKey;
@@ -86,23 +85,7 @@ impl ReachLink {
 
         let Some(vertex_count) = session.bake_meshes.merged_high().map(|high| high.mesh.positions.len()) else { return };
 
-        // Each vertex is its nearest set's: other sets, and a set left out by the selected-set filter, never color it
-        let sets: Vec<(&HighPolyReach, f32, f32)> = self
-            .reach
-            .iter()
-            .zip(&shown.0)
-            .enumerate()
-            .filter(|(texture_set, _)| only_set.is_none_or(|only| only == *texture_set))
-            .filter_map(|(_, (reach, &(max_frontal, max_rear)))| Some((reach.as_ref()?, max_frontal, max_rear)))
-            .collect();
-        let missed: Vec<f32> = (0..vertex_count)
-            .into_par_iter()
-            .map(|vertex| {
-                let missed = sets.iter().find_map(|(reach, max_frontal, max_rear)| reach.missed(vertex, *max_frontal, *max_rear));
-                f32::from(u8::from(missed.unwrap_or(false)))
-            })
-            .collect();
-        out.bake_high_missed = Some((self.high_id, missed));
+        out.bake_high_missed = Some((self.high_id, high_poly_missed(&self.reach, &shown.0, only_set, vertex_count)));
         self.shown = Some(shown);
     }
 }

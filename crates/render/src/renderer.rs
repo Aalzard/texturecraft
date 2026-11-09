@@ -2141,7 +2141,7 @@ impl Renderer {
 
         // The wireframe and the highlight draw the mesh's own edges (displaced in the vertex shader too)
         let passes = [
-            (Some(mesh_pipeline).filter(|_| low_poly_shown), &geometry.vb, &geometry.ib, &geometry.draws, low_poly_set, 1),
+            (low_poly_shown.then_some(mesh_pipeline), &geometry.vb, &geometry.ib, &geometry.draws, low_poly_set, 1),
             (wire.filter(|_| low_poly_shown), &mesh.geo.vb, &mesh.lines, &mesh.line_draws, low_poly_set, 1),
             (highlight, &mesh.geo.vb, &mesh.lines, &mesh.line_draws, highlight_set, HIGHLIGHT_SHIFTS),
         ];

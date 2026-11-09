@@ -309,9 +309,10 @@ fn frame_size_in_pixels(ui: &Ui, rect: Rect) -> [u32; 2] {
     [pixels(rect.left(), rect.right()), pixels(rect.top(), rect.bottom())]
 }
 
-fn add_callback(app: &mut TextureCraftApp, ui: &Ui, rect: Rect, frame: Frame, sync: &mut PendingSync) {
+fn add_callback(app: &mut TextureCraftApp, ui: &Ui, rect: Rect, mut frame: Frame, sync: &mut PendingSync) {
     let tokens = Tokens::get(ui.ctx());
     let bake = bake_visualization(app);
+    frame.shade.bake = bake.filter(|_| frame.kind == ViewKind::Scene);
     let scene = match (sync.0.take(), app.gpu.as_mut()) {
         (Some(aux), Some(gpu_link)) => {
             let sync_start_ms = crate::now_ms();
@@ -653,7 +654,7 @@ fn view_3d(app: &mut TextureCraftApp, ui: &mut Ui, rect: Rect, sync: &mut Pendin
         size: frame_size_in_pixels(ui, rect),
         kind: ViewKind::Scene,
         camera: app.session.camera,
-        shade: Shade { highlight: drop_highlight(app, ui, &response), bake: bake_visualization(app), ..shade(app) },
+        shade: Shade { highlight: drop_highlight(app, ui, &response), ..shade(app) },
         visible: app.session.doc.project.texture_sets.iter().map(|texture_set| texture_set.visible).collect(),
     };
     add_callback(app, ui, rect, frame, sync);
