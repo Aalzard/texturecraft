@@ -124,8 +124,8 @@ static PENDING: Mutex<Option<u64>> = Mutex::new(None);
 
 #[cfg(not(target_arch = "wasm32"))]
 fn choose_files(app: &mut TextureCraftApp, link: bool) {
-    let Some(paths) = rfd::FileDialog::new().add_filter(tr("Images"), crate::web_files::IMAGE_EXTS).pick_files() else { return };
-    add_files(app, &paths, link);
+    use crate::file_dialogs::{Bound, FileDialog};
+    app.ask_file(FileDialog::open_many().filter(tr("Images"), crate::web_files::IMAGE_EXTS), Bound::Project, move |app, paths| add_files(app, &paths, link));
 }
 
 /// Paste an image from the clipboard (or an image file's path copied as text).
