@@ -431,8 +431,8 @@ mod tests {
     use texturecraft_core::Channel;
     use texturecraft_geom::primitives;
 
-    fn test_session() -> Session {
-        Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap()
+    fn test_session() -> crate::Result<Session> {
+        Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128)
     }
 
     fn held_worker() -> (ThumbService, std::sync::mpsc::Receiver<Job>, std::sync::mpsc::Sender<Done>) {
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn unchanged_baked_handles_match_even_with_non_finite_samples() {
-        let mut session = test_session();
+        let mut session = test_session().unwrap();
         let baked = session.doc.baked.entry(0).or_default();
         baked.resolution = 1;
         baked.maps.insert(texturecraft_core::BakedMap::Height, Arc::new(vec![f32::NAN]));
@@ -460,7 +460,7 @@ mod tests {
     #[test]
     #[ignore]
     fn benchmark_unchanged_4k_baked_snapshot() {
-        let mut session = test_session();
+        let mut session = test_session().unwrap();
         let baked = session.doc.baked.entry(0).or_default();
         baked.resolution = 4096;
         baked.maps.insert(texturecraft_core::BakedMap::Normal, Arc::new(vec![0.5; 4096 * 4096 * 3]));
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn collecting_the_last_result_requests_a_frame_to_display_it() {
-        let session = test_session();
+        let session = test_session().unwrap();
         let target = ThumbTarget::Content { layer: session.selected_layer().unwrap(), channel: Channel::BaseColor };
         let (mut service, jobs, results) = held_worker();
         service.begin_frame(&session, 0.0);
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn a_stopped_worker_retries_visible_targets_inline() {
-        let session = test_session();
+        let session = test_session().unwrap();
         let target = ThumbTarget::Content { layer: session.selected_layer().unwrap(), channel: Channel::BaseColor };
         let (mut service, jobs, results) = held_worker();
         service.begin_frame(&session, 0.0);
@@ -521,7 +521,7 @@ mod tests {
 
     #[test]
     fn edits_keep_worker_jobs_and_retained_snapshots_bounded() {
-        let mut session = test_session();
+        let mut session = test_session().unwrap();
         let layer = session.selected_layer().unwrap();
         let target = ThumbTarget::Content { layer, channel: Channel::BaseColor };
         let (mut service, jobs, results) = held_worker();
