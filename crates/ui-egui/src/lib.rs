@@ -303,6 +303,9 @@ impl TextureCraftApp {
             return;
         }
 
+        // Restore the picker's view before the preview starts following baked maps
+        id_color_pick::IdColorPick::end(self);
+
         if let Err(error) = self.session.bake_preview_begin_for(&sets) {
             self.toast(error.to_string(), true);
             return;
