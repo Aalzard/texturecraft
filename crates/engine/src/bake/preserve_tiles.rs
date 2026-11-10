@@ -42,6 +42,8 @@ pub(super) fn restore(output: &mut BakeOutput, previous: &BakedMaps, excluded_ti
             .ok_or_else(|| EngineError::Other("resized bake map exceeds the addressable size".into()))?;
         let mut pixels = Vec::new();
         pixels.try_reserve_exact(count).map_err(|error| EngineError::Other(format!("cannot retain mesh map {}: {error}", map.id())))?;
+        #[cfg(test)]
+        RETAINED_ALLOCATIONS.with(|allocations| allocations.borrow_mut().push(*map));
         for y in 0..size.1 {
             for x in 0..size.0 {
                 let value = previous.sample(*map, x, y, size).unwrap_or_else(|| map.neutral());
@@ -51,4 +53,16 @@ pub(super) fn restore(output: &mut BakeOutput, previous: &BakedMaps, excluded_ti
         output.maps.insert(*map, pixels);
     }
     Ok(())
+}
+
+// Restoration is sequential on the calling thread. Record successful retained-buffer allocations
+// only in unit tests, without a global allocator or interference from parallel test threads.
+#[cfg(test)]
+std::thread_local! {
+    static RETAINED_ALLOCATIONS: std::cell::RefCell<Vec<texturecraft_core::BakedMap>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+pub(super) fn take_retained_allocations() -> Vec<texturecraft_core::BakedMap> {
+    RETAINED_ALLOCATIONS.with(|allocations| std::mem::take(&mut *allocations.borrow_mut()))
 }
