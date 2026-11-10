@@ -1,10 +1,9 @@
 //! Live bake preview: while the app bakes, the 3D view shows each mesh map on the model as soon
 //! as it is finished ([`crate::BakeTask::run_streaming`]). The streamed maps live here, not in
 //! the document: nothing enters the undo history until a texture set's bake is applied
-//! ([`Session::apply_bake`]), and a cancelled bake leaves the set it was baking as it was (a set finished before the cancel
-//! stays applied: each set is its own undo step). The preview
-//! shows one map at a time, raw on the model; maps and texture sets not baked yet show their
-//! neutral value.
+//! ([`Session::apply_streamed_bake`]). Cancellation leaves the current set unchanged; sets already
+//! applied keep their results and undo steps. The preview shows one map at a time, raw on the
+//! model; maps and texture sets not baked yet show their neutral value.
 
 mod preview_set;
 mod preview_show;
@@ -79,6 +78,22 @@ impl BakePreview {
 }
 
 impl Session {
+    /// Start a preview from each selected texture set's enabled maps, in the same order as
+    /// [`crate::BakeTask::maps`]. Invalid indices return the project's texture-set error before
+    /// changing the preview or view mode. This reads settings without preparing bake geometry.
+    pub fn bake_preview_begin_for(&mut self, sets: &[usize]) -> Result<()> {
+        let orders = sets
+            .iter()
+            .map(|&texture_set| {
+                let set = self.doc.project.texture_set(texture_set)?;
+                Ok((texture_set, set.bake.maps.enabled().collect()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        self.bake_preview_begin(orders);
+        Ok(())
+    }
+
     /// Start showing a bake of `sets` (each with the maps it makes, in order): the 3D view
     /// follows the newest map and every set shows neutral values until its maps arrive. The
     /// view mode in use comes back with [`Session::bake_preview_end`].
@@ -145,7 +160,8 @@ impl Session {
         }
     }
 
-    /// The bake is over, cancelled or no longer shown: put the previous view mode back.
+    /// Drop the displayed maps and restore the previous view mode. This does not stop a
+    /// worker or undo any applied results; the UI also uses it when leaving Bake mode.
     pub fn bake_preview_end(&mut self) {
         if let Some(preview) = self.bake_preview.take() {
             self.view = preview.restore;

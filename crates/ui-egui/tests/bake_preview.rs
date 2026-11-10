@@ -162,3 +162,23 @@ fn a_ready_result_waits_for_the_map_stream_to_close() {
     assert_eq!(harness.state().session.view, ViewMode::UvChecker);
     assert!(MAPS.iter().all(|map| harness.state().session.doc.baked[&0].maps.contains_key(map)));
 }
+
+#[test]
+fn an_invalid_set_does_not_start_a_partial_bake_or_change_the_view() {
+    let mut harness = harness();
+    let app = harness.state_mut();
+    let invalid_set = app.session.set_count();
+    let expected_error = app.session.doc.project.texture_set(invalid_set).unwrap_err().to_string();
+    let view = app.session.view;
+    let revision = app.session.revision;
+    let history_steps = app.session.history_labels().len();
+
+    app.start_bake(vec![0, invalid_set]);
+
+    assert!(app.bake.is_none(), "validate every set before queuing any work");
+    assert!(!app.session.bake_preview_active());
+    assert_eq!(app.session.view, view);
+    assert_eq!(app.session.revision, revision);
+    assert_eq!(app.session.history_labels().len(), history_steps);
+    assert!(app.toasts.iter().any(|toast| toast.error && toast.text.contains(&expected_error)));
+}

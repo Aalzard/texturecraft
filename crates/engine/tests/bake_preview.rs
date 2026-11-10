@@ -329,3 +329,39 @@ fn box_fills_are_refused_while_a_bake_shows() {
     session.bake_preview_end();
     assert!(session.polygon_fill_box_uv(Vec2::ZERO, Vec2::ONE).unwrap() > 0);
 }
+
+#[test]
+fn preview_order_matches_each_sets_bake_task() {
+    let mut session = session();
+    session.doc.project.texture_sets[1].bake.maps.select([BakedMap::WorldNormal, BakedMap::Height]);
+    let expected: Vec<_> = [0, 1].into_iter().map(|texture_set| session.bake_task(texture_set).unwrap().maps()).collect();
+
+    session.bake_preview_begin_for(&[0, 1]).unwrap();
+
+    let preview = session.bake_preview.as_ref().unwrap();
+    for (texture_set, maps) in expected.iter().enumerate() {
+        assert_eq!(&preview.sets[&texture_set].order, maps);
+        assert!(preview.sets[&texture_set].baked.maps.is_empty());
+    }
+    assert_eq!(session.view, ViewMode::MeshMap(expected[0][0]));
+}
+
+#[test]
+fn invalid_preview_sets_preserve_the_existing_preview_and_view() {
+    let mut session = session();
+    session.bake_preview_begin_for(&[0]).unwrap();
+    session.bake_preview_set_current(0);
+    session.bake_preview_show(PreviewShow::Material).unwrap();
+    let before = texturecraft_engine::bake_preview::preview_json(&session);
+    let view = session.view;
+    let revision = session.revision;
+    let invalid_set = session.set_count();
+    let expected_error = session.doc.project.texture_set(invalid_set).unwrap_err().to_string();
+
+    let error = session.bake_preview_begin_for(&[1, invalid_set]).unwrap_err();
+
+    assert!(error.to_string().contains(&expected_error));
+    assert_eq!(texturecraft_engine::bake_preview::preview_json(&session), before);
+    assert_eq!(session.view, view);
+    assert_eq!(session.revision, revision);
+}

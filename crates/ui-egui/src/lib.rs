@@ -296,23 +296,19 @@ impl TextureCraftApp {
         self.toasts.push(Toast { text: text.into(), error: true, until: f64::INFINITY });
     }
 
-    /// Start baking texture sets in the background (one after another).
+    /// Start baking texture sets in the background, one after another. Invalid set indices
+    /// show an error without starting a preview or queuing any work.
     pub fn start_bake(&mut self, sets: Vec<usize>) {
         if self.bake.is_some() || sets.is_empty() {
             return;
         }
 
-        let total = sets.len();
-        let orders = sets
-            .iter()
-            .map(|&set_index| {
-                let maps =
-                    self.session.doc.project.texture_sets.get(set_index).map(|texture_set| texture_set.bake.maps.enabled().collect()).unwrap_or_default();
-                (set_index, maps)
-            })
-            .collect();
+        if let Err(error) = self.session.bake_preview_begin_for(&sets) {
+            self.toast(error.to_string(), true);
+            return;
+        }
 
-        self.session.bake_preview_begin(orders);
+        let total = sets.len();
         self.bake = Some(BakeJob { queue: sets, current: None, total });
     }
 
@@ -365,6 +361,8 @@ impl TextureCraftApp {
         }
     }
 
+    /// Show at most one streamed map per frame, then apply the set as one undo step after
+    /// its map channel closes. Closing the preview alone does not stop the background bake.
     fn poll_bake(&mut self, ctx: &egui::Context) {
         // Leaving Bake mode puts the view mode back; the bake goes on
         if self.session.bake_preview_active() && self.ui.mode != state::Mode::Baking {
@@ -447,7 +445,8 @@ impl TextureCraftApp {
         }
     }
 
-    /// Cancel the active bake and discard queued sets
+    /// Cancel the active worker, discard queued sets and restore the view. The current set's
+    /// preview maps are discarded; previously applied sets keep their results and undo steps.
     pub fn cancel_bake(&mut self) {
         let Some(job) = self.bake.take() else { return };
 
@@ -455,7 +454,7 @@ impl TextureCraftApp {
             running.progress.cancel.store(true, Ordering::Relaxed);
         }
 
-        // The streamed maps were only shown: the document keeps the maps it had
+        // Only the current set is uncommitted; completed sets remain applied
         self.session.bake_preview_end();
     }
 
