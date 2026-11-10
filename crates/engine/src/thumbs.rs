@@ -64,21 +64,27 @@ impl ThumbSnapshot {
         })
     }
 
-    /// Whether `s` would give the same thumbnails as this snapshot.
-    fn matches(&self, s: &Session, ts: usize) -> bool {
-        let same_pixels = self.pixels.layers.len() == s.doc.pixels.layers.len()
-            && self.pixels.masks.len() == s.doc.pixels.masks.len()
-            && self.pixels.layers.iter().all(|(k, v)| s.doc.pixels.layers.get(k) == Some(v))
-            && self.pixels.masks.iter().all(|(k, v)| s.doc.pixels.masks.get(k) == Some(v));
-        let none = BakedMaps::default();
-        let baked = s.doc.baked.get(&ts).unwrap_or(&none);
-        self.ts == ts
-            && self.mesh_id == s.mesh_id
-            && self.project == s.doc.project
+    /// Whether `session` would give the same thumbnails as this snapshot.
+    fn matches(&self, session: &Session, texture_set: usize) -> bool {
+        let same_pixels = self.pixels.layers.len() == session.doc.pixels.layers.len()
+            && self.pixels.masks.len() == session.doc.pixels.masks.len()
+            && self.pixels.layers.iter().all(|(key, pixels)| session.doc.pixels.layers.get(key) == Some(pixels))
+            && self.pixels.masks.iter().all(|(key, pixels)| session.doc.pixels.masks.get(key) == Some(pixels));
+        let empty = BakedMaps::default();
+        let baked = session.doc.baked.get(&texture_set).unwrap_or(&empty);
+
+        // Copy-on-write maps change handles on edits; float equality would scan entire bakes
+        let same_baked = self.baked.resolution == baked.resolution
+            && self.baked.maps.len() == baked.maps.len()
+            && self.baked.maps.iter().all(|(map, pixels)| baked.maps.get(map).is_some_and(|current| Arc::ptr_eq(pixels, current)));
+
+        self.ts == texture_set
+            && self.mesh_id == session.mesh_id
+            && self.project == session.doc.project
             && same_pixels
-            && self.baked == *baked
-            && self.images.len() == s.images.len()
-            && self.images.iter().all(|(k, v)| s.images.get(k).is_some_and(|o| Arc::ptr_eq(o, v)))
+            && same_baked
+            && self.images.len() == session.images.len()
+            && self.images.iter().all(|(key, image)| session.images.get(key).is_some_and(|current| Arc::ptr_eq(current, image)))
     }
 
     /// Render `target`: the work of one job.
@@ -195,7 +201,7 @@ pub struct ThumbService {
     tick: u64,
     versions: u64,
     queue: VecDeque<ThumbTarget>,
-    in_flight: HashSet<ThumbTarget>,
+    in_flight: HashSet<(u64, ThumbTarget)>,
     wanted: HashSet<ThumbTarget>,
     gbufs: GbufCache,
     #[cfg(not(target_arch = "wasm32"))]
@@ -238,139 +244,162 @@ impl ThumbService {
     }
 
     /// Start of a frame: forget what the last frame asked for and notice document changes.
-    pub fn begin_frame(&mut self, s: &Session, now: f64) {
+    pub fn begin_frame(&mut self, session: &Session, now: f64) {
         self.wanted.clear();
-        let ts = s.ts();
-        if self.seen == Some(s.revision) && self.snapshot.as_ref().is_some_and(|sn| sn.ts == ts && sn.mesh_id == s.mesh_id) {
+        let texture_set = session.ts();
+        if self.seen == Some(session.revision)
+            && self.snapshot.as_ref().is_some_and(|snapshot| snapshot.ts == texture_set && snapshot.mesh_id == session.mesh_id)
+        {
             return;
         }
-        // While the document keeps changing, compare at the debounce pace (the first look is immediate).
+
+        // Compare at the debounce pace while the document keeps changing
         if self.snapshot.is_some() && now - self.last_check < DEBOUNCE {
             return;
         }
+
         self.last_check = now;
-        if self.snapshot.as_ref().is_some_and(|sn| sn.matches(s, ts)) {
-            self.seen = Some(s.revision);
+        if self.snapshot.as_ref().is_some_and(|snapshot| snapshot.matches(session, texture_set)) {
+            self.seen = Some(session.revision);
             return;
         }
-        self.snapshot = ThumbSnapshot::new(s, ts, &mut self.gbufs).map(Arc::new);
-        self.seen = Some(s.revision);
-        self.generation += 1;
-        // Jobs of the old snapshot are not worth running (those in flight are dropped on arrival).
+
+        self.snapshot = ThumbSnapshot::new(session, texture_set, &mut self.gbufs).map(Arc::new);
+        self.seen = Some(session.revision);
+        self.generation = self.generation.wrapping_add(1);
+
+        // Keep dispatched jobs counted until they finish, even when their snapshot is stale
         self.queue.clear();
-        self.inline.clear();
-        self.in_flight.clear();
-        if let Some(sn) = &self.snapshot {
-            self.cache.retain(|t, _| sn.has(*t));
+        for job in self.inline.drain(..) {
+            self.in_flight.remove(&(job.generation, job.target));
+        }
+
+        if let Some(snapshot) = &self.snapshot {
+            self.cache.retain(|target, _| snapshot.has(*target));
         } else {
             self.cache.clear();
         }
     }
 
     /// Whether the displayed pictures wait for a document comparison that is still debounced.
-    fn checked(&self, s: &Session) -> bool {
-        self.seen == Some(s.revision)
+    fn checked(&self, session: &Session) -> bool {
+        self.seen == Some(session.revision)
     }
 
     /// The picture for `target` (call for the rows on screen only). Queues work when the
     /// picture is missing or out of date.
-    pub fn get(&mut self, s: &Session, target: ThumbTarget) -> ThumbView {
+    pub fn get(&mut self, session: &Session, target: ThumbTarget) -> ThumbView {
         self.wanted.insert(target);
-        self.tick += 1;
-        let fresh = self.cache.get(&target).is_some_and(|e| e.generation == self.generation);
-        let checked = self.checked(s);
-        if !fresh && checked && self.snapshot.is_some() && !self.in_flight.contains(&target) && !self.queue.contains(&target) {
+        self.tick = self.tick.wrapping_add(1);
+        let fresh = self.cache.get(&target).is_some_and(|entry| entry.generation == self.generation);
+        let checked = self.checked(session);
+        if !fresh && checked && self.snapshot.is_some() && !self.in_flight.contains(&(self.generation, target)) && !self.queue.contains(&target) {
             self.queue.push_back(target);
         }
-        let tick = self.tick;
+
         match self.cache.get_mut(&target) {
-            Some(e) => {
-                e.used = tick;
-                ThumbView { image: e.image.clone(), version: e.version, pending: !(fresh && checked) }
+            Some(entry) => {
+                entry.used = self.tick;
+                ThumbView { image: entry.image.clone(), version: entry.version, pending: !(fresh && checked) }
             }
             None => ThumbView { image: None, version: 0, pending: true },
         }
     }
 
-    /// End of a frame: take finished pictures, drop queued rows nobody asked for, hand the worker
-    /// its next jobs. Returns whether more work is outstanding (ask for another frame).
-    pub fn poll(&mut self, s: &Session) -> bool {
-        self.collect();
-        let wanted = &self.wanted;
-        self.queue.retain(|t| wanted.contains(t));
+    /// End of a frame: collect results, discard unrequested rows, and dispatch new work.
+    /// Returns whether another frame is needed, including to display newly collected pictures.
+    pub fn poll(&mut self, session: &Session) -> bool {
+        let changed = self.collect();
+        self.queue.retain(|target| self.wanted.contains(target));
         self.dispatch();
         self.trim();
-        !self.queue.is_empty() || !self.in_flight.is_empty() || !self.inline.is_empty() || !self.checked(s)
+
+        changed || !self.queue.is_empty() || !self.in_flight.is_empty() || !self.checked(session)
     }
 
     fn dispatch(&mut self) {
         let Some(snapshot) = self.snapshot.clone() else { return };
-        while self.in_flight.len() + self.inline.len() < IN_FLIGHT {
+
+        while self.in_flight.len() < IN_FLIGHT {
             let Some(target) = self.queue.pop_front() else { break };
             let job = Job { snapshot: snapshot.clone(), generation: self.generation, target };
-            self.in_flight.insert(target);
-            if !self.send(job) {
-                break;
-            }
+            self.in_flight.insert((job.generation, target));
+            self.send(job);
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn send(&mut self, job: Job) -> bool {
+    fn send(&mut self, job: Job) {
         if !self.spawned {
             self.spawned = true;
             self.worker = spawn_worker();
         }
+
         match &self.worker {
-            Some(w) => match w.tx.send(job) {
-                Ok(()) => true,
-                Err(e) => {
-                    // The worker is gone: run this and the rest here.
+            Some(worker) => {
+                if let Err(error) = worker.tx.send(job) {
+                    // A stopped worker cannot complete any of its outstanding jobs
                     self.worker = None;
-                    self.inline.push_back(e.0);
-                    true
+                    self.in_flight.clear();
+                    self.in_flight.insert((error.0.generation, error.0.target));
+                    self.inline.push_back(error.0);
                 }
-            },
-            None => {
-                self.inline.push_back(job);
-                true
             }
+            None => self.inline.push_back(job),
         }
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn send(&mut self, job: Job) -> bool {
+    fn send(&mut self, job: Job) {
         self.inline.push_back(job);
-        true
     }
 
-    fn collect(&mut self) {
-        let mut done: Vec<Done> = Vec::new();
+    fn collect(&mut self) -> bool {
+        let mut completed = Vec::new();
+        let mut changed = false;
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(w) = &self.worker {
-            while let Ok(d) = w.rx.try_recv() {
-                done.push(d);
+        if let Some(worker) = &self.worker {
+            loop {
+                match worker.rx.try_recv() {
+                    Ok(result) => completed.push(result),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        // Request another frame so wanted targets retry on the inline fallback
+                        self.worker = None;
+                        self.in_flight.clear();
+                        changed = true;
+                        break;
+                    }
+                }
             }
         }
-        // Without a thread one job runs per frame, so the interface keeps its pace.
+
+        // Without a thread, bound each poll to one render
         if let Some(job) = self.inline.pop_front() {
             let image = job.snapshot.render(job.target);
-            done.push(Done { generation: job.generation, target: job.target, image });
+            completed.push(Done { generation: job.generation, target: job.target, image });
         }
-        for d in done {
-            self.rendered += 1;
-            // A picture of an older snapshot never replaces a newer one.
-            if d.generation != self.generation {
+
+        for result in completed {
+            self.rendered = self.rendered.wrapping_add(1);
+            self.in_flight.remove(&(result.generation, result.target));
+
+            // A picture of an older snapshot never replaces a newer one
+            if result.generation != self.generation {
                 continue;
             }
-            self.in_flight.remove(&d.target);
-            if !self.snapshot.as_ref().is_some_and(|sn| sn.has(d.target)) {
+
+            if !self.snapshot.as_ref().is_some_and(|snapshot| snapshot.has(result.target)) {
                 continue;
             }
-            self.versions += 1;
-            let entry = Entry { image: d.image.map(Arc::new), generation: d.generation, version: self.versions, used: self.tick };
-            self.cache.insert(d.target, entry);
+
+            self.versions = self.versions.wrapping_add(1);
+            let entry = Entry { image: result.image.map(Arc::new), generation: result.generation, version: self.versions, used: self.tick };
+            self.cache.insert(result.target, entry);
+            changed = true;
         }
+
+        changed
     }
 
     fn trim(&mut self) {
@@ -393,5 +422,144 @@ impl ThumbService {
     /// Whether any work is queued or running (tests).
     pub fn busy(&self) -> bool {
         !self.queue.is_empty() || !self.in_flight.is_empty() || !self.inline.is_empty()
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use texturecraft_core::Channel;
+    use texturecraft_geom::primitives;
+
+    #[test]
+    fn unchanged_baked_handles_match_even_with_non_finite_samples() {
+        let mut session = Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap();
+        let baked = session.doc.baked.entry(0).or_default();
+        baked.resolution = 1;
+        baked.maps.insert(texturecraft_core::BakedMap::Height, Arc::new(vec![f32::NAN]));
+        let snapshot = ThumbSnapshot::new(&session, 0, &mut GbufCache::default()).unwrap();
+
+        assert!(snapshot.matches(&session, 0), "unchanged shared data must not invalidate every frame");
+
+        let map = session.doc.baked.get_mut(&0).unwrap().maps.get_mut(&texturecraft_core::BakedMap::Height).unwrap();
+        Arc::make_mut(map)[0] = 0.5;
+        assert!(!snapshot.matches(&session, 0), "a copy-on-write edit must invalidate the snapshot");
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_unchanged_4k_baked_snapshot() {
+        let mut session = Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap();
+        let baked = session.doc.baked.entry(0).or_default();
+        baked.resolution = 4096;
+        baked.maps.insert(texturecraft_core::BakedMap::Normal, Arc::new(vec![0.5; 4096 * 4096 * 3]));
+        baked.maps.insert(texturecraft_core::BakedMap::AmbientOcclusion, Arc::new(vec![0.5; 4096 * 4096]));
+        let snapshot = ThumbSnapshot::new(&session, 0, &mut GbufCache::default()).unwrap();
+        let start = std::time::Instant::now();
+
+        for _ in 0..20 {
+            assert!(std::hint::black_box(&snapshot).matches(std::hint::black_box(&session), 0));
+        }
+
+        eprintln!("20 unchanged snapshot comparisons, 4K normal + AO (256 MiB): {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn collecting_the_last_result_requests_a_frame_to_display_it() {
+        let session = Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap();
+        let target = ThumbTarget::Content { layer: session.selected_layer().unwrap(), channel: Channel::BaseColor };
+        let (sender, jobs) = std::sync::mpsc::channel();
+        let (results, receiver) = std::sync::mpsc::channel();
+        let mut service = ThumbService { worker: Some(Worker { tx: sender, rx: receiver }), spawned: true, ..Default::default() };
+        service.begin_frame(&session, 0.0);
+        service.get(&session, target);
+        assert!(service.poll(&session));
+        let job = jobs.try_recv().unwrap();
+        results.send(Done { generation: job.generation, target, image: job.snapshot.render(target) }).unwrap();
+
+        service.begin_frame(&session, 0.1);
+        assert!(service.get(&session, target).image.is_none());
+        let repaint = service.poll(&session);
+
+        assert!(service.is_fresh(target));
+        assert!(repaint, "the frame drew before collecting the final thumbnail");
+        service.begin_frame(&session, 0.2);
+        assert!(service.get(&session, target).image.is_some());
+        assert!(!service.poll(&session), "an idle cache must stop repainting");
+    }
+
+    #[test]
+    fn a_stopped_worker_retries_visible_targets_inline() {
+        let session = Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap();
+        let target = ThumbTarget::Content { layer: session.selected_layer().unwrap(), channel: Channel::BaseColor };
+        let (sender, jobs) = std::sync::mpsc::channel();
+        let (results, receiver) = std::sync::mpsc::channel();
+        let mut service = ThumbService { worker: Some(Worker { tx: sender, rx: receiver }), spawned: true, ..Default::default() };
+        service.begin_frame(&session, 0.0);
+        service.get(&session, target);
+        service.poll(&session);
+
+        // Simulate a worker that stops with a dispatched request still outstanding
+        drop(jobs);
+        drop(results);
+        for frame in 1..=4 {
+            service.begin_frame(&session, f64::from(frame));
+            service.get(&session, target);
+            service.poll(&session);
+        }
+
+        assert!(service.get(&session, target).image.is_some());
+        assert!(!service.busy());
+    }
+
+    #[test]
+    fn edits_keep_worker_jobs_and_retained_snapshots_bounded() {
+        let mut session = Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap();
+        let layer = session.selected_layer().unwrap();
+        let target = ThumbTarget::Content { layer, channel: Channel::BaseColor };
+        let (sender, jobs) = std::sync::mpsc::channel();
+        let (results, receiver) = std::sync::mpsc::channel();
+        let mut service = ThumbService { worker: Some(Worker { tx: sender, rx: receiver }), spawned: true, ..Default::default() };
+        let mut snapshots = Vec::new();
+
+        // Hold the worker's receiver still while repeated edits each produce a new snapshot
+        for revision in 0..2_000 {
+            session.doc.pixels.layer_mut(layer, Channel::BaseColor, (128, 128)).set(0, 0, &[revision, 0, 0, u16::MAX]);
+            session.revision += 1;
+            service.begin_frame(&session, f64::from(revision));
+            snapshots.push(Arc::downgrade(service.snapshot.as_ref().unwrap()));
+            service.get(&session, target);
+            service.poll(&session);
+        }
+
+        let queued: Vec<_> = jobs.try_iter().collect();
+        let retained = snapshots.iter().filter(|snapshot| snapshot.strong_count() > 0).count();
+        let retained_pixel_bytes: usize = snapshots.iter().filter_map(std::sync::Weak::upgrade).map(|snapshot| snapshot.pixels.bytes()).sum();
+        eprintln!("2,000 edits: {} queued jobs, {retained} live snapshots, {retained_pixel_bytes} retained pixel bytes", queued.len());
+        assert!(queued.len() <= IN_FLIGHT, "{} queued jobs bypassed the worker limit", queued.len());
+        assert!(retained <= IN_FLIGHT + 1, "{retained} document snapshots retained across edits");
+        assert!(retained_pixel_bytes <= (IN_FLIGHT + 1) * texturecraft_texel::TILE_AREA * 4 * std::mem::size_of::<u16>());
+
+        // Finishing stale work frees a slot for the newest document, without caching old results
+        for job in queued {
+            results.send(Done { generation: job.generation, target: job.target, image: None }).unwrap();
+        }
+
+        assert_eq!(snapshots.iter().filter(|snapshot| snapshot.strong_count() > 0).count(), 1, "completed jobs release stale snapshots");
+        assert!(service.poll(&session));
+        assert!(!service.is_fresh(target));
+        let latest = jobs.try_recv().unwrap();
+        assert_eq!(latest.generation, service.generation);
+        results.send(Done { generation: latest.generation, target, image: latest.snapshot.render(target) }).unwrap();
+        drop(latest);
+        assert!(service.poll(&session));
+        assert!(service.is_fresh(target));
+
+        let image = Arc::downgrade(service.cache.get(&target).unwrap().image.as_ref().unwrap());
+        drop(service);
+
+        assert!(snapshots.iter().all(|snapshot| snapshot.upgrade().is_none()), "dropping the cache releases its last snapshot");
+        assert!(image.upgrade().is_none(), "dropping the cache releases the rendered image");
+        assert!(jobs.try_recv().is_err());
     }
 }

@@ -40,10 +40,20 @@ fn stack(s: &mut Session) -> Stack {
 }
 
 fn inputs<'a>(s: &'a Session, project: &'a texturecraft_engine::core::Project, gbuf: &'a UvGBuffer) -> Inputs<'a> {
-    let none = Default::default();
-    // Leaked: the oracle only lives for the test.
-    let baked: &'a _ = Box::leak(Box::new(s.doc.baked.get(&0).cloned().unwrap_or(none)));
-    Inputs { project, ts: 0, mesh: &s.mesh, gbuf, pixels: &s.doc.pixels, baked, block_scales: Default::default(), preview: None, images: &s.images, bounds: s.mesh.bounds() }
+    static EMPTY_BAKED: std::sync::LazyLock<texturecraft_engine::compose::BakedMaps> = std::sync::LazyLock::new(Default::default);
+    let baked = s.doc.baked.get(&0).unwrap_or(&EMPTY_BAKED);
+    Inputs {
+        project,
+        ts: 0,
+        mesh: &s.mesh,
+        gbuf,
+        pixels: &s.doc.pixels,
+        baked,
+        block_scales: Default::default(),
+        preview: None,
+        images: &s.images,
+        bounds: s.mesh.bounds(),
+    }
 }
 
 /// The reference: the same sub-stack cut by hand and evaluated at 64 px with the ordinary CPU
@@ -56,7 +66,6 @@ fn oracle(s: &Session, target: ThumbTarget) -> ThumbImage {
         ThumbTarget::Mask { layer } => (layer, None, Channel::BaseColor),
         ThumbTarget::Stage { effect, channel } => (p.effect(effect).unwrap().0, Some(effect), channel),
     };
-    p.texture_sets[0].stack = vec![layer];
     let l = p.layers.get_mut(&layer).unwrap();
     l.visible = true;
     let in_mask = upto.is_some_and(|e| l.mask.as_ref().is_some_and(|m| m.effects.iter().any(|x| x.id == e))) || matches!(target, ThumbTarget::Mask { .. });
@@ -127,30 +136,34 @@ fn image(svc: &mut ThumbService, s: &Session, t: ThumbTarget) -> ThumbImage {
 
 #[test]
 fn thumbnails_equal_a_cpu_evaluation_of_the_same_sub_stack() {
-    let mut s = session();
-    let st = stack(&mut s);
-    let base = Channel::BaseColor;
+    let mut session = session();
+    let stack = stack(&mut session);
+    let base_color = Channel::BaseColor;
     let targets = [
-        ThumbTarget::Content { layer: st.layer, channel: base },
-        ThumbTarget::Content { layer: st.layer, channel: Channel::Roughness },
-        ThumbTarget::Mask { layer: st.layer },
-        ThumbTarget::Stage { effect: st.invert, channel: base },
-        ThumbTarget::Stage { effect: st.posterize, channel: base },
-        ThumbTarget::Stage { effect: st.gen_, channel: base },
+        ThumbTarget::Content { layer: stack.layer, channel: base_color },
+        ThumbTarget::Content { layer: stack.layer, channel: Channel::Roughness },
+        ThumbTarget::Mask { layer: stack.layer },
+        ThumbTarget::Stage { effect: stack.invert, channel: base_color },
+        ThumbTarget::Stage { effect: stack.posterize, channel: base_color },
+        ThumbTarget::Stage { effect: stack.gen_, channel: base_color },
     ];
-    let (mut svc, mut clock) = (ThumbService::new(), 0.0);
-    settle(&mut svc, &s, &targets, &mut clock);
-    for t in targets {
-        assert_eq!(image(&mut svc, &s, t), oracle(&s, t), "{t:?}");
+    let (mut service, mut clock) = (ThumbService::new(), 0.0);
+
+    settle(&mut service, &session, &targets, &mut clock);
+
+    for target in targets {
+        assert_eq!(image(&mut service, &session, target), oracle(&session, target), "{target:?}");
     }
-    // Sanity on the values themselves: the first stage is #336699 inverted (in linear light).
-    let inv = image(&mut svc, &s, targets[3]);
-    let px = inv.rgba.chunks_exact(4).find(|p| p[3] == 255).unwrap();
-    let expect = |byte: f32| (linear_to_srgb(1.0 - texturecraft_engine::texel::srgb_to_linear(byte / 255.0)) * 255.0 + 0.5) as i32;
-    assert!((px[0] as i32 - expect(51.0)).abs() <= 1 && (px[2] as i32 - expect(153.0)).abs() <= 1, "{px:?}");
-    // The mask thumbnail is gray and not flat (a position gradient on a black mask).
-    let m = image(&mut svc, &s, targets[2]);
-    let grays: Vec<u8> = m.rgba.chunks_exact(4).filter(|p| p[3] == 255).map(|p| p[0]).collect();
+
+    // The first stage inverts #336699 in linear light
+    let inverted = image(&mut service, &session, targets[3]);
+    let pixel = inverted.rgba.as_chunks::<4>().0.iter().find(|pixel| pixel[3] == 255).unwrap();
+    let expected = |byte: f32| (linear_to_srgb(1.0 - texturecraft_engine::texel::srgb_to_linear(byte / 255.0)) * 255.0 + 0.5) as i32;
+    assert!((i32::from(pixel[0]) - expected(51.0)).abs() <= 1 && (i32::from(pixel[2]) - expected(153.0)).abs() <= 1, "{pixel:?}");
+
+    // A position generator must produce a nonuniform mask
+    let mask = image(&mut service, &session, targets[2]);
+    let grays: Vec<u8> = mask.rgba.as_chunks::<4>().0.iter().filter(|pixel| pixel[3] == 255).map(|pixel| pixel[0]).collect();
     assert!(grays.iter().max() != grays.iter().min());
 }
 
@@ -266,52 +279,130 @@ fn a_result_of_an_older_document_never_replaces_a_newer_one() {
 
 #[test]
 fn only_requested_rows_render_and_the_cache_is_bounded() {
-    let mut s = session();
-    let layers: Vec<LayerId> = (0..(CACHE_ENTRIES + 30)).map(|_| id(execute(&mut s, "layer.add.paint", &Value::Null).unwrap(), "layer")).collect();
-    let target = |l: LayerId| ThumbTarget::Content { layer: l, channel: Channel::BaseColor };
-    let mut svc = ThumbService::new();
-    // A frame asks for six rows, the next frame (scrolled) for only one of them.
-    svc.begin_frame(&s, 1.0);
-    for l in &layers[..6] {
-        svc.get(&s, target(*l));
+    let mut session = session();
+    let layers: Vec<LayerId> = (0..(CACHE_ENTRIES + 30)).map(|_| id(execute(&mut session, "layer.add.paint", &Value::Null).unwrap(), "layer")).collect();
+    let target = |layer: LayerId| ThumbTarget::Content { layer, channel: Channel::BaseColor };
+    let mut service = ThumbService::new();
+
+    // A frame asks for six rows, then scrolling leaves only one visible
+    service.begin_frame(&session, 1.0);
+    for layer in &layers[..6] {
+        service.get(&session, target(*layer));
     }
-    svc.poll(&s);
+    service.poll(&session);
     let mut clock = 2.0;
     for _ in 0..300 {
         clock += 0.2;
-        svc.begin_frame(&s, clock);
-        svc.get(&s, target(layers[0]));
-        svc.poll(&s);
+        service.begin_frame(&session, clock);
+        service.get(&session, target(layers[0]));
+        service.poll(&session);
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert!(svc.is_fresh(target(layers[0])));
-    // At most the rows already on their way (the in-flight limit) finished besides it.
-    let done = layers[..6].iter().filter(|l| svc.is_fresh(target(**l))).count();
-    assert!(done <= 3, "{done} of the scrolled-away rows were rendered");
-    // Scrolling through every layer keeps the cache within its limit.
+
+    assert!(service.is_fresh(target(layers[0])));
+    let completed = layers[..6].iter().filter(|layer| service.is_fresh(target(**layer))).count();
+    assert!(completed <= 3, "{completed} of the scrolled-away rows were rendered");
+
+    // Scrolling through every layer evicts pictures and releases their allocations
+    let mut images = Vec::new();
     for chunk in layers.chunks(12) {
-        let ts: Vec<ThumbTarget> = chunk.iter().map(|l| target(*l)).collect();
-        settle(&mut svc, &s, &ts, &mut clock);
-        assert!(svc.cached() <= CACHE_ENTRIES + 12, "{}", svc.cached());
+        let targets: Vec<ThumbTarget> = chunk.iter().map(|layer| target(*layer)).collect();
+        settle(&mut service, &session, &targets, &mut clock);
+        for target in targets {
+            images.push(std::sync::Arc::downgrade(&service.get(&session, target).image.unwrap()));
+        }
+        assert!(service.cached() <= CACHE_ENTRIES, "{}", service.cached());
     }
     clock += 0.2;
-    svc.begin_frame(&s, clock);
-    svc.poll(&s);
-    assert!(svc.cached() <= CACHE_ENTRIES, "{}", svc.cached());
+    service.begin_frame(&session, clock);
+    service.poll(&session);
+
+    assert!(service.cached() <= CACHE_ENTRIES, "{}", service.cached());
+    assert!(images.len() > CACHE_ENTRIES);
+    assert!(images.first().unwrap().upgrade().is_none(), "the oldest image was evicted");
+    assert_eq!(images.iter().filter(|image| image.strong_count() > 0).count(), service.cached());
+
+    drop(service);
+
+    assert!(images.iter().all(|image| image.upgrade().is_none()), "closing the cache releases every picture");
 }
 
 #[test]
 fn an_empty_paint_layer_is_transparent_and_a_folder_composites_its_children() {
-    let mut s = session();
-    let paint = id(execute(&mut s, "layer.add.paint", &Value::Null).unwrap(), "layer");
-    let fill = id(execute(&mut s, "layer.add.fill", &json!({"color": "#336699"})).unwrap(), "layer");
-    let folder = id(execute(&mut s, "layer.group", &json!({"layer": fill.0})).unwrap(), "layer");
-    let base = Channel::BaseColor;
-    let (p, f) = (ThumbTarget::Content { layer: paint, channel: base }, ThumbTarget::Content { layer: folder, channel: base });
-    let (mut svc, mut clock) = (ThumbService::new(), 0.0);
-    settle(&mut svc, &s, &[p, f], &mut clock);
-    assert!(image(&mut svc, &s, p).rgba.chunks_exact(4).all(|px| px[3] == 0), "nothing painted: nothing shown");
-    let folder_img = image(&mut svc, &s, f);
-    let px = folder_img.rgba.chunks_exact(4).find(|px| px[3] == 255).unwrap();
-    assert!((px[0] as i32 - 51).abs() <= 1 && (px[2] as i32 - 153).abs() <= 1, "{px:?}");
+    let mut session = session();
+    let paint = id(execute(&mut session, "layer.add.paint", &Value::Null).unwrap(), "layer");
+    let fill = id(execute(&mut session, "layer.add.fill", &json!({"color": "#336699"})).unwrap(), "layer");
+    let folder = id(execute(&mut session, "layer.group", &json!({"layer": fill.0})).unwrap(), "layer");
+    let paint_target = ThumbTarget::Content { layer: paint, channel: Channel::BaseColor };
+    let folder_target = ThumbTarget::Content { layer: folder, channel: Channel::BaseColor };
+    let (mut service, mut clock) = (ThumbService::new(), 0.0);
+
+    settle(&mut service, &session, &[paint_target, folder_target], &mut clock);
+
+    assert!(image(&mut service, &session, paint_target).rgba.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0), "nothing painted: nothing shown");
+    let folder_image = image(&mut service, &session, folder_target);
+    let pixel = folder_image.rgba.as_chunks::<4>().0.iter().find(|pixel| pixel[3] == 255).unwrap();
+    assert!((i32::from(pixel[0]) - 51).abs() <= 1 && (i32::from(pixel[2]) - 153).abs() <= 1, "{pixel:?}");
+}
+
+#[test]
+fn instances_preview_the_source_content_and_inherited_mask() {
+    use texturecraft_engine::thumbs::{GbufCache, ThumbSnapshot};
+
+    let mut session = session();
+    let stack = stack(&mut session);
+    let instance = id(execute(&mut session, "layer.instance", &json!({"layer": stack.layer.0})).unwrap(), "layer");
+    let snapshot = ThumbSnapshot::new(&session, 0, &mut GbufCache::default()).unwrap();
+
+    for channel in [Channel::BaseColor, Channel::Roughness] {
+        let source = snapshot.render(ThumbTarget::Content { layer: stack.layer, channel }).unwrap();
+        let preview = snapshot.render(ThumbTarget::Content { layer: instance, channel });
+
+        assert!(preview == Some(source), "the instance inherits {channel:?} from its source");
+    }
+
+    assert_eq!(snapshot.render(ThumbTarget::Mask { layer: instance }), snapshot.render(ThumbTarget::Mask { layer: stack.layer }));
+}
+
+#[test]
+fn thumbnails_keep_anchor_inputs_from_lower_layers() {
+    use texturecraft_engine::thumbs::{GbufCache, ThumbSnapshot};
+
+    let mut session = session();
+    execute(&mut session, "layer.add.fill", &json!({"height": 0.25})).unwrap();
+    let anchor = id(execute(&mut session, "effect.add.anchor", &Value::Null).unwrap(), "effect");
+    let layer = id(execute(&mut session, "layer.add.fill", &Value::Null).unwrap(), "layer");
+    execute(&mut session, "layer.fill.set", &json!({"channel": "roughness", "anchor": anchor.0, "anchorChannel": "height"})).unwrap();
+    execute(&mut session, "mask.add.black", &Value::Null).unwrap();
+    let mask_effect = id(execute(&mut session, "effect.add.fill", &json!({"anchor": anchor.0, "anchorChannel": "height"})).unwrap(), "effect");
+    let snapshot = ThumbSnapshot::new(&session, 0, &mut GbufCache::default()).unwrap();
+
+    for target in [
+        ThumbTarget::Content { layer, channel: Channel::Roughness },
+        ThumbTarget::Mask { layer },
+        ThumbTarget::Stage { effect: mask_effect, channel: Channel::BaseColor },
+    ] {
+        let image = snapshot.render(target).unwrap();
+        let pixel = image.rgba.as_chunks::<4>().0.iter().find(|pixel| pixel[3] == 255).unwrap();
+
+        assert!((i32::from(pixel[0]) - 64).abs() <= 1, "{target:?} must read the lower anchor's 0.25, got {pixel:?}");
+    }
+}
+
+#[test]
+fn folder_thumbnails_keep_anchors_outside_the_folder() {
+    use texturecraft_engine::thumbs::{GbufCache, ThumbSnapshot};
+
+    let mut session = session();
+    execute(&mut session, "layer.add.fill", &json!({"height": 0.25})).unwrap();
+    let anchor = id(execute(&mut session, "effect.add.anchor", &Value::Null).unwrap(), "effect");
+    let layer = id(execute(&mut session, "layer.add.fill", &Value::Null).unwrap(), "layer");
+    execute(&mut session, "layer.fill.set", &json!({"channel": "roughness", "anchor": anchor.0, "anchorChannel": "height"})).unwrap();
+    let folder = id(execute(&mut session, "layer.group", &json!({"layer": layer.0})).unwrap(), "layer");
+    let snapshot = ThumbSnapshot::new(&session, 0, &mut GbufCache::default()).unwrap();
+
+    let image = snapshot.render(ThumbTarget::Content { layer: folder, channel: Channel::Roughness }).unwrap();
+    let pixel = image.rgba.as_chunks::<4>().0.iter().find(|pixel| pixel[3] == 255).unwrap();
+
+    assert!((i32::from(pixel[0]) - 64).abs() <= 1, "the folder must read the external anchor's 0.25, got {pixel:?}");
 }

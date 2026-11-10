@@ -49,6 +49,9 @@ impl LayerPanel {
     pub(crate) fn begin(&mut self, session: &Session, now: f64) {
         self.frame += 1;
         self.service.begin_frame(session, now);
+
+        // Deleted layer IDs must not accumulate in panel state
+        self.folded.retain(|(layer, _)| session.doc.project.layers.contains_key(&texturecraft_engine::core::LayerId(*layer)));
     }
 
     /// The texture of `target`, queuing its render (call only for rows that are on screen).
@@ -83,5 +86,59 @@ impl LayerPanel {
     /// The service, for tests.
     pub fn service(&self) -> &ThumbService {
         &self.service
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use texturecraft_engine::core::{Channel, LayerId};
+    use texturecraft_engine::geom::primitives;
+
+    #[test]
+    fn deleted_layers_release_their_fold_state() {
+        let mut session = Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap();
+        let layer = session.selected_layer().unwrap();
+        let mut panel = LayerPanel::default();
+        panel.folded.extend([(layer.0, false), (layer.0, true)]);
+        panel.begin(&session, 0.0);
+        assert_eq!(panel.folded.len(), 2, "existing layers keep their view settings");
+
+        texturecraft_engine::execute(&mut session, "layer.remove", &serde_json::json!({"layer": layer.0})).unwrap();
+        panel.begin(&session, 1.0);
+
+        assert!(panel.folded.is_empty(), "deleted layer IDs must not accumulate in view state");
+    }
+
+    #[test]
+    fn evicted_and_dropped_thumbnail_handles_release_textures() {
+        let session = Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap();
+        let context = Context::default();
+        let initial_textures = context.tex_manager().read().num_allocated();
+        let mut panel = LayerPanel::default();
+        let mut evicted = Vec::new();
+        panel.begin(&session, 0.0);
+
+        // Simulate scrolling through more textures than the UI cache retains
+        for index in 0..CACHE_ENTRIES * 2 + 1 {
+            let target = ThumbTarget::Content { layer: LayerId(index as u64), channel: Channel::BaseColor };
+            let image = egui::ColorImage::filled([64, 64], egui::Color32::WHITE);
+            let texture = context.load_texture("layer-thumb", image, TextureOptions::LINEAR);
+            evicted.push(texture.id());
+            panel.textures.insert(target, (1, texture, panel.frame));
+        }
+        let kept = evicted.pop().unwrap();
+        panel.begin(&session, 1.0);
+        panel.begin(&session, 2.0);
+        panel.textures.values_mut().find(|(_, texture, _)| texture.id() == kept).unwrap().2 = panel.frame;
+        panel.end(&context, &session);
+
+        assert_eq!(context.tex_manager().read().num_allocated(), initial_textures + 1);
+        assert!(evicted.iter().all(|id| context.tex_manager().read().meta(*id).is_none()));
+        assert!(context.tex_manager().read().meta(kept).is_some());
+
+        drop(panel);
+
+        assert_eq!(context.tex_manager().read().num_allocated(), initial_textures);
     }
 }

@@ -1,8 +1,8 @@
 //! Small previews of one layer's content, one mask, or one effect stage, computed without
 //! touching the main composite.
 //!
-//! Every thumbnail is the ordinary compositor run on a *cut* copy of the project: the texture
-//! set's stack is replaced by the one layer, the layer is forced visible at Normal / 100 %, and
+//! Every thumbnail is the ordinary compositor run on a *cut* copy of the project: only the
+//! requested layer is drawn, forced visible at Normal / 100 %, and
 //! the layer's effect list is truncated after the effect being previewed. The evaluator is the
 //! same code the viewport uses (just on a small G-buffer), so a thumbnail always agrees with
 //! what the stack really computes. Nothing here mutates the caller's project.
@@ -10,7 +10,7 @@
 use texturecraft_core::{BlendMode, Channel, ChannelBlend, ChannelKind, LayerId, Project};
 use texturecraft_texel::{TILE, from_u16, from_u16_signed, linear_to_srgb};
 
-use crate::eval::{Composite, FlatTile, Inputs, all_tiles, composite_tiles, flatten_layer, mask_image};
+use crate::eval::{Composite, FlatTile, Inputs, all_tiles, flatten_layer, mask_image};
 
 /// Edge length (texels) the thumbnails are computed at.
 pub const THUMB_TEXELS: u32 = 64;
@@ -55,16 +55,22 @@ pub fn render(inp: &Inputs, target: ThumbTarget) -> Option<ThumbImage> {
     }
 }
 
-/// `project` cut down to the single layer `id` of texture set `ts`: only that layer is drawn,
-/// visible, Normal at full opacity in `channel` (when given).
-fn solo(project: &Project, ts: usize, id: LayerId, channel: Option<Channel>) -> Option<Project> {
+/// Force the requested layer visible, retaining the stack needed by anchor readers.
+fn solo(project: &Project, texture_set: usize, id: LayerId, channel: Option<Channel>) -> Option<Project> {
     let mut cut = project.clone();
-    cut.texture_sets.get_mut(ts)?.stack = vec![id];
-    let l = cut.layers.get_mut(&id)?;
-    l.visible = true;
-    if let Some(c) = channel {
-        *l.channels.get_mut(&c)? = ChannelBlend { mode: BlendMode::Normal, opacity: 1.0 };
+
+    // Ordinary previews need no neighbouring layers or their filter allocations
+    if !project.render_tree(&[id]).iter().any(|layer| crate::eval::reads_anchor(project, *layer)) {
+        cut.texture_sets.get_mut(texture_set)?.stack = vec![id];
     }
+
+    cut.layers.get_mut(&id)?.visible = true;
+    if let Some(channel) = channel {
+        // Instances inherit channels from their source
+        let owner = cut.content_layer(id)?.id;
+        *cut.layers.get_mut(&owner)?.channels.get_mut(&channel)? = ChannelBlend { mode: BlendMode::Normal, opacity: 1.0 };
+    }
+
     Some(cut)
 }
 
@@ -79,38 +85,38 @@ fn truncate_after(list: &mut Vec<texturecraft_core::Effect>, last: LayerId) -> b
     }
 }
 
-fn content(inp: &Inputs, layer: LayerId, channel: Channel, upto: Option<LayerId>) -> Option<ThumbImage> {
-    let set = inp.project.texture_set(inp.ts).ok()?;
+fn content(inputs: &Inputs, layer: LayerId, channel: Channel, through_effect: Option<LayerId>) -> Option<ThumbImage> {
+    let set = inputs.project.texture_set(inputs.ts).ok()?;
     if !set.channel_list().contains(&channel) {
         return None;
     }
-    // The layer whose content is drawn: an instance draws its source's effects.
-    let mut cut = solo(inp.project, inp.ts, layer, Some(channel))?;
+
+    // An instance draws its source's effects
+    let mut cut = solo(inputs.project, inputs.ts, layer, Some(channel))?;
     let owner = cut.content_layer(layer)?.id;
     for id in [layer, owner] {
-        let l = cut.layers.get_mut(&id)?;
-        l.mask = None;
-        l.visible = true;
-        if let Some(b) = l.channels.get_mut(&channel) {
-            *b = ChannelBlend { mode: BlendMode::Normal, opacity: 1.0 };
-        }
+        let content = cut.layers.get_mut(&id)?;
+        content.mask = None;
+        content.visible = true;
     }
-    if let Some(effect) = upto
+
+    if let Some(effect) = through_effect
         && !truncate_after(&mut cut.layers.get_mut(&owner)?.content_effects, effect)
     {
         return None;
     }
-    let cut_inp = Inputs { project: &cut, preview: None, block_scales: inp.block_scales.clone(), ..*inp };
-    let (w, h) = (inp.gbuf.width, inp.gbuf.height);
-    // A paint or fill layer shows its own coverage (transparent where nothing is painted); a
-    // folder shows its children composited over the channel's default.
+
+    let cut_inputs = Inputs { project: &cut, preview: None, block_scales: inputs.block_scales.clone(), ..*inputs };
+    let (width, height) = (inputs.gbuf.width, inputs.gbuf.height);
+
+    // Paint and fill previews retain coverage; folders composite over channel defaults
     if !cut.layers.get(&owner)?.is_group() {
-        let flat = flatten_layer(&cut_inp, layer, &all_tiles(w, h))?;
-        return Some(encode_flat(&flat, channel, w, h));
+        let flat = flatten_layer(&cut_inputs, layer, &all_tiles(width, height))?;
+        return Some(encode_flat(&flat, channel, width, height));
     }
-    let mut comp = Composite::with_size(&set.channel_list(), w, h);
-    composite_tiles(&cut_inp, &mut comp, &all_tiles(w, h));
-    Some(encode_channel(&comp, channel, inp))
+
+    let comp = crate::eval::thumbnail::composite_layer(&cut_inputs, layer, channel)?;
+    Some(encode_channel(&comp, channel, inputs))
 }
 
 /// Encode the flattened (premultiplied value, coverage) tiles of `channel`: alpha is coverage.
@@ -153,28 +159,30 @@ fn display(channel: Channel, v: [f32; 3]) -> [u8; 3] {
     }
 }
 
-fn mask(inp: &Inputs, layer: LayerId, upto: Option<LayerId>) -> Option<ThumbImage> {
-    let mut cut = solo(inp.project, inp.ts, layer, None)?;
+fn mask(inputs: &Inputs, layer: LayerId, through_effect: Option<LayerId>) -> Option<ThumbImage> {
+    let mut cut = solo(inputs.project, inputs.ts, layer, None)?;
     let owner = cut.mask_owner(layer);
-    let m = cut.layers.get_mut(&owner)?.mask.as_mut()?;
-    m.enabled = true;
-    if let Some(effect) = upto
-        && !truncate_after(&mut m.effects, effect)
+    let mask = cut.layers.get_mut(&owner)?.mask.as_mut()?;
+    mask.enabled = true;
+    if let Some(effect) = through_effect
+        && !truncate_after(&mut mask.effects, effect)
     {
         return None;
     }
-    let cut_inp = Inputs { project: &cut, preview: None, block_scales: inp.block_scales.clone(), ..*inp };
-    let (w, h) = (inp.gbuf.width, inp.gbuf.height);
-    let gray = mask_image(&cut_inp, layer, w)?;
-    let mut rgba = Vec::with_capacity((w * h) as usize * 4);
-    for y in 0..h {
-        for x in 0..w {
-            let i = (y * w + x) as usize;
-            let g = gray.get(i).copied().unwrap_or(0);
-            rgba.extend_from_slice(&[g, g, g, if inp.gbuf.covered(i) { 255 } else { 0 }]);
+
+    let cut_inputs = Inputs { project: &cut, preview: None, block_scales: inputs.block_scales.clone(), ..*inputs };
+    let (width, height) = (inputs.gbuf.width, inputs.gbuf.height);
+    let gray = mask_image(&cut_inputs, layer, width)?;
+    let mut rgba = Vec::with_capacity((width * height) as usize * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let offset = (y * width + x) as usize;
+            let value = gray.get(offset).copied().unwrap_or(0);
+            rgba.extend_from_slice(&[value, value, value, if inputs.gbuf.covered(offset) { 255 } else { 0 }]);
         }
     }
-    Some(ThumbImage { width: w, height: h, rgba })
+
+    Some(ThumbImage { width, height, rgba })
 }
 
 /// Encode the composited `channel` for display: colors linear → sRGB, signed values 0 → mid
