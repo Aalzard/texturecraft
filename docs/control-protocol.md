@@ -143,7 +143,9 @@ The streamed maps are held by the session, not the document: nothing enters the 
 until a texture set's bake is applied (one undo step); a cancelled bake leaves the set it was baking
 as it was, while sets that finished before the cancel stay applied. When
 the bake ends, is cancelled or Bake mode is left, the view mode that was in use comes back.
-**Painting is paused while a bake is shown**: strokes fail with "Painting is paused while a bake
+Bake setup overlays are hidden during the preview so they cannot cover the maps; their visibility
+settings take effect again when the preview ends.
+**Painting is paused while a bake is shown**: strokes and polygon fills fail with "Painting is paused while a bake
 is shown. Cancel the bake or wait for it to finish."
 
 `bake.preview` `{show?: "follow" \| "material" \| "map:<id>"}` reads and sets what the view shows

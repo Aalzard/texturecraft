@@ -45,6 +45,8 @@ impl Session {
 
     /// Fill what the box between viewport pixels `corner` and `opposite` selects (one undo step)
     pub fn polygon_fill_box(&mut self, corner: Vec2, opposite: Vec2, viewport: Vec2) -> Result<usize> {
+        self.refuse_while_baking()?;
+
         // A scripted box stands alone: it finishes any drag under way, and ends even when it fails
         self.end_polygon_fill_box();
         let shown = self.drag_polygon_fill_box(corner, opposite, viewport);
@@ -54,6 +56,8 @@ impl Session {
 
     /// Fill what the box between texture coordinates `corner` and `opposite` selects (the 2D view, one undo step)
     pub fn polygon_fill_box_uv(&mut self, corner: Vec2, opposite: Vec2) -> Result<usize> {
+        self.refuse_while_baking()?;
+
         self.end_polygon_fill_box();
         let shown = self.drag_polygon_fill_box_uv(corner, opposite);
         let filled = self.end_polygon_fill_box();
@@ -85,6 +89,7 @@ impl Session {
 
     /// Show the fill of a box from `corner` to `opposite` in the 3D view of size `viewport`, or in the 2D view when None
     fn drag_polygon_fill(&mut self, corner: Vec2, opposite: Vec2, viewport: Option<Vec2>) -> Result<usize> {
+        self.refuse_while_baking()?;
         if !corner.is_finite() || !opposite.is_finite() {
             return Err(EngineError::Other("the box corners must be finite".into()));
         }

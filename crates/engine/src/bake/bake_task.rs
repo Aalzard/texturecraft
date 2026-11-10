@@ -1,4 +1,4 @@
-use super::MergedHigh;
+use super::{MergedHigh, StreamedBake, StreamedMap};
 use crate::{EngineError, Result};
 use std::sync::Arc;
 use texturecraft_bake::{BakeOutput, BakePaintMap, BakeRequest, HighPoly, Progress, bake_tiles, tracing::Tracer};
@@ -28,30 +28,6 @@ pub struct BakeTask {
     pub tracer: Option<Arc<dyn Tracer>>,
 }
 
-/// One finished map of a streamed bake (see [`BakeTask::run_streaming`]).
-#[derive(Clone, Debug)]
-pub struct StreamedMap {
-    pub map: BakedMap,
-    /// Position among the maps this bake makes, from 0, and how many there are.
-    pub index: usize,
-    pub total: usize,
-    /// Width and height in texels.
-    pub resolution: u32,
-    pub height: u32,
-    /// Row-major, `map.components()` floats per texel, padded.
-    pub data: Arc<Vec<f32>>,
-}
-
-/// The result of a streamed bake: the finished maps stay shared (`Arc`) with whoever was shown them,
-/// so the preview and the document hold one buffer per map, never two
-#[derive(Clone, Debug)]
-pub struct StreamedBake {
-    pub resolution: u32,
-    pub height: u32,
-    pub maps: std::collections::BTreeMap<BakedMap, Arc<Vec<f32>>>,
-    pub tracer: String,
-}
-
 impl BakeTask {
     /// The maps this task makes, in the order [`BakeTask::run_streaming`] finishes them
     pub fn maps(&self) -> Vec<BakedMap> {
@@ -69,22 +45,28 @@ impl BakeTask {
         let maps = self.maps();
         let total = maps.len();
         let mut combined: Option<StreamedBake> = None;
+
         for (index, map) in maps.into_iter().enumerate() {
             let mut settings = self.settings.clone();
             settings.maps.select([map]);
             let mut output = self.run_with(&settings, progress)?;
             let Some(data) = output.maps.remove(&map) else { continue };
+
             let data = Arc::new(data);
             on_map(StreamedMap { map, index, total, resolution: output.resolution, height: output.height, data: data.clone() });
             match &mut combined {
-                Some(all) => {
-                    all.maps.insert(map, data);
+                Some(combined) => {
+                    combined.maps.insert(map, data);
                 }
                 None => {
-                    combined = Some(StreamedBake { resolution: output.resolution, height: output.height, maps: [(map, data)].into(), tracer: output.tracer });
+                    // A resized partial bake also returns unchecked maps that must survive application
+                    let mut retained: std::collections::BTreeMap<_, _> = output.maps.into_iter().map(|(map, pixels)| (map, Arc::new(pixels))).collect();
+                    retained.insert(map, data);
+                    combined = Some(StreamedBake { resolution: output.resolution, height: output.height, maps: retained, tracer: output.tracer });
                 }
             }
         }
+
         match combined {
             Some(output) => Ok(output),
             None => {
@@ -118,6 +100,7 @@ impl BakeTask {
             cage_paint: self.cage_paint.as_deref(),
             tiles: self.tiles,
         };
+
         let mut output = bake_tiles(&request, progress, &self.excluded_tiles, self.tracer.as_deref())
             .map_err(|error| EngineError::Other(format!("bake failed: {error}")))?;
         super::preserve_tiles::restore(&mut output, &self.previous_maps, &self.excluded_tiles, self.tiles)?;

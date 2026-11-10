@@ -226,6 +226,7 @@ impl Session {
         if entry.resolution != resolution || entry.maps.keys().any(|map| entry.height(*map) != height) {
             entry.maps.clear();
         }
+
         entry.resolution = resolution;
         entry.maps.extend(maps);
         self.doc.project.texture_set_mut(texture_set)?.baked = entry.maps.keys().copied().collect();

@@ -187,8 +187,11 @@ fn edit_settings(
 /// What the 3D view shows while a bake runs: the newest finished map, one finished map or the material
 fn preview_control(app: &mut TextureCraftApp, ui: &mut Ui) {
     use texturecraft_engine::PreviewShow;
+
     let Some(preview) = app.session.bake_preview.as_ref() else { return };
+
     let show = preview.show;
+
     // Finished maps of the set baking now can be pinned; the others are still neutral
     let rows: Vec<(BakedMap, bool)> =
         preview.current_set().map(|set| set.order.iter().map(|&map| (map, set.baked.maps.contains_key(&map))).collect()).unwrap_or_default();
@@ -197,6 +200,7 @@ fn preview_control(app: &mut TextureCraftApp, ui: &mut Ui) {
         PreviewShow::Material => tr("Material").to_owned(),
         PreviewShow::Pin(map) => trf("Mesh map: {map}", &[("map", &tr(crate::i18n::baked_map_label(map)))]),
     };
+
     let mut choice = None;
     egui::ComboBox::from_id_salt("bake_preview_show")
         .selected_text(text)
@@ -218,6 +222,7 @@ fn preview_control(app: &mut TextureCraftApp, ui: &mut Ui) {
         .on_hover_text(tr(
             "What the 3D view shows while the bake runs: the newest finished map, one finished map, or the material. Maps not baked yet show a neutral value.",
         ));
+
     if let Some(show) = choice {
         app.run("bake.preview", json!({ "show": show.id() }));
     }

@@ -137,9 +137,11 @@ pub fn handle(app: &mut TextureCraftApp, ctx: &egui::Context, method: &str, p: &
             if app.bake.is_some() {
                 return err("a bake is already running");
             }
+
             if sets.is_empty() {
                 return err("no texture set to bake: tick one in Bake mode or pass `ts`");
             }
+
             app.ui.mode = crate::state::Mode::Baking;
             app.start_bake(sets);
             ok(texturecraft_engine::bake_preview::preview_json(&app.session))

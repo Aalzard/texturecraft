@@ -11,16 +11,20 @@ mod mesh_map_command;
 mod model_patch;
 mod paint_command;
 mod preserve_tiles;
+mod streamed_bake;
+mod streamed_map;
 mod tile_command;
 
 pub use bake_cage_inputs::BakeCageInputs;
 pub use bake_mesh::BakeMesh;
 pub use bake_meshes::BakeMeshes;
-pub use bake_task::{BakeTask, StreamedBake, StreamedMap};
+pub use bake_task::BakeTask;
 pub use high_poly_missed::high_poly_missed;
 pub use merged_high::MergedHigh;
 pub use mesh_map_command::{install_gpu_tracer, meshes_json, settings_params};
 pub use model_patch::settings_patch;
+pub use streamed_bake::StreamedBake;
+pub use streamed_map::StreamedMap;
 pub use texturecraft_bake::*;
 
 use crate::CommandSpec;

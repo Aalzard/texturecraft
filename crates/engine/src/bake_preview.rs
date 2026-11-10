@@ -6,6 +6,14 @@
 //! shows one map at a time, raw on the model; maps and texture sets not baked yet show their
 //! neutral value.
 
+mod preview_set;
+mod preview_show;
+mod stage;
+
+pub use preview_set::PreviewSet;
+pub use preview_show::PreviewShow;
+pub use stage::Stage;
+
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
@@ -30,53 +38,6 @@ pub fn specs() -> Vec<CommandSpec> {
         always,
         preview
     )]
-}
-
-/// What the 3D view shows while a bake runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PreviewShow {
-    /// The newest finished map (the first one, still neutral, before any is done).
-    Follow,
-    /// One map, pinned: neutral until it is baked.
-    Pin(BakedMap),
-    /// The lit material.
-    Material,
-}
-
-impl PreviewShow {
-    pub fn id(self) -> String {
-        match self {
-            PreviewShow::Follow => "follow".into(),
-            PreviewShow::Pin(map) => format!("map:{}", map.id()),
-            PreviewShow::Material => "material".into(),
-        }
-    }
-
-    pub fn parse(text: &str) -> Option<PreviewShow> {
-        match text {
-            "follow" => Some(PreviewShow::Follow),
-            "material" => Some(PreviewShow::Material),
-            _ => text.strip_prefix("map:").and_then(BakedMap::parse).map(PreviewShow::Pin),
-        }
-    }
-}
-
-/// The maps of one texture set streamed so far.
-#[derive(Clone, Debug, Default)]
-pub struct PreviewSet {
-    pub baked: BakedMaps,
-    /// The maps this set's bake makes, in the order they arrive.
-    pub order: Vec<BakedMap>,
-}
-
-/// The map a bake is working on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Stage {
-    pub texture_set: usize,
-    pub map: BakedMap,
-    /// 1-based position among the set's maps, and how many there are.
-    pub position: usize,
-    pub total: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -124,6 +85,7 @@ impl Session {
     pub fn bake_preview_begin(&mut self, sets: Vec<(usize, Vec<BakedMap>)>) {
         let restore = self.bake_preview.as_ref().map_or(self.view, |preview| preview.restore);
         let sets = sets.into_iter().map(|(texture_set, order)| (texture_set, PreviewSet { baked: BakedMaps::default(), order })).collect();
+
         self.bake_preview = Some(BakePreview { restore, show: PreviewShow::Follow, sets, current: None, newest: None });
         self.bake_preview_refresh();
     }
@@ -133,17 +95,21 @@ impl Session {
         if let Some(preview) = &mut self.bake_preview {
             preview.current = Some(texture_set);
         }
+
         self.bake_preview_refresh();
     }
 
     /// Install one finished map of set `texture_set`. Returns false when no preview shows.
     pub fn bake_preview_map(&mut self, texture_set: usize, streamed: StreamedMap) -> bool {
         let Some(preview) = &mut self.bake_preview else { return false };
+
         let set = preview.sets.entry(texture_set).or_default();
+
         // A new bake of the set starts from nothing (the baker never repeats a map)
         if streamed.index == 0 {
             set.baked = BakedMaps::default();
         }
+
         set.baked.resolution = streamed.resolution;
         set.baked.maps.insert(streamed.map, streamed.data);
         preview.newest = Some(streamed.map);
@@ -154,6 +120,7 @@ impl Session {
     /// Choose what the view shows (Follow, a pinned map or the material).
     pub fn bake_preview_show(&mut self, show: PreviewShow) -> Result<()> {
         let Some(preview) = &mut self.bake_preview else { return Err(bad("bake.preview", "no bake is running")) };
+
         preview.show = show;
         self.bake_preview_refresh();
         Ok(())
@@ -163,6 +130,7 @@ impl Session {
     /// the material and is what comes back when the bake ends.
     pub(crate) fn bake_preview_user_view(&mut self, view: ViewMode) {
         let Some(preview) = &mut self.bake_preview else { return };
+
         match view {
             ViewMode::MeshMap(map) => preview.show = PreviewShow::Pin(map),
             other => {
@@ -170,6 +138,7 @@ impl Session {
                 preview.restore = other;
             }
         }
+
         self.bake_preview_refresh();
         if !matches!(view, ViewMode::MeshMap(_)) {
             self.view = view;
@@ -201,6 +170,7 @@ impl Session {
 
     fn bake_preview_refresh(&mut self) {
         let Some(preview) = &self.bake_preview else { return };
+
         self.view = match preview.shown() {
             Some(map) => ViewMode::MeshMap(map),
             None => ViewMode::Material,
@@ -212,6 +182,7 @@ impl Session {
 /// The preview as JSON, for `bake.preview`, `session.inspect` and `ui.inspect`.
 pub fn preview_json(session: &Session) -> Value {
     let Some(preview) = &session.bake_preview else { return json!({ "active": false }) };
+
     let stage = preview.stage().map(|stage| json!({ "set": stage.texture_set, "map": stage.map.id(), "n": stage.position, "total": stage.total }));
     let sets: Vec<Value> = preview
         .sets
@@ -224,6 +195,7 @@ pub fn preview_json(session: &Session) -> Value {
             })
         })
         .collect();
+
     json!({
         "active": true,
         "show": preview.show.id(),
@@ -240,5 +212,6 @@ fn preview(session: &mut Session, params: &Value) -> Result<Value> {
         let show = PreviewShow::parse(show).ok_or_else(|| bad("bake.preview", format!("unknown `show` {show:?}: follow, material or map:<id>")))?;
         session.bake_preview_show(show)?;
     }
+
     Ok(preview_json(session))
 }
