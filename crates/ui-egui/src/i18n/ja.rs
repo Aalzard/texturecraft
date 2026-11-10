@@ -1,6 +1,17 @@
 //! Japanese UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    ("Baking {map} ({n}/{total})", "{map} をベイク中 ({n}/{total})"),
+    ("Baking {map} ({n}/{total}), texture set {set} of {sets}", "{map} をベイク中 ({n}/{total})、テクスチャセット {set}/{sets}"),
+    ("Follow Newest Map", "最新のマップを追う"),
+    (
+        "Painting is paused while a bake is shown. Cancel the bake or wait for it to finish.",
+        "ベイクの表示中はペイントを一時停止しています。ベイクをキャンセルするか、終わるまでお待ちください。",
+    ),
+    (
+        "What the 3D view shows while the bake runs: the newest finished map, one finished map, or the material. Maps not baked yet show a neutral value.",
+        "ベイク中に3Dビューが表示するもの：最後に完成したマップ、完成済みの好きなマップ、またはマテリアル。まだベイクされていないマップは中立値で表示されます。",
+    ),
     (
         "\"{layer}\" has no paint yet: the filter changes what you paint on it.",
         "「{layer}」にはまだペイントがありません：フィルターはこのレイヤーにペイントした内容を変化させます。",
@@ -66,7 +77,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Always", "常に"),
     ("Ambient Occlusion", "アンビエントオクルージョン"),
     ("Ambient occlusion", "アンビエントオクルージョン"),
-    ("Ambient occlusion intensity", "アンビエントオクルージョンの強度"),
     ("Amount", "量"),
     ("Anchor point", "アンカーポイント"),
     ("Anchor: {name}", "アンカー: {name}"),
@@ -432,6 +442,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Invert", "反転"),
     ("Invert mask", "マスクを反転"),
     ("Invert mask background", "マスクの背景を反転"),
+    ("Invert mask value", "マスク値を反転"),
     ("Invert quick mask", "クイックマスクを反転"),
     ("Jitters", "ジッター"),
     ("Join the ArtCraft community on Discord", "DiscordでArtCraftコミュニティに参加"),

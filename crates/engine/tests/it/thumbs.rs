@@ -364,14 +364,20 @@ fn instances_preview_the_source_content_and_inherited_mask() {
     assert_eq!(snapshot.render(ThumbTarget::Mask { layer: instance }), snapshot.render(ThumbTarget::Mask { layer: stack.layer }));
 }
 
-#[test]
-fn thumbnails_keep_anchor_inputs_from_lower_layers() {
-    use texturecraft_engine::thumbs::{GbufCache, ThumbSnapshot};
-
+/// A lower height anchor and an independent upper fill that can read it.
+fn anchor_stack() -> (Session, LayerId, LayerId) {
     let mut session = session();
     execute(&mut session, "layer.add.fill", &json!({"height": 0.25})).unwrap();
     let anchor = id(execute(&mut session, "effect.add.anchor", &Value::Null).unwrap(), "effect");
     let layer = id(execute(&mut session, "layer.add.fill", &Value::Null).unwrap(), "layer");
+    (session, anchor, layer)
+}
+
+#[test]
+fn thumbnails_keep_anchor_inputs_from_lower_layers() {
+    use texturecraft_engine::thumbs::{GbufCache, ThumbSnapshot};
+
+    let (mut session, anchor, layer) = anchor_stack();
     execute(&mut session, "layer.fill.set", &json!({"channel": "roughness", "anchor": anchor.0, "anchorChannel": "height"})).unwrap();
     execute(&mut session, "mask.add.black", &Value::Null).unwrap();
     let mask_effect = id(execute(&mut session, "effect.add.fill", &json!({"anchor": anchor.0, "anchorChannel": "height"})).unwrap(), "effect");
@@ -393,10 +399,7 @@ fn thumbnails_keep_anchor_inputs_from_lower_layers() {
 fn folder_thumbnails_keep_anchors_outside_the_folder() {
     use texturecraft_engine::thumbs::{GbufCache, ThumbSnapshot};
 
-    let mut session = session();
-    execute(&mut session, "layer.add.fill", &json!({"height": 0.25})).unwrap();
-    let anchor = id(execute(&mut session, "effect.add.anchor", &Value::Null).unwrap(), "effect");
-    let layer = id(execute(&mut session, "layer.add.fill", &Value::Null).unwrap(), "layer");
+    let (mut session, anchor, layer) = anchor_stack();
     execute(&mut session, "layer.fill.set", &json!({"channel": "roughness", "anchor": anchor.0, "anchorChannel": "height"})).unwrap();
     let folder = id(execute(&mut session, "layer.group", &json!({"layer": layer.0})).unwrap(), "layer");
     let snapshot = ThumbSnapshot::new(&session, 0, &mut GbufCache::default()).unwrap();
@@ -405,4 +408,32 @@ fn folder_thumbnails_keep_anchors_outside_the_folder() {
     let pixel = image.rgba.as_chunks::<4>().0.iter().find(|pixel| pixel[3] == 255).unwrap();
 
     assert!((i32::from(pixel[0]) - 64).abs() <= 1, "the folder must read the external anchor's 0.25, got {pixel:?}");
+}
+
+#[test]
+fn effect_only_anchor_reads_keep_the_lower_stack() {
+    use texturecraft_engine::thumbs::{GbufCache, ThumbSnapshot};
+
+    for target_kind in ["content", "mask"] {
+        let (mut session, anchor, layer) = anchor_stack();
+        if target_kind == "mask" {
+            execute(&mut session, "mask.add.black", &Value::Null).unwrap();
+        }
+        let effect = id(execute(&mut session, "effect.add.fill", &json!({"target": target_kind})).unwrap(), "effect");
+        if target_kind == "content" {
+            execute(&mut session, "layer.fill.set", &json!({"effect": effect.0, "channel": "roughness", "anchor": anchor.0, "anchorChannel": "height"}))
+                .unwrap();
+        } else {
+            execute(&mut session, "effect.set", &json!({"effect": effect.0, "anchor": anchor.0, "anchorChannel": "height"})).unwrap();
+        }
+        let target = if target_kind == "content" { ThumbTarget::Content { layer, channel: Channel::Roughness } } else { ThumbTarget::Mask { layer } };
+        let snapshot = ThumbSnapshot::new(&session, 0, &mut GbufCache::default()).unwrap();
+
+        for target in [target, ThumbTarget::Stage { effect, channel: Channel::Roughness }] {
+            let image = snapshot.render(target).unwrap();
+            let pixel = image.rgba.as_chunks::<4>().0.iter().find(|pixel| pixel[3] == 255).unwrap();
+
+            assert!((i32::from(pixel[0]) - 64).abs() <= 1, "{target_kind} {target:?} must read the lower anchor's 0.25, got {pixel:?}");
+        }
+    }
 }

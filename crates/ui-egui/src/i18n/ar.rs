@@ -1,6 +1,17 @@
 //! Arabic UI text: (English key, translation). Keys are the English strings passed to `tr`.
 
 pub const TABLE: &[(&str, &str)] = &[
+    ("Baking {map} ({n}/{total})", "جارٍ خبز {map} ({n}/{total})"),
+    ("Baking {map} ({n}/{total}), texture set {set} of {sets}", "جارٍ خبز {map} ({n}/{total})، مجموعة الخامات {set} من {sets}"),
+    ("Follow Newest Map", "تتبّع أحدث خريطة"),
+    (
+        "Painting is paused while a bake is shown. Cancel the bake or wait for it to finish.",
+        "الرسم متوقف مؤقتًا أثناء عرض عملية الخبز. ألغِ الخبز أو انتظر حتى ينتهي.",
+    ),
+    (
+        "What the 3D view shows while the bake runs: the newest finished map, one finished map, or the material. Maps not baked yet show a neutral value.",
+        "ما يعرضه العرض ثلاثي الأبعاد أثناء الخبز: أحدث خريطة مكتملة، أو أي خريطة مكتملة تختارها، أو الخامة. الخرائط التي لم تُخبز بعد تعرض قيمة محايدة.",
+    ),
     ("\"{layer}\" has no paint yet: the filter changes what you paint on it.", "لا يوجد رسم على \"{layer}\" بعد: يغيّر المرشح ما ترسمه عليها."),
     ("0 turns autosave off. Copies go to {folder}", "0 يعطل الحفظ التلقائي. تُحفظ النُسخ في {folder}"),
     ("2D view only", "عرض ثنائي الأبعاد فقط"),
@@ -60,7 +71,6 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Always", "دائماً"),
     ("Ambient Occlusion", "الانسداد المحيطي (AO)"),
     ("Ambient occlusion", "الانسداد المحيطي (AO)"),
-    ("Ambient occlusion intensity", "شدة الانسداد المحيطي"),
     ("Amount", "المقدار"),
     ("Anchor point", "نقطة ارتكاز"),
     ("Anchor: {name}", "نقطة ارتكاز: {name}"),
@@ -420,6 +430,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("Invert", "عكس"),
     ("Invert mask", "عكس القناع"),
     ("Invert mask background", "عكس خلفية القناع"),
+    ("Invert mask value", "عكس قيمة القناع"),
     ("Invert quick mask", "عكس القناع السريع"),
     ("Jitters", "اضطرابات (Jitters)"),
     ("Join the ArtCraft community on Discord", "انضم إلى مجتمع ArtCraft على Discord"),

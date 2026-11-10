@@ -272,6 +272,28 @@ const INDENT: f32 = 14.0;
 /// Height of the "Content effects" / "Mask effects" header rows.
 const GROUP_HEADER_H: f32 = 20.0;
 
+/// Keep both thumbnail targets inside the row before spending space on indentation
+fn layer_thumbnail_layout(width: f32, depth: usize, folder: bool, preferred_size: f32) -> (f32, f32) {
+    let controls = 7.0 + 20.0 + if folder { 14.0 } else { 0.0 };
+    let thumbnail_space = (width - controls - 4.0 - 4.0).max(0.0);
+    let size = preferred_size.min(thumbnail_space * 0.5);
+    let indent = (depth as f32 * INDENT).min((thumbnail_space - size * 2.0).max(0.0));
+    (indent, size)
+}
+
+/// Drop secondary controls before allowing them to cover thumbnail targets or the name
+fn layer_name_layout(rect: Rect, left: f32) -> (Rect, bool) {
+    let right = rect.right() - 4.0;
+    let show_blend = right - RIGHT_COLUMN - 4.0 - left >= 20.0;
+    let name_right = if show_blend { right - RIGHT_COLUMN - 4.0 } else { right };
+    (Rect::from_min_max(pos2(left, rect.top() + 4.0), pos2(name_right.max(left), rect.bottom() - 4.0)), show_blend)
+}
+
+/// Preserve the effect eye, preview and a readable name before spending space on nesting.
+fn effect_row_indent(width: f32, level: usize, preview: f32) -> f32 {
+    (level as f32 * INDENT).min((width - 7.0 - 22.0 - preview - 8.0 - 20.0 - 6.0).max(0.0))
+}
+
 /// X of the centre of the eye column at indent `level` in a row spanning from `left`.
 fn level_x(left: f32, level: usize) -> f32 {
     left + 7.0 + level as f32 * INDENT + 8.0
@@ -345,14 +367,18 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
         row_shade(&tk, index)
     };
     p.rect_filled(rect, 0.0, bg);
-    // Folder contents hang off lines down the left.
+    let (indent, size) = layer_thumbnail_layout(rect.width(), depth, layer.is_group(), size);
+
+    // Folder contents hang off lines down the left without crossing compact row controls
     let line = Stroke::new(1.0, tk.button_border.gamma_multiply(0.6));
     for level in 0..depth {
         let x = level_x(rect.left(), level);
-        p.vline(x, rect.y_range(), line);
+        if level as f32 * INDENT + 8.0 < indent {
+            p.vline(x, rect.y_range(), line);
+        }
     }
-    if depth > 0 {
-        let x = level_x(rect.left(), depth - 1);
+    if depth > 0 && indent >= INDENT {
+        let x = rect.left() + 15.0 + indent - INDENT;
         p.hline(x..=x + INDENT * 0.5, rect.center().y, line);
     }
     if selected {
@@ -361,7 +387,7 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     if let Some(tag) = layer.color_tag.and_then(|t| TAG_COLORS.get(t as usize)) {
         p.rect_filled(Rect::from_min_size(rect.min + vec2(3.0, 0.0), vec2(3.0, h)), 0.0, *tag);
     }
-    let x0 = rect.left() + 7.0 + depth as f32 * INDENT;
+    let x0 = rect.left() + 7.0 + indent;
     // Eye.
     let eye = Rect::from_center_size(pos2(x0 + 8.0, rect.center().y), vec2(18.0, 18.0));
     let eye_resp = ui.interact(eye, ui.scope_id().with(("eye", layer.id.0)), Sense::click()).on_hover_text(tr("Show or hide the layer"));
@@ -462,7 +488,8 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
         x = mask_rect.right() + 8.0;
     } else {
         // The empty slot adds a mask to this layer.
-        mask_rect = Rect::from_center_size(pos2(x + 9.0, rect.center().y), vec2(18.0, 18.0));
+        let slot_size = size.min(18.0);
+        mask_rect = Rect::from_min_size(pos2(x, rect.center().y - slot_size * 0.5), vec2(slot_size, slot_size));
         let slot = ui.interact(mask_rect, ui.scope_id().with(("mask_slot", layer.id.0)), Sense::click()).on_hover_text(tr("Add mask"));
         p.rect_stroke(mask_rect, 2.0, Stroke::new(1.0, if slot.hovered() { tk.accent } else { tk.field_border }), egui::StrokeKind::Inside);
         if slot.hovered() {
@@ -475,7 +502,14 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     let blend_rect = Rect::from_min_size(pos2(rect.right() - RIGHT_COLUMN - 4.0, rect.center().y - 18.0), vec2(RIGHT_COLUMN, 17.0));
     let op_rect = Rect::from_min_size(pos2(rect.right() - RIGHT_COLUMN - 4.0, rect.center().y + 1.0), vec2(RIGHT_COLUMN, 17.0));
     // Name (or rename editor) with the quieter subtitle under it.
-    let name_rect = Rect::from_min_max(pos2(x, rect.top() + 4.0), pos2((blend_rect.left() - 4.0).max(x + 20.0), rect.bottom() - 4.0));
+    let (name_rect, show_blend) = layer_name_layout(rect, x);
+    let show_name = name_rect.width() >= 20.0;
+    if !show_name {
+        resp.clone().on_hover_text(&layer.name);
+        if app.ui.rename.as_ref().is_some_and(|(id, _)| *id == layer.id.0) {
+            app.ui.rename = None;
+        }
+    }
     let renaming = app.ui.rename.as_ref().is_some_and(|(r, _)| *r == layer.id.0);
     if renaming {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(name_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
@@ -498,7 +532,7 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
                 r.request_focus();
             }
         }
-    } else {
+    } else if show_name {
         let galley = elided(&p, layer.name.clone(), 12.5, if layer.visible { tk.text_strong } else { tk.text_dim }, name_rect.width());
         p.galley(pos2(name_rect.left(), rect.center().y - 2.0 - galley.size().y), galley, tk.text);
         let kind = tr(match &layer.kind {
@@ -517,7 +551,7 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
         let sub = elided(&p, subtitle, 10.0, tk.text_dim, name_rect.width());
         p.galley(pos2(name_rect.left(), rect.center().y + 2.0), sub, tk.text_dim);
     }
-    if let Some(b) = blend {
+    if let Some(b) = blend.filter(|_| show_blend) {
         let br = ui.interact(blend_rect, ui.scope_id().with(("blend", layer.id.0)), Sense::click()).on_hover_text(tr("Blending mode of the displayed channel"));
         if br.hovered() {
             p.rect_filled(blend_rect, 2.0, tk.row_hover);
@@ -550,7 +584,7 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
         if r.changed() {
             app.run("layer.blend", json!({"layer": layer.id.0, "channel": ch.id(), "opacity": op / 100.0}));
         }
-    } else {
+    } else if show_blend {
         p.text(blend_rect.right_center(), egui::Align2::RIGHT_CENTER, tr("off"), egui::FontId::proportional(11.0), tk.text_dim);
     }
     // Interaction: select, rename, drag & drop, context menu.
@@ -558,7 +592,7 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
     if resp.clicked() && !on_control && !renaming {
         app.run("layer.select", json!({"layer": layer.id.0}));
     }
-    if resp.double_clicked() && !on_control && !renaming {
+    if resp.double_clicked() && !on_control && !renaming && show_name {
         app.ui.rename = Some((layer.id.0, layer.name.clone()));
     }
     if resp.drag_started() && !renaming {
@@ -639,8 +673,9 @@ fn effect_group(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: us
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let p = ui.painter().clone();
     p.rect_filled(rect, 0.0, if resp.hovered() { tk.row_hover } else { tk.panel });
-    tree_lines(&p, &tk, rect, depth + 1, &[], more_below);
-    let x = level_x(rect.left(), depth + 1);
+    let indent = ((depth + 1) as f32 * INDENT).min((rect.width() - 90.0).max(0.0));
+    tree_lines(&p, &tk, rect, indent, &[], more_below);
+    let x = rect.left() + 15.0 + indent;
     p.text(
         pos2(x, rect.center().y),
         egui::Align2::CENTER_CENTER,
@@ -648,7 +683,8 @@ fn effect_group(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: us
         egui::FontId::proportional(10.0),
         tk.text_dim,
     );
-    p.text(pos2(x + 10.0, rect.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(10.5), tk.text_dim);
+    let galley = elided(&p, label.to_string(), 10.5, tk.text_dim, (rect.right() - 28.0 - x - 10.0).max(0.0));
+    p.galley(pos2(x + 10.0, rect.center().y - galley.size().y * 0.5), galley, tk.text_dim);
     p.text(pos2(rect.right() - 8.0, rect.center().y), egui::Align2::RIGHT_CENTER, stack.len().to_string(), egui::FontId::proportional(10.0), tk.text_dim);
     if resp.on_hover_text(tr("Fold or unfold these effects")).clicked() && !app.layer_panel.folded.remove(&key) {
         app.layer_panel.folded.insert(key);
@@ -662,15 +698,20 @@ fn effect_group(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: us
     }
 }
 
-/// Tree connector of a row at indent `level`: a line down from the parent's column (to the middle
+/// Tree connector of a row at the clamped `indent`: a line down from the parent's column (to the middle
 /// of the row when `more` is false, the row's end otherwise) and a tick towards the row, with
 /// lines straight through for the `trunks` of ancestors that continue.
-fn tree_lines(p: &egui::Painter, tk: &Tokens, rect: Rect, level: usize, trunks: &[usize], more: bool) {
+fn tree_lines(p: &egui::Painter, tk: &Tokens, rect: Rect, indent: f32, trunks: &[usize], more: bool) {
+    if indent < INDENT {
+        return;
+    }
     let stroke = Stroke::new(1.0, tk.button_border);
     for t in trunks {
-        p.vline(level_x(rect.left(), *t), rect.y_range(), stroke);
+        if *t as f32 * INDENT + 8.0 < indent {
+            p.vline(level_x(rect.left(), *t), rect.y_range(), stroke);
+        }
     }
-    let x = level_x(rect.left(), level.saturating_sub(1));
+    let x = rect.left() + 15.0 + indent - INDENT;
     let end = if more { rect.bottom() } else { rect.center().y };
     p.vline(x, rect.top()..=end, stroke);
     p.hline(x..=x + INDENT * 0.6, rect.center().y, stroke);
@@ -700,11 +741,12 @@ fn effect_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, stack: &[Ef
             tk.panel
         },
     );
-    tree_lines(&p, &tk, rect, level, trunks, !last);
+    let indent = effect_row_indent(rect.width(), level, size);
+    tree_lines(&p, &tk, rect, indent, trunks, !last);
     if selected {
         p.rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), 0.0, tk.accent);
     }
-    let x0 = rect.left() + 7.0 + level as f32 * INDENT;
+    let x0 = rect.left() + 7.0 + indent;
     let eye = Rect::from_center_size(pos2(x0 + 8.0, rect.center().y), vec2(16.0, 16.0));
     let er = ui.interact(eye, ui.scope_id().with(("eff_eye", eid.0)), Sense::click()).on_hover_text(tr("Enable or disable the effect"));
     p.text(eye.center(), egui::Align2::CENTER_CENTER, if visible { ic::EYE } else { ic::EYE_SLASH }, egui::FontId::proportional(12.0), tk.text_dim);
@@ -2481,5 +2523,66 @@ fn filter_properties(app: &mut TextureCraftApp, ui: &mut Ui, id: u64, filter: &F
             ui.label(RichText::new(tr("Works in texture space, like the blur: it does not cross UV seams.")).size(FILTER_HINT_SIZE).color(tk.text_dim));
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod layer_layout_tests {
+    use super::*;
+
+    #[test]
+    fn narrow_nested_rows_keep_thumbnail_and_secondary_controls_separate() {
+        for width in [120.0, 180.0, 260.0, 400.0] {
+            for depth in 0..=12 {
+                for folder in [false, true] {
+                    let row = Rect::from_min_size(pos2(100.0, 20.0), vec2(width, 48.0));
+                    let (indent, size) = layer_thumbnail_layout(width, depth, folder, 36.0);
+                    let content_left = row.left() + 7.0 + indent + 20.0 + if folder { 14.0 } else { 0.0 };
+                    let content = Rect::from_min_size(pos2(content_left, row.top() + 6.0), vec2(size, size));
+                    let mask = content.translate(vec2(size + 4.0, 0.0));
+                    let (name, show_blend) = layer_name_layout(row, mask.right() + 8.0);
+
+                    assert!(size >= 35.0, "minimum-width panels retain usable thumbnail targets");
+                    assert!(row.contains_rect(content) && row.contains_rect(mask), "width={width}, depth={depth}, folder={folder}");
+                    assert!(!content.intersects(mask));
+                    if name.width() >= 20.0 {
+                        assert!(row.contains_rect(name));
+                        assert!(name.left() > mask.right());
+                    }
+                    if show_blend {
+                        let blend_left = row.right() - RIGHT_COLUMN - 4.0;
+                        assert!(name.right() + 4.0 <= blend_left);
+                        assert!(mask.right() < blend_left);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_effect_rows_keep_the_eye_preview_and_name_inside() {
+        for width in [120.0, 180.0, 260.0, 400.0] {
+            for level in 0..=14 {
+                for preview in [18.0, 21.6, 28.0] {
+                    let indent = effect_row_indent(width, level, preview);
+                    let eye_right = 7.0 + indent + 16.0;
+                    let preview_left = 7.0 + indent + 22.0;
+                    let name_left = preview_left + preview + 8.0;
+                    assert!(eye_right < preview_left);
+                    assert!(name_left + 20.0 <= width - 6.0 + 0.001);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_rows_keep_preferred_sizes_and_secondary_controls() {
+        let row = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 48.0));
+        let (indent, size) = layer_thumbnail_layout(row.width(), 2, false, 36.0);
+        let (_, show_blend) = layer_name_layout(row, 7.0 + indent + 20.0 + size * 2.0 + 4.0 + 8.0);
+
+        assert_eq!(indent, 28.0);
+        assert_eq!(size, 36.0);
+        assert!(show_blend);
     }
 }

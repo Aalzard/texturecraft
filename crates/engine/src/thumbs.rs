@@ -431,9 +431,20 @@ mod tests {
     use texturecraft_core::Channel;
     use texturecraft_geom::primitives;
 
+    fn test_session() -> Session {
+        Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap()
+    }
+
+    fn held_worker() -> (ThumbService, std::sync::mpsc::Receiver<Job>, std::sync::mpsc::Sender<Done>) {
+        let (sender, jobs) = std::sync::mpsc::channel();
+        let (results, receiver) = std::sync::mpsc::channel();
+        let service = ThumbService { worker: Some(Worker { tx: sender, rx: receiver }), spawned: true, ..Default::default() };
+        (service, jobs, results)
+    }
+
     #[test]
     fn unchanged_baked_handles_match_even_with_non_finite_samples() {
-        let mut session = Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap();
+        let mut session = test_session();
         let baked = session.doc.baked.entry(0).or_default();
         baked.resolution = 1;
         baked.maps.insert(texturecraft_core::BakedMap::Height, Arc::new(vec![f32::NAN]));
@@ -449,7 +460,7 @@ mod tests {
     #[test]
     #[ignore]
     fn benchmark_unchanged_4k_baked_snapshot() {
-        let mut session = Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap();
+        let mut session = test_session();
         let baked = session.doc.baked.entry(0).or_default();
         baked.resolution = 4096;
         baked.maps.insert(texturecraft_core::BakedMap::Normal, Arc::new(vec![0.5; 4096 * 4096 * 3]));
@@ -466,11 +477,9 @@ mod tests {
 
     #[test]
     fn collecting_the_last_result_requests_a_frame_to_display_it() {
-        let session = Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap();
+        let session = test_session();
         let target = ThumbTarget::Content { layer: session.selected_layer().unwrap(), channel: Channel::BaseColor };
-        let (sender, jobs) = std::sync::mpsc::channel();
-        let (results, receiver) = std::sync::mpsc::channel();
-        let mut service = ThumbService { worker: Some(Worker { tx: sender, rx: receiver }), spawned: true, ..Default::default() };
+        let (mut service, jobs, results) = held_worker();
         service.begin_frame(&session, 0.0);
         service.get(&session, target);
         assert!(service.poll(&session));
@@ -490,11 +499,9 @@ mod tests {
 
     #[test]
     fn a_stopped_worker_retries_visible_targets_inline() {
-        let session = Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap();
+        let session = test_session();
         let target = ThumbTarget::Content { layer: session.selected_layer().unwrap(), channel: Channel::BaseColor };
-        let (sender, jobs) = std::sync::mpsc::channel();
-        let (results, receiver) = std::sync::mpsc::channel();
-        let mut service = ThumbService { worker: Some(Worker { tx: sender, rx: receiver }), spawned: true, ..Default::default() };
+        let (mut service, jobs, results) = held_worker();
         service.begin_frame(&session, 0.0);
         service.get(&session, target);
         service.poll(&session);
@@ -514,12 +521,10 @@ mod tests {
 
     #[test]
     fn edits_keep_worker_jobs_and_retained_snapshots_bounded() {
-        let mut session = Session::new_project("thumb", primitives::plane(1.0, 1), "builtin:plane", None, 128).unwrap();
+        let mut session = test_session();
         let layer = session.selected_layer().unwrap();
         let target = ThumbTarget::Content { layer, channel: Channel::BaseColor };
-        let (sender, jobs) = std::sync::mpsc::channel();
-        let (results, receiver) = std::sync::mpsc::channel();
-        let mut service = ThumbService { worker: Some(Worker { tx: sender, rx: receiver }), spawned: true, ..Default::default() };
+        let (mut service, jobs, results) = held_worker();
         let mut snapshots = Vec::new();
 
         // Hold the worker's receiver still while repeated edits each produce a new snapshot

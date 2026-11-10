@@ -94,3 +94,29 @@ fn visible_rows_get_their_thumbnails() {
     // Rows, mask, and every effect stage on screen were asked for: well under the cache size.
     assert!(h.state().layer_panel.service().cached() >= 4);
 }
+
+#[test]
+fn deeply_nested_effect_visibility_is_reachable_in_a_narrow_panel() {
+    use craft_ui::docking::Node;
+    use craft_ui::layout::SplitSize;
+    use texturecraft_ui_egui::docking::Dock;
+
+    let (mut h, layer) = harness();
+    for _ in 0..6 {
+        execute(&mut h.state_mut().session, "layer.group", &Value::Null).unwrap();
+    }
+    let mut workspace = h.state().ui.dock.workspace().clone();
+    let Some(Node::Split { second, .. }) = workspace.layout.root.as_mut() else { panic!("default columns") };
+    let Node::Split { size, .. } = second.as_mut() else { panic!("viewport and right column") };
+    *size = SplitSize::Ratio(0.99);
+    h.state_mut().ui.dock = Dock::from_value(serde_json::to_value(workspace).unwrap());
+    h.run_steps(4);
+
+    let row = h.get_by_label("Effect A").rect();
+    assert!(row.width() < 180.0, "the test must use a compact panel: {row:?}");
+    let indent = (row.width() - 7.0 - 22.0 - 21.6 - 8.0 - 20.0 - 6.0).max(0.0);
+    click(&mut h, egui::pos2(row.left() + 15.0 + indent, row.center().y));
+
+    let content = &h.state().session.doc.project.layers[&layer].content_effects;
+    assert!(!content.iter().find(|effect| effect.name == "Effect A").unwrap().visible, "the compact eye toggles the effect instead of missing the panel");
+}
