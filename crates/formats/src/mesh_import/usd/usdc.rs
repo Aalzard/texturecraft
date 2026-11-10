@@ -224,17 +224,19 @@ impl<'a> Crate<'a> {
         Ok(())
     }
 
-    fn read_fields(&mut self, mut s: Cur, budget: &mut Budget) -> Result<()> {
-        let n = s.count(0)?;
-        let tokens = s.ints(n, 4, budget)?;
-        let size = s.u64()?;
-        let comp = s.bytes(usize::try_from(size).map_err(|_| truncated())?)?;
-        budget.take(n.saturating_mul(24))?;
-        let reps = codec::decompress(comp, n.saturating_mul(8))?;
-        if reps.len() != n * 8 {
+    fn read_fields(&mut self, mut section: Cur, budget: &mut Budget) -> Result<()> {
+        let count = section.count(0)?;
+        let tokens = section.ints(count, 4, budget)?;
+        let size = section.u64()?;
+        let compressed = section.bytes(usize::try_from(size).map_err(|_| truncated())?)?;
+        budget.take(count.saturating_mul(24))?;
+        let representations = codec::decompress(compressed, count.saturating_mul(8))?;
+        if representations.len() != count * 8 {
             return Err(malformed(KIND, "field values are truncated"));
         }
-        self.fields = tokens.iter().zip(reps.as_chunks::<8>().0.iter()).map(|(t, r)| (*t as u32, u64::from_le_bytes(*r))).collect();
+
+        self.fields = tokens.iter().zip(representations.as_chunks::<8>().0.iter()).map(|(t, r)| (*t as u32, u64::from_le_bytes(*r))).collect();
+
         Ok(())
     }
 

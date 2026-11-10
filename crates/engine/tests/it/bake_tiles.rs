@@ -53,6 +53,7 @@ fn partial_bake_preserves_unchecked_tiles_and_uses_the_workers_selection() {
     execute(&mut session, "bake.tile.set", &json!({"tile": 1002, "enabled": true})).unwrap();
     execute(&mut session, "bake.tile.set", &json!({"tile": 1001, "enabled": false})).unwrap();
     let before = session.doc.baked.clone();
+
     let output = task.run(&Progress::new()).unwrap();
     session.apply_bake(0, output).unwrap();
 
@@ -61,6 +62,7 @@ fn partial_bake_preserves_unchecked_tiles_and_uses_the_workers_selection() {
         assert!(row[..32].iter().all(|value| *value > 0.99));
         assert!(row[32..].iter().all(|value| *value == 0.25));
     }
+
     session.undo().unwrap();
     assert_eq!(session.doc.baked, before);
 }
@@ -76,7 +78,9 @@ fn partial_bake_resizes_retained_tiles_and_unchecked_map_outputs() {
         },
     );
     execute(&mut session, "bake.tile.set", &json!({"tile": 1002, "enabled": false})).unwrap();
+
     let result = execute(&mut session, "bake.run", &json!({"resolution": 64, "cpu": true})).unwrap();
+
     assert_eq!(result["baked"], json!([0]));
 
     let baked = &session.doc.baked[&0];
@@ -87,6 +91,7 @@ fn partial_bake_resizes_retained_tiles_and_unchecked_map_outputs() {
     }
     assert_eq!(baked.maps[&BakedMap::Normal].len(), 128 * 64 * 3);
     assert!(baked.maps[&BakedMap::Normal].iter().all(|value| *value == 0.4));
+
     let reopened = Session::from_project_bytes(&session.to_project_bytes().unwrap()).unwrap();
     assert_eq!(reopened.doc.baked, session.doc.baked);
 }
