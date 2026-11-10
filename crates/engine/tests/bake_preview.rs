@@ -365,3 +365,64 @@ fn invalid_preview_sets_preserve_the_existing_preview_and_view() {
     assert_eq!(session.view, view);
     assert_eq!(session.revision, revision);
 }
+
+#[test]
+fn starting_a_bake_preview_discards_an_active_stroke() {
+    for (from_settings, paint_mask) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut session = session();
+        execute(&mut session, "layer.add.paint", &Value::Null).unwrap();
+        if paint_mask {
+            session.target = texturecraft_engine::StackTarget::Mask;
+        }
+
+        let before = session.doc.clone();
+        let history = session.history_labels();
+        let view = session.view;
+        session.begin_stroke_uv(Vec2::splat(0.5), 1.0).unwrap();
+        assert!(session.stroke_tiles() > 0, "the stroke must contain paint before the preview starts");
+
+        if from_settings {
+            session.bake_preview_begin_for(&[0]).unwrap();
+        } else {
+            session.bake_preview_begin(vec![(0, order(&session))]);
+        }
+        let stroke_survived = session.stroke_active();
+        session.continue_stroke_uv(Vec2::splat(0.6), 1.0);
+        session.end_stroke().unwrap();
+
+        assert_eq!(session.history_labels(), history, "releasing the pointer during a preview must not commit paint");
+        assert!(!stroke_survived, "activation must cancel the stroke immediately");
+        assert_eq!(session.doc.project, before.project);
+        assert_eq!(session.doc.pixels.layers, before.pixels.layers);
+        assert_eq!(session.doc.pixels.masks, before.pixels.masks);
+        assert!(session.bake_preview_active());
+        session.bake_preview_end();
+
+        assert_eq!(session.view, view);
+        session.begin_stroke_uv(Vec2::splat(0.5), 1.0).unwrap();
+        session.end_stroke().unwrap();
+        assert_eq!(session.history_labels().len(), history.len() + 1, "painting resumes after the preview ends");
+    }
+}
+
+#[test]
+fn a_rejected_bake_preview_preserves_the_active_stroke() {
+    let mut session = session();
+    execute(&mut session, "layer.add.paint", &Value::Null).unwrap();
+    let history_steps = session.history_labels().len();
+    let view = session.view;
+    session.begin_stroke_uv(Vec2::splat(0.5), 1.0).unwrap();
+    let painted_tiles = session.stroke_tiles();
+    assert!(painted_tiles > 0);
+
+    let result = session.bake_preview_begin_for(&[0, session.set_count()]);
+
+    assert!(result.is_err());
+    assert!(!session.bake_preview_active());
+    assert!(session.stroke_active());
+    assert_eq!(session.stroke_tiles(), painted_tiles);
+    assert_eq!(session.view, view);
+    session.end_stroke().unwrap();
+
+    assert_eq!(session.history_labels().len(), history_steps + 1, "a rejected preview must not discard painting");
+}

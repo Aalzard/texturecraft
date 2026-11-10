@@ -96,8 +96,11 @@ impl Session {
 
     /// Start showing a bake of `sets` (each with the maps it makes, in order): the 3D view
     /// follows the newest map and every set shows neutral values until its maps arrive. The
-    /// view mode in use comes back with [`Session::bake_preview_end`].
+    /// view mode in use comes back with [`Session::bake_preview_end`]. An active stroke is
+    /// discarded so a later pointer release cannot commit paint during the preview.
     pub fn bake_preview_begin(&mut self, sets: Vec<(usize, Vec<BakedMap>)>) {
+        self.cancel_stroke();
+
         let restore = self.bake_preview.as_ref().map_or(self.view, |preview| preview.restore);
         let sets = sets.into_iter().map(|(texture_set, order)| (texture_set, PreviewSet { baked: BakedMaps::default(), order })).collect();
 
